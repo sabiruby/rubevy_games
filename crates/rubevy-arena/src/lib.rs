@@ -37,17 +37,28 @@ impl Default for ArenaSize {
 pub struct ArenaPlugin {
     pub size: ArenaSize,
     pub floor: Color,
+    /// Whether the camera zooms in as the arena shrinks. Off by default: with the view fixed, the
+    /// walls are seen moving in, which is the point of shrinking them.
+    pub follow_shrink: bool,
 }
 
 impl Default for ArenaPlugin {
     fn default() -> Self {
-        ArenaPlugin { size: ArenaSize::default(), floor: Color::srgb(0.08, 0.08, 0.10) }
+        ArenaPlugin { size: ArenaSize::default(), floor: Color::srgb(0.08, 0.08, 0.10), follow_shrink: false }
     }
+}
+
+/// How the camera treats the arena: the size the view was framed for, and whether it follows.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct ArenaView {
+    pub framed: f32,
+    pub follow_shrink: bool,
 }
 
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.size)
+            .insert_resource(ArenaView { framed: self.size.0, follow_shrink: self.follow_shrink })
             .insert_resource(ClearColor(self.floor))
             .add_systems(Startup, spawn_camera)
             .add_systems(PostUpdate, follow_arena);
@@ -77,6 +88,7 @@ fn view_of(half: f32) -> bevy::camera::ScalingMode {
 /// arena sits in the part of the window the editor does not cover.
 fn follow_arena(
     size: Res<ArenaSize>,
+    view: Res<ArenaView>,
     editor: Option<Res<Editor>>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Projection, &mut Transform), With<Camera2d>>,
@@ -86,14 +98,16 @@ fn follow_arena(
     if !(size.is_changed() || editor_changed) {
         return;
     }
+    // with following off, the view stays framed on the arena as it started
+    let half = if view.follow_shrink { size.0 } else { view.framed };
     let aspect = windows.iter().next().map(|w| w.width() / w.height().max(1.0)).unwrap_or(16.0 / 9.0);
-    let seen = size.0 + 3.0;
+    let seen = half + 3.0;
     let visible_width = seen * 2.0 * aspect.max(1.0);
     // the editor is about a third of the window on the right: centre the arena in the rest
     let slide = if editor_open { visible_width * 0.16 } else { 0.0 };
     for (mut projection, mut transform) in &mut cameras {
         if let Projection::Orthographic(ortho) = &mut *projection {
-            ortho.scaling_mode = view_of(size.0);
+            ortho.scaling_mode = view_of(half);
         }
         transform.translation.x = slide;
     }

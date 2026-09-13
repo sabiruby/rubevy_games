@@ -183,9 +183,7 @@ and a robot going down a large one (Kenney's `explosion1` / `explosion3`),
 growing and fading over a quarter of a second or 0.7 s.
 
 The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little
-floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes
-the walls in, `ArenaSize` changes, the wall of crates is rebuilt at the new edge, and the camera
-zooms to it — the fight fills the window as the field gets smaller.
+floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
 
 ## Seeing it where there is no window
 
