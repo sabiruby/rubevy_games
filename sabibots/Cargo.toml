@@ -12,3 +12,4 @@ rubevy = { workspace = true, features = ["ruby-source"] }
 sabiruby.workspace = true
 sabiruby-compiler.workspace = true
 rubevy-arena.workspace = true
+bevy_egui.workspace = true

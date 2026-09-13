@@ -3,6 +3,7 @@
 //! * [`ArenaPlugin`] — a 2D camera that shows a square arena whatever the window size is.
 //! * [`Hud`] — the line of text at the top, and the per-script panel below it.
 //! * [`CodePanel`] — the script a game is showing, with the line it stands on marked.
+//! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game.
 //! * [`Watch`] — the Ruby directory, watched: saving a file tells the game to start that script
 //!   again. Editing a robot's brain and seeing it change without restarting is the point.
 //!
@@ -16,8 +17,10 @@ use std::sync::Mutex;
 use bevy::prelude::*;
 
 pub mod code;
+pub mod editor;
 pub mod hud;
 pub use code::{CodePanel, CodePanelPlugin};
+pub use editor::{Editor, EditorPlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
 
 /// Half the width of the square the camera shows, in world units.
@@ -46,22 +49,40 @@ impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.size)
             .insert_resource(ClearColor(self.floor))
-            .add_systems(Startup, spawn_camera);
+            .add_systems(Startup, spawn_camera)
+            .add_systems(PostUpdate, follow_arena);
     }
 }
 
 fn spawn_camera(mut commands: Commands, size: Res<ArenaSize>) {
     commands.spawn((
         Camera2d,
-        // the arena is square: whatever the window is, its short side shows exactly the arena
+        // whatever the window's shape, the arena's height is in view; a wide window shows more
+        // floor at the sides, which is where the panels sit
         Projection::Orthographic(OrthographicProjection {
-            scaling_mode: bevy::camera::ScalingMode::AutoMin {
-                min_width: size.0 * 2.0,
-                min_height: size.0 * 2.0,
-            },
+            scaling_mode: view_of(size.0),
             ..OrthographicProjection::default_2d()
         }),
     ));
+}
+
+fn view_of(half: f32) -> bevy::camera::ScalingMode {
+    // a little floor past the wall, so what stands at the edge is not cut off by the window
+    let seen = half + 3.0;
+    bevy::camera::ScalingMode::AutoMin { min_width: seen * 2.0, min_height: seen * 2.0 }
+}
+
+/// A match that closes the arena in changes [`ArenaSize`]; the view follows it, so the fight
+/// fills the window as the field gets smaller.
+fn follow_arena(size: Res<ArenaSize>, mut cameras: Query<&mut Projection, With<Camera2d>>) {
+    if !size.is_changed() || size.is_added() {
+        return;
+    }
+    for mut projection in &mut cameras {
+        if let Projection::Orthographic(ortho) = &mut *projection {
+            ortho.scaling_mode = view_of(size.0);
+        }
+    }
 }
 
 /// A directory of `.rb` files, watched. `changed()` answers the files written since the last

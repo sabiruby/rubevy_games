@@ -109,27 +109,46 @@ the game subtracts its length and says `prelude.rb:N` for anything above it.
 The bar fills as a robot approaches a timeslice's worth of instructions (3,000) — the point where
 it starts costing the other robot its turn. A robot thinking normally is tens to hundreds.
 
-## The code panel
+## The editor
 
-The right-hand side lists the watched robot's own file with the line it is standing on marked:
+The right-hand window is an editor (egui, through `bevy_egui` 0.42 — the release built for Bevy
+0.19). It shows the watched robot's own file and puts a band behind **the line of that file its
+brain is standing on**:
 
 ```
-scout.rb:22
-   20      end
-   21    end
->  22    sleep 0.05
-   23  end
+red/scout  scout.rb  (in prelude.rb:15)
+   9        target = scan(40)        ← banded
 ```
 
-`1`, `2`, … pick a robot, `Tab` moves on, `C` hides the panel.
+Type in it and press **Ctrl+S** (or the Save button): the file is written, the same file watcher
+that notices an edit made in any other editor notices this one, and that robot starts again with
+the new brain while the match carries on. `● unsaved` shows while the text differs from the file.
 
-The marked line is the innermost frame **in the robot's own file**, which is not the innermost
-frame: a robot waiting for a scan is standing inside `prelude.rb`, three frames down. The VM
-answers the whole stack (`Vm::task_frames`), so the panel can show the line of the author's file
-that is waiting, and the title says where it actually is (`scout.rb  (in prelude.rb:15)`).
+`1`–`4` pick a robot, `Tab` moves on, `F1` hides the editor. Keys typed into the editor stay the
+editor's: a `2` in the code does not switch robots (`EguiWantsInput`).
 
-It is read-only for now. Editing in place is the next step, and the lines are kept as a
-`Vec<String>` for that reason.
+The banded line is the innermost frame **in the robot's own file**, which is not the innermost
+frame: a robot waiting for a scan stands three frames deep inside `prelude.rb`. The VM answers the
+whole stack (`Vm::task_frames`), the editor picks the frame in the file it shows, and the title
+says where the brain really is.
+
+Two details that make it a listing rather than a text box: it never wraps (a custom layouter sets
+the wrap width to infinity), so each row of the gutter is one line of the file; and the band is a
+background on that line's text section, so it moves with the text as the file is edited.
+
+The editor lives in `rubevy-arena` (`Editor`, `EditorPlugin`) so the other games get it for free.
+The older read-only panel (`CodePanel`, Bevy UI only) is still there for a game that does not want
+egui.
+
+## Blasts, and the view following the arena
+
+A hit leaves a small puff and a robot going down a large one (Kenney's `explosion1` / `explosion3`),
+growing and fading over a quarter of a second or 0.7 s.
+
+The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little
+floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes
+the walls in, `ArenaSize` changes, the wall of crates is rebuilt at the new edge, and the camera
+zooms to it — the fight fills the window as the field gets smaller.
 
 ## Seeing it where there is no window
 
@@ -150,8 +169,6 @@ game points `AssetPlugin` at its own `assets/` directory.
 
 ## What v0.1 does not do yet
 
-* **An in-game editor.** The plan is: read-only code panel with the current line first, editing
-  after that (Bevy has no text input of its own, so it means `bevy_egui` or a small widget).
 * **Sound, sprites, effects.** Everything is a coloured square.
 
 ## Running

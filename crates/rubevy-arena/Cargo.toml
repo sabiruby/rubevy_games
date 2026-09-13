@@ -11,3 +11,4 @@ bevy.workspace = true
 rubevy.workspace = true
 sabiruby.workspace = true
 notify = "8"
+bevy_egui.workspace = true

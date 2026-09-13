@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
-use rubevy_arena::{ArenaPlugin, ArenaSize, CodePanel, CodePanelPlugin, Hud, HudPlugin, ScriptPanel, Watch};
+use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorPlugin, Hud, HudPlugin, ScriptPanel, Watch};
 
 const ROBOT_RADIUS: f32 = 1.6;
 const MAX_SPEED: f32 = 14.0;
@@ -51,6 +51,14 @@ struct Robot {
     own_line: Option<u32>,
     /// where the hull points, kept from the last direction it moved or fired in
     heading: f32,
+}
+
+/// A puff where a shot landed or a robot went down: it grows, fades and goes.
+#[derive(Component)]
+struct Blast {
+    life: f32,
+    span: f32,
+    size: f32,
 }
 
 #[derive(Component)]
@@ -126,14 +134,14 @@ fn main() {
                     .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SabiRuby Battle".into(),
-                        resolution: (900u32, 900u32).into(),
+                        resolution: (1600u32, 900u32).into(),
                         ..default()
                     }),
                     ..default()
                 }),
                 ArenaPlugin::default(),
                 HudPlugin,
-                CodePanelPlugin,
+                EditorPlugin,
                 RubevyPlugin::default(),
             ))
             .init_resource::<Watched>()
@@ -146,7 +154,7 @@ fn main() {
         .add_systems(Startup, (spawn_match, spawn_arena))
         .add_systems(
             Update,
-            (answer_requests, move_robots, move_bullets, rebuild_walls, reload_changed, report_ended, update_hud)
+            (answer_requests, move_robots, move_bullets, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
                 .chain(),
         );
     if let Some((path, after)) = shot {
@@ -165,17 +173,15 @@ fn main() {
 #[derive(Resource, Default)]
 struct Watched {
     entity: Option<Entity>,
-    source: String,
-    /// the file the source came from, so it is read again only when it changes
-    from: Option<PathBuf>,
 }
 
-/// `1`, `2`, … pick a robot; `Tab` moves on; `C` hides the panel.
+/// `1`, `2`, … pick a robot; `Tab` moves on; `F1` hides the editor — unless the editor has the keyboard.
 fn choose_watched(
     keys: Res<ButtonInput<KeyCode>>,
+    typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
     robots: Query<Entity, With<Robot>>,
     mut watched: ResMut<Watched>,
-    mut panel: ResMut<CodePanel>,
+    mut editor: ResMut<Editor>,
 ) {
     let all: Vec<Entity> = robots.iter().collect();
     if all.is_empty() {
@@ -183,53 +189,39 @@ fn choose_watched(
     }
     if watched.entity.is_none() {
         watched.entity = Some(all[0]);
-        panel.visible = true;
+        editor.open = true;
+    }
+    // keys typed into the editor are the editor's: a `2` in the code must not switch robots
+    if typing.is_some_and(|t| t.wants_keyboard_input()) {
+        return;
     }
     for (i, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].into_iter().enumerate() {
         if keys.just_pressed(key) {
             if let Some(e) = all.get(i) {
                 watched.entity = Some(*e);
-                panel.visible = true;
+                editor.open = true;
             }
         }
     }
     if keys.just_pressed(KeyCode::Tab) {
         let at = all.iter().position(|e| Some(*e) == watched.entity).unwrap_or(0);
         watched.entity = Some(all[(at + 1) % all.len()]);
-        panel.visible = true;
+        editor.open = true;
     }
-    if keys.just_pressed(KeyCode::KeyC) {
-        panel.visible = !panel.visible;
+    if keys.just_pressed(KeyCode::F1) {
+        editor.open = !editor.open;
     }
 }
 
-/// The panel follows the watched robot: its file, and the line its brain stands on.
-fn show_code(
-    mut watched: ResMut<Watched>,
-    mut panel: ResMut<CodePanel>,
-    robots: Query<(&Robot, &ScriptPanel)>,
-) {
+/// The editor follows the watched robot: its file, and the line its brain stands on.
+fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(&Robot, &ScriptPanel)>) {
     let Some(entity) = watched.entity else { return };
     let Ok((robot, script)) = robots.get(entity) else { return };
-    if watched.from.as_deref() != Some(robot.file.as_path()) {
-        match std::fs::read_to_string(&robot.file) {
-            Ok(text) => {
-                watched.source = text;
-                watched.from = Some(robot.file.clone());
-            }
-            Err(e) => {
-                error!("{:?}: {e}", robot.file);
-                return;
-            }
-        }
-    }
-    let name = robot.file.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let source = watched.source.clone();
-    panel.show(name, &source);
-    // `ScriptPanel::at` is `file:line` in the robot's own numbering, or in the prelude's
-    panel.current = robot.own_line;
+    editor.show(&robot.file);
+    editor.label = robot.name.clone();
+    editor.current = robot.own_line;
     // where it stands when that is not this file: inside the DSL, waiting for an answer
-    panel.elsewhere = script.at.starts_with("prelude").then(|| script.at.clone());
+    editor.elsewhere = script.at.starts_with("prelude").then(|| script.at.clone());
 }
 
 /// `--shot`: where to put the picture, and when.
@@ -313,10 +305,13 @@ fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetS
     let tile = 8.0;
     let sand: Handle<Image> = server.load("sprites/tileSand1.png");
     let sand2: Handle<Image> = server.load("sprites/tileSand2.png");
-    let n = (half * 2.0 / tile).ceil() as i32;
-    for ix in 0..n {
-        for iy in 0..n {
-            let x = -half + tile * (ix as f32 + 0.5);
+    // the window is 16:9 and the arena is square, so the floor reaches past the wall sideways
+    let wide = half * 16.0 / 9.0 + tile;
+    let nx = (wide * 2.0 / tile).ceil() as i32;
+    let ny = (half * 2.0 / tile).ceil() as i32;
+    for ix in 0..nx {
+        for iy in 0..ny {
+            let x = -wide + tile * (ix as f32 + 0.5);
             let y = -half + tile * (iy as f32 + 0.5);
             let image = if (ix + iy) % 3 == 0 { sand2.clone() } else { sand.clone() };
             commands.spawn((
@@ -629,6 +624,7 @@ fn move_bullets(
     time: Res<Time>,
     mut commands: Commands,
     mut events: ResMut<Events>,
+    server: Res<AssetServer>,
     arena: Res<ArenaSize>,
     mut bullets: Query<(Entity, &mut Bullet, &mut Transform)>,
     mut robots: Query<(Entity, &mut Robot, &Transform), Without<Bullet>>,
@@ -650,13 +646,41 @@ fn move_bullets(
                 let was_alive = robot.hp > 0.0;
                 robot.hp -= BULLET_DAMAGE;
                 commands.entity(entity).despawn();
-                if was_alive && robot.hp <= 0.0 {
+                let big = was_alive && robot.hp <= 0.0;
+                let size = if big { ROBOT_RADIUS * 3.5 } else { ROBOT_RADIUS * 1.2 };
+                let image = if big { "sprites/explosion3.png" } else { "sprites/explosion1.png" };
+                commands.spawn((
+                    Blast { life: 0.0, span: if big { 0.7 } else { 0.25 }, size },
+                    Sprite { image: server.load(image), custom_size: Some(Vec2::splat(size * 0.4)), ..default() },
+                    Transform::from_xyz(at.x, at.y, 3.0),
+                ));
+                if big {
                     // kind 0: a robot is down. The match reads these and decides what they mean
                     events.0.push([0.0, target.to_bits() as f64, bullet.owner.to_bits() as f64]);
                 }
                 break;
             }
         }
+    }
+}
+
+/// A blast grows and fades over its span, and is gone after it.
+fn fade_blasts(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut blasts: Query<(Entity, &mut Blast, &mut Sprite, &mut Transform)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut blast, mut sprite, mut transform) in &mut blasts {
+        blast.life += dt;
+        let t = (blast.life / blast.span).clamp(0.0, 1.0);
+        if t >= 1.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        sprite.custom_size = Some(Vec2::splat(blast.size * (0.4 + t)));
+        sprite.color = Color::srgba(1.0, 1.0, 1.0, 1.0 - t);
+        transform.rotation = Quat::from_rotation_z(t * 1.5);
     }
 }
 
@@ -704,7 +728,6 @@ fn report_ended(mut ended: MessageReader<ScriptEnded>, mut hud: ResMut<Hud>) {
 fn update_hud(
     world: Res<ScriptWorld>,
     mut robots: Query<(&mut Robot, Option<&ScriptTask>, &mut ScriptPanel)>,
-    mut hud: ResMut<Hud>,
 ) {
     let mut alive = 0;
     for (mut robot, script, mut panel) in &mut robots {

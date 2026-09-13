@@ -16,8 +16,9 @@ cargo run -p sabibots                 # a window, 2D, 900x900
 cargo run -p sabibots -- --headless 15  # no window: 15 seconds, the result on stdout
 ```
 
-Then open `sabibots/ruby/robots/scout.rb`, change how it fights, and save: that robot starts
-again with the new brain while the game keeps running. `sabibots/ruby/matches/training.rb` is the
+Then change how a robot fights — in the editor on the right of the game window (Ctrl+S), or
+in `sabibots/ruby/robots/scout.rb` with any editor — and save: that robot starts again with the
+new brain while the match keeps running. `1`–`4` pick which robot the editor shows. `sabibots/ruby/matches/training.rb` is the
 match itself — who is on the field, when the walls close in, what ends it — and it is Ruby too.
 
 ## Why Ruby here
