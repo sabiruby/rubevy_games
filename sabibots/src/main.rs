@@ -1152,13 +1152,21 @@ fn rebuild_walls(
     build_walls(&mut commands, &server, arena.0);
 }
 
+/// How many crates make a side of an arena this size, and how far apart they are.
+fn wall_layout(half: f32) -> (i32, f32) {
+    let count = (half * 2.0 / 2.6).round().max(1.0) as i32;
+    (count, half * 2.0 / count as f32)
+}
+
+/// The walls stop closing in at this many crates a side: room for a last fight.
+const MIN_CRATES: i32 = 7;
+
 /// A crate of about 2.6 units every step along each side, the step stretched a little so that
 /// the side is a whole number of crates and every side ends exactly on a corner — at any size the
 /// match shrinks the arena to.
 fn build_walls(commands: &mut Commands, server: &AssetServer, half: f32) {
     let image: Handle<Image> = server.load("sprites/crateMetal.png");
-    let count = (half * 2.0 / 2.6).round().max(1.0) as i32;
-    let step = half * 2.0 / count as f32;
+    let (count, step) = wall_layout(half);
     let mut place = |x: f32, y: f32| {
         commands.spawn((
             Wall,
@@ -1259,9 +1267,17 @@ fn answer_requests(
                 world.answer(&request, Answer::Rows(rows));
                 continue;
             }
+            // `shrink(crates)`: every wall moves in by that many crates. The crate size stays the
+            // same, so the wall is still a whole number of crates and the corners still meet
             "shrink" => {
-                arena.0 = (arena.0 - request.num_or(0, 0.0) as f32).max(9.0);
-                hud.line = format!("the walls close in: {:.0}", arena.0);
+                let crates = request.num_or(0, 1.0).max(0.0).round() as i32;
+                let (count, step) = wall_layout(arena.0);
+                let smaller = (count - 2 * crates).max(MIN_CRATES.min(count));
+                let half = step * smaller as f32 / 2.0;
+                if half < arena.0 - 0.01 {
+                    arena.0 = half;
+                    hud.line = format!("the walls close in: {smaller} crates wide");
+                }
                 world.answer(&request, Answer::Num(arena.0 as f64));
                 continue;
             }

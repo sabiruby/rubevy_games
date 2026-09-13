@@ -25,9 +25,10 @@ class Match
     @teams[color.to_s] = robots
   end
 
-  # rule(:sudden_death, after: 20) { ... }  — run once, that many seconds in
-  def rule(name, after:, &body)
-    @rules << { name: name.to_s, at: after.to_f, body: body, done: false }
+  # rule(:sudden_death, after: 20) { ... }             — once, that many seconds in
+  # rule(:sudden_death, after: 20, every: 2.0) { ... }  — from then on, every 2 seconds
+  def rule(name, after:, every: nil, &body)
+    @rules << { name: name.to_s, at: after.to_f, every: every&.to_f, body: body, done: false, runs: 0 }
   end
 
   def on_destroyed(&body) = @on_destroyed = body
@@ -46,7 +47,8 @@ class Match
   # [[kind, id, other], ...] since the last call; kind 0 = destroyed
   def events = Rubevy.ask("events").pop
 
-  def shrink(by) = Rubevy.ask("shrink", by).pop
+  # move every wall in by that many crates (they stop at a small ring); the new half-width
+  def shrink(crates = 1) = Rubevy.ask("shrink", crates).pop
   def declare(team) = Rubevy.ask("win", team).pop
 
   # --- running the match -----------------------------------------------------
@@ -97,8 +99,13 @@ class Match
 
       @rules.each do |r|
         next if r[:done] || now - started < r[:at]
-        r[:done] = true
-        log "rule: #{r[:name]}"
+        log "rule: #{r[:name]}" if r[:runs] == 0
+        r[:runs] += 1
+        if r[:every]
+          r[:at] += r[:every]
+        else
+          r[:done] = true
+        end
         r[:body].call(self)
       end
 

@@ -16,8 +16,8 @@ match "Training", noise: 0.3 do
   team :red,  robots: %w[scout hunter]
   team :blue, robots: %w[scout scout]
 
-  rule(:sudden_death, after: 20) { |m| m.shrink 8.0 }   # the walls close in
-  rule(:closer, after: 35) { |m| m.shrink 6.0 }
+  # from 20 s on, the walls close in one crate every 2 seconds
+  rule(:sudden_death, after: 20, every: 2.0) { |m| m.shrink 1 }
 
   on_destroyed { |file, team| Rubevy.log("match: #{team}'s #{file} is down") }
 end
@@ -52,7 +52,7 @@ And what only the match asks for:
 | `ask("board")` | `[[id, team, hp, x, y], …]` |
 | `ask("events")` | `[[kind, id, other], …]` since the last call — `0` is "down" |
 | `ask("clock")` | seconds since the match started |
-| `ask("shrink", by)` | the arena's new half-width; the wall of crates moves |
+| `ask("shrink", crates)` | every wall moves in by that many crates (down to 7 a side); the new half-width |
 | `ask("win", team)` | the result, for the HUD |
 
 Every one of them parks the robot's task until the answer comes back (`ScriptWorld::answer`), so
@@ -303,7 +303,7 @@ and a robot going down a large one (Kenney's `explosion1` / `explosion3`),
 growing and fading over a quarter of a second or 0.7 s.
 
 The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little
-floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The crates are spaced about 2.6 apart with the step stretched so each side is a whole number of them: every side ends exactly on a corner at any size (a fixed step used to leave the top and right sides a crate past the corner once the arena shrank). The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
+floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The crates are spaced about 2.6 apart with the step stretched so each side is a whole number of them, so every side ends exactly on a corner (a fixed step used to leave the top and right sides a crate past the corner). The walls close in a crate at a time: `shrink(1)` takes one crate off each end of every side, the crate size stays the same, and the arena gets smaller in steps the eye can follow — 25 crates a side at the start, 23, 21, … down to 7, where it stops. A rule with `every:` repeats, which is how the match does it gradually (the first version shrank by 8 and then 6 units at once, which looked like a jump rather than walls moving). The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
 
 ## Seeing it where there is no window
 
