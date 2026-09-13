@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/rubevy-arena", "sabibots"]
+
+# One Bevy for the whole repository: a binary can only have one, and keeping the version in one
+# place is what makes bumping it a single edit for every game here.
+[workspace.dependencies]
+bevy = { version = "0.19.1", default-features = false, features = [
+  "bevy_asset", "bevy_log", "bevy_window", "bevy_winit", "bevy_core_pipeline",
+  "bevy_render", "bevy_sprite", "bevy_text", "bevy_ui", "bevy_ui_render",
+  "default_font", "x11", "multi_threaded",
+] }
+rubevy = { git = "https://github.com/kishima/rubevy" }
+sabiruby = "0.4"
+rubevy-arena = { path = "crates/rubevy-arena" }
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kishima/rubevy_games"
+
+[profile.dev]
+opt-level = 1          # Bevy is unusable at 0
+
+[profile.dev.package."*"]
+opt-level = 3
