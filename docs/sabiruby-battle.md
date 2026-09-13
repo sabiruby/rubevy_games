@@ -334,6 +334,7 @@ game points `AssetPlugin` at its own `assets/` directory.
 ```
 cargo run -p sabibots                    # window
 cargo run -p sabibots -- --headless 15   # 15 seconds, result on stdout, no GPU needed
+web/build.sh && web/serve.sh             # in a browser (docs/web.md)
 ```
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at

@@ -8,8 +8,10 @@ members = ["crates/rubevy-arena", "sabibots"]
 bevy = { version = "0.19.1", default-features = false, features = [
   "bevy_asset", "bevy_log", "bevy_window", "bevy_winit", "bevy_core_pipeline",
   "bevy_render", "bevy_sprite", "bevy_text", "bevy_ui", "bevy_ui_render",
-  "default_font", "png", "x11", "multi_threaded",
+  "default_font", "png",
 ] }
+# what differs between the PC build and the browser build (threads, X11, WebGL) is added per
+# target in each game's Cargo.toml, so the one `cargo build` picks the right set
 rubevy = { git = "https://github.com/kishima/rubevy" }
 # the same source as rubevy's, so there is one VM in the binary and one set of types
 sabiruby = { git = "https://github.com/kishima/sabiruby" }
@@ -28,3 +30,11 @@ opt-level = 1          # Bevy is unusable at 0
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The browser build (`web/build.sh`): a release build that favours size, since the page downloads it.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true

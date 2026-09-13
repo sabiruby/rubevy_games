@@ -11,10 +11,19 @@ so editing a file changes what happens on screen without a rebuild.
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
+**Play it in a browser:** <https://kishima.github.io/rubevy_games/> — the same game, built for
+the web. Or on a PC:
+
 ```
-cargo run -p sabibots                 # a window, 2D, 900x900
+cargo run -p sabibots                   # a window, 2D, 16:9
 cargo run -p sabibots -- --headless 15  # no window: 15 seconds, the result on stdout
+web/build.sh && web/serve.sh            # the browser build, at http://localhost:8080/
 ```
+
+The PC build and the browser build are the same code; which one you get is chosen by the target
+(`sabibots/src/platform.rs`, and [`docs/web.md`](docs/web.md) for how the browser one is put
+together). In the browser, **Save** keeps the brain in the browser's local storage instead of a
+file, and there is no file to edit from outside.
 
 Then change how a robot fights in the editor on the right of the game window: **Apply** (F5)
 runs the edited brain in that robot straight away, in memory, without touching the file; **Save
@@ -40,8 +49,10 @@ Three things the VM gives a game, which is what these are built to show:
 crates/rubevy-arena/   the 2D floor: camera, HUD, watching the Ruby directory for edits
 sabibots/             SabiRuby Battle
   src/main.rs         the game: arena, robots, bullets, and the answers to what Ruby asks
+  src/platform.rs     what differs between the PC build and the browser build
   ruby/prelude.rb     the DSL every robot is written in
   ruby/robots/*.rb    the robots
+web/                  the browser build: build.sh, serve.sh, index.html (dist/ is the output)
 docs/                 how it is put together, and what is next
 ```
 
@@ -53,6 +64,11 @@ Bevy, and keeping the version in one place makes bumping it a single edit for ev
 A GPU for the windowed mode (Bevy's usual Linux dependencies apply). `--headless` needs none and
 is what the games are tested with. The Ruby is compiled in process by the reference mruby
 compiler (`sabiruby-compiler`), so nothing has to be built ahead of time.
+
+The browser build needs the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` of the version
+in `Cargo.lock`, optionally `wasm-opt`, and a checkout of
+[sabiruby-playground](https://github.com/kishima/sabiruby-playground) next to this one with its
+`tools/build.sh` run (that is where the compiler module comes from). See `docs/web.md`.
 
 ## License
 

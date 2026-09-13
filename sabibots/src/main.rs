@@ -14,6 +14,8 @@
 //!
 //! Save a robot file while it runs and that robot starts again with the new brain.
 
+mod platform;
+
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -234,7 +236,7 @@ impl Shots {
 }
 
 fn main() {
-    let ruby = ruby_dir();
+    let ruby = platform::ruby_dir();
     // `--headless N`: no window, N seconds, the match reported on stdout. It is how the game is
     // tested where there is no GPU, and it runs exactly the same systems as the windowed one.
     let args: Vec<String> = std::env::args().collect();
@@ -259,7 +261,7 @@ fn main() {
                 )),
                 bevy::log::LogPlugin { filter: "info,bevy_asset=off".into(), ..default() },
                 bevy::asset::AssetPlugin {
-                    file_path: assets_dir().to_string_lossy().into_owned(),
+                    file_path: platform::assets_dir(),
                     ..default()
                 },
                 RubevyPlugin::default(),
@@ -275,13 +277,18 @@ fn main() {
             app.add_plugins((
                 DefaultPlugins
                     .set(AssetPlugin {
-                        file_path: assets_dir().to_string_lossy().into_owned(),
+                        file_path: platform::assets_dir(),
+                        // the sprites have no .meta files; in the browser each would be a 404
+                        meta_check: bevy::asset::AssetMetaCheck::Never,
                         ..default()
                     })
                     .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SabiRuby Battle".into(),
                         resolution: (1600u32, 900u32).into(),
+                        // in the browser: the page's canvas, as large as its box
+                        canvas: Some("#sabibots".into()),
+                        fit_canvas_to_parent: true,
                         ..default()
                     }),
                     ..default()
@@ -630,9 +637,10 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     let Ok((_, robot)) = robots.get(entity) else { return };
     // what the robot is running: its applied brain, or its file
     editor.show(entity.to_bits(), || {
-        robot.brain.clone().unwrap_or_else(|| std::fs::read_to_string(&robot.file).unwrap_or_default())
+        robot.brain.clone().unwrap_or_else(|| platform::read(&robot.file).unwrap_or_default())
     });
     editor.file = brain_name(robot);
+    editor.save_label = Some(platform::SAVE_LABEL.into());
     editor.in_memory = robot.brain.is_some();
     editor.label = robot.name.clone();
     editor.current = robot.own_line;
@@ -673,7 +681,7 @@ fn selftest(
         0 => {
             // show robot 3 and type a different brain into the editor
             let Some((e, r)) = by_number(3) else { return };
-            test.original = std::fs::read_to_string(&r.file).unwrap_or_default();
+            test.original = platform::read(&r.file).unwrap_or_default();
             watched.entity = Some(e);
             test.step = 1;
             test.at = now + 0.5;
@@ -688,7 +696,7 @@ fn selftest(
         2 => {
             let (_, r3) = by_number(3).unwrap();
             let (_, r4) = by_number(4).unwrap();
-            let on_disk = std::fs::read_to_string(&r3.file).unwrap_or_default();
+            let on_disk = platform::read(&r3.file).unwrap_or_default();
             ok(r3.brain.as_deref().is_some_and(|b| b.contains("sleep 0.5")), "Apply gives robot 3 the edited brain");
             ok(r4.brain.is_none(), "Apply leaves robot 4 (same file) alone");
             ok(on_disk == test.original, "Apply does not touch the file");
@@ -712,7 +720,7 @@ fn selftest(
             ok(r3.brain.is_none(), "Revert puts robot 3 back on its file");
             ok(r4.brain.is_some(), "Revert is for the shown robot only: robot 4 keeps its brain");
             ok(editor.text == test.original, "Revert shows the file again");
-            let on_disk = std::fs::read_to_string(&r3.file).unwrap_or_default();
+            let on_disk = platform::read(&r3.file).unwrap_or_default();
             ok(on_disk == test.original, "nothing was written");
             restart.0 = true;
             test.step = 5;
@@ -793,19 +801,6 @@ fn stop_when_over(
     }
     info!("{}", if hud.line.is_empty() { "time" } else { hud.line.as_str() });
     exit.write(AppExit::Success);
-}
-
-/// Where the sprites live. Bevy looks next to the executable by default, which is not where a
-/// workspace puts them.
-fn assets_dir() -> PathBuf {
-    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-    if here.is_dir() { here } else { PathBuf::from("sabibots/assets") }
-}
-
-fn ruby_dir() -> PathBuf {
-    // run from the workspace root or from the crate; both find the Ruby
-    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("ruby");
-    if here.is_dir() { here } else { PathBuf::from("sabibots/ruby") }
 }
 
 /// A crate of the arena wall, so the wall can be rebuilt when the match closes it in.
@@ -949,7 +944,7 @@ fn spawn_robot(
     };
     let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
     let name = format!("{number} {team_name}/{file}");
-    let source = brain.clone().unwrap_or_else(|| std::fs::read_to_string(&path).unwrap_or_default());
+    let source = brain.clone().unwrap_or_else(|| platform::read(&path).unwrap_or_default());
     // it starts facing the middle of the arena
     let facing = (-at.y).atan2(-at.x);
     let robot = commands
@@ -1006,10 +1001,10 @@ fn compile_with(
     start: &str,
     assets: &mut Assets<MrbAsset>,
 ) -> Option<(Handle<MrbAsset>, u32)> {
-    let body = match std::fs::read_to_string(robot) {
+    let body = match platform::read(robot) {
         Ok(b) => b,
         Err(e) => {
-            error!("{robot:?}: {e}");
+            error!("{e}");
             return None;
         }
     };
@@ -1027,15 +1022,13 @@ fn compile_text(
     start: &str,
     assets: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
-    let prelude = std::fs::read_to_string(ruby.join(prelude_file)).map_err(|e| format!("{prelude_file}: {e}"))?;
+    let prelude = platform::read(&ruby.join(prelude_file))?;
     let src = format!("{prelude}\n# ---- {name} ----\n{body}\n{start}\n");
-    let opts = sabiruby_compiler::Options { filename: name.to_string(), debug_info: true, ..Default::default() };
+
     // the prelude sits in front, so a line in the compiled program is `prelude_lines` further
     // down than the same line of the robot's own file
     let prelude_lines = prelude.lines().count() as u32 + 2;
-    sabiruby_compiler::compile(src.as_bytes(), &opts)
-        .map(|bytes| (assets.add(MrbAsset { bytes }), prelude_lines))
-        .map_err(|e| format!("{name}: {e}"))
+    platform::compile(&src, name).map(|bytes| (assets.add(MrbAsset { bytes }), prelude_lines))
 }
 
 /// Starts a robot over with another brain: dropping its task and giving it a new `Script`.
@@ -1097,7 +1090,7 @@ fn do_editor_actions(
             hud.line = format!("new brain: {what}");
         }
         EditorAction::Save => {
-            if let Err(e) = std::fs::write(&file, &text) {
+            if let Err(e) = platform::write(&file, &text) {
                 editor.message = format!("could not save {name}: {e}");
                 return;
             }
@@ -1115,7 +1108,7 @@ fn do_editor_actions(
             hud.line = format!("{name} saved");
         }
         EditorAction::Revert => {
-            let Ok(source) = std::fs::read_to_string(&file) else {
+            let Ok(source) = platform::read(&file) else {
                 editor.message = format!("could not read {name}");
                 return;
             };
@@ -1227,10 +1220,7 @@ fn answer_requests(
                 rules.dice = if seed >= 0.0 {
                     seed as u64
                 } else {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(1)
+                    platform::clock_seed()
                 };
                 world.answer(&request, Answer::Num(rules.noise as f64));
                 continue;
@@ -1584,7 +1574,7 @@ fn reload_changed(
             // the editor showing this robot, with nothing typed, follows the file
             if let (Some(editor), Some(watched)) = (editor.as_mut(), watched.as_ref()) {
                 if watched.entity == Some(entity) && !editor.changed() {
-                    if let Ok(source) = std::fs::read_to_string(&robot.file) {
+                    if let Ok(source) = platform::read(&robot.file) {
                         editor.reset_to(source, "the file changed");
                     }
                 }
@@ -1593,7 +1583,7 @@ fn reload_changed(
                 hud.line = format!("{}: compile error (see the log)", robot.name);
                 continue;
             };
-            fresh.push((entity, std::fs::read_to_string(&robot.file).unwrap_or_default()));
+            fresh.push((entity, platform::read(&robot.file).unwrap_or_default()));
             // dropping ScriptTask and giving the entity a new Script starts it over
             commands
                 .entity(entity)

@@ -72,6 +72,8 @@ pub struct Editor {
     pub heat: Vec<f32>,
     /// Where the script is when that is not in its own source (inside the DSL, say).
     pub elsewhere: Option<String>,
+    /// The Save button's text, where the game's save is not a file ("Save in browser").
+    pub save_label: Option<String>,
     /// The last thing that happened, for the panel.
     pub message: String,
     pub open: bool,
@@ -181,6 +183,7 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
         .filter_map(|id| choices.iter().find(|c| c.id == *id).map(|c| c.label.clone()))
         .collect();
     let file = editor.file.clone();
+    let save_label = editor.save_label.clone().unwrap_or_else(|| "Save to file (Ctrl+S)".into());
     let amber = egui::Color32::from_rgb(240, 190, 90);
 
     // egui 0.36 grows panels inside a Ui; a window takes the context, and a movable one suits an
@@ -220,7 +223,7 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&title).strong());
                 if changed {
-                    ui.label(egui::RichText::new("● edited").color(amber));
+                    ui.label(egui::RichText::new("* edited").color(amber));
                 }
             });
             ui.horizontal_wrapped(|ui| {
@@ -231,7 +234,7 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
                 if ui.button(format!("Apply to all {file}")).on_hover_text("run this in every robot with this brain").clicked() {
                     editor.action = Some(EditorAction::ApplyAll);
                 }
-                if ui.button("Save to file (Ctrl+S)").on_hover_text("write it to disk, for keeping").clicked() {
+                if ui.button(save_label).on_hover_text("keep it: robots on the file start with it from now on").clicked() {
                     editor.action = Some(EditorAction::Save);
                 }
                 if ui.button("Revert").on_hover_text("forget the edits, back to the file").clicked() {

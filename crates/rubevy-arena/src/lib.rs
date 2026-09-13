@@ -11,8 +11,6 @@
 //! here, so bumping Bevy is one crate's problem rather than every game's.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::channel;
-use std::sync::Mutex;
 
 use bevy::prelude::*;
 
@@ -113,22 +111,25 @@ fn follow_arena(
     }
 }
 
-/// A directory of `.rb` files, watched. `changed()` answers the files written since the last
+/// A directory of `.rb` files, watched. In the browser build there is no directory: `new`
+/// answers `None` there, as it does anywhere the platform has no watcher. `changed()` answers the files written since the last
 /// call, so a game can restart exactly the scripts that changed.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 pub struct Watch {
     pub dir: PathBuf,
-    rx: Mutex<std::sync::mpsc::Receiver<PathBuf>>,
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<PathBuf>>,
     _watcher: Box<dyn notify::Watcher + Send + Sync>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Watch {
     /// Watches `dir` and everything under it. Answers `None` where the platform has no watcher
     /// (the game then simply does not reload).
     pub fn new(dir: impl AsRef<Path>) -> Option<Watch> {
         use notify::{RecursiveMode, Watcher};
         let dir = dir.as_ref().to_path_buf();
-        let (tx, rx) = channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let Ok(event) = res else { return };
             if !matches!(event.kind, notify::EventKind::Modify(_) | notify::EventKind::Create(_)) {
@@ -142,7 +143,7 @@ impl Watch {
         })
         .ok()?;
         watcher.watch(&dir, RecursiveMode::Recursive).ok()?;
-        Some(Watch { dir, rx: Mutex::new(rx), _watcher: Box::new(watcher) })
+        Some(Watch { dir, rx: std::sync::Mutex::new(rx), _watcher: Box::new(watcher) })
     }
 
     /// The `.rb` files written since the last call, without repeats.
@@ -155,6 +156,23 @@ impl Watch {
             }
         }
         out
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource)]
+pub struct Watch {
+    pub dir: PathBuf,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Watch {
+    pub fn new(_dir: impl AsRef<Path>) -> Option<Watch> {
+        None
+    }
+
+    pub fn changed(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 }
 

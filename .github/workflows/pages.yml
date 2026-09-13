@@ -1,0 +1,77 @@
+# The browser version of the games, on GitHub Pages: https://kishima.github.io/rubevy_games/
+# Built by web/build.sh, as locally. The Ruby compiler module comes from sabiruby-playground,
+# built against the same SabiRuby commit as the game's VM (the one Cargo.lock names).
+name: pages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  # 3f47c9d: sabi_take_binary, which the page's compile bridge calls
+  PLAYGROUND_REF: 3f47c9d787fb4e36e94d4b976f7e61c3fa82fbec
+  WASI_SDK: "34"
+  BINARYEN: "132"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: rubevy_games
+      - name: the SabiRuby commit of Cargo.lock
+        id: vm
+        run: echo "ref=$(grep -m1 -o 'github.com/kishima/sabiruby#[0-9a-f]*' rubevy_games/Cargo.lock | cut -d'#' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: kishima/sabiruby-playground
+          ref: ${{ env.PLAYGROUND_REF }}
+          path: sabiruby-playground
+      - uses: actions/checkout@v4
+        with:
+          repository: kishima/sabiruby
+          ref: ${{ steps.vm.outputs.ref }}
+          path: sabiruby
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1, wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rubevy_games
+            sabiruby-playground/wasm
+      - name: wasi-sdk, binaryen, wasm-bindgen
+        run: |
+          curl -sSL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK}/wasi-sdk-${WASI_SDK}.0-x86_64-linux.tar.gz" | tar xz -C "$RUNNER_TEMP"
+          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-${WASI_SDK}.0-x86_64-linux" >> "$GITHUB_ENV"
+          curl -sSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN}/binaryen-version_${BINARYEN}-x86_64-linux.tar.gz" | tar xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN}/bin" >> "$GITHUB_PATH"
+          v=$(grep -A1 '^name = "wasm-bindgen"$' rubevy_games/Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
+          curl -sSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$v/wasm-bindgen-$v-x86_64-unknown-linux-musl.tar.gz" | tar xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/wasm-bindgen-$v-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: the Ruby compiler module
+        working-directory: sabiruby-playground
+        run: tools/build.sh
+      - name: web/build.sh
+        working-directory: rubevy_games
+        run: web/build.sh
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: rubevy_games/web/dist
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

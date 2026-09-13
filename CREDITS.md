@@ -23,6 +23,17 @@ how anyone who wants more of it finds the pack.
 The text is Bevy's built-in default font (Fira Mono, SIL Open Font License 1.1), which ships with
 the engine; nothing is added to this repository for it.
 
+## In the browser build
+
+The page (`web/dist/`, built by `web/build.sh`) also carries two things from
+[sabiruby-playground](https://github.com/kishima/sabiruby-playground), copied at build time and
+not kept in this repository:
+
+* `compiler/sabiruby.wasm` and `compiler/sabi.js` — the SabiRuby playground's module, with the
+  reference mruby compiler (MIT, see `LICENSE-mruby` of SabiRuby) and Prism (MIT) inside.
+* `compiler/vendor/browser_wasi_shim/` — [browser_wasi_shim](https://github.com/bjorn3/browser_wasi_shim),
+  MIT OR Apache-2.0; its licence files are copied with it.
+
 ## Code
 
 MIT (`LICENSE`), © 2026 Kishima Craft Works. The VM is

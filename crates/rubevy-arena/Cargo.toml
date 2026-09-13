@@ -10,5 +10,8 @@ description = "The 2D floor the games in this repository stand on: a camera, spr
 bevy.workspace = true
 rubevy.workspace = true
 sabiruby.workspace = true
-notify = "8"
 bevy_egui.workspace = true
+
+# watching the Ruby directory for edits: there is no directory to watch in a browser
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+notify = "8"
