@@ -177,7 +177,9 @@ egui.
 
 ## Blasts, and the view following the arena
 
-A hit leaves a small puff and a robot going down a large one (Kenney's `explosion1` / `explosion3`),
+A robot that is down turns grey — its hull swapped for Kenney's dark one, its name and its
+editor button greyed — so what is still in the fight is what has colour. A hit leaves a small puff
+and a robot going down a large one (Kenney's `explosion1` / `explosion3`),
 growing and fading over a quarter of a second or 0.7 s.
 
 The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little

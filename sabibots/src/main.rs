@@ -59,6 +59,26 @@ struct Robot {
     brain: Option<String>,
 }
 
+/// A robot that has lost: its hull is swapped for a grey one, once.
+#[derive(Component)]
+struct Downed;
+
+fn gray_out_downed(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    mut robots: Query<(Entity, &Robot, &mut Sprite), Without<Downed>>,
+) {
+    for (entity, robot, mut sprite) in &mut robots {
+        if robot.hp > 0.0 {
+            continue;
+        }
+        // Kenney's dark hull, dimmed a little more: grey whatever team it was on
+        sprite.image = server.load("sprites/tankBody_dark_outline.png");
+        sprite.color = Color::srgb(0.7, 0.7, 0.7);
+        commands.entity(entity).insert(Downed);
+    }
+}
+
 /// A puff where a shot landed or a robot went down: it grows, fades and goes.
 #[derive(Component)]
 struct Blast {
@@ -160,7 +180,7 @@ fn main() {
         .add_systems(Startup, (spawn_match, spawn_arena))
         .add_systems(
             Update,
-            (answer_requests, move_robots, move_bullets, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
+            (answer_requests, move_robots, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
                 .chain(),
         );
     if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
@@ -287,7 +307,7 @@ fn follow_nameplates(
             *color = TextColor(if selected {
                 Color::srgb(1.0, 1.0, 0.55)
             } else if down {
-                Color::srgba(r, g, b, 0.5)
+                Color::srgb(0.62, 0.62, 0.62)
             } else {
                 Color::srgb(r, g, b)
             });
@@ -312,7 +332,11 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
                 rubevy_arena::editor::EditorChoice {
                     id: e.to_bits(),
                     label: format!("{} {brain}{}", r.number, if r.brain.is_some() { "*" } else { "" }),
-                    color: ((cr * 255.0) as u8, (cg * 255.0) as u8, (cb * 255.0) as u8),
+                    color: if r.hp <= 0.0 {
+                        (150, 150, 150)
+                    } else {
+                        ((cr * 255.0) as u8, (cg * 255.0) as u8, (cb * 255.0) as u8)
+                    },
                     dim: r.hp <= 0.0,
                 },
             )

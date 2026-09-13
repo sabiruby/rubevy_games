@@ -9,6 +9,7 @@ text beside them as `LICENSE-kenney.txt`:
 | file | used as |
 |---|---|
 | `tankBody_blue_outline.png`, `tankBody_red_outline.png` | the robots |
+| `tankBody_dark_outline.png` | a robot that is down |
 | `bulletBlue1_outline.png`, `bulletRed1_outline.png` | their shots |
 | `tileSand1.png`, `tileSand2.png`, `tileGrass1.png` | the floor |
 | `crateMetal.png` | the arena wall |
