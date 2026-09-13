@@ -109,6 +109,18 @@ the game subtracts its length and says `prelude.rb:N` for anything above it.
 The bar fills as a robot approaches a timeslice's worth of instructions (3,000) — the point where
 it starts costing the other robot its turn. A robot thinking normally is tens to hundreds.
 
+## Telling the robots apart
+
+Every robot has a number — the order the match put it on the field — and it is the same number
+everywhere: over its head (`3 scout  hp 86`, in its team's colour), at the start of its HUD row
+(`3 blue/scout`), in the editor's title, and on the key that picks it (`3`). The robot the editor
+is showing is marked over its head: `> 1 scout  hp 100 <` in yellow. The text has a dark copy
+behind it so it reads on the sand, and it follows the robot rather than being its child, so it
+does not turn with the hull.
+
+While the editor is open the camera slides so the arena sits in the part of the window the editor
+does not cover; hide the editor (`F1`) and the arena comes back to the middle.
+
 ## The editor
 
 The right-hand window is an editor (egui, through `bevy_egui` 0.42 — the release built for Bevy
@@ -124,7 +136,7 @@ Type in it and press **Ctrl+S** (or the Save button): the file is written, the s
 that notices an edit made in any other editor notices this one, and that robot starts again with
 the new brain while the match carries on. `● unsaved` shows while the text differs from the file.
 
-`1`–`4` pick a robot, `Tab` moves on, `F1` hides the editor. Keys typed into the editor stay the
+`1`–`8` pick a robot by its number, `Tab` moves on, `F1` hides the editor. Keys typed into the editor stay the
 editor's: a `2` in the code does not switch robots (`EguiWantsInput`).
 
 The banded line is the innermost frame **in the robot's own file**, which is not the innermost

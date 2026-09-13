@@ -36,6 +36,9 @@ struct Events(Vec<[f64; 3]>);
 /// A robot in the arena. The Ruby side never sees this; it asks for what it needs.
 #[derive(Component, Debug)]
 struct Robot {
+    /// 1, 2, 3 … in the order the match put it on the field: the key that picks it, its HUD row,
+    /// and the number over its head
+    number: usize,
     /// which team it belongs to, as an index into `TEAMS`
     team: usize,
     name: String,
@@ -145,7 +148,7 @@ fn main() {
                 RubevyPlugin::default(),
             ))
             .init_resource::<Watched>()
-            .add_systems(Update, (choose_watched, show_code).chain());
+            .add_systems(Update, (choose_watched, show_code, spawn_nameplates, follow_nameplates).chain());
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
@@ -179,11 +182,13 @@ struct Watched {
 fn choose_watched(
     keys: Res<ButtonInput<KeyCode>>,
     typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
-    robots: Query<Entity, With<Robot>>,
+    robots: Query<(Entity, &Robot)>,
     mut watched: ResMut<Watched>,
     mut editor: ResMut<Editor>,
 ) {
-    let all: Vec<Entity> = robots.iter().collect();
+    let mut numbered: Vec<(Entity, usize)> = robots.iter().map(|(e, r)| (e, r.number)).collect();
+    numbered.sort_by_key(|(_, n)| *n);
+    let all: Vec<Entity> = numbered.iter().map(|(e, _)| *e).collect();
     if all.is_empty() {
         return;
     }
@@ -195,9 +200,13 @@ fn choose_watched(
     if typing.is_some_and(|t| t.wants_keyboard_input()) {
         return;
     }
-    for (i, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].into_iter().enumerate() {
+    let digits = [
+        KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4,
+        KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8,
+    ];
+    for (i, key) in digits.into_iter().enumerate() {
         if keys.just_pressed(key) {
-            if let Some(e) = all.get(i) {
+            if let Some((e, _)) = numbered.iter().find(|(_, n)| *n == i + 1) {
                 watched.entity = Some(*e);
                 editor.open = true;
             }
@@ -210,6 +219,67 @@ fn choose_watched(
     }
     if keys.just_pressed(KeyCode::F1) {
         editor.open = !editor.open;
+    }
+}
+
+/// The text over a robot: its number and brain, in its team's colour, marked when the editor
+/// is showing it. A dark copy behind it keeps it readable on the sand.
+#[derive(Component)]
+struct Nameplate {
+    robot: Entity,
+    shadow: bool,
+}
+
+const TEAM_COLORS: [(f32, f32, f32); 4] = [(1.0, 0.42, 0.36), (0.45, 0.72, 1.0), (0.45, 0.9, 0.45), (1.0, 0.85, 0.35)];
+
+fn spawn_nameplates(mut commands: Commands, robots: Query<Entity, Added<Robot>>) {
+    for entity in &robots {
+        for shadow in [true, false] {
+            commands.spawn((
+                Nameplate { robot: entity, shadow },
+                Text2d::new(""),
+                TextFont { font_size: bevy::text::FontSize::Px(44.0), ..default() },
+                TextColor(if shadow { Color::srgba(0.0, 0.0, 0.0, 0.75) } else { Color::WHITE }),
+                // world units are large next to pixels: a 44px font scaled to about two units tall
+                Transform::from_xyz(0.0, 0.0, if shadow { 6.0 } else { 6.1 }).with_scale(Vec3::splat(0.045)),
+            ));
+        }
+    }
+}
+
+fn follow_nameplates(
+    mut commands: Commands,
+    watched: Res<Watched>,
+    robots: Query<(&Robot, &Transform), Without<Nameplate>>,
+    mut plates: Query<(Entity, &Nameplate, &mut Text2d, &mut TextColor, &mut Transform)>,
+) {
+    for (plate, owner, mut text, mut color, mut transform) in &mut plates {
+        let Ok((robot, at)) = robots.get(owner.robot) else {
+            commands.entity(plate).despawn();
+            continue;
+        };
+        let brain = robot.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let selected = watched.entity == Some(owner.robot);
+        let down = robot.hp <= 0.0;
+        **text = match (selected, down) {
+            (_, true) => format!("{} {brain}  down", robot.number),
+            (true, false) => format!("> {} {brain}  hp {} <", robot.number, robot.hp as i32),
+            (false, false) => format!("{} {brain}  hp {}", robot.number, robot.hp as i32),
+        };
+        if !owner.shadow {
+            let (r, g, b) = TEAM_COLORS[robot.team.min(TEAM_COLORS.len() - 1)];
+            *color = TextColor(if selected {
+                Color::srgb(1.0, 1.0, 0.55)
+            } else if down {
+                Color::srgba(r, g, b, 0.5)
+            } else {
+                Color::srgb(r, g, b)
+            });
+        }
+        // the shadow sits a little down and right of the text it darkens
+        let nudge = if owner.shadow { 0.12 } else { 0.0 };
+        transform.translation.x = at.translation.x + nudge;
+        transform.translation.y = at.translation.y + ROBOT_RADIUS * 2.0 - nudge;
     }
 }
 
@@ -306,13 +376,14 @@ fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetS
     let sand: Handle<Image> = server.load("sprites/tileSand1.png");
     let sand2: Handle<Image> = server.load("sprites/tileSand2.png");
     // the window is 16:9 and the arena is square, so the floor reaches past the wall sideways
-    let wide = half * 16.0 / 9.0 + tile;
+    let tall = half + tile;
+    let wide = tall * 16.0 / 9.0 + tile * 3.0;
     let nx = (wide * 2.0 / tile).ceil() as i32;
-    let ny = (half * 2.0 / tile).ceil() as i32;
+    let ny = (tall * 2.0 / tile).ceil() as i32;
     for ix in 0..nx {
         for iy in 0..ny {
             let x = -wide + tile * (ix as f32 + 0.5);
-            let y = -half + tile * (iy as f32 + 0.5);
+            let y = -tall + tile * (iy as f32 + 0.5);
             let image = if (ix + iy) % 3 == 0 { sand2.clone() } else { sand.clone() };
             commands.spawn((
                 Sprite { image, custom_size: Some(Vec2::splat(tile)), ..default() },
@@ -363,10 +434,12 @@ fn spawn_robot(
     let path = ruby.join("robots").join(format!("{file}.rb"));
     let (handle, prelude_lines) = compile(ruby, &path, assets)?;
     let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
-    let name = format!("{team_name}/{file}");
+    let number = shots.0.len() + 1; // one entry per robot spawned so far
+    let name = format!("{number} {team_name}/{file}");
     let robot = commands
         .spawn((
             Robot {
+                number,
                 team,
                 name: name.clone(),
                 file: path,

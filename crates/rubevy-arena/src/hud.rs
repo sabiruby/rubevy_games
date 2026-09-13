@@ -120,5 +120,5 @@ fn render(p: &ScriptPanel) -> String {
         let filled = if p.budget == 0 { 0 } else { (p.spent * 16 / p.budget).min(16) as usize };
         format!("[{}{}]", "#".repeat(filled), "-".repeat(16 - filled))
     };
-    format!("{:<10} {:<9} {bar} {:>7} insn  {}", p.name, p.state, p.spent, p.at)
+    format!("{:<14} {:<9} {bar} {:>7} insn  {}", p.name, p.state, p.spent, p.at)
 }

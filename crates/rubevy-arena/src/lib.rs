@@ -73,15 +73,29 @@ fn view_of(half: f32) -> bevy::camera::ScalingMode {
 }
 
 /// A match that closes the arena in changes [`ArenaSize`]; the view follows it, so the fight
-/// fills the window as the field gets smaller.
-fn follow_arena(size: Res<ArenaSize>, mut cameras: Query<&mut Projection, With<Camera2d>>) {
-    if !size.is_changed() || size.is_added() {
+/// fills the window as the field gets smaller. While the editor is open the view slides so the
+/// arena sits in the part of the window the editor does not cover.
+fn follow_arena(
+    size: Res<ArenaSize>,
+    editor: Option<Res<Editor>>,
+    windows: Query<&Window>,
+    mut cameras: Query<(&mut Projection, &mut Transform), With<Camera2d>>,
+) {
+    let editor_open = editor.as_ref().is_some_and(|e| e.open);
+    let editor_changed = editor.as_ref().is_some_and(|e| e.is_changed());
+    if !(size.is_changed() || editor_changed) {
         return;
     }
-    for mut projection in &mut cameras {
+    let aspect = windows.iter().next().map(|w| w.width() / w.height().max(1.0)).unwrap_or(16.0 / 9.0);
+    let seen = size.0 + 3.0;
+    let visible_width = seen * 2.0 * aspect.max(1.0);
+    // the editor is about a third of the window on the right: centre the arena in the rest
+    let slide = if editor_open { visible_width * 0.16 } else { 0.0 };
+    for (mut projection, mut transform) in &mut cameras {
         if let Projection::Orthographic(ortho) = &mut *projection {
             ortho.scaling_mode = view_of(size.0);
         }
+        transform.translation.x = slide;
     }
 }
 
