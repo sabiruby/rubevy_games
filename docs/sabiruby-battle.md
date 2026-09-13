@@ -3,6 +3,33 @@
 Two robots in a square arena. Each robot's brain is one `.rb` file, running as a task in the one
 VM the game keeps, and every move it makes goes through a question the game answers.
 
+## Two kinds of script
+
+A **robot** is one file with a brain in it. A **match** is one file that runs the whole game: it
+puts the robots on the field, watches what happens to them, and decides when it is over. Both are
+tasks in the same VM, written in the same way — ask the game something, wait for the answer — and
+the game does only what it is told.
+
+```ruby
+# ruby/matches/training.rb
+match "Training" do
+  team :red,  robots: %w[scout hunter]
+  team :blue, robots: %w[scout scout]
+
+  rule(:sudden_death, after: 20) { |m| m.shrink 8.0 }   # the walls close in
+  rule(:closer, after: 35) { |m| m.shrink 6.0 }
+
+  on_destroyed { |file, team| Rubevy.log("match: #{team}'s #{file} is down") }
+end
+```
+
+The match asks for `spawn` (a robot file, a team, a place), `board` (every robot with its team,
+hp and position), `events` (what has happened since it last looked), `clock`, `shrink` and `win`.
+Nothing about the rules is in the Rust: the number of teams, when the walls move, what counts as
+a victory — all of it is in that file, and saving it starts the match again.
+
+`ruby/match_prelude.rb` is the DSL, the same way `ruby/prelude.rb` is the robots'.
+
 ## The boundary
 
 The game owns the world; Ruby owns the decisions.
@@ -14,6 +41,17 @@ The game owns the world; Ruby owns the decisions.
 | `Rubevy.ask("thrust", dx, dy)` | `true` | push in a direction; the game caps the speed |
 | `Rubevy.ask("fire", dx, dy)` | `true` / `false` | shoot, unless the gun is still cooling |
 | `Rubevy.ask("arena")` | half the arena's width | so the DSL can keep off the walls |
+
+And what only the match asks for:
+
+| the match asks | the game answers |
+|---|---|
+| `ask("spawn", file, team, x, y)` | the new robot's id; it comes with its own brain |
+| `ask("board")` | `[[id, team, hp, x, y], …]` |
+| `ask("events")` | `[[kind, id, other], …]` since the last call — `0` is "down" |
+| `ask("clock")` | seconds since the match started |
+| `ask("shrink", by)` | the arena's new half-width; the wall of crates moves |
+| `ask("win", team)` | the result, for the HUD |
 
 Every one of them parks the robot's task until the answer comes back (`ScriptWorld::answer`), so
 a robot waiting for a scan costs nothing and the other robot keeps running. Nothing is a callback
@@ -114,8 +152,6 @@ game points `AssetPlugin` at its own `assets/` directory.
 
 * **An in-game editor.** The plan is: read-only code panel with the current line first, editing
   after that (Bevy has no text input of its own, so it means `bevy_egui` or a small widget).
-* **More than two robots, teams, a match DSL.** `match "Training" do … end` — the second pattern
-  the games are for (Ruby running the whole game, not just the agents).
 * **Sound, sprites, effects.** Everything is a coloured square.
 
 ## Running

@@ -21,9 +21,23 @@ const BULLET_SPEED: f32 = 40.0;
 const COOLDOWN: f32 = 0.35;
 const BULLET_DAMAGE: f32 = 7.0;
 
+/// The teams a match can put on the field, in the order Ruby names them.
+const TEAMS: [(&str, &str, &str); 4] = [
+    ("red", "sprites/tankBody_red_outline.png", "sprites/bulletRed1_outline.png"),
+    ("blue", "sprites/tankBody_blue_outline.png", "sprites/bulletBlue1_outline.png"),
+    ("green", "sprites/tankBody_green_outline.png", "sprites/bulletGreen1_outline.png"),
+    ("yellow", "sprites/tankBody_sand_outline.png", "sprites/bulletSand1_outline.png"),
+];
+
+/// What happened that a match may want to know about. Drained by `Rubevy.ask("events")`.
+#[derive(Resource, Default)]
+struct Events(Vec<[f64; 3]>);
+
 /// A robot in the arena. The Ruby side never sees this; it asks for what it needs.
 #[derive(Component, Debug)]
 struct Robot {
+    /// which team it belongs to, as an index into `TEAMS`
+    team: usize,
     name: String,
     file: PathBuf,
     hp: f32,
@@ -88,7 +102,7 @@ fn main() {
                 MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
                     std::time::Duration::from_secs_f32(1.0 / 60.0),
                 )),
-                bevy::log::LogPlugin::default(),
+                bevy::log::LogPlugin { filter: "info,bevy_asset=off".into(), ..default() },
                 bevy::asset::AssetPlugin {
                     file_path: assets_dir().to_string_lossy().into_owned(),
                     ..default()
@@ -128,10 +142,12 @@ fn main() {
     }
     app.insert_resource(RubyDir(ruby.clone()))
         .init_resource::<Shots>()
-        .add_systems(Startup, (spawn_robots, spawn_arena))
+        .init_resource::<Events>()
+        .add_systems(Startup, (spawn_match, spawn_arena))
         .add_systems(
             Update,
-            (answer_requests, move_robots, move_bullets, reload_changed, report_ended, update_hud).chain(),
+            (answer_requests, move_robots, move_bullets, rebuild_walls, reload_changed, report_ended, update_hud)
+                .chain(),
         );
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false })
@@ -287,6 +303,10 @@ fn ruby_dir() -> PathBuf {
     if here.is_dir() { here } else { PathBuf::from("sabibots/ruby") }
 }
 
+/// A crate of the arena wall, so the wall can be rebuilt when the match closes it in.
+#[derive(Component)]
+struct Wall;
+
 /// The floor, tiled, and a wall of crates around it.
 fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetServer>) {
     let half = arena.0;
@@ -312,6 +332,7 @@ fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetS
         let t = -half + step * i as f32;
         for (x, y) in [(t, half), (t, -half), (-half, t), (half, t)] {
             commands.spawn((
+                Wall,
                 Sprite { image: crate_.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
                 Transform::from_xyz(x, y, 0.0),
             ));
@@ -319,38 +340,80 @@ fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetS
     }
 }
 
-fn spawn_robots(
+fn spawn_match(
     mut commands: Commands,
     ruby: Res<RubyDir>,
     mut assets: ResMut<Assets<MrbAsset>>,
-    server: Res<AssetServer>,
-    mut shots: ResMut<Shots>,
 ) {
-    let starts = [("scout", Vec2::new(-18.0, -10.0), "sprites/tankBody_blue_outline.png"),
-                  ("hunter", Vec2::new(18.0, 12.0), "sprites/tankBody_red_outline.png")];
-    for (i, (file, at, image)) in starts.into_iter().enumerate() {
-        let path = ruby.0.join("robots").join(format!("{file}.rb"));
-        let Some((handle, prelude_lines)) = compile(&ruby.0, &path, &mut assets) else { continue };
-        let bullet = if image.contains("blue") { "sprites/bulletBlue1_outline.png" } else { "sprites/bulletRed1_outline.png" };
-        let robot = commands.spawn((
-            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO, last_instructions: 0, prelude_lines, own_line: None, heading: 0.0 },
-            Script::new(handle).with_name(file).with_priority(100 + i as u8),
-            ScriptPanel { name: file.to_string(), ..default() },
+    // the match is a script like a robot is, at a higher priority: it spawns the field and
+    // decides when the fight is over, and the game only does what it is told
+    let path = ruby.0.join("matches").join("training.rb");
+    let Some((handle, _)) = compile_with(&ruby.0, "match_prelude.rb", &path, "run_match", &mut assets) else {
+        return;
+    };
+    commands.spawn((Script::new(handle).with_name("match").with_priority(10),));
+}
+
+/// `Rubevy.ask("spawn", file, team, x, y)` from the match: a robot with its own brain.
+fn spawn_robot(
+    commands: &mut Commands,
+    ruby: &Path,
+    assets: &mut Assets<MrbAsset>,
+    server: &AssetServer,
+    shots: &mut Shots,
+    file: &str,
+    team: usize,
+    at: Vec2,
+) -> Option<Entity> {
+    let path = ruby.join("robots").join(format!("{file}.rb"));
+    let (handle, prelude_lines) = compile(ruby, &path, assets)?;
+    let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
+    let name = format!("{team_name}/{file}");
+    let robot = commands
+        .spawn((
+            Robot {
+                team,
+                name: name.clone(),
+                file: path,
+                hp: 100.0,
+                cooldown: 0.0,
+                velocity: Vec2::ZERO,
+                last_instructions: 0,
+                prelude_lines,
+                own_line: None,
+                heading: 0.0,
+            },
+            Script::new(handle).with_name(&name).with_priority(100),
+            ScriptPanel { name, ..default() },
             Sprite {
-                image: server.load(image),
+                image: server.load(hull),
                 custom_size: Some(Vec2::splat(ROBOT_RADIUS * 2.4)),
                 ..default()
             },
             Transform::from_xyz(at.x, at.y, 1.0),
-        )).id();
-        shots.0.push((robot, server.load(bullet)));
-    }
+        ))
+        .id();
+    shots.0.push((robot, server.load(bullet)));
+    Some(robot)
 }
 
 /// The prelude and one robot's file, compiled to bytecode in process (the reference compiler),
 /// so the game reads `.rb` and nothing has to be built ahead of time.
 fn compile(ruby: &Path, robot: &Path, assets: &mut Assets<MrbAsset>) -> Option<(Handle<MrbAsset>, u32)> {
-    let prelude = std::fs::read_to_string(ruby.join("prelude.rb")).ok()?;
+    compile_with(ruby, "prelude.rb", robot, "run_robot", assets)
+}
+
+/// A script: one DSL file in front, the author's file behind it, and the call that starts it.
+/// The two are compiled as one program, which is why neither needs a `require`; the answer says
+/// how many lines the prelude added, so line numbers can be reported in the author's own terms.
+fn compile_with(
+    ruby: &Path,
+    prelude_file: &str,
+    robot: &Path,
+    start: &str,
+    assets: &mut Assets<MrbAsset>,
+) -> Option<(Handle<MrbAsset>, u32)> {
+    let prelude = std::fs::read_to_string(ruby.join(prelude_file)).ok()?;
     let body = match std::fs::read_to_string(robot) {
         Ok(b) => b,
         Err(e) => {
@@ -359,7 +422,7 @@ fn compile(ruby: &Path, robot: &Path, assets: &mut Assets<MrbAsset>) -> Option<(
         }
     };
     let name = robot.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_robot\n");
+    let src = format!("{prelude}\n# ---- {name} ----\n{body}\n{start}\n");
     let opts = sabiruby_compiler::Options { filename: name.clone(), debug_info: true, ..Default::default() };
     // the prelude sits in front, so a line in the compiled program is `prelude_lines` further
     // down than the same line of the robot's own file
@@ -373,19 +436,104 @@ fn compile(ruby: &Path, robot: &Path, assets: &mut Assets<MrbAsset>) -> Option<(
     }
 }
 
+/// The wall follows the arena: a match that closes it in changes `ArenaSize`, and the crates
+/// move to the new edge.
+fn rebuild_walls(
+    mut commands: Commands,
+    arena: Res<ArenaSize>,
+    server: Res<AssetServer>,
+    walls: Query<Entity, With<Wall>>,
+) {
+    if !arena.is_changed() || arena.is_added() {
+        return;
+    }
+    for wall in &walls {
+        commands.entity(wall).despawn();
+    }
+    let half = arena.0;
+    let crate_: Handle<Image> = server.load("sprites/crateMetal.png");
+    let step = 2.6;
+    let count = (half * 2.0 / step).ceil() as i32;
+    for i in 0..=count {
+        let t = -half + step * i as f32;
+        for (x, y) in [(t, half), (t, -half), (-half, t), (half, t)] {
+            commands.spawn((
+                Wall,
+                Sprite { image: crate_.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
+                Transform::from_xyz(x, y, 0.0),
+            ));
+        }
+    }
+}
+
 /// The game's side of `Rubevy.ask`: everything a robot can see or do.
 fn answer_requests(
     mut world: ResMut<ScriptWorld>,
     mut robots: Query<(Entity, &mut Robot, &Transform)>,
     mut commands: Commands,
-    arena: Res<ArenaSize>,
-    shots: Res<Shots>,
+    mut arena: ResMut<ArenaSize>,
+    mut shots: ResMut<Shots>,
+    mut events: ResMut<Events>,
+    mut hud: ResMut<Hud>,
+    time: Res<Time>,
+    ruby: Res<RubyDir>,
+    mut assets: ResMut<Assets<MrbAsset>>,
+    server: Res<AssetServer>,
 ) {
-    let positions: Vec<(Entity, Vec2, f32)> = robots
+    let positions: Vec<(Entity, usize, Vec2, f32)> = robots
         .iter()
-        .map(|(e, r, t)| (e, t.translation.truncate(), r.hp))
+        .map(|(e, r, t)| (e, r.team, t.translation.truncate(), r.hp))
         .collect();
     for request in world.take_requests() {
+        // what the match asks for. It has no entity of its own: it is the game, not a thing in it
+        match request.kind.as_str() {
+            "clock" => {
+                world.answer(&request, Answer::Num(time.elapsed_secs() as f64));
+                continue;
+            }
+            "spawn" => {
+                let file = request.text(0).unwrap_or("scout").to_string();
+                let team_name = request.text(1).unwrap_or("red").to_string();
+                let team = TEAMS.iter().position(|(n, _, _)| *n == team_name).unwrap_or(0);
+                let at = Vec2::new(request.num_or(2, 0.0) as f32, request.num_or(3, 0.0) as f32);
+                let answer =
+                    match spawn_robot(&mut commands, &ruby.0, &mut assets, &server, &mut shots, &file, team, at) {
+                        Some(e) => Answer::Num(e.to_bits() as f64),
+                        None => Answer::Nil,
+                    };
+                world.answer(&request, answer);
+                continue;
+            }
+            "board" => {
+                let rows = positions
+                    .iter()
+                    .map(|(e, team, at, hp)| {
+                        vec![e.to_bits() as f64, *team as f64, *hp as f64, at.x as f64, at.y as f64]
+                    })
+                    .collect();
+                world.answer(&request, Answer::Rows(rows));
+                continue;
+            }
+            "events" => {
+                let rows = std::mem::take(&mut events.0).into_iter().map(|e| e.to_vec()).collect();
+                world.answer(&request, Answer::Rows(rows));
+                continue;
+            }
+            "shrink" => {
+                arena.0 = (arena.0 - request.num_or(0, 0.0) as f32).max(9.0);
+                hud.line = format!("the walls close in: {:.0}", arena.0);
+                world.answer(&request, Answer::Num(arena.0 as f64));
+                continue;
+            }
+            "win" => {
+                let team = request.text(0).unwrap_or("none").to_string();
+                hud.line =
+                    if team == "none" { "a draw".into() } else { format!("winner: {team}") };
+                world.answer(&request, Answer::Bool(true));
+                continue;
+            }
+            _ => {}
+        }
         let Some(me) = request.entity else {
             world.answer(&request, Answer::Nil);
             continue;
@@ -396,24 +544,22 @@ fn answer_requests(
         };
         let at = transform.translation.truncate();
         let answer = match request.kind.as_str() {
-            "me" => Answer::List(vec![at.x as f64, at.y as f64, robot.hp as f64, 0.0]),
+            "me" => Answer::List(vec![at.x as f64, at.y as f64, robot.hp as f64, robot.team as f64]),
             "scan" => {
-                let range = request.args.first().copied().unwrap_or(40.0);
-                match nearest(me, at, &positions, range) {
+                let range = request.num_or(0, 40.0) as f32;
+                match nearest(me, robot.team, at, &positions, range) {
                     Some((d, dist)) => Answer::List(vec![d.x as f64, d.y as f64, dist as f64]),
                     None => Answer::Nil,
                 }
             }
             "thrust" => {
-                let (dx, dy) = (request.args.first().copied().unwrap_or(0.0),
-                                request.args.get(1).copied().unwrap_or(0.0));
+                let (dx, dy) = (request.num_or(0, 0.0) as f32, request.num_or(1, 0.0) as f32);
                 let v = Vec2::new(dx, dy).clamp_length_max(1.0) * MAX_SPEED;
                 robot.velocity = v;
                 Answer::Bool(true)
             }
             "fire" => {
-                let dir = Vec2::new(request.args.first().copied().unwrap_or(0.0),
-                                    request.args.get(1).copied().unwrap_or(0.0));
+                let dir = Vec2::new(request.num_or(0, 0.0) as f32, request.num_or(1, 0.0) as f32);
                 if robot.cooldown > 0.0 || dir.length_squared() < 1e-6 || robot.hp <= 0.0 {
                     Answer::Bool(false)
                 } else {
@@ -444,11 +590,17 @@ fn answer_requests(
     }
 }
 
-/// The nearest living robot other than `me`, as an offset and a distance.
-fn nearest(me: Entity, at: Vec2, all: &[(Entity, Vec2, f32)], range: f32) -> Option<(Vec2, f32)> {
+/// The nearest living robot of another team, as an offset and a distance.
+fn nearest(
+    me: Entity,
+    team: usize,
+    at: Vec2,
+    all: &[(Entity, usize, Vec2, f32)],
+    range: f32,
+) -> Option<(Vec2, f32)> {
     all.iter()
-        .filter(|(e, _, hp)| *e != me && *hp > 0.0)
-        .map(|(_, p, _)| (*p - at, (*p - at).length()))
+        .filter(|(e, t, _, hp)| *e != me && *t != team && *hp > 0.0)
+        .map(|(_, _, p, _)| (*p - at, (*p - at).length()))
         .filter(|(_, d)| *d <= range)
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
@@ -476,6 +628,7 @@ fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut R
 fn move_bullets(
     time: Res<Time>,
     mut commands: Commands,
+    mut events: ResMut<Events>,
     arena: Res<ArenaSize>,
     mut bullets: Query<(Entity, &mut Bullet, &mut Transform)>,
     mut robots: Query<(Entity, &mut Robot, &Transform), Without<Bullet>>,
@@ -494,8 +647,13 @@ fn move_bullets(
                 continue;
             }
             if t.translation.truncate().distance(at) <= ROBOT_RADIUS {
+                let was_alive = robot.hp > 0.0;
                 robot.hp -= BULLET_DAMAGE;
                 commands.entity(entity).despawn();
+                if was_alive && robot.hp <= 0.0 {
+                    // kind 0: a robot is down. The match reads these and decides what they mean
+                    events.0.push([0.0, target.to_bits() as f64, bullet.owner.to_bits() as f64]);
+                }
                 break;
             }
         }
@@ -581,9 +739,5 @@ fn update_hud(
             .find(|(_, line)| *line > robot.prelude_lines)
             .map(|(_, line)| line - robot.prelude_lines);
     }
-    if alive <= 1 && !hud.line.starts_with("winner") {
-        if let Some((robot, _, _)) = robots.iter().find(|(r, _, _)| r.hp > 0.0) {
-            hud.line = format!("winner: {}", robot.name);
-        }
-    }
+    let _ = alive;
 }

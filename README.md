@@ -17,7 +17,8 @@ cargo run -p sabibots -- --headless 15  # no window: 15 seconds, the result on s
 ```
 
 Then open `sabibots/ruby/robots/scout.rb`, change how it fights, and save: that robot starts
-again with the new brain while the game keeps running.
+again with the new brain while the game keeps running. `sabibots/ruby/matches/training.rb` is the
+match itself — who is on the field, when the walls close in, what ends it — and it is Ruby too.
 
 ## Why Ruby here
 
