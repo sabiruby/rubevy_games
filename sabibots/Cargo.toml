@@ -10,5 +10,5 @@ description = "SabiRuby Battle — robots whose brains are Ruby, running as task
 bevy.workspace = true
 rubevy = { workspace = true, features = ["ruby-source"] }
 sabiruby.workspace = true
-sabiruby-compiler = { version = "0.2.1", features = ["host"] }
+sabiruby-compiler.workspace = true
 rubevy-arena.workspace = true

@@ -57,13 +57,28 @@ rubevy hands the scheduler a budget per frame. A robot that never sleeps is pree
 next frame; a robot that raises has its exception become the task's result, which the game reports
 and the match carries on. Neither can stop the frame.
 
+## The HUD
+
+One line per robot: its name, hp, a bar of what its brain spent on the last frame, the count, and
+**the line it is standing on** — `scout.rb:22` in its own file, or `prelude.rb:18` where it is
+inside the DSL (waiting for a scan, usually). It comes from the VM: `Vm::task_instructions` and
+`Vm::task_location`, through `ScriptWorld::stats`, and both work while a task is parked as well as
+while it runs.
+
+The line numbers are the robot's own. The prelude is compiled in front of the robot's file, so
+the game subtracts its length and says `prelude.rb:N` for anything above it.
+
+The bar fills as a robot approaches a timeslice's worth of instructions (3,000) — the point where
+it starts costing the other robot its turn. A robot thinking normally is tens to hundreds.
+
+## Seeing it where there is no window
+
+`cargo run -p sabibots -- --shot shot.png 5` opens the window, waits five seconds, writes a PNG
+and exits. With `docker/run.sh` (see `docs/wsl-gpu.md`) that works on a machine with no GPU
+driver, which is how the screenshots in this repository were made.
+
 ## What v0.1 does not do yet
 
-* **Per-robot instruction counts and current line in the HUD.** The panel is there
-  (`rubevy-arena::ScriptPanel`) and shows hp, but the VM counts instructions for the whole VM, not
-  per task, and it has no "where is this task" entry point. Both are small additions to SabiRuby
-  (`Vm::task_instructions(task)`, `Vm::task_location(task)`) and are the next thing worth doing:
-  watching a robot's own line move is the thing this VM can show that others cannot.
 * **An in-game editor.** The plan is: read-only code panel with the current line first, editing
   after that (Bevy has no text input of its own, so it means `bevy_egui` or a small widget).
 * **More than two robots, teams, a match DSL.** `match "Training" do … end` — the second pattern

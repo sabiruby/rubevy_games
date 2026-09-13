@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptWorld};
+use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
 use rubevy_arena::{ArenaPlugin, ArenaSize, Hud, HudPlugin, ScriptPanel, Watch};
 
 const ROBOT_RADIUS: f32 = 1.6;
@@ -29,6 +29,10 @@ struct Robot {
     hp: f32,
     cooldown: f32,
     velocity: Vec2,
+    /// what its brain had spent as of the last frame, so the HUD can show this frame's share
+    last_instructions: u64,
+    /// lines the prelude adds in front of the robot's own file
+    prelude_lines: u32,
 }
 
 #[derive(Component)]
@@ -49,6 +53,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().position(|a| a == "--headless").map(|i| {
         args.get(i + 1).and_then(|s| s.parse::<f32>().ok()).unwrap_or(10.0)
+    });
+    // `--shot FILE [SECONDS]`: a window, a picture of it, and out. For checking the HUD where
+    // the window itself cannot be looked at.
+    let shot = args.iter().position(|a| a == "--shot").map(|i| {
+        (
+            args.get(i + 1).cloned().unwrap_or_else(|| "shot.png".into()),
+            args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0),
+        )
     });
 
     let mut app = App::new();
@@ -84,17 +96,47 @@ fn main() {
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
-        .add_systems(Startup, spawn_robots)
+        .add_systems(Startup, (spawn_robots, spawn_arena))
         .add_systems(
             Update,
             (answer_requests, move_robots, move_bullets, reload_changed, report_ended, update_hud).chain(),
         );
+    if let Some((path, after)) = shot {
+        app.insert_resource(Shot { path, after, taken: false })
+            .add_systems(Update, take_shot);
+    }
     if let Some(watch) = Watch::new(&ruby) {
         app.insert_resource(watch);
     } else {
         warn!("could not watch {ruby:?}: saving a robot will not reload it");
     }
     app.run();
+}
+
+/// `--shot`: where to put the picture, and when.
+#[derive(Resource)]
+struct Shot {
+    path: String,
+    after: f32,
+    taken: bool,
+}
+
+fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mut exit: MessageWriter<AppExit>) {
+    if shot.taken {
+        if time.elapsed_secs() > shot.after + 1.0 {
+            exit.write(AppExit::Success);
+        }
+        return;
+    }
+    if time.elapsed_secs() < shot.after {
+        return;
+    }
+    shot.taken = true;
+    let path = shot.path.clone();
+    info!("screenshot -> {path}");
+    commands
+        .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+        .observe(bevy::render::view::screenshot::save_to_disk(path));
 }
 
 /// `--headless`: how long the match may last, and the last line printed.
@@ -107,20 +149,22 @@ fn stop_when_over(
     time: Res<Time>,
     headless: Res<Headless>,
     hud: Res<Hud>,
-    robots: Query<(&Robot, &Transform)>,
+    robots: Query<(&Robot, &ScriptPanel, &Transform)>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let over = hud.line.starts_with("winner") || time.elapsed_secs() >= headless.until;
     if !over {
         return;
     }
-    for (robot, t) in &robots {
+    for (robot, panel, t) in &robots {
         info!(
-            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})",
+            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}",
             robot.name,
             robot.hp.max(0.0) as i32,
             t.translation.x,
-            t.translation.y
+            t.translation.y,
+            panel.spent,
+            panel.at
         );
     }
     info!("{}", if hud.line.is_empty() { "time" } else { hud.line.as_str() });
@@ -133,14 +177,31 @@ fn ruby_dir() -> PathBuf {
     if here.is_dir() { here } else { PathBuf::from("sabibots/ruby") }
 }
 
+/// Four thin bars: the walls the robots are clamped to.
+fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>) {
+    let (half, thick) = (arena.0, 0.6);
+    let wall = Color::srgb(0.25, 0.26, 0.32);
+    for (x, y, w, h) in [
+        (0.0, half, half * 2.0 + thick, thick),
+        (0.0, -half, half * 2.0 + thick, thick),
+        (-half, 0.0, thick, half * 2.0 + thick),
+        (half, 0.0, thick, half * 2.0 + thick),
+    ] {
+        commands.spawn((
+            Sprite { color: wall, custom_size: Some(Vec2::new(w, h)), ..default() },
+            Transform::from_xyz(x, y, 0.0),
+        ));
+    }
+}
+
 fn spawn_robots(mut commands: Commands, ruby: Res<RubyDir>, mut assets: ResMut<Assets<MrbAsset>>) {
     let starts = [("scout", Vec2::new(-18.0, -10.0), Color::srgb(0.35, 0.75, 1.0)),
                   ("hunter", Vec2::new(18.0, 12.0), Color::srgb(1.0, 0.45, 0.35))];
     for (i, (file, at, color)) in starts.into_iter().enumerate() {
         let path = ruby.0.join("robots").join(format!("{file}.rb"));
-        let Some(handle) = compile(&ruby.0, &path, &mut assets) else { continue };
+        let Some((handle, prelude_lines)) = compile(&ruby.0, &path, &mut assets) else { continue };
         commands.spawn((
-            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO },
+            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO, last_instructions: 0, prelude_lines },
             Script::new(handle).with_name(file).with_priority(100 + i as u8),
             ScriptPanel { name: file.to_string(), ..default() },
             Sprite { color, custom_size: Some(Vec2::splat(ROBOT_RADIUS * 2.0)), ..default() },
@@ -151,7 +212,7 @@ fn spawn_robots(mut commands: Commands, ruby: Res<RubyDir>, mut assets: ResMut<A
 
 /// The prelude and one robot's file, compiled to bytecode in process (the reference compiler),
 /// so the game reads `.rb` and nothing has to be built ahead of time.
-fn compile(ruby: &Path, robot: &Path, assets: &mut Assets<MrbAsset>) -> Option<Handle<MrbAsset>> {
+fn compile(ruby: &Path, robot: &Path, assets: &mut Assets<MrbAsset>) -> Option<(Handle<MrbAsset>, u32)> {
     let prelude = std::fs::read_to_string(ruby.join("prelude.rb")).ok()?;
     let body = match std::fs::read_to_string(robot) {
         Ok(b) => b,
@@ -163,8 +224,11 @@ fn compile(ruby: &Path, robot: &Path, assets: &mut Assets<MrbAsset>) -> Option<H
     let name = robot.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_robot\n");
     let opts = sabiruby_compiler::Options { filename: name.clone(), debug_info: true, ..Default::default() };
+    // the prelude sits in front, so a line in the compiled program is `prelude_lines` further
+    // down than the same line of the robot's own file
+    let prelude_lines = prelude.lines().count() as u32 + 2;
     match sabiruby_compiler::compile(src.as_bytes(), &opts) {
-        Ok(bytes) => Some(assets.add(MrbAsset { bytes })),
+        Ok(bytes) => Some((assets.add(MrbAsset { bytes }), prelude_lines)),
         Err(e) => {
             error!("{name}: {e}");
             None
@@ -304,7 +368,7 @@ fn reload_changed(
             if !reload {
                 continue;
             }
-            let Some(handle) = compile(&ruby.0, &robot.file, &mut assets) else {
+            let Some((handle, _)) = compile(&ruby.0, &robot.file, &mut assets) else {
                 hud.line = format!("{}: compile error (see the log)", robot.name);
                 continue;
             };
@@ -329,9 +393,13 @@ fn report_ended(mut ended: MessageReader<ScriptEnded>, mut hud: ResMut<Hud>) {
     }
 }
 
-fn update_hud(mut robots: Query<(&Robot, &mut ScriptPanel)>, mut hud: ResMut<Hud>) {
+fn update_hud(
+    world: Res<ScriptWorld>,
+    mut robots: Query<(&mut Robot, Option<&ScriptTask>, &mut ScriptPanel)>,
+    mut hud: ResMut<Hud>,
+) {
     let mut alive = 0;
-    for (robot, mut panel) in &mut robots {
+    for (mut robot, script, mut panel) in &mut robots {
         panel.name = robot.name.clone();
         panel.state = if robot.hp > 0.0 {
             alive += 1;
@@ -339,9 +407,25 @@ fn update_hud(mut robots: Query<(&Robot, &mut ScriptPanel)>, mut hud: ResMut<Hud
         } else {
             "down".into()
         };
+        // what the brain spent on this frame, and the line it is standing on — the VM knows both,
+        // for a parked task as well as a running one
+        let Some(script) = script else { continue };
+        let stats = world.stats(script);
+        panel.spent = stats.instructions.saturating_sub(robot.last_instructions);
+        // a brain that thinks for a frame spends tens to hundreds; the bar fills as one
+        // approaches a timeslice's worth, which is where it starts costing the other robot
+        panel.budget = 3_000;
+        robot.last_instructions = stats.instructions;
+        panel.at = match stats.location {
+            Some((file, line)) if line > robot.prelude_lines => {
+                format!("{file}:{}", line - robot.prelude_lines)
+            }
+            Some((_, line)) => format!("prelude.rb:{line}"),
+            None => String::new(),
+        };
     }
     if alive <= 1 && !hud.line.starts_with("winner") {
-        if let Some((robot, _)) = robots.iter().find(|(r, _)| r.hp > 0.0) {
+        if let Some((robot, _, _)) = robots.iter().find(|(r, _, _)| r.hp > 0.0) {
             hud.line = format!("winner: {}", robot.name);
         }
     }
