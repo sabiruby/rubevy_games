@@ -132,9 +132,32 @@ red/scout  scout.rb  (in prelude.rb:15)
    9        target = scan(40)        ← banded
 ```
 
-Type in it and press **Ctrl+S** (or the Save button): the file is written, the same file watcher
-that notices an edit made in any other editor notices this one, and that robot starts again with
-the new brain while the match carries on. `● unsaved` shows while the text differs from the file.
+What is typed stays **in memory** until you say otherwise. Trying something in a running match
+should not rewrite the project on disk — and a build whose files cannot be written (a packaged
+game, a browser) gets the same editor. Four buttons decide what happens to the text:
+
+| button | key | what it does |
+|---|---|---|
+| **Apply** | F5 / Ctrl+Enter | compiles the text and restarts **this robot only** with it; the file is untouched |
+| **Apply to all *file*** | | the same, for every robot whose brain is that file |
+| **Save to file** | Ctrl+S | writes the text to the file; robots on the file pick it up |
+| **Revert** | | forgets the edits and puts this robot back on its file |
+
+A robot running an applied brain is marked `*` — `3 scout*` on its button and over its head, and
+`scout.rb*` in the editor's title. The file watcher leaves such robots alone: an edit made in
+another editor reaches the robots on the file, not the one you are experimenting with. A text that
+does not compile is not applied; the editor says why and the robot keeps the brain it has.
+
+Closing the game forgets applied brains that were not saved. Edits typed and not applied are kept
+per robot while the game runs, and the editor lists the robots that have some.
+
+The editor itself does no file I/O (`EditorAction` is what it hands the game), so the rules above
+live in the game (`do_editor_actions`), and another game can choose different ones.
+
+`SABIBOTS_SELFTEST=1 docker/run.sh` drives these buttons the way a click would and checks the
+outcome: Apply reaches only the shown robot and writes nothing, Apply to all reaches the robots on
+the same file and no others, Revert puts the shown robot back on its file. Save is left out of it
+on purpose, since it writes to the repository.
 
 Along the top of the editor is a button per robot (`1 scout`, `2 hunter`, … in team colours, faded when the robot is down); click one to show its brain. `1`–`8` do the same from the keyboard, `Tab` moves on, `F1` hides the editor. Switching to another file keeps what was typed into the one being left: unsaved edits are held per file and come back when you return to it, and the editor lists which files have them. Keys typed into the editor stay the
 editor's: a `2` in the code does not switch robots (`EguiWantsInput`).

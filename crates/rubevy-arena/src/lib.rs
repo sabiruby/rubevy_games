@@ -20,7 +20,7 @@ pub mod code;
 pub mod editor;
 pub mod hud;
 pub use code::{CodePanel, CodePanelPlugin};
-pub use editor::{Editor, EditorPlugin};
+pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
 
 /// Half the width of the square the camera shows, in world units.

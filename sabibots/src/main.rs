@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
-use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorPlugin, Hud, HudPlugin, ScriptPanel, Watch};
+use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, HudPlugin, ScriptPanel, Watch};
 
 const ROBOT_RADIUS: f32 = 1.6;
 const MAX_SPEED: f32 = 14.0;
@@ -54,6 +54,9 @@ struct Robot {
     own_line: Option<u32>,
     /// where the hull points, kept from the last direction it moved or fired in
     heading: f32,
+    /// the brain it runs when that is not its file: text applied from the editor and not saved.
+    /// A robot with one is left alone when the file changes on disk.
+    brain: Option<String>,
 }
 
 /// A puff where a shot landed or a robot went down: it grows, fades and goes.
@@ -148,7 +151,7 @@ fn main() {
                 RubevyPlugin::default(),
             ))
             .init_resource::<Watched>()
-            .add_systems(Update, (choose_watched, show_code, spawn_nameplates, follow_nameplates).chain());
+            .add_systems(Update, (choose_watched, show_code, do_editor_actions, spawn_nameplates, follow_nameplates).chain());
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
@@ -160,6 +163,9 @@ fn main() {
             (answer_requests, move_robots, move_bullets, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
                 .chain(),
         );
+    if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
+        app.insert_resource(SelfTest { at: 2.0, ..default() }).add_systems(Update, selftest);
+    }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false })
             .add_systems(Update, take_shot);
@@ -264,7 +270,11 @@ fn follow_nameplates(
             commands.entity(plate).despawn();
             continue;
         };
-        let brain = robot.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let star = if robot.brain.is_some() { "*" } else { "" };
+        let brain = format!(
+            "{}{star}",
+            robot.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+        );
         let selected = watched.entity == Some(owner.robot);
         let down = robot.hp <= 0.0;
         **text = match (selected, down) {
@@ -301,7 +311,7 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
                 r.number,
                 rubevy_arena::editor::EditorChoice {
                     id: e.to_bits(),
-                    label: format!("{} {brain}", r.number),
+                    label: format!("{} {brain}{}", r.number, if r.brain.is_some() { "*" } else { "" }),
                     color: ((cr * 255.0) as u8, (cg * 255.0) as u8, (cb * 255.0) as u8),
                     dim: r.hp <= 0.0,
                 },
@@ -314,11 +324,92 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
 
     let Some(entity) = watched.entity else { return };
     let Ok((_, robot, script)) = robots.get(entity) else { return };
-    editor.show(&robot.file);
+    // what the robot is running: its applied brain, or its file
+    editor.show(entity.to_bits(), || {
+        robot.brain.clone().unwrap_or_else(|| std::fs::read_to_string(&robot.file).unwrap_or_default())
+    });
+    editor.file = brain_name(robot);
+    editor.in_memory = robot.brain.is_some();
     editor.label = robot.name.clone();
     editor.current = robot.own_line;
     // where it stands when that is not this file: inside the DSL, waiting for an answer
     editor.elsewhere = script.at.starts_with("prelude").then(|| script.at.clone());
+}
+
+/// `SABIBOTS_SELFTEST=1`: drives the editor's buttons the way a click would (by setting
+/// `Editor::action`) and checks what happened to the robots and to the file — the part of the
+/// editor that cannot be clicked where there is no mouse. Logs `selftest:` lines and exits.
+#[derive(Resource, Default)]
+struct SelfTest {
+    step: usize,
+    at: f32,
+    original: String,
+}
+
+fn selftest(
+    time: Res<Time>,
+    mut test: ResMut<SelfTest>,
+    mut editor: ResMut<Editor>,
+    mut watched: ResMut<Watched>,
+    robots: Query<(Entity, &Robot)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let now = time.elapsed_secs();
+    if now < test.at {
+        return;
+    }
+    let by_number = |n: usize| robots.iter().find(|(_, r)| r.number == n);
+    let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
+    match test.step {
+        0 => {
+            // show robot 3 and type a different brain into the editor
+            let Some((e, r)) = by_number(3) else { return };
+            test.original = std::fs::read_to_string(&r.file).unwrap_or_default();
+            watched.entity = Some(e);
+            test.step = 1;
+            test.at = now + 0.5;
+        }
+        1 => {
+            editor.text = editor.text.replace("sleep 0.05", "sleep 0.5");
+            ok(editor.changed(), "typing marks the text edited");
+            editor.action = Some(EditorAction::Apply);
+            test.step = 2;
+            test.at = now + 0.5;
+        }
+        2 => {
+            let (_, r3) = by_number(3).unwrap();
+            let (_, r4) = by_number(4).unwrap();
+            let on_disk = std::fs::read_to_string(&r3.file).unwrap_or_default();
+            ok(r3.brain.as_deref().is_some_and(|b| b.contains("sleep 0.5")), "Apply gives robot 3 the edited brain");
+            ok(r4.brain.is_none(), "Apply leaves robot 4 (same file) alone");
+            ok(on_disk == test.original, "Apply does not touch the file");
+            ok(!editor.changed(), "after Apply the text is what the robot runs");
+            editor.action = Some(EditorAction::ApplyAll);
+            test.step = 3;
+            test.at = now + 0.5;
+        }
+        3 => {
+            let (_, r4) = by_number(4).unwrap();
+            let (_, r2) = by_number(2).unwrap();
+            ok(r4.brain.is_some(), "Apply to all reaches robot 4 (same file)");
+            ok(r2.brain.is_none(), "Apply to all leaves robot 2 (another file) alone");
+            editor.action = Some(EditorAction::Revert);
+            test.step = 4;
+            test.at = now + 0.5;
+        }
+        4 => {
+            let (_, r3) = by_number(3).unwrap();
+            let (_, r4) = by_number(4).unwrap();
+            ok(r3.brain.is_none(), "Revert puts robot 3 back on its file");
+            ok(r4.brain.is_some(), "Revert is for the shown robot only: robot 4 keeps its brain");
+            ok(editor.text == test.original, "Revert shows the file again");
+            let on_disk = std::fs::read_to_string(&r3.file).unwrap_or_default();
+            ok(on_disk == test.original, "nothing was written");
+            exit.write(AppExit::Success);
+            test.step = 5;
+        }
+        _ => {}
+    }
 }
 
 /// `--shot`: where to put the picture, and when.
@@ -477,6 +568,7 @@ fn spawn_robot(
                 prelude_lines,
                 own_line: None,
                 heading: 0.0,
+                brain: None,
             },
             Script::new(handle).with_name(&name).with_priority(100),
             ScriptPanel { name, ..default() },
@@ -508,7 +600,6 @@ fn compile_with(
     start: &str,
     assets: &mut Assets<MrbAsset>,
 ) -> Option<(Handle<MrbAsset>, u32)> {
-    let prelude = std::fs::read_to_string(ruby.join(prelude_file)).ok()?;
     let body = match std::fs::read_to_string(robot) {
         Ok(b) => b,
         Err(e) => {
@@ -517,16 +608,119 @@ fn compile_with(
         }
     };
     let name = robot.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    compile_text(ruby, prelude_file, &name, &body, start, assets).map_err(|e| error!("{e}")).ok()
+}
+
+/// The same, from text rather than a file: what the editor applies. The error is the compiler's
+/// message, for the editor to show.
+fn compile_text(
+    ruby: &Path,
+    prelude_file: &str,
+    name: &str,
+    body: &str,
+    start: &str,
+    assets: &mut Assets<MrbAsset>,
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let prelude = std::fs::read_to_string(ruby.join(prelude_file)).map_err(|e| format!("{prelude_file}: {e}"))?;
     let src = format!("{prelude}\n# ---- {name} ----\n{body}\n{start}\n");
-    let opts = sabiruby_compiler::Options { filename: name.clone(), debug_info: true, ..Default::default() };
+    let opts = sabiruby_compiler::Options { filename: name.to_string(), debug_info: true, ..Default::default() };
     // the prelude sits in front, so a line in the compiled program is `prelude_lines` further
     // down than the same line of the robot's own file
     let prelude_lines = prelude.lines().count() as u32 + 2;
-    match sabiruby_compiler::compile(src.as_bytes(), &opts) {
-        Ok(bytes) => Some((assets.add(MrbAsset { bytes }), prelude_lines)),
-        Err(e) => {
-            error!("{name}: {e}");
-            None
+    sabiruby_compiler::compile(src.as_bytes(), &opts)
+        .map(|bytes| (assets.add(MrbAsset { bytes }), prelude_lines))
+        .map_err(|e| format!("{name}: {e}"))
+}
+
+/// Starts a robot over with another brain: dropping its task and giving it a new `Script`.
+fn restart(commands: &mut Commands, entity: Entity, name: &str, handle: Handle<MrbAsset>) {
+    commands
+        .entity(entity)
+        .remove::<rubevy::ScriptTask>()
+        .remove::<rubevy::ScriptDone>()
+        .insert(Script::new(handle).with_name(name).with_priority(128));
+}
+
+fn brain_name(robot: &Robot) -> String {
+    robot.file.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// What the editor's buttons asked for. Nothing here writes a file except `Save`: applying runs
+/// the text in memory, so trying something in a match does not rewrite the project.
+fn do_editor_actions(
+    mut editor: ResMut<Editor>,
+    watched: Res<Watched>,
+    ruby: Res<RubyDir>,
+    mut commands: Commands,
+    mut assets: ResMut<Assets<MrbAsset>>,
+    mut robots: Query<(Entity, &mut Robot)>,
+    mut hud: ResMut<Hud>,
+) {
+    let Some(action) = editor.action.take() else { return };
+    let Some(shown) = watched.entity else { return };
+    let Ok((_, robot)) = robots.get(shown) else { return };
+    let file = robot.file.clone();
+    let name = brain_name(robot);
+    let label = robot.name.clone();
+    let text = editor.text.clone();
+
+    match action {
+        EditorAction::Apply | EditorAction::ApplyAll => {
+            let (handle, _) = match compile_text(&ruby.0, "prelude.rb", &name, &text, "run_robot", &mut assets) {
+                Ok(c) => c,
+                Err(e) => {
+                    // the robot keeps the brain it has
+                    editor.message = format!("not applied: {e}");
+                    return;
+                }
+            };
+            let mut count = 0;
+            for (entity, mut r) in &mut robots {
+                let target = if action == EditorAction::Apply { entity == shown } else { r.file == file };
+                if !target {
+                    continue;
+                }
+                r.brain = Some(text.clone());
+                restart(&mut commands, entity, &r.name, handle.clone());
+                count += 1;
+            }
+            let what = if count == 1 { label.clone() } else { format!("{count} robots with {name}") };
+            editor.applied(format!("applied to {what} (in memory: Save to file to keep it)"));
+            hud.line = format!("new brain: {what}");
+        }
+        EditorAction::Save => {
+            if let Err(e) = std::fs::write(&file, &text) {
+                editor.message = format!("could not save {name}: {e}");
+                return;
+            }
+            // the file is what this text is now: robots running exactly it are file-brained
+            // again, and the watcher restarts the ones on the file (the shown one included)
+            for (_, mut r) in &mut robots {
+                if r.file == file && r.brain.as_deref() == Some(text.as_str()) {
+                    r.brain = None;
+                }
+            }
+            if let Ok((_, mut r)) = robots.get_mut(shown) {
+                r.brain = None;
+            }
+            editor.applied(format!("saved to {name}"));
+            hud.line = format!("{name} saved");
+        }
+        EditorAction::Revert => {
+            let Ok(source) = std::fs::read_to_string(&file) else {
+                editor.message = format!("could not read {name}");
+                return;
+            };
+            match compile_text(&ruby.0, "prelude.rb", &name, &source, "run_robot", &mut assets) {
+                Ok((handle, _)) => {
+                    if let Ok((entity, mut r)) = robots.get_mut(shown) {
+                        r.brain = None;
+                        restart(&mut commands, entity, &r.name, handle);
+                    }
+                    editor.reset_to(source, format!("back to {name}"));
+                }
+                Err(e) => editor.message = format!("the file does not compile: {e}"),
+            }
         }
     }
 }
@@ -792,13 +986,25 @@ fn reload_changed(
     mut assets: ResMut<Assets<MrbAsset>>,
     robots: Query<(Entity, &Robot)>,
     mut hud: ResMut<Hud>,
+    editor: Option<ResMut<Editor>>,
+    watched: Option<Res<Watched>>,
 ) {
     let Some(watch) = watch else { return };
+    let mut editor = editor;
     for path in watch.changed() {
         for (entity, robot) in &robots {
             let reload = path == robot.file || path.ends_with("prelude.rb");
-            if !reload {
+            // a brain applied from the editor is the robot's until it is saved or reverted
+            if !reload || robot.brain.is_some() {
                 continue;
+            }
+            // the editor showing this robot, with nothing typed, follows the file
+            if let (Some(editor), Some(watched)) = (editor.as_mut(), watched.as_ref()) {
+                if watched.entity == Some(entity) && !editor.changed() {
+                    if let Ok(source) = std::fs::read_to_string(&robot.file) {
+                        editor.reset_to(source, "the file changed");
+                    }
+                }
             }
             let Some((handle, _)) = compile(&ruby.0, &robot.file, &mut assets) else {
                 hud.line = format!("{}: compile error (see the log)", robot.name);

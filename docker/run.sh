@@ -20,5 +20,6 @@ exec docker run --rm $TTY \
   -e WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
   -e XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir \
   -e PULSE_SERVER=/mnt/wslg/PulseServer \
+  -e SABIBOTS_SELFTEST \
   -w /app "$IMAGE" \
   "/target/$MODE/$GAME" "$@"
