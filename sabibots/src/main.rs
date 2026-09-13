@@ -95,6 +95,8 @@ fn main() {
                 },
                 RubevyPlugin::default(),
             ))
+            // no renderer here, but the same systems run and they load sprites
+            .init_asset::<Image>()
             .insert_resource(ArenaSize::default())
             .insert_resource(Headless { until: seconds })
             .init_resource::<Hud>()
