@@ -191,14 +191,20 @@ The panel at the top left has one row per robot, in words and bars:
 | health | a bar, green, yellow below half, red below a quarter; `down` when it is out |
 | energy | a bar out of 100: driving and firing spend it, time brings it back |
 | thinking | the instructions its Ruby runs per frame, averaged over about a second; a timeslice's worth (3,000) fills the bar |
-| mostly doing | the line of its own file it has spent the most time on lately, not counting `sleep` — `target = nearest_enemy(60)`, `fire: (aimed?(angle, 0.2) …` |
 
 Each robot also has a small health bar over it, under its name.
 
 The first version showed `prelude.rb:15` and a per-frame instruction count. Both were true and
 neither was readable: a brain passes through a dozen lines a frame and sleeps most frames, so the
-"current line" jumps and the count flickers between 0 and a hundred. What is readable is where it
-keeps coming back to, which is what `mostly doing` and the editor's shading show.
+"current line" jumps and the count flickers between 0 and a hundred. A `mostly doing` column (the
+line it had spent the most time on lately) replaced it and went the same way — two lines that
+take about the same time trade places many times a second — and so did the editor's
+`(in prelude.rb:82)`. What is left is what can be read: the editor's shading, which fades over
+about a second, and the smoothed instruction count.
+
+The scoreboard and the editor are windows with title bars: drag them anywhere, and fold the
+scoreboard away with its triangle. The scoreboard starts at the top left, the editor at the top
+right. The scoreboard's button starts the match over (below).
 
 ## Telling the robots apart
 
@@ -219,8 +225,8 @@ The right-hand window is an editor (egui, through `bevy_egui` 0.42 — the relea
 brain is standing on**:
 
 ```
-red/scout  scout.rb  (in prelude.rb:15)
-   7      target = nearest_enemy(45)        ← banded
+1 red/scout  scout.rb
+   7      target = nearest_enemy(45)        ← shaded
 ```
 
 What is typed stays **in memory** until you say otherwise. Trying something in a running match
@@ -253,18 +259,41 @@ on purpose, since it writes to the repository.
 Along the top of the editor is a button per robot (`1 scout`, `2 hunter`, … in team colours, faded when the robot is down); click one to show its brain. `1`–`8` do the same from the keyboard, `Tab` moves on, `F1` hides the editor. Switching to another file keeps what was typed into the one being left: unsaved edits are held per file and come back when you return to it, and the editor lists which files have them. Keys typed into the editor stay the
 editor's: a `2` in the code does not switch robots (`EguiWantsInput`).
 
-The banded line is the innermost frame **in the robot's own file**, which is not the innermost
-frame: a robot waiting for its radar stands a few frames deep inside `prelude.rb`. The VM answers the
-whole stack (`Vm::task_frames`), the editor picks the frame in the file it shows, and the title
-says where the brain really is.
+The line that is shaded is the innermost frame **in the robot's own file**, which is not the
+innermost frame: a robot waiting for its radar stands a few frames deep inside `prelude.rb`. The
+VM answers the whole stack (`Vm::task_frames`) and the game picks the frame in the file it shows,
+accumulating it into the shading every frame.
 
 Two details that make it a listing rather than a text box: it never wraps (a custom layouter sets
-the wrap width to infinity), so each row of the gutter is one line of the file; and the band is a
+the wrap width to infinity), so each row of the gutter is one line of the file; and the shading is a
 background on that line's text section, so it moves with the text as the file is edited.
 
 The editor lives in `rubevy-arena` (`Editor`, `EditorPlugin`) so the other games get it for free.
 The older read-only panel (`CodePanel`, Bevy UI only) is still there for a game that does not want
 egui.
+
+## Starting again
+
+`Restart (R)` on the scoreboard — `Play again (R)`, once there is a winner — starts the match over
+without restarting the game. Everything on the field is despawned (robots, and with them their
+barrels, names and bars; shots; blasts; the match's own entity), the arena goes back to its size,
+and the match script is started again, so it reads `training.rb` afresh and spawns the robots as
+it did the first time.
+
+Despawning is also what stops the old scripts: rubevy terminates a task when its entity goes (or
+its `ScriptTask` is removed). Until that was added a reload left the old brain running beside
+the new one, asking for the same body — invisible, since nothing showed it any more. A question
+asked just before a restart is answered with `nil` and nobody is waiting for it.
+
+A brain applied in the editor and not saved comes back with the robot's number: number 3 is still
+the third robot the match spawns. Edits typed and not applied are dropped.
+
+A robot that goes down has its task stopped the same way, so a wreck no longer spends
+instructions on a body that cannot move.
+
+`SABIBOTS_SELFTEST=1` ends by pressing Restart and checking that there are four robots again (not
+eight), all at full health, that an applied brain came back and a reverted one did not, and that
+the wall ends on its corners.
 
 ## Blasts, and the view following the arena
 
@@ -274,7 +303,7 @@ and a robot going down a large one (Kenney's `explosion1` / `explosion3`),
 growing and fading over a quarter of a second or 0.7 s.
 
 The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little
-floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
+floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The crates are spaced about 2.6 apart with the step stretched so each side is a whole number of them: every side ends exactly on a corner at any size (a fixed step used to leave the top and right sides a crate past the corner once the arena shrank). The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
 
 ## Seeing it where there is no window
 
@@ -298,8 +327,7 @@ game points `AssetPlugin` at its own `assets/` directory.
 
 * **Sound.**
 * **Reflexes** (see above): a brain notices a hit on its next pass, not when it happens.
-* **Downed robots' brains keep running.** Their `act` does nothing, but they still spend
-  instructions.
+* **Keeping edits that were typed and not applied across a restart.** Applied brains are kept.
 
 ## Running
 

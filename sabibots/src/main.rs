@@ -97,19 +97,25 @@ struct Robot {
     cpu: f32,
 }
 
-/// A robot that has lost: its hull is swapped for a grey one, once.
+/// A robot that has lost: its hull is swapped for a grey one and its brain is stopped, once.
 #[derive(Component)]
 struct Downed;
 
 fn gray_out_downed(
     mut commands: Commands,
     server: Res<AssetServer>,
-    mut robots: Query<(Entity, &Robot, &mut Sprite), Without<Downed>>,
+    mut robots: Query<(Entity, &mut Robot, &mut Sprite), Without<Downed>>,
 ) {
-    for (entity, robot, mut sprite) in &mut robots {
+    for (entity, mut robot, mut sprite) in &mut robots {
         if robot.hp > 0.0 {
             continue;
         }
+        // and its brain stops: taking the task away terminates it (Script too, or the plugin
+        // would start it again)
+        commands.entity(entity).remove::<(ScriptTask, rubevy::ScriptDone, Script)>();
+        robot.cpu = 0.0;
+        robot.throttle = 0.0;
+        robot.turn = 0.0;
         // Kenney's dark hull, dimmed a little more: grey whatever team it was on
         sprite.image = server.load("sprites/tankBody_dark_outline.png");
         sprite.color = Color::srgb(0.7, 0.7, 0.7);
@@ -288,20 +294,22 @@ fn main() {
             .init_resource::<Hud>()
             .add_systems(
                 Update,
-                (choose_watched, show_code, do_editor_actions, spawn_nameplates, follow_nameplates, spawn_life_bars, follow_life_bars)
+                (restart_key, choose_watched, show_code, do_editor_actions, spawn_nameplates, follow_nameplates, spawn_life_bars, follow_life_bars)
                     .chain(),
             )
             .add_systems(bevy_egui::EguiPrimaryContextPass, draw_scoreboard);
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
+        .init_resource::<Restart>()
+        .init_resource::<KeptBrains>()
         .init_resource::<Shots>()
         .init_resource::<Events>()
         .init_resource::<Rules>()
         .add_systems(Startup, (spawn_match, spawn_arena))
         .add_systems(
             Update,
-            (answer_requests, move_robots, separate_robots, spawn_turrets, follow_turrets, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
+            (restart_match, answer_requests, move_robots, separate_robots, spawn_turrets, follow_turrets, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
                 .chain(),
         );
     if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
@@ -447,32 +455,40 @@ fn draw_scoreboard(
     watched: Res<Watched>,
     robots: Query<(Entity, &Robot)>,
     mut editor: ResMut<Editor>,
+    mut restart: ResMut<Restart>,
 ) {
     use bevy_egui::egui;
     let Ok(ctx) = contexts.ctx_mut() else { return };
+    let over = hud.line.starts_with("winner") || hud.line == "a draw";
     let mut rows: Vec<(Entity, &Robot)> = robots.iter().collect();
     rows.sort_by_key(|(_, r)| r.number);
 
-    egui::Window::new("scoreboard")
-        .title_bar(false)
+    // a window with a title bar, to be dragged out of the way; it starts at the top left
+    egui::Window::new("SabiRuby Battle")
+        .collapsible(true)
         .resizable(false)
-        .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
+        .default_pos([8.0, 8.0])
         .show(ctx, |ui| {
             // a scoreboard, not a document: nothing in it is text to select
             ui.style_mut().interaction.selectable_labels = false;
-            if !hud.line.is_empty() {
-                ui.label(egui::RichText::new(&hud.line).strong().size(16.0));
-                ui.separator();
-            }
-            egui::Grid::new("robots").num_columns(5).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if !hud.line.is_empty() {
+                    ui.label(egui::RichText::new(&hud.line).strong().size(16.0));
+                }
+                // once it is over the button says so; before that it is there, quieter
+                let label = if over { egui::RichText::new("Play again (R)").strong().size(16.0) } else { egui::RichText::new("Restart (R)") };
+                if ui.button(label).on_hover_text("start the match over; brains applied in the editor are kept").clicked() {
+                    restart.0 = true;
+                }
+            });
+            ui.separator();
+            egui::Grid::new("robots").num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(egui::RichText::new("robot").weak());
                 ui.label(egui::RichText::new("health").weak());
                 ui.label(egui::RichText::new("energy").weak())
                     .on_hover_text("driving and firing spend it, time brings it back; a harder shot costs more");
                 ui.label(egui::RichText::new("thinking").weak())
                     .on_hover_text("instructions its Ruby runs per frame, averaged over about a second");
-                ui.label(egui::RichText::new("mostly doing").weak())
-                    .on_hover_text("the line of its file it has spent the most time on lately, not counting sleep");
                 ui.end_row();
 
                 for (entity, robot) in rows {
@@ -520,35 +536,10 @@ fn draw_scoreboard(
                             .desired_width(80.0)
                             .text(format!("{:.0}", robot.cpu)),
                     );
-
-                    let doing = if down { String::new() } else { mostly_doing(robot) };
-                    ui.label(egui::RichText::new(doing).monospace());
                     ui.end_row();
                 }
             });
         });
-}
-
-/// The source line the brain has spent the most time on lately, trimmed — `strafe(target, 0.9)`,
-/// `patrol`. Waiting in `sleep` is left out: a brain spends most of its time there, and "it is
-/// sleeping" says nothing about what it is up to.
-fn mostly_doing(robot: &Robot) -> String {
-    let lines: Vec<&str> = robot.source.lines().collect();
-    let Some((i, _)) = robot
-        .heat
-        .iter()
-        .enumerate()
-        .filter(|(i, h)| **h > 0.0 && !lines.get(*i).is_some_and(|l| l.trim_start().starts_with("sleep")))
-        .max_by(|a, b| a.1.total_cmp(b.1))
-    else {
-        return String::new();
-    };
-    let line = robot.source.lines().nth(i).unwrap_or("").trim();
-    let mut s: String = line.chars().take(26).collect();
-    if line.chars().count() > 26 {
-        s.push('…');
-    }
-    s
 }
 
 /// A bar over each robot's name: how much life it has left.
@@ -609,11 +600,11 @@ fn follow_life_bars(
 }
 
 /// The editor follows the watched robot: its file, and the line its brain stands on.
-fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(Entity, &Robot, &ScriptPanel)>) {
+fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(Entity, &Robot)>) {
     // the buttons along the top of the editor: every robot, by number, in its team's colour
     let mut choices: Vec<(usize, rubevy_arena::editor::EditorChoice)> = robots
         .iter()
-        .map(|(e, r, _)| {
+        .map(|(e, r)| {
             let (cr, cg, cb) = TEAM_COLORS[r.team.min(TEAM_COLORS.len() - 1)];
             let brain = r.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             (
@@ -636,7 +627,7 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     editor.selected = watched.entity.map(|e| e.to_bits());
 
     let Some(entity) = watched.entity else { return };
-    let Ok((_, robot, script)) = robots.get(entity) else { return };
+    let Ok((_, robot)) = robots.get(entity) else { return };
     // what the robot is running: its applied brain, or its file
     editor.show(entity.to_bits(), || {
         robot.brain.clone().unwrap_or_else(|| std::fs::read_to_string(&robot.file).unwrap_or_default())
@@ -646,8 +637,9 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     editor.label = robot.name.clone();
     editor.current = robot.own_line;
     editor.heat = robot.heat.clone();
-    // where it stands when that is not this file: inside the DSL, waiting for an answer
-    editor.elsewhere = script.at.starts_with("prelude").then(|| script.at.clone());
+    // not where it stands this instant (`prelude.rb:82`, then `:67`, many times a second): the
+    // shading says where it keeps coming back to, which is what can be read
+    editor.elsewhere = None;
 }
 
 /// `SABIBOTS_SELFTEST=1`: drives the editor's buttons the way a click would (by setting
@@ -666,6 +658,9 @@ fn selftest(
     mut editor: ResMut<Editor>,
     mut watched: ResMut<Watched>,
     robots: Query<(Entity, &Robot)>,
+    walls: Query<&Transform, With<Wall>>,
+    arena: Res<ArenaSize>,
+    mut restart: ResMut<Restart>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -719,8 +714,24 @@ fn selftest(
             ok(editor.text == test.original, "Revert shows the file again");
             let on_disk = std::fs::read_to_string(&r3.file).unwrap_or_default();
             ok(on_disk == test.original, "nothing was written");
-            exit.write(AppExit::Success);
+            restart.0 = true;
             test.step = 5;
+            test.at = now + 2.0;
+        }
+        5 => {
+            ok(robots.iter().count() == 4, "after a restart there are four robots again, not eight");
+            ok(robots.iter().all(|(_, r)| r.hp == 100.0), "every robot starts with full health");
+            let r3 = by_number(3).map(|(_, r)| r);
+            let r4 = by_number(4).map(|(_, r)| r);
+            ok(r3.is_some_and(|r| r.brain.is_none()), "robot 3 comes back on its file");
+            ok(r4.is_some_and(|r| r.brain.is_some()), "robot 4 comes back with its applied brain");
+            // every side ends on a corner: no crate past the wall's line
+            let half = arena.0;
+            let edge = walls.iter().map(|t| t.translation.x.abs().max(t.translation.y.abs())).fold(0.0f32, f32::max);
+            let corner = walls.iter().any(|t| (t.translation.x - half).abs() < 0.01 && (t.translation.y - half).abs() < 0.01);
+            ok((edge - half).abs() < 0.01 && corner, "the wall ends exactly on its corners");
+            exit.write(AppExit::Success);
+            test.step = 6;
         }
         _ => {}
     }
@@ -823,33 +834,92 @@ fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetS
             ));
         }
     }
-    let crate_: Handle<Image> = server.load("sprites/crateMetal.png");
-    let step = 2.6;
-    let count = (half * 2.0 / step).ceil() as i32;
-    for i in 0..=count {
-        let t = -half + step * i as f32;
-        for (x, y) in [(t, half), (t, -half), (-half, t), (half, t)] {
-            commands.spawn((
-                Wall,
-                Sprite { image: crate_.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
-                Transform::from_xyz(x, y, 0.0),
-            ));
-        }
-    }
+    build_walls(&mut commands, &server, half);
 }
 
-fn spawn_match(
+/// The entity the match's script runs on.
+#[derive(Component)]
+struct MatchScript;
+
+fn spawn_match(mut commands: Commands, ruby: Res<RubyDir>, mut assets: ResMut<Assets<MrbAsset>>) {
+    start_match(&mut commands, &ruby.0, &mut assets);
+}
+
+fn start_match(commands: &mut Commands, ruby: &Path, assets: &mut Assets<MrbAsset>) {
+    // the match is a script like a robot is, at a higher priority: it spawns the field and
+    // decides when the fight is over, and the game only does what it is told
+    let path = ruby.join("matches").join("training.rb");
+    let Some((handle, _)) = compile_with(ruby, "match_prelude.rb", &path, "run_match", assets) else {
+        return;
+    };
+    commands.spawn((MatchScript, Script::new(handle).with_name("match").with_priority(10)));
+}
+
+/// Set by the scoreboard's button or `R`: start the match over on the next frame.
+#[derive(Resource, Default)]
+struct Restart(bool);
+
+/// Brains applied from the editor and not saved, by robot number, kept across a restart: the
+/// robot that comes back as number 3 gets number 3's brain.
+#[derive(Resource, Default)]
+struct KeptBrains(std::collections::HashMap<usize, String>);
+
+/// Everything on the field goes — robots (their turrets, names and bars follow them), shots,
+/// blasts, the match — the arena goes back to its size, and the match script starts again. Its
+/// task and the robots' tasks are terminated as their entities go.
+fn restart_match(
+    mut restart: ResMut<Restart>,
     mut commands: Commands,
     ruby: Res<RubyDir>,
     mut assets: ResMut<Assets<MrbAsset>>,
+    mut arena: ResMut<ArenaSize>,
+    mut shots: ResMut<Shots>,
+    mut events: ResMut<Events>,
+    mut hud: ResMut<Hud>,
+    mut kept: ResMut<KeptBrains>,
+    robots: Query<(Entity, &Robot)>,
+    others: Query<Entity, Or<(With<Bullet>, With<Blast>, With<MatchScript>)>>,
+    watched: Option<ResMut<Watched>>,
+    editor: Option<ResMut<Editor>>,
 ) {
-    // the match is a script like a robot is, at a higher priority: it spawns the field and
-    // decides when the fight is over, and the game only does what it is told
-    let path = ruby.0.join("matches").join("training.rb");
-    let Some((handle, _)) = compile_with(&ruby.0, "match_prelude.rb", &path, "run_match", &mut assets) else {
+    if !std::mem::take(&mut restart.0) {
         return;
-    };
-    commands.spawn((Script::new(handle).with_name("match").with_priority(10),));
+    }
+    kept.0.clear();
+    for (entity, robot) in &robots {
+        if let Some(brain) = &robot.brain {
+            kept.0.insert(robot.number, brain.clone());
+        }
+        commands.entity(entity).despawn();
+    }
+    for entity in &others {
+        commands.entity(entity).despawn();
+    }
+    arena.0 = ArenaSize::default().0;
+    shots.0.clear();
+    events.0.clear();
+    hud.line = "the match starts again".into();
+    if let Some(mut watched) = watched {
+        watched.entity = None;
+    }
+    if let Some(mut editor) = editor {
+        editor.clear();
+    }
+    start_match(&mut commands, &ruby.0, &mut assets);
+    info!("restart ({} applied brains kept)", kept.0.len());
+}
+
+fn restart_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
+    mut restart: ResMut<Restart>,
+) {
+    if typing.is_some_and(|t| t.wants_keyboard_input()) {
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyR) {
+        restart.0 = true;
+    }
 }
 
 /// `Rubevy.ask("spawn", file, team, x, y)` from the match: a robot with its own brain.
@@ -859,16 +929,27 @@ fn spawn_robot(
     assets: &mut Assets<MrbAsset>,
     server: &AssetServer,
     shots: &mut Shots,
+    kept: &KeptBrains,
     file: &str,
     team: usize,
     at: Vec2,
 ) -> Option<Entity> {
     let path = ruby.join("robots").join(format!("{file}.rb"));
-    let (handle, prelude_lines) = compile(ruby, &path, assets)?;
-    let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
     let number = shots.0.len() + 1; // one entry per robot spawned so far
+    // a brain applied before a restart comes back with the robot's number, if it still compiles
+    let brain = kept.0.get(&number).cloned();
+    let applied = brain.as_ref().and_then(|text| {
+        let name = format!("{file}.rb");
+        compile_text(ruby, "prelude.rb", &name, text, "run_robot", assets).map_err(|e| warn!("{e}")).ok()
+    });
+    let brain = if applied.is_some() { brain } else { None };
+    let (handle, prelude_lines) = match applied {
+        Some(c) => c,
+        None => compile(ruby, &path, assets)?,
+    };
+    let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
     let name = format!("{number} {team_name}/{file}");
-    let source = std::fs::read_to_string(&path).unwrap_or_default();
+    let source = brain.clone().unwrap_or_else(|| std::fs::read_to_string(&path).unwrap_or_default());
     // it starts facing the middle of the arena
     let facing = (-at.y).atan2(-at.x);
     let robot = commands
@@ -890,7 +971,7 @@ fn spawn_robot(
                 prelude_lines,
                 own_line: None,
                 heading: facing,
-                brain: None,
+                brain,
                 source,
                 heat: Vec::new(),
                 cpu: 0.0,
@@ -1068,18 +1149,31 @@ fn rebuild_walls(
     for wall in &walls {
         commands.entity(wall).despawn();
     }
-    let half = arena.0;
-    let crate_: Handle<Image> = server.load("sprites/crateMetal.png");
-    let step = 2.6;
-    let count = (half * 2.0 / step).ceil() as i32;
+    build_walls(&mut commands, &server, arena.0);
+}
+
+/// A crate of about 2.6 units every step along each side, the step stretched a little so that
+/// the side is a whole number of crates and every side ends exactly on a corner — at any size the
+/// match shrinks the arena to.
+fn build_walls(commands: &mut Commands, server: &AssetServer, half: f32) {
+    let image: Handle<Image> = server.load("sprites/crateMetal.png");
+    let count = (half * 2.0 / 2.6).round().max(1.0) as i32;
+    let step = half * 2.0 / count as f32;
+    let mut place = |x: f32, y: f32| {
+        commands.spawn((
+            Wall,
+            Sprite { image: image.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
+            Transform::from_xyz(x, y, 0.0),
+        ));
+    };
     for i in 0..=count {
         let t = -half + step * i as f32;
-        for (x, y) in [(t, half), (t, -half), (-half, t), (half, t)] {
-            commands.spawn((
-                Wall,
-                Sprite { image: crate_.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
-                Transform::from_xyz(x, y, 0.0),
-            ));
+        place(t, half);
+        place(t, -half);
+        // the corners are already there
+        if i > 0 && i < count {
+            place(-half, t);
+            place(half, t);
         }
     }
 }
@@ -1092,6 +1186,7 @@ fn answer_requests(
     mut commands: Commands,
     mut arena: ResMut<ArenaSize>,
     mut rules: ResMut<Rules>,
+    kept: Res<KeptBrains>,
     mut shots: ResMut<Shots>,
     mut events: ResMut<Events>,
     mut hud: ResMut<Hud>,
@@ -1110,6 +1205,11 @@ fn answer_requests(
         .map(|(e, r, t)| (e, r.team, r.hp, t.translation.truncate(), r.velocity, r.heading, r.turret))
         .collect();
     for request in world.take_requests() {
+        // asked just before a restart took its entity away: nobody is waiting for the answer
+        if request.entity.is_some_and(|e| commands.get_entity(e).is_err()) {
+            world.answer(&request, Answer::Nil);
+            continue;
+        }
         // what the match asks for. It has no entity of its own: it is the game, not a thing in it
         match request.kind.as_str() {
             // `match "…", noise: 0.3, seed: 7`: how noisy this match is, and its dice
@@ -1137,7 +1237,7 @@ fn answer_requests(
                 let team = TEAMS.iter().position(|(n, _, _)| *n == team_name).unwrap_or(0);
                 let at = Vec2::new(request.num_or(2, 0.0) as f32, request.num_or(3, 0.0) as f32);
                 let answer =
-                    match spawn_robot(&mut commands, &ruby.0, &mut assets, &server, &mut shots, &file, team, at) {
+                    match spawn_robot(&mut commands, &ruby.0, &mut assets, &server, &mut shots, &kept, &file, team, at) {
                         Some(e) => Answer::Num(e.to_bits() as f64),
                         None => Answer::Nil,
                     };

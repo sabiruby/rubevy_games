@@ -121,6 +121,19 @@ impl Editor {
         self.message = message.into();
     }
 
+    /// Forgets everything shown and every draft: the scripts it was about are gone (a restart).
+    pub fn clear(&mut self) {
+        self.key = None;
+        self.selected = None;
+        self.picked = None;
+        self.drafts.clear();
+        self.text.clear();
+        self.base.clear();
+        self.heat.clear();
+        self.current = None;
+        self.elsewhere = None;
+    }
+
     /// Scripts other than the one shown that have edits not applied yet.
     pub fn drafts(&self) -> impl Iterator<Item = &u64> {
         self.drafts.keys()
@@ -171,13 +184,15 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
     let amber = egui::Color32::from_rgb(240, 190, 90);
 
     // egui 0.36 grows panels inside a Ui; a window takes the context, and a movable one suits an
-    // editor that shares the screen with the game
-    egui::Window::new("code")
-        .title_bar(false)
+    // editor that shares the screen with the game. It starts at the top right; drag its title bar
+    // to put it anywhere else.
+    let right = ctx.content_rect().right();
+    egui::Window::new("Ruby")
+        .collapsible(false)
         .resizable(true)
         .default_width(520.0)
         .default_height(640.0)
-        .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+        .default_pos([right - 8.0 - 520.0, 8.0])
         .show(ctx, |ui| {
             // one button per thing the game offers; the one showing is marked
             if !choices.is_empty() {
