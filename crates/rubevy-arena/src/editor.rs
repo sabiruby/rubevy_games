@@ -10,9 +10,29 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 
+/// One of the things the editor can be switched to — a robot, in SabiRuby Battle. The game fills
+/// [`Editor::choices`]; the editor draws a button for each.
+#[derive(Debug, Clone)]
+pub struct EditorChoice {
+    /// The game's own id for it, handed back in [`Editor::picked`].
+    pub id: u64,
+    pub label: String,
+    pub color: (u8, u8, u8),
+    /// Drawn faded (a robot that is down, say).
+    pub dim: bool,
+}
+
 /// What the panel shows and edits.
 #[derive(Resource, Default)]
 pub struct Editor {
+    /// The buttons along the top: what the editor can be switched to.
+    pub choices: Vec<EditorChoice>,
+    /// Which of them is showing, to mark its button.
+    pub selected: Option<u64>,
+    /// Set when a button is clicked; the game takes it and switches.
+    pub picked: Option<u64>,
+    /// Edits not saved yet, per file, so switching away and back does not lose them.
+    drafts: std::collections::HashMap<PathBuf, (String, String)>,
     /// The file being shown. Setting it to a different path loads that file.
     pub path: Option<PathBuf>,
     /// Whose file it is, for the title (several robots can share a file).
@@ -34,6 +54,20 @@ impl Editor {
     /// Shows `path`, reading it where it is not the file already shown.
     pub fn show(&mut self, path: &std::path::Path) {
         if self.path.as_deref() == Some(path) {
+            return;
+        }
+        // keep what was typed into the file being left, if it was not saved
+        if let Some(old) = self.path.take() {
+            if self.text != self.saved {
+                self.drafts.insert(old, (std::mem::take(&mut self.text), std::mem::take(&mut self.saved)));
+            }
+        }
+        if let Some((text, saved)) = self.drafts.remove(path) {
+            self.text = text;
+            self.saved = saved;
+            self.path = Some(path.to_path_buf());
+            self.message = "unsaved edits kept".into();
+            self.open = true;
             return;
         }
         match std::fs::read_to_string(path) {
@@ -97,6 +131,9 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
     let changed = editor.changed();
     let current = editor.current;
     let message = editor.message.clone();
+    let choices = editor.choices.clone();
+    let selected = editor.selected;
+    let unsaved: Vec<PathBuf> = editor.drafts.keys().cloned().collect();
 
     // egui 0.36 grows panels inside a Ui; a window takes the context, and a movable one suits an
     // editor that shares the screen with the game
@@ -107,6 +144,33 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
         .default_height(640.0)
         .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
         .show(ctx, |ui| {
+            // one button per thing the game offers; the one showing is marked
+            if !choices.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    // big enough to hit without aiming
+                    ui.spacing_mut().button_padding = egui::vec2(10.0, 5.0);
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for choice in &choices {
+                        let (r, g, b) = choice.color;
+                        let mut color = egui::Color32::from_rgb(r, g, b);
+                        if choice.dim {
+                            color = color.gamma_multiply(0.45);
+                        }
+                        let text = egui::RichText::new(&choice.label).color(color).strong().size(16.0);
+                        if ui.add(egui::Button::selectable(selected == Some(choice.id), text)).clicked() {
+                            editor.picked = Some(choice.id);
+                        }
+                    }
+                });
+                ui.separator();
+            }
+            if !unsaved.is_empty() {
+                let names: Vec<String> = unsaved.iter().map(|p| name_of(p)).collect();
+                ui.label(
+                    egui::RichText::new(format!("unsaved edits in {}", names.join(", ")))
+                        .color(egui::Color32::from_rgb(240, 190, 90)),
+                );
+            }
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&title).strong());
                 if changed {

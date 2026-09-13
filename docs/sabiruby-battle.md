@@ -136,7 +136,7 @@ Type in it and press **Ctrl+S** (or the Save button): the file is written, the s
 that notices an edit made in any other editor notices this one, and that robot starts again with
 the new brain while the match carries on. `● unsaved` shows while the text differs from the file.
 
-`1`–`8` pick a robot by its number, `Tab` moves on, `F1` hides the editor. Keys typed into the editor stay the
+Along the top of the editor is a button per robot (`1 scout`, `2 hunter`, … in team colours, faded when the robot is down); click one to show its brain. `1`–`8` do the same from the keyboard, `Tab` moves on, `F1` hides the editor. Switching to another file keeps what was typed into the one being left: unsaved edits are held per file and come back when you return to it, and the editor lists which files have them. Keys typed into the editor stay the
 editor's: a `2` in the code does not switch robots (`EguiWantsInput`).
 
 The banded line is the innermost frame **in the robot's own file**, which is not the innermost

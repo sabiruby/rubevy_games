@@ -196,6 +196,12 @@ fn choose_watched(
         watched.entity = Some(all[0]);
         editor.open = true;
     }
+    // a robot button clicked in the editor
+    if let Some(bits) = editor.picked.take() {
+        if let Some(e) = all.iter().find(|e| e.to_bits() == bits) {
+            watched.entity = Some(*e);
+        }
+    }
     // keys typed into the editor are the editor's: a `2` in the code must not switch robots
     if typing.is_some_and(|t| t.wants_keyboard_input()) {
         return;
@@ -284,9 +290,30 @@ fn follow_nameplates(
 }
 
 /// The editor follows the watched robot: its file, and the line its brain stands on.
-fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(&Robot, &ScriptPanel)>) {
+fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(Entity, &Robot, &ScriptPanel)>) {
+    // the buttons along the top of the editor: every robot, by number, in its team's colour
+    let mut choices: Vec<(usize, rubevy_arena::editor::EditorChoice)> = robots
+        .iter()
+        .map(|(e, r, _)| {
+            let (cr, cg, cb) = TEAM_COLORS[r.team.min(TEAM_COLORS.len() - 1)];
+            let brain = r.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            (
+                r.number,
+                rubevy_arena::editor::EditorChoice {
+                    id: e.to_bits(),
+                    label: format!("{} {brain}", r.number),
+                    color: ((cr * 255.0) as u8, (cg * 255.0) as u8, (cb * 255.0) as u8),
+                    dim: r.hp <= 0.0,
+                },
+            )
+        })
+        .collect();
+    choices.sort_by_key(|(n, _)| *n);
+    editor.choices = choices.into_iter().map(|(_, c)| c).collect();
+    editor.selected = watched.entity.map(|e| e.to_bits());
+
     let Some(entity) = watched.entity else { return };
-    let Ok((robot, script)) = robots.get(entity) else { return };
+    let Ok((_, robot, script)) = robots.get(entity) else { return };
     editor.show(&robot.file);
     editor.label = robot.name.clone();
     editor.current = robot.own_line;
