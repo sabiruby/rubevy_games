@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
-use rubevy_arena::{ArenaPlugin, ArenaSize, Hud, HudPlugin, ScriptPanel, Watch};
+use rubevy_arena::{ArenaPlugin, ArenaSize, CodePanel, CodePanelPlugin, Hud, HudPlugin, ScriptPanel, Watch};
 
 const ROBOT_RADIUS: f32 = 1.6;
 const MAX_SPEED: f32 = 14.0;
@@ -33,6 +33,8 @@ struct Robot {
     last_instructions: u64,
     /// lines the prelude adds in front of the robot's own file
     prelude_lines: u32,
+    /// the line of its own file the brain is inside, however deep in the DSL it stands
+    own_line: Option<u32>,
 }
 
 #[derive(Component)]
@@ -91,8 +93,11 @@ fn main() {
                 }),
                 ArenaPlugin::default(),
                 HudPlugin,
+                CodePanelPlugin,
                 RubevyPlugin::default(),
-            ));
+            ))
+            .init_resource::<Watched>()
+            .add_systems(Update, (choose_watched, show_code).chain());
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
@@ -111,6 +116,77 @@ fn main() {
         warn!("could not watch {ruby:?}: saving a robot will not reload it");
     }
     app.run();
+}
+
+/// Which robot's code the panel shows, and the source it was read from.
+#[derive(Resource, Default)]
+struct Watched {
+    entity: Option<Entity>,
+    source: String,
+    /// the file the source came from, so it is read again only when it changes
+    from: Option<PathBuf>,
+}
+
+/// `1`, `2`, … pick a robot; `Tab` moves on; `C` hides the panel.
+fn choose_watched(
+    keys: Res<ButtonInput<KeyCode>>,
+    robots: Query<Entity, With<Robot>>,
+    mut watched: ResMut<Watched>,
+    mut panel: ResMut<CodePanel>,
+) {
+    let all: Vec<Entity> = robots.iter().collect();
+    if all.is_empty() {
+        return;
+    }
+    if watched.entity.is_none() {
+        watched.entity = Some(all[0]);
+        panel.visible = true;
+    }
+    for (i, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4].into_iter().enumerate() {
+        if keys.just_pressed(key) {
+            if let Some(e) = all.get(i) {
+                watched.entity = Some(*e);
+                panel.visible = true;
+            }
+        }
+    }
+    if keys.just_pressed(KeyCode::Tab) {
+        let at = all.iter().position(|e| Some(*e) == watched.entity).unwrap_or(0);
+        watched.entity = Some(all[(at + 1) % all.len()]);
+        panel.visible = true;
+    }
+    if keys.just_pressed(KeyCode::KeyC) {
+        panel.visible = !panel.visible;
+    }
+}
+
+/// The panel follows the watched robot: its file, and the line its brain stands on.
+fn show_code(
+    mut watched: ResMut<Watched>,
+    mut panel: ResMut<CodePanel>,
+    robots: Query<(&Robot, &ScriptPanel)>,
+) {
+    let Some(entity) = watched.entity else { return };
+    let Ok((robot, script)) = robots.get(entity) else { return };
+    if watched.from.as_deref() != Some(robot.file.as_path()) {
+        match std::fs::read_to_string(&robot.file) {
+            Ok(text) => {
+                watched.source = text;
+                watched.from = Some(robot.file.clone());
+            }
+            Err(e) => {
+                error!("{:?}: {e}", robot.file);
+                return;
+            }
+        }
+    }
+    let name = robot.file.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let source = watched.source.clone();
+    panel.show(name, &source);
+    // `ScriptPanel::at` is `file:line` in the robot's own numbering, or in the prelude's
+    panel.current = robot.own_line;
+    // where it stands when that is not this file: inside the DSL, waiting for an answer
+    panel.elsewhere = script.at.starts_with("prelude").then(|| script.at.clone());
 }
 
 /// `--shot`: where to put the picture, and when.
@@ -201,7 +277,7 @@ fn spawn_robots(mut commands: Commands, ruby: Res<RubyDir>, mut assets: ResMut<A
         let path = ruby.0.join("robots").join(format!("{file}.rb"));
         let Some((handle, prelude_lines)) = compile(&ruby.0, &path, &mut assets) else { continue };
         commands.spawn((
-            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO, last_instructions: 0, prelude_lines },
+            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO, last_instructions: 0, prelude_lines, own_line: None },
             Script::new(handle).with_name(file).with_priority(100 + i as u8),
             ScriptPanel { name: file.to_string(), ..default() },
             Sprite { color, custom_size: Some(Vec2::splat(ROBOT_RADIUS * 2.0)), ..default() },
@@ -423,6 +499,13 @@ fn update_hud(
             Some((_, line)) => format!("prelude.rb:{line}"),
             None => String::new(),
         };
+        // the line of the robot's own file that is waiting, even when the brain is standing
+        // inside the DSL (which it is whenever it waits for a scan)
+        robot.own_line = stats
+            .frames
+            .iter()
+            .find(|(_, line)| *line > robot.prelude_lines)
+            .map(|(_, line)| line - robot.prelude_lines);
     }
     if alive <= 1 && !hud.line.starts_with("winner") {
         if let Some((robot, _, _)) = robots.iter().find(|(r, _, _)| r.hp > 0.0) {

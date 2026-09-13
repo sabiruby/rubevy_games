@@ -2,6 +2,7 @@
 //!
 //! * [`ArenaPlugin`] — a 2D camera that shows a square arena whatever the window size is.
 //! * [`Hud`] — the line of text at the top, and the per-script panel below it.
+//! * [`CodePanel`] — the script a game is showing, with the line it stands on marked.
 //! * [`Watch`] — the Ruby directory, watched: saving a file tells the game to start that script
 //!   again. Editing a robot's brain and seeing it change without restarting is the point.
 //!
@@ -14,7 +15,9 @@ use std::sync::Mutex;
 
 use bevy::prelude::*;
 
+pub mod code;
 pub mod hud;
+pub use code::{CodePanel, CodePanelPlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
 
 /// Half the width of the square the camera shows, in world units.

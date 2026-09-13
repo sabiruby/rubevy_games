@@ -71,6 +71,28 @@ the game subtracts its length and says `prelude.rb:N` for anything above it.
 The bar fills as a robot approaches a timeslice's worth of instructions (3,000) — the point where
 it starts costing the other robot its turn. A robot thinking normally is tens to hundreds.
 
+## The code panel
+
+The right-hand side lists the watched robot's own file with the line it is standing on marked:
+
+```
+scout.rb:22
+   20      end
+   21    end
+>  22    sleep 0.05
+   23  end
+```
+
+`1`, `2`, … pick a robot, `Tab` moves on, `C` hides the panel.
+
+The marked line is the innermost frame **in the robot's own file**, which is not the innermost
+frame: a robot waiting for a scan is standing inside `prelude.rb`, three frames down. The VM
+answers the whole stack (`Vm::task_frames`), so the panel can show the line of the author's file
+that is waiting, and the title says where it actually is (`scout.rb  (in prelude.rb:15)`).
+
+It is read-only for now. Editing in place is the next step, and the lines are kept as a
+`Vec<String>` for that reason.
+
 ## Seeing it where there is no window
 
 `cargo run -p sabibots -- --shot shot.png 5` opens the window, waits five seconds, writes a PNG
