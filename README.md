@@ -53,3 +53,4 @@ compiler (`sabiruby-compiler`), so nothing has to be built ahead of time.
 ## License
 
 MIT (`LICENSE`). The Ruby in `*/ruby/` is part of the games and under the same terms.
+The art is Kenney's *Top-down Tanks Remastered* (CC0); see [`CREDITS.md`](CREDITS.md).

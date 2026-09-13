@@ -32,6 +32,10 @@ struct HudLine;
 #[derive(Component)]
 struct PanelText(Entity);
 
+/// The box the lines sit in, so they are readable over whatever the floor is.
+#[derive(Resource)]
+struct HudRoot(Entity);
+
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Hud>()
@@ -41,18 +45,29 @@ impl Plugin for HudPlugin {
 }
 
 fn spawn_hud(mut commands: Commands) {
+    let root = commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(8.0),
+                left: px(8.0),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(8.0)),
+                row_gap: px(3.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.82)),
+        ))
+        .id();
     commands.spawn((
         HudLine,
         Text::new(""),
-        TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() },
-        TextColor(Color::srgb(0.85, 0.85, 0.9)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(8.0),
-            left: px(12.0),
-            ..default()
-        },
+        TextFont { font_size: bevy::text::FontSize::Px(15.0), ..default() },
+        TextColor(Color::srgb(0.95, 0.95, 1.0)),
+        TextLayout::no_wrap(),
+        ChildOf(root),
     ));
+    commands.insert_resource(HudRoot(root));
 }
 
 fn px(v: f32) -> Val {
@@ -71,6 +86,7 @@ fn update_line(hud: Res<Hud>, mut q: Query<&mut Text, With<HudLine>>) {
 /// Each panel gets a text node the first time it is seen, and follows it after that.
 fn update_panels(
     mut commands: Commands,
+    root: Res<HudRoot>,
     panels: Query<(Entity, &ScriptPanel)>,
     mut texts: Query<(&PanelText, &mut Text)>,
 ) {
@@ -87,18 +103,13 @@ fn update_panels(
         if seen.contains(&entity) {
             continue;
         }
-        let top = 32.0 + 56.0 * seen.len() as f32;
         commands.spawn((
             PanelText(entity),
             Text::new(render(panel)),
             TextFont { font_size: bevy::text::FontSize::Px(13.0), ..default() },
-            TextColor(Color::srgb(0.7, 0.75, 0.8)),
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(top),
-                left: px(12.0),
-                ..default()
-            },
+            TextColor(Color::srgb(0.82, 0.86, 0.92)),
+            TextLayout::no_wrap(),
+            ChildOf(root.0),
         ));
         seen.push(entity);
     }

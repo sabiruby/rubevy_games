@@ -99,6 +99,17 @@ It is read-only for now. Editing in place is the next step, and the lines are ke
 and exits. With `docker/run.sh` (see `docs/wsl-gpu.md`) that works on a machine with no GPU
 driver, which is how the screenshots in this repository were made.
 
+## The picture
+
+Kenney's *Top-down Tanks Remastered* (CC0), a dozen files of it in `sabibots/assets/sprites/`:
+tank hulls for the robots, their own coloured shots, sand tiles for the floor and metal crates
+for the wall. The hull turns to where the robot is moving or last fired
+(`heading`), which makes the Ruby's decisions legible at a glance — a robot circling its enemy
+looks like it is circling.
+
+Bevy looks for assets next to the executable, which is not where a workspace puts them, so the
+game points `AssetPlugin` at its own `assets/` directory.
+
 ## What v0.1 does not do yet
 
 * **An in-game editor.** The plan is: read-only code panel with the current line first, editing

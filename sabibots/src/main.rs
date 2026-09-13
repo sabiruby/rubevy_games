@@ -35,6 +35,8 @@ struct Robot {
     prelude_lines: u32,
     /// the line of its own file the brain is inside, however deep in the DSL it stands
     own_line: Option<u32>,
+    /// where the hull points, kept from the last direction it moved or fired in
+    heading: f32,
 }
 
 #[derive(Component)]
@@ -47,6 +49,20 @@ struct Bullet {
 /// Where the Ruby lives. `ruby/prelude.rb` is put in front of every robot's file.
 #[derive(Resource)]
 struct RubyDir(PathBuf);
+
+/// The bullet sprite each robot fires, in the order the robots were spawned.
+#[derive(Resource, Default)]
+struct Shots(Vec<(Entity, Handle<Image>)>);
+
+impl Shots {
+    fn image_for(&self, robot: Entity) -> Handle<Image> {
+        self.0
+            .iter()
+            .find(|(e, _)| *e == robot)
+            .map(|(_, h)| h.clone())
+            .unwrap_or_default()
+    }
+}
 
 fn main() {
     let ruby = ruby_dir();
@@ -73,7 +89,10 @@ fn main() {
                     std::time::Duration::from_secs_f32(1.0 / 60.0),
                 )),
                 bevy::log::LogPlugin::default(),
-                bevy::asset::AssetPlugin::default(),
+                bevy::asset::AssetPlugin {
+                    file_path: assets_dir().to_string_lossy().into_owned(),
+                    ..default()
+                },
                 RubevyPlugin::default(),
             ))
             .insert_resource(ArenaSize::default())
@@ -83,7 +102,12 @@ fn main() {
         }
         None => {
             app.add_plugins((
-                DefaultPlugins.set(WindowPlugin {
+                DefaultPlugins
+                    .set(AssetPlugin {
+                        file_path: assets_dir().to_string_lossy().into_owned(),
+                        ..default()
+                    })
+                    .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SabiRuby Battle".into(),
                         resolution: (900u32, 900u32).into(),
@@ -101,6 +125,7 @@ fn main() {
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
+        .init_resource::<Shots>()
         .add_systems(Startup, (spawn_robots, spawn_arena))
         .add_systems(
             Update,
@@ -247,42 +272,76 @@ fn stop_when_over(
     exit.write(AppExit::Success);
 }
 
+/// Where the sprites live. Bevy looks next to the executable by default, which is not where a
+/// workspace puts them.
+fn assets_dir() -> PathBuf {
+    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    if here.is_dir() { here } else { PathBuf::from("sabibots/assets") }
+}
+
 fn ruby_dir() -> PathBuf {
     // run from the workspace root or from the crate; both find the Ruby
     let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("ruby");
     if here.is_dir() { here } else { PathBuf::from("sabibots/ruby") }
 }
 
-/// Four thin bars: the walls the robots are clamped to.
-fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>) {
-    let (half, thick) = (arena.0, 0.6);
-    let wall = Color::srgb(0.25, 0.26, 0.32);
-    for (x, y, w, h) in [
-        (0.0, half, half * 2.0 + thick, thick),
-        (0.0, -half, half * 2.0 + thick, thick),
-        (-half, 0.0, thick, half * 2.0 + thick),
-        (half, 0.0, thick, half * 2.0 + thick),
-    ] {
-        commands.spawn((
-            Sprite { color: wall, custom_size: Some(Vec2::new(w, h)), ..default() },
-            Transform::from_xyz(x, y, 0.0),
-        ));
+/// The floor, tiled, and a wall of crates around it.
+fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetServer>) {
+    let half = arena.0;
+    let tile = 8.0;
+    let sand: Handle<Image> = server.load("sprites/tileSand1.png");
+    let sand2: Handle<Image> = server.load("sprites/tileSand2.png");
+    let n = (half * 2.0 / tile).ceil() as i32;
+    for ix in 0..n {
+        for iy in 0..n {
+            let x = -half + tile * (ix as f32 + 0.5);
+            let y = -half + tile * (iy as f32 + 0.5);
+            let image = if (ix + iy) % 3 == 0 { sand2.clone() } else { sand.clone() };
+            commands.spawn((
+                Sprite { image, custom_size: Some(Vec2::splat(tile)), ..default() },
+                Transform::from_xyz(x, y, -1.0),
+            ));
+        }
+    }
+    let crate_: Handle<Image> = server.load("sprites/crateMetal.png");
+    let step = 2.6;
+    let count = (half * 2.0 / step).ceil() as i32;
+    for i in 0..=count {
+        let t = -half + step * i as f32;
+        for (x, y) in [(t, half), (t, -half), (-half, t), (half, t)] {
+            commands.spawn((
+                Sprite { image: crate_.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
+                Transform::from_xyz(x, y, 0.0),
+            ));
+        }
     }
 }
 
-fn spawn_robots(mut commands: Commands, ruby: Res<RubyDir>, mut assets: ResMut<Assets<MrbAsset>>) {
-    let starts = [("scout", Vec2::new(-18.0, -10.0), Color::srgb(0.35, 0.75, 1.0)),
-                  ("hunter", Vec2::new(18.0, 12.0), Color::srgb(1.0, 0.45, 0.35))];
-    for (i, (file, at, color)) in starts.into_iter().enumerate() {
+fn spawn_robots(
+    mut commands: Commands,
+    ruby: Res<RubyDir>,
+    mut assets: ResMut<Assets<MrbAsset>>,
+    server: Res<AssetServer>,
+    mut shots: ResMut<Shots>,
+) {
+    let starts = [("scout", Vec2::new(-18.0, -10.0), "sprites/tankBody_blue_outline.png"),
+                  ("hunter", Vec2::new(18.0, 12.0), "sprites/tankBody_red_outline.png")];
+    for (i, (file, at, image)) in starts.into_iter().enumerate() {
         let path = ruby.0.join("robots").join(format!("{file}.rb"));
         let Some((handle, prelude_lines)) = compile(&ruby.0, &path, &mut assets) else { continue };
-        commands.spawn((
-            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO, last_instructions: 0, prelude_lines, own_line: None },
+        let bullet = if image.contains("blue") { "sprites/bulletBlue1_outline.png" } else { "sprites/bulletRed1_outline.png" };
+        let robot = commands.spawn((
+            Robot { name: file.to_string(), file: path, hp: 100.0, cooldown: 0.0, velocity: Vec2::ZERO, last_instructions: 0, prelude_lines, own_line: None, heading: 0.0 },
             Script::new(handle).with_name(file).with_priority(100 + i as u8),
             ScriptPanel { name: file.to_string(), ..default() },
-            Sprite { color, custom_size: Some(Vec2::splat(ROBOT_RADIUS * 2.0)), ..default() },
+            Sprite {
+                image: server.load(image),
+                custom_size: Some(Vec2::splat(ROBOT_RADIUS * 2.4)),
+                ..default()
+            },
             Transform::from_xyz(at.x, at.y, 1.0),
-        ));
+        )).id();
+        shots.0.push((robot, server.load(bullet)));
     }
 }
 
@@ -318,6 +377,7 @@ fn answer_requests(
     mut robots: Query<(Entity, &mut Robot, &Transform)>,
     mut commands: Commands,
     arena: Res<ArenaSize>,
+    shots: Res<Shots>,
 ) {
     let positions: Vec<(Entity, Vec2, f32)> = robots
         .iter()
@@ -357,10 +417,17 @@ fn answer_requests(
                 } else {
                     robot.cooldown = COOLDOWN;
                     let dir = dir.normalize();
+                    robot.heading = dir.y.atan2(dir.x);
+                    let image = shots.image_for(me);
                     commands.spawn((
                         Bullet { velocity: dir * BULLET_SPEED, owner: me, life: 2.0 },
-                        Sprite { color: Color::srgb(1.0, 0.9, 0.5), custom_size: Some(Vec2::splat(0.5)), ..default() },
-                        Transform::from_xyz(at.x + dir.x * ROBOT_RADIUS * 1.2, at.y + dir.y * ROBOT_RADIUS * 1.2, 2.0),
+                        Sprite { image, custom_size: Some(Vec2::new(0.7, 1.6)), ..default() },
+                        Transform::from_xyz(
+                            at.x + dir.x * ROBOT_RADIUS * 1.4,
+                            at.y + dir.y * ROBOT_RADIUS * 1.4,
+                            2.0,
+                        )
+                        .with_rotation(Quat::from_rotation_z(robot.heading - std::f32::consts::FRAC_PI_2)),
                     ));
                     Answer::Bool(true)
                 }
@@ -396,6 +463,11 @@ fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut R
         let limit = arena.0 - ROBOT_RADIUS;
         transform.translation.x = (transform.translation.x + step.x).clamp(-limit, limit);
         transform.translation.y = (transform.translation.y + step.y).clamp(-limit, limit);
+        if robot.velocity.length_squared() > 0.5 {
+            robot.heading = robot.velocity.y.atan2(robot.velocity.x);
+        }
+        // Kenney's tanks are drawn pointing up, so the sprite is a quarter turn behind the heading
+        transform.rotation = Quat::from_rotation_z(robot.heading - std::f32::consts::FRAC_PI_2);
     }
 }
 
