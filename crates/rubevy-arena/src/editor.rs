@@ -64,8 +64,12 @@ pub struct Editor {
     /// Edits not applied yet, per script, so switching away and back does not lose them.
     drafts: HashMap<u64, (String, String)>,
 
-    /// 1-based: the line the script is standing on, marked in the gutter.
+    /// 1-based: the line the script is standing on right now.
     pub current: Option<u32>,
+    /// Where the script has been spending its time, per line (index 0 is line 1), smoothed over
+    /// the last second or so. The listing shades each line by it: a brain jumps between lines
+    /// far faster than an eye can follow, but where it *keeps* coming back to is readable.
+    pub heat: Vec<f32>,
     /// Where the script is when that is not in its own source (inside the DSL, say).
     pub elsewhere: Option<String>,
     /// The last thing that happened, for the panel.
@@ -155,7 +159,7 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
         None => format!("{}  {}{star}", editor.label, editor.file),
     };
     let changed = editor.changed();
-    let current = editor.current;
+    let heat = editor.heat.clone();
     let message = editor.message.clone();
     let choices = editor.choices.clone();
     let selected = editor.selected;
@@ -227,7 +231,7 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
             // a listing does not wrap: one row of the gutter is one line of the file, and the line
             // the script is standing on has a band behind it
             let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-                ui.fonts_mut(|fonts| fonts.layout_job(listing(text.as_str(), current)))
+                ui.fonts_mut(|fonts| fonts.layout_job(listing(text.as_str(), &heat)))
             };
             egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
@@ -255,26 +259,33 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
 
 const FONT: f32 = 13.0;
 
-/// The source as a layout: monospace, no wrapping, and the current line on a band.
-fn listing(text: &str, current: Option<u32>) -> egui::text::LayoutJob {
+/// The source as a layout: monospace, no wrapping, and each line shaded by how much of the
+/// brain's recent time it took — the hottest line fully, the rest in proportion.
+fn listing(text: &str, heat: &[f32]) -> egui::text::LayoutJob {
     use egui::text::{LayoutJob, TextFormat};
-    let normal = TextFormat {
-        font_id: egui::FontId::monospace(FONT),
-        color: egui::Color32::from_rgb(210, 214, 222),
-        ..Default::default()
-    };
-    let marked = TextFormat {
-        font_id: egui::FontId::monospace(FONT),
-        color: egui::Color32::from_rgb(255, 236, 150),
-        background: egui::Color32::from_rgba_unmultiplied(120, 95, 20, 150),
-        ..Default::default()
-    };
+    let hottest = heat.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
     let mut job = LayoutJob::default();
     job.wrap.max_width = f32::INFINITY;
     for (i, line) in text.split_inclusive('\n').enumerate() {
-        let format = if current == Some(i as u32 + 1) { marked.clone() } else { normal.clone() };
-        job.append(line, 0.0, format);
+        let share = heat.get(i).copied().unwrap_or(0.0) / hottest;
+        // below a tenth of the hottest line, nothing: a line passed through once is not a place
+        let share = if share < 0.1 { 0.0 } else { share };
+        let alpha = (share * 170.0) as u8;
+        let color = if share > 0.6 {
+            egui::Color32::from_rgb(255, 236, 150)
+        } else {
+            egui::Color32::from_rgb(210, 214, 222)
+        };
+        job.append(
+            line,
+            0.0,
+            TextFormat {
+                font_id: egui::FontId::monospace(FONT),
+                color,
+                background: egui::Color32::from_rgba_unmultiplied(150, 110, 20, alpha),
+                ..Default::default()
+            },
+        );
     }
     job
 }
-

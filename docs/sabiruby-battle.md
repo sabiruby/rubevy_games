@@ -95,19 +95,23 @@ rubevy hands the scheduler a budget per frame. A robot that never sleeps is pree
 next frame; a robot that raises has its exception become the task's result, which the game reports
 and the match carries on. Neither can stop the frame.
 
-## The HUD
+## The scoreboard
 
-One line per robot: its name, hp, a bar of what its brain spent on the last frame, the count, and
-**the line it is standing on** — `scout.rb:22` in its own file, or `prelude.rb:18` where it is
-inside the DSL (waiting for a scan, usually). It comes from the VM: `Vm::task_instructions` and
-`Vm::task_location`, through `ScriptWorld::stats`, and both work while a task is parked as well as
-while it runs.
+The panel at the top left has one row per robot, in words and bars:
 
-The line numbers are the robot's own. The prelude is compiled in front of the robot's file, so
-the game subtracts its length and says `prelude.rb:N` for anything above it.
+| column | what it is |
+|---|---|
+| robot | its number and brain (`1 scout`, `*` if it runs an applied brain), in its team's colour; click it to show it in the editor |
+| health | a bar, green, yellow below half, red below a quarter; `down` when it is out |
+| thinking | the instructions its Ruby runs per frame, averaged over about a second; a timeslice's worth (3,000) fills the bar |
+| mostly doing | the line of its own file it has spent the most time on lately, not counting `sleep` — `strafe(target, 0.9)`, `patrol` |
 
-The bar fills as a robot approaches a timeslice's worth of instructions (3,000) — the point where
-it starts costing the other robot its turn. A robot thinking normally is tens to hundreds.
+Each robot also has a small health bar over it, under its name.
+
+The first version showed `prelude.rb:15` and a per-frame instruction count. Both were true and
+neither was readable: a brain passes through a dozen lines a frame and sleeps most frames, so the
+"current line" jumps and the count flickers between 0 and a hundred. What is readable is where it
+keeps coming back to, which is what `mostly doing` and the editor's shading show.
 
 ## Telling the robots apart
 

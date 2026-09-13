@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
-use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, HudPlugin, ScriptPanel, Watch};
+use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, Watch};
 
 const ROBOT_RADIUS: f32 = 1.6;
 const MAX_SPEED: f32 = 14.0;
@@ -57,6 +57,13 @@ struct Robot {
     /// the brain it runs when that is not its file: text applied from the editor and not saved.
     /// A robot with one is left alone when the file changes on disk.
     brain: Option<String>,
+    /// the source it is running (the file's text or the applied brain), for showing a line of it
+    source: String,
+    /// where the brain has been spending its time, per line of its own file, decaying over a
+    /// second or so — the readable version of a current line that changes many times a second
+    heat: Vec<f32>,
+    /// instructions per frame, smoothed the same way
+    cpu: f32,
 }
 
 /// A robot that has lost: its hull is swapped for a grey one, once.
@@ -166,12 +173,17 @@ fn main() {
                     ..default()
                 }),
                 ArenaPlugin::default(),
-                HudPlugin,
                 EditorPlugin,
                 RubevyPlugin::default(),
             ))
             .init_resource::<Watched>()
-            .add_systems(Update, (choose_watched, show_code, do_editor_actions, spawn_nameplates, follow_nameplates).chain());
+            .init_resource::<Hud>()
+            .add_systems(
+                Update,
+                (choose_watched, show_code, do_editor_actions, spawn_nameplates, follow_nameplates, spawn_life_bars, follow_life_bars)
+                    .chain(),
+            )
+            .add_systems(bevy_egui::EguiPrimaryContextPass, draw_scoreboard);
         }
     }
     app.insert_resource(RubyDir(ruby.clone()))
@@ -299,8 +311,8 @@ fn follow_nameplates(
         let down = robot.hp <= 0.0;
         **text = match (selected, down) {
             (_, true) => format!("{} {brain}  down", robot.number),
-            (true, false) => format!("> {} {brain}  hp {} <", robot.number, robot.hp as i32),
-            (false, false) => format!("{} {brain}  hp {}", robot.number, robot.hp as i32),
+            (true, false) => format!("> {} {brain} <", robot.number),
+            (false, false) => format!("{} {brain}", robot.number),
         };
         if !owner.shadow {
             let (r, g, b) = TEAM_COLORS[robot.team.min(TEAM_COLORS.len() - 1)];
@@ -315,7 +327,165 @@ fn follow_nameplates(
         // the shadow sits a little down and right of the text it darkens
         let nudge = if owner.shadow { 0.12 } else { 0.0 };
         transform.translation.x = at.translation.x + nudge;
-        transform.translation.y = at.translation.y + ROBOT_RADIUS * 2.0 - nudge;
+        transform.translation.y = at.translation.y + ROBOT_RADIUS * 2.25 - nudge;
+    }
+}
+
+/// The panel at the top left: one row per robot, in words and bars rather than file:line.
+fn draw_scoreboard(
+    mut contexts: bevy_egui::EguiContexts,
+    hud: Res<Hud>,
+    watched: Res<Watched>,
+    robots: Query<(Entity, &Robot)>,
+    mut editor: ResMut<Editor>,
+) {
+    use bevy_egui::egui;
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let mut rows: Vec<(Entity, &Robot)> = robots.iter().collect();
+    rows.sort_by_key(|(_, r)| r.number);
+
+    egui::Window::new("scoreboard")
+        .title_bar(false)
+        .resizable(false)
+        .anchor(egui::Align2::LEFT_TOP, [8.0, 8.0])
+        .show(ctx, |ui| {
+            // a scoreboard, not a document: nothing in it is text to select
+            ui.style_mut().interaction.selectable_labels = false;
+            if !hud.line.is_empty() {
+                ui.label(egui::RichText::new(&hud.line).strong().size(16.0));
+                ui.separator();
+            }
+            egui::Grid::new("robots").num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.label(egui::RichText::new("robot").weak());
+                ui.label(egui::RichText::new("health").weak());
+                ui.label(egui::RichText::new("thinking").weak())
+                    .on_hover_text("instructions its Ruby runs per frame, averaged over about a second");
+                ui.label(egui::RichText::new("mostly doing").weak())
+                    .on_hover_text("the line of its file it has spent the most time on lately, not counting sleep");
+                ui.end_row();
+
+                for (entity, robot) in rows {
+                    let (r, g, b) = TEAM_COLORS[robot.team.min(TEAM_COLORS.len() - 1)];
+                    let down = robot.hp <= 0.0;
+                    let team = if down {
+                        egui::Color32::from_gray(150)
+                    } else {
+                        egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+                    };
+                    let brain = robot.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    let star = if robot.brain.is_some() { "*" } else { "" };
+                    let marker = if watched.entity == Some(entity) { "> " } else { "  " };
+                    let name = egui::RichText::new(format!("{marker}{} {brain}{star}", robot.number)).color(team).strong();
+                    // the name picks the robot, as its button in the editor does
+                    if ui.add(egui::Label::new(name).sense(egui::Sense::click())).clicked() {
+                        editor.picked = Some(entity.to_bits());
+                    }
+
+                    let life = (robot.hp / 100.0).clamp(0.0, 1.0);
+                    let fill = if life > 0.5 {
+                        egui::Color32::from_rgb(90, 190, 90)
+                    } else if life > 0.25 {
+                        egui::Color32::from_rgb(220, 180, 60)
+                    } else {
+                        egui::Color32::from_rgb(210, 70, 60)
+                    };
+                    let text = if down { "down".to_string() } else { format!("{}", robot.hp as i32) };
+                    ui.add(egui::ProgressBar::new(life).fill(fill).desired_width(120.0).text(text));
+
+                    // a timeslice's worth of instructions fills the bar: the point where a brain
+                    // starts taking turns away from the others
+                    let cpu = (robot.cpu / 3000.0).clamp(0.0, 1.0);
+                    ui.add(
+                        egui::ProgressBar::new(cpu)
+                            .fill(egui::Color32::from_rgb(90, 140, 210))
+                            .desired_width(80.0)
+                            .text(format!("{:.0}", robot.cpu)),
+                    );
+
+                    let doing = if down { String::new() } else { mostly_doing(robot) };
+                    ui.label(egui::RichText::new(doing).monospace());
+                    ui.end_row();
+                }
+            });
+        });
+}
+
+/// The source line the brain has spent the most time on lately, trimmed — `strafe(target, 0.9)`,
+/// `patrol`. Waiting in `sleep` is left out: a brain spends most of its time there, and "it is
+/// sleeping" says nothing about what it is up to.
+fn mostly_doing(robot: &Robot) -> String {
+    let lines: Vec<&str> = robot.source.lines().collect();
+    let Some((i, _)) = robot
+        .heat
+        .iter()
+        .enumerate()
+        .filter(|(i, h)| **h > 0.0 && !lines.get(*i).is_some_and(|l| l.trim_start().starts_with("sleep")))
+        .max_by(|a, b| a.1.total_cmp(b.1))
+    else {
+        return String::new();
+    };
+    let line = robot.source.lines().nth(i).unwrap_or("").trim();
+    let mut s: String = line.chars().take(26).collect();
+    if line.chars().count() > 26 {
+        s.push('…');
+    }
+    s
+}
+
+/// A bar over each robot's name: how much life it has left.
+#[derive(Component)]
+struct LifeBar {
+    robot: Entity,
+    fill: bool,
+}
+
+const BAR_WIDTH: f32 = 3.6;
+
+fn spawn_life_bars(mut commands: Commands, robots: Query<Entity, Added<Robot>>) {
+    for entity in &robots {
+        for fill in [false, true] {
+            commands.spawn((
+                LifeBar { robot: entity, fill },
+                Sprite {
+                    color: if fill { Color::srgb(0.35, 0.8, 0.35) } else { Color::srgba(0.0, 0.0, 0.0, 0.6) },
+                    custom_size: Some(Vec2::new(BAR_WIDTH, 0.45)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, if fill { 5.1 } else { 5.0 }),
+            ));
+        }
+    }
+}
+
+fn follow_life_bars(
+    mut commands: Commands,
+    robots: Query<(&Robot, &Transform), Without<LifeBar>>,
+    mut bars: Query<(Entity, &LifeBar, &mut Sprite, &mut Transform, &mut Visibility)>,
+) {
+    for (bar, owner, mut sprite, mut transform, mut visibility) in &mut bars {
+        let Ok((robot, at)) = robots.get(owner.robot) else {
+            commands.entity(bar).despawn();
+            continue;
+        };
+        *visibility = if robot.hp <= 0.0 { Visibility::Hidden } else { Visibility::Inherited };
+        let life = (robot.hp / 100.0).clamp(0.0, 1.0);
+        let y = at.translation.y + ROBOT_RADIUS * 1.35;
+        if owner.fill {
+            let w = BAR_WIDTH * life;
+            sprite.custom_size = Some(Vec2::new(w.max(0.001), 0.45));
+            sprite.color = if life > 0.5 {
+                Color::srgb(0.35, 0.8, 0.35)
+            } else if life > 0.25 {
+                Color::srgb(0.9, 0.75, 0.25)
+            } else {
+                Color::srgb(0.85, 0.3, 0.25)
+            };
+            // anchored at the bar's left end, so it empties towards the left
+            transform.translation.x = at.translation.x - BAR_WIDTH / 2.0 + w / 2.0;
+        } else {
+            transform.translation.x = at.translation.x;
+        }
+        transform.translation.y = y;
     }
 }
 
@@ -356,6 +526,7 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     editor.in_memory = robot.brain.is_some();
     editor.label = robot.name.clone();
     editor.current = robot.own_line;
+    editor.heat = robot.heat.clone();
     // where it stands when that is not this file: inside the DSL, waiting for an answer
     editor.elsewhere = script.at.starts_with("prelude").then(|| script.at.clone());
 }
@@ -578,6 +749,7 @@ fn spawn_robot(
     let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
     let number = shots.0.len() + 1; // one entry per robot spawned so far
     let name = format!("{number} {team_name}/{file}");
+    let source = std::fs::read_to_string(&path).unwrap_or_default();
     let robot = commands
         .spawn((
             Robot {
@@ -593,6 +765,9 @@ fn spawn_robot(
                 own_line: None,
                 heading: 0.0,
                 brain: None,
+                source,
+                heat: Vec::new(),
+                cpu: 0.0,
             },
             Script::new(handle).with_name(&name).with_priority(100),
             ScriptPanel { name, ..default() },
@@ -705,6 +880,8 @@ fn do_editor_actions(
                     continue;
                 }
                 r.brain = Some(text.clone());
+                r.source = text.clone();
+                r.heat.clear();
                 restart(&mut commands, entity, &r.name, handle.clone());
                 count += 1;
             }
@@ -739,6 +916,8 @@ fn do_editor_actions(
                 Ok((handle, _)) => {
                     if let Ok((entity, mut r)) = robots.get_mut(shown) {
                         r.brain = None;
+                        r.source = source.clone();
+                        r.heat.clear();
                         restart(&mut commands, entity, &r.name, handle);
                     }
                     editor.reset_to(source, format!("back to {name}"));
@@ -1008,15 +1187,16 @@ fn reload_changed(
     ruby: Res<RubyDir>,
     mut commands: Commands,
     mut assets: ResMut<Assets<MrbAsset>>,
-    robots: Query<(Entity, &Robot)>,
+    mut robots: Query<(Entity, &mut Robot)>,
     mut hud: ResMut<Hud>,
     editor: Option<ResMut<Editor>>,
     watched: Option<Res<Watched>>,
 ) {
     let Some(watch) = watch else { return };
     let mut editor = editor;
+    let mut fresh: Vec<(Entity, String)> = Vec::new();
     for path in watch.changed() {
-        for (entity, robot) in &robots {
+        for (entity, robot) in robots.iter() {
             let reload = path == robot.file || path.ends_with("prelude.rb");
             // a brain applied from the editor is the robot's until it is saved or reverted
             if !reload || robot.brain.is_some() {
@@ -1034,6 +1214,7 @@ fn reload_changed(
                 hud.line = format!("{}: compile error (see the log)", robot.name);
                 continue;
             };
+            fresh.push((entity, std::fs::read_to_string(&robot.file).unwrap_or_default()));
             // dropping ScriptTask and giving the entity a new Script starts it over
             commands
                 .entity(entity)
@@ -1042,6 +1223,12 @@ fn reload_changed(
                 .insert(Script::new(handle).with_name(&robot.name).with_priority(128));
             hud.line = format!("{} reloaded", robot.name);
             info!("reloaded {}", robot.name);
+        }
+    }
+    for (entity, source) in fresh {
+        if let Ok((_, mut r)) = robots.get_mut(entity) {
+            r.source = source;
+            r.heat.clear();
         }
     }
 }
@@ -1057,8 +1244,11 @@ fn report_ended(mut ended: MessageReader<ScriptEnded>, mut hud: ResMut<Hud>) {
 
 fn update_hud(
     world: Res<ScriptWorld>,
+    time: Res<Time>,
     mut robots: Query<(&mut Robot, Option<&ScriptTask>, &mut ScriptPanel)>,
 ) {
+    // about a second of memory: a line the brain keeps coming back to stays lit
+    let keep = (-time.delta_secs() / 0.8).exp();
     let mut alive = 0;
     for (mut robot, script, mut panel) in &mut robots {
         panel.name = robot.name.clone();
@@ -1091,6 +1281,18 @@ fn update_hud(
             .iter()
             .find(|(_, line)| *line > robot.prelude_lines)
             .map(|(_, line)| line - robot.prelude_lines);
+        let spent = panel.spent as f32;
+        robot.cpu = robot.cpu * keep + spent * (1.0 - keep);
+        for h in robot.heat.iter_mut() {
+            *h *= keep;
+        }
+        if let Some(line) = robot.own_line {
+            let i = line as usize - 1;
+            if robot.heat.len() <= i {
+                robot.heat.resize(i + 1, 0.0);
+            }
+            robot.heat[i] += 1.0 - keep;
+        }
     }
     let _ = alive;
 }
