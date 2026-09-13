@@ -12,7 +12,7 @@ the game does only what it is told.
 
 ```ruby
 # ruby/matches/training.rb
-match "Training" do
+match "Training", noise: 0.3 do
   team :red,  robots: %w[scout hunter]
   team :blue, robots: %w[scout scout]
 
@@ -32,20 +32,22 @@ a victory — all of it is in that file, and saving it starts the match again.
 
 ## The boundary
 
-The game owns the world; Ruby owns the decisions.
+The game owns the world; Ruby owns the decisions. What a robot gets is deliberately raw — a tank's
+controls and noisy readings — so there is room to write a brain that is better than another one.
 
 | Ruby asks | the game answers | what it does |
 |---|---|---|
-| `Rubevy.ask("me")` | `[x, y, hp, heading]` | where this robot is |
-| `Rubevy.ask("scan", range)` | `[dx, dy, distance]` or `nil` | the nearest living enemy within range |
-| `Rubevy.ask("thrust", dx, dy)` | `true` | push in a direction; the game caps the speed |
-| `Rubevy.ask("fire", dx, dy)` | `true` / `false` | shoot, unless the gun is still cooling |
-| `Rubevy.ask("arena")` | half the arena's width | so the DSL can keep off the walls |
+| `ask("status")` | `[x, y, hp, team, heading, speed, turret, energy, cooldown, arena, time]` | the robot itself |
+| `ask("radar", range)` | the status row, then `[id, team, hp, x, y, vx, vy, heading, turret, distance, bearing]` per robot | every other robot still running within range, friends included, through the match's noise |
+| `ask("incoming", range)` | `[[x, y, vx, vy, distance], …]`, nearest first | shots from other teams on their way |
+| `ask("act", throttle, turn, aim, power)` | `[fired, energy, cooldown]` | the controls; any of them `-999` to leave as it is |
+| `ask("seed")` | a number | a robot's own dice, rolled from the match's, for `srand` |
 
 And what only the match asks for:
 
 | the match asks | the game answers |
 |---|---|
+| `ask("rules", noise, seed)` | how noisy radars and guns are; the dice (`-1`: the clock) |
 | `ask("spawn", file, team, x, y)` | the new robot's id; it comes with its own brain |
 | `ask("board")` | `[[id, team, hp, x, y], …]` |
 | `ask("events")` | `[[kind, id, other], …]` since the last call — `0` is "down" |
@@ -54,26 +56,110 @@ And what only the match asks for:
 | `ask("win", team)` | the result, for the HUD |
 
 Every one of them parks the robot's task until the answer comes back (`ScriptWorld::answer`), so
-a robot waiting for a scan costs nothing and the other robot keeps running. Nothing is a callback
-and nothing polls; a robot reads as ordinary sequential Ruby:
+a robot waiting for its radar costs nothing and the other robots keep running. Nothing is a
+callback and nothing polls; a robot reads as ordinary sequential Ruby:
 
 ```ruby
 loop do
-  target = scan(40)
-  aim_and_fire(target) if target
-  sleep 0.05
+  target = nearest_enemy(60)
+  if target
+    angle = lead(target, 0.9)
+    act throttle: 0.5, turn: steer_to(target.bearing), aim: angle,
+        fire: aimed?(angle) ? 0.9 : nil
+  end
+  sleep 0.08
 end
 ```
 
-The game answers everything in the same frame today. It does not have to — `Rubevy.ask` was built
-so an answer can come frames later (a path request, an asset load), and the robot simply waits.
+A question costs about a frame: the task asks, the game answers in its next pass, the scheduler
+resumes the task. That is why `act` sets all four controls at once and `radar` brings the robot's
+own status back with it — a brain that asked one question per control would react a few frames
+late. The game answers everything in the frame it is asked today; `Rubevy.ask` also allows an
+answer that comes frames later (a path request, an asset load), and the robot simply waits.
+
+## A tank, not a cursor
+
+The first version had `thrust(dx, dy)` (move in any direction, at once) and `fire(dx, dy)` (shoot
+in any direction, at once) and `scan` (the nearest enemy, exactly). Every brain written with them
+came out the same, because there was nothing to be good at: pointing at the enemy was already the
+best aim, and moving sideways was already the best dodge.
+
+Now a robot is a tank:
+
+* **The hull turns at a limited rate** (`turn`, -1..1 of 2.6 rad/s) and the robot moves only along
+  it (`throttle`, -1..1; reverse is slower). Speed takes about a fifth of a second to build and
+  to die away. Getting out of the way of a shot means turning first.
+* **The turret turns on its own**, towards the angle it was given, at 4 rad/s. A robot can drive
+  one way and shoot another, but a turret that has to swing round is a turret that is not
+  firing.
+* **A shot's power** (0.2..1) trades damage (4..16) for speed (55..30), reload (0.3..0.8 s) and
+  energy. A light shot is hard to dodge and does little; a heavy one hurts and can be seen coming.
+* **Energy** (100) comes back at 12/s. Full throttle costs 9/s, a shot 16 × (0.25 + power). A robot
+  that fires everything it has cannot also run, and one with none left crawls at a third of its
+  speed and cannot fire at all.
+* **Shots fly**, so a moving target has to be led: aim where it will be, not where it is.
+* Tanks push each other apart instead of driving through each other, and a team's shots pass over
+  its own robots.
+
+## Randomness
+
+`match "Training", noise: 0.3, seed: 7 do … end`:
+
+* `noise` (0..1) blurs the radar — positions by up to `noise × distance × 5%`, velocities too — and
+  the shots from `incoming`, and spreads every shot by up to `noise × 0.1` rad on top of a small
+  spread every gun has. A robot far away is a guess; a robot close is a fact.
+* `seed` fixes the game's dice. Each robot's `rand` is `srand`ed from them when it starts, so a
+  robot that flips coins (the scout's circling direction, the hunter's wandering) flips the same
+  coins in a seeded match. Leave it out and every match is different. A replay with the same seed
+  is alike rather than identical: frame times still vary, and so do the moments the questions are
+  answered.
 
 ## The DSL
 
-`ruby/prelude.rb` defines `Robot` (what a robot can do) and `robot "Name" do … end`, which is
-`Class.new(Robot)` with the block `class_eval`'d into it. So a robot file is a class body: `def
-run` is the brain, `def patrol` is a helper, and instance variables are the robot's memory
-between frames.
+`ruby/prelude.rb` has two halves.
+
+The first is **what the game offers**, as thin as it can be: `status`, `me` (the last status seen,
+without asking), `radar(range)` → `Contact`s, `incoming(range)` → `Shot`s, and
+`act(throttle:, turn:, aim:, fire:)` with `drive`, `aim`, `fire`, `stop` as one-control shorthands.
+`Status`, `Contact` and `Shot` are plain classes over the rows the game answers.
+
+The second is **a library written on top of it in plain Ruby**, which a robot can use, copy and
+change, or ignore:
+
+| helper | what it works out |
+|---|---|
+| `angle_diff(a, b)`, `angle_to(x, y)`, `distance_to`, `angle_to_center` | geometry from where the robot is |
+| `steer_to(angle)` | a `turn` value that brings the hull round, gently as it gets close |
+| `enemies(range)`, `nearest_enemy(range)` | the radar, filtered |
+| `lead(target, power)` | where to aim so a shot of that power meets a target that keeps its course |
+| `aimed?(angle, tolerance)` | the gun is ready and the turret is close enough |
+| `near_wall?(margin)` | time to turn back in |
+| `on_collision?(shot)`, `dodge_angle(shot)` | whether a shot will hit if nothing changes, and which way is across its path |
+| `wander_turn` | a turn that keeps a direction for a while, then picks another at random |
+
+None of the helpers asks the game anything except through `radar`: they compute a number, and the
+robot's `act` sends them all at once.
+
+`robot "Name" do … end` is `Class.new(Robot)` with the block `class_eval`'d into it. So a robot
+file is a class body: `def run` is the brain, other `def`s are its own helpers, and instance
+variables are the robot's memory between frames.
+
+The two robots that come with the game:
+
+* **scout** circles its nearest enemy (the side flips now and then), dodges a shot that is on
+  course to hit it, and fires light, fast shots (power 0.3) while it has energy to spare.
+* **hunter** drives at its enemy until it is 18 away, backs off slowly from there, and fires heavy
+  shots (0.9) when its turret is on the lead angle; with nothing on the radar it wanders with its
+  turret sweeping.
+
+## Next: reflexes
+
+A brain is one loop, so a robot that is sleeping between decisions notices a hit only on its next
+pass. The next step is `reflex(:hit) { … }`: a block that runs as a task of its own when the game
+reports a hit, beside the main loop — mruby-task's scheduler already runs many tasks, and this
+is where a robot would start using more than one.
+
+## The DSL
 
 The prelude is put in front of the robot's file and the two are compiled as one program, which is
 why a robot file needs no `require`. Reading it as one program is also what makes reloading a
@@ -103,8 +189,9 @@ The panel at the top left has one row per robot, in words and bars:
 |---|---|
 | robot | its number and brain (`1 scout`, `*` if it runs an applied brain), in its team's colour; click it to show it in the editor |
 | health | a bar, green, yellow below half, red below a quarter; `down` when it is out |
+| energy | a bar out of 100: driving and firing spend it, time brings it back |
 | thinking | the instructions its Ruby runs per frame, averaged over about a second; a timeslice's worth (3,000) fills the bar |
-| mostly doing | the line of its own file it has spent the most time on lately, not counting `sleep` — `strafe(target, 0.9)`, `patrol` |
+| mostly doing | the line of its own file it has spent the most time on lately, not counting `sleep` — `target = nearest_enemy(60)`, `fire: (aimed?(angle, 0.2) …` |
 
 Each robot also has a small health bar over it, under its name.
 
@@ -133,7 +220,7 @@ brain is standing on**:
 
 ```
 red/scout  scout.rb  (in prelude.rb:15)
-   9        target = scan(40)        ← banded
+   7      target = nearest_enemy(45)        ← banded
 ```
 
 What is typed stays **in memory** until you say otherwise. Trying something in a running match
@@ -167,7 +254,7 @@ Along the top of the editor is a button per robot (`1 scout`, `2 hunter`, … in
 editor's: a `2` in the code does not switch robots (`EguiWantsInput`).
 
 The banded line is the innermost frame **in the robot's own file**, which is not the innermost
-frame: a robot waiting for a scan stands three frames deep inside `prelude.rb`. The VM answers the
+frame: a robot waiting for its radar stands a few frames deep inside `prelude.rb`. The VM answers the
 whole stack (`Vm::task_frames`), the editor picks the frame in the file it shows, and the title
 says where the brain really is.
 
@@ -199,16 +286,20 @@ driver, which is how the screenshots in this repository were made.
 
 Kenney's *Top-down Tanks Remastered* (CC0), a dozen files of it in `sabibots/assets/sprites/`:
 tank hulls for the robots, their own coloured shots, sand tiles for the floor and metal crates
-for the wall. The hull turns to where the robot is moving or last fired
-(`heading`), which makes the Ruby's decisions legible at a glance — a robot circling its enemy
-looks like it is circling.
+for the wall, and a barrel on each hull that turns on its own (Kenney has red and blue barrels;
+the other teams get a tinted blue one). The hull points where the tank is heading and the barrel
+where the turret is, which makes the Ruby's decisions legible at a glance — a scout circling its
+enemy with its gun turned inwards looks like exactly that.
 
 Bevy looks for assets next to the executable, which is not where a workspace puts them, so the
 game points `AssetPlugin` at its own `assets/` directory.
 
-## What v0.1 does not do yet
+## What it does not do yet
 
-* **Sound, sprites, effects.** Everything is a coloured square.
+* **Sound.**
+* **Reflexes** (see above): a brain notices a hit on its next pass, not when it happens.
+* **Downed robots' brains keep running.** Their `act` does nothing, but they still spend
+  instructions.
 
 ## Running
 

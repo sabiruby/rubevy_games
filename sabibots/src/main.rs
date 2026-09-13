@@ -2,8 +2,13 @@
 //!
 //! Each robot is an entity with a `Script`: `ruby/prelude.rb` (the DSL) followed by
 //! `ruby/robots/<name>.rb` (the robot itself). The script asks the game for what it needs
-//! (`me`, `scan`, `thrust`, `fire`) and is parked until the game answers, so a robot that is
+//! (`radar`, `incoming`, `act`, …) and is parked until the game answers, so a robot that is
 //! thinking costs nothing and a robot that never yields is preempted at its timeslice.
+//!
+//! What the game gives a robot is deliberately raw: a tank's controls (throttle, turn, where the
+//! turret should point, how hard to fire) and noisy readings of what is around it. Aiming ahead
+//! of a moving target, dodging, and saving energy are the robot's own Ruby — the helpers in the
+//! prelude are one way to write them, not the only one.
 //!
 //!     cargo run -p sabibots
 //!
@@ -16,10 +21,29 @@ use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, Sc
 use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, Watch};
 
 const ROBOT_RADIUS: f32 = 1.6;
-const MAX_SPEED: f32 = 14.0;
-const BULLET_SPEED: f32 = 40.0;
-const COOLDOWN: f32 = 0.35;
-const BULLET_DAMAGE: f32 = 7.0;
+/// A robot is a tank: it moves along its heading, turns at a limited rate, and its turret turns
+/// on its own, also at a limited rate.
+const MAX_SPEED: f32 = 12.0;
+const REVERSE_SPEED: f32 = 7.0;
+const TURN_RATE: f32 = 2.6;
+const TURRET_RATE: f32 = 4.0;
+/// Energy: driving and firing cost it, time gives it back. A robot that fires everything it has
+/// cannot also run away.
+const ENERGY_MAX: f32 = 100.0;
+const ENERGY_REGEN: f32 = 12.0;
+const DRIVE_COST: f32 = 9.0;
+const FIRE_COST: f32 = 16.0;
+/// A shot's power (0.2 to 1): more damage, a slower shot, a longer reload, more energy.
+const BULLET_SPEED_FAST: f32 = 55.0;
+const BULLET_SPEED_SLOW: f32 = 30.0;
+const BULLET_DAMAGE_MIN: f32 = 4.0;
+const BULLET_DAMAGE_MAX: f32 = 16.0;
+const COOLDOWN_MIN: f32 = 0.3;
+const COOLDOWN_MAX: f32 = 0.8;
+/// Even with no noise in the match, a gun is not a laser.
+const BASE_SPREAD: f32 = 0.02;
+/// "leave this as it is", for any part of `act` the brain does not set
+const UNSET: f64 = -999.0;
 
 /// The teams a match can put on the field, in the order Ruby names them.
 const TEAMS: [(&str, &str, &str); 4] = [
@@ -46,13 +70,20 @@ struct Robot {
     hp: f32,
     cooldown: f32,
     velocity: Vec2,
+    /// what its brain last set: -1 (full reverse) to 1 (full ahead), and -1 to 1 of TURN_RATE
+    throttle: f32,
+    turn: f32,
+    /// the turret's world angle, and where it has been told to point
+    turret: f32,
+    turret_target: f32,
+    energy: f32,
     /// what its brain had spent as of the last frame, so the HUD can show this frame's share
     last_instructions: u64,
     /// lines the prelude adds in front of the robot's own file
     prelude_lines: u32,
     /// the line of its own file the brain is inside, however deep in the DSL it stands
     own_line: Option<u32>,
-    /// where the hull points, kept from the last direction it moved or fired in
+    /// where the hull points; it only changes by turning
     heading: f32,
     /// the brain it runs when that is not its file: text applied from the editor and not saved.
     /// A robot with one is left alone when the file changes on disk.
@@ -86,6 +117,50 @@ fn gray_out_downed(
     }
 }
 
+/// The barrel on top of a robot: its own entity, because it turns on its own.
+#[derive(Component)]
+struct Turret {
+    robot: Entity,
+}
+
+fn spawn_turrets(mut commands: Commands, server: Res<AssetServer>, robots: Query<(Entity, &Robot), Added<Robot>>) {
+    for (entity, robot) in &robots {
+        // Kenney draws red and blue barrels; the other teams get the blue one, tinted
+        let (image, color) = match robot.team {
+            0 => ("sprites/tankRed_barrel1_outline.png", Color::WHITE),
+            1 => ("sprites/tankBlue_barrel1_outline.png", Color::WHITE),
+            2 => ("sprites/tankBlue_barrel1_outline.png", Color::srgb(0.6, 1.0, 0.6)),
+            _ => ("sprites/tankBlue_barrel1_outline.png", Color::srgb(1.0, 0.95, 0.6)),
+        };
+        commands.spawn((
+            Turret { robot: entity },
+            Sprite { image: server.load(image), color, custom_size: Some(Vec2::new(1.1, 2.6)), ..default() },
+            Transform::from_xyz(0.0, 0.0, 1.5),
+        ));
+    }
+}
+
+fn follow_turrets(
+    mut commands: Commands,
+    robots: Query<(&Robot, &Transform), Without<Turret>>,
+    mut turrets: Query<(Entity, &Turret, &mut Sprite, &mut Transform)>,
+) {
+    for (entity, turret, mut sprite, mut transform) in &mut turrets {
+        let Ok((robot, at)) = robots.get(turret.robot) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        // the barrel's back end sits over the middle of the hull
+        let dir = Vec2::from_angle(robot.turret);
+        transform.translation.x = at.translation.x + dir.x * 1.0;
+        transform.translation.y = at.translation.y + dir.y * 1.0;
+        transform.rotation = Quat::from_rotation_z(robot.turret - std::f32::consts::FRAC_PI_2);
+        if robot.hp <= 0.0 {
+            sprite.color = Color::srgb(0.45, 0.45, 0.45);
+        }
+    }
+}
+
 /// A puff where a shot landed or a robot went down: it grows, fades and goes.
 #[derive(Component)]
 struct Blast {
@@ -98,7 +173,40 @@ struct Blast {
 struct Bullet {
     velocity: Vec2,
     owner: Entity,
+    team: usize,
+    damage: f32,
     life: f32,
+}
+
+/// The match's randomness: how noisy the sensors and the guns are, and the dice that make it.
+/// Seeded, so the same seed rolls the same numbers (the frame timing still varies, so a replay
+/// is alike rather than identical).
+#[derive(Resource)]
+struct Rules {
+    noise: f32,
+    dice: u64,
+}
+
+impl Default for Rules {
+    fn default() -> Self {
+        Rules { noise: 0.0, dice: 0x9E37_79B9_7F4A_7C15 }
+    }
+}
+
+impl Rules {
+    /// 0..1, SplitMix64
+    fn roll(&mut self) -> f32 {
+        self.dice = self.dice.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.dice;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z >> 40) as f32 / (1u64 << 24) as f32
+    }
+    /// about -1..1, bunched in the middle
+    fn wobble(&mut self) -> f32 {
+        (self.roll() + self.roll() + self.roll()) / 1.5 - 1.0
+    }
 }
 
 /// Where the Ruby lives. `ruby/prelude.rb` is put in front of every robot's file.
@@ -189,10 +297,11 @@ fn main() {
     app.insert_resource(RubyDir(ruby.clone()))
         .init_resource::<Shots>()
         .init_resource::<Events>()
+        .init_resource::<Rules>()
         .add_systems(Startup, (spawn_match, spawn_arena))
         .add_systems(
             Update,
-            (answer_requests, move_robots, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
+            (answer_requests, move_robots, separate_robots, spawn_turrets, follow_turrets, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
                 .chain(),
         );
     if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
@@ -355,9 +464,11 @@ fn draw_scoreboard(
                 ui.label(egui::RichText::new(&hud.line).strong().size(16.0));
                 ui.separator();
             }
-            egui::Grid::new("robots").num_columns(4).spacing([12.0, 6.0]).show(ui, |ui| {
+            egui::Grid::new("robots").num_columns(5).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(egui::RichText::new("robot").weak());
                 ui.label(egui::RichText::new("health").weak());
+                ui.label(egui::RichText::new("energy").weak())
+                    .on_hover_text("driving and firing spend it, time brings it back; a harder shot costs more");
                 ui.label(egui::RichText::new("thinking").weak())
                     .on_hover_text("instructions its Ruby runs per frame, averaged over about a second");
                 ui.label(egui::RichText::new("mostly doing").weak())
@@ -391,6 +502,14 @@ fn draw_scoreboard(
                     };
                     let text = if down { "down".to_string() } else { format!("{}", robot.hp as i32) };
                     ui.add(egui::ProgressBar::new(life).fill(fill).desired_width(120.0).text(text));
+
+                    let energy = (robot.energy / ENERGY_MAX).clamp(0.0, 1.0);
+                    ui.add(
+                        egui::ProgressBar::new(if down { 0.0 } else { energy })
+                            .fill(egui::Color32::from_rgb(200, 170, 60))
+                            .desired_width(70.0)
+                            .text(if down { String::new() } else { format!("{}", robot.energy as i32) }),
+                    );
 
                     // a timeslice's worth of instructions fills the bar: the point where a brain
                     // starts taking turns away from the others
@@ -750,6 +869,8 @@ fn spawn_robot(
     let number = shots.0.len() + 1; // one entry per robot spawned so far
     let name = format!("{number} {team_name}/{file}");
     let source = std::fs::read_to_string(&path).unwrap_or_default();
+    // it starts facing the middle of the arena
+    let facing = (-at.y).atan2(-at.x);
     let robot = commands
         .spawn((
             Robot {
@@ -760,10 +881,15 @@ fn spawn_robot(
                 hp: 100.0,
                 cooldown: 0.0,
                 velocity: Vec2::ZERO,
+                throttle: 0.0,
+                turn: 0.0,
+                turret: facing,
+                turret_target: facing,
+                energy: ENERGY_MAX,
                 last_instructions: 0,
                 prelude_lines,
                 own_line: None,
-                heading: 0.0,
+                heading: facing,
                 brain: None,
                 source,
                 heat: Vec::new(),
@@ -962,8 +1088,10 @@ fn rebuild_walls(
 fn answer_requests(
     mut world: ResMut<ScriptWorld>,
     mut robots: Query<(Entity, &mut Robot, &Transform)>,
+    bullets: Query<(&Bullet, &Transform), Without<Robot>>,
     mut commands: Commands,
     mut arena: ResMut<ArenaSize>,
+    mut rules: ResMut<Rules>,
     mut shots: ResMut<Shots>,
     mut events: ResMut<Events>,
     mut hud: ResMut<Hud>,
@@ -976,9 +1104,29 @@ fn answer_requests(
         .iter()
         .map(|(e, r, t)| (e, r.team, t.translation.truncate(), r.hp))
         .collect();
+    // what a radar can see of a robot: where it is, where it is going, where it faces
+    let seen: Vec<(Entity, usize, f32, Vec2, Vec2, f32, f32)> = robots
+        .iter()
+        .map(|(e, r, t)| (e, r.team, r.hp, t.translation.truncate(), r.velocity, r.heading, r.turret))
+        .collect();
     for request in world.take_requests() {
         // what the match asks for. It has no entity of its own: it is the game, not a thing in it
         match request.kind.as_str() {
+            // `match "…", noise: 0.3, seed: 7`: how noisy this match is, and its dice
+            "rules" => {
+                rules.noise = request.num_or(0, 0.0).clamp(0.0, 1.0) as f32;
+                let seed = request.num_or(1, -1.0);
+                rules.dice = if seed >= 0.0 {
+                    seed as u64
+                } else {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(1)
+                };
+                world.answer(&request, Answer::Num(rules.noise as f64));
+                continue;
+            }
             "clock" => {
                 world.answer(&request, Answer::Num(time.elapsed_secs() as f64));
                 continue;
@@ -1036,40 +1184,95 @@ fn answer_requests(
         };
         let at = transform.translation.truncate();
         let answer = match request.kind.as_str() {
-            "me" => Answer::List(vec![at.x as f64, at.y as f64, robot.hp as f64, robot.team as f64]),
-            "scan" => {
-                let range = request.num_or(0, 40.0) as f32;
-                match nearest(me, robot.team, at, &positions, range) {
-                    Some((d, dist)) => Answer::List(vec![d.x as f64, d.y as f64, dist as f64]),
-                    None => Answer::Nil,
+            // for `srand`: a robot's own dice, rolled from the match's
+            "seed" => Answer::Num((rules.roll() * 1_000_000.0).floor() as f64),
+            "status" => Answer::List(status_row(&robot, at, arena.0, time.elapsed_secs())),
+            // the robot itself first, then every other robot still running within range, read
+            // through the match's noise: the further away, the less exact
+            "radar" => {
+                let range = request.num_or(0, 60.0) as f32;
+                let mut rows = vec![status_row(&robot, at, arena.0, time.elapsed_secs())];
+                for (other, team, hp, pos, vel, heading, turret) in &seen {
+                    let dist = pos.distance(at);
+                    if *other == me || *hp <= 0.0 || dist > range {
+                        continue;
+                    }
+                    let blur = rules.noise * dist * 0.05;
+                    let pos = *pos + Vec2::new(rules.wobble(), rules.wobble()) * blur;
+                    let vel = *vel + Vec2::new(rules.wobble(), rules.wobble()) * rules.noise * 2.0;
+                    let off = pos - at;
+                    rows.push(vec![
+                        other.to_bits() as f64,
+                        *team as f64,
+                        *hp as f64,
+                        pos.x as f64,
+                        pos.y as f64,
+                        vel.x as f64,
+                        vel.y as f64,
+                        *heading as f64,
+                        *turret as f64,
+                        off.length() as f64,
+                        off.y.atan2(off.x) as f64,
+                    ]);
                 }
+                Answer::Rows(rows)
             }
-            "thrust" => {
-                let (dx, dy) = (request.num_or(0, 0.0) as f32, request.num_or(1, 0.0) as f32);
-                let v = Vec2::new(dx, dy).clamp_length_max(1.0) * MAX_SPEED;
-                robot.velocity = v;
-                Answer::Bool(true)
+            // shots from other teams within range: where they are and where they are going
+            "incoming" => {
+                let range = request.num_or(0, 25.0) as f32;
+                let mut rows: Vec<Vec<f64>> = bullets
+                    .iter()
+                    .filter(|(b, _)| b.team != robot.team)
+                    .map(|(b, t)| (b, t.translation.truncate()))
+                    .filter(|(_, p)| p.distance(at) <= range)
+                    .map(|(b, p)| {
+                        let p = p + Vec2::new(rules.wobble(), rules.wobble()) * rules.noise * 1.5;
+                        vec![p.x as f64, p.y as f64, b.velocity.x as f64, b.velocity.y as f64, p.distance(at) as f64]
+                    })
+                    .collect();
+                rows.sort_by(|a, b| a[4].total_cmp(&b[4]));
+                Answer::Rows(rows)
             }
-            "fire" => {
-                let dir = Vec2::new(request.num_or(0, 0.0) as f32, request.num_or(1, 0.0) as f32);
-                if robot.cooldown > 0.0 || dir.length_squared() < 1e-6 || robot.hp <= 0.0 {
-                    Answer::Bool(false)
+            // `act(throttle, turn, aim, power)`: the controls, any of them UNSET to leave alone.
+            // Answers [fired (1 or 0), energy, cooldown]
+            "act" => {
+                let set = |i: usize| request.num(i).filter(|v| *v > UNSET + 1.0);
+                if robot.hp <= 0.0 {
+                    Answer::List(vec![0.0, 0.0, 0.0])
                 } else {
-                    robot.cooldown = COOLDOWN;
-                    let dir = dir.normalize();
-                    robot.heading = dir.y.atan2(dir.x);
-                    let image = shots.image_for(me);
-                    commands.spawn((
-                        Bullet { velocity: dir * BULLET_SPEED, owner: me, life: 2.0 },
-                        Sprite { image, custom_size: Some(Vec2::new(0.7, 1.6)), ..default() },
-                        Transform::from_xyz(
-                            at.x + dir.x * ROBOT_RADIUS * 1.4,
-                            at.y + dir.y * ROBOT_RADIUS * 1.4,
-                            2.0,
-                        )
-                        .with_rotation(Quat::from_rotation_z(robot.heading - std::f32::consts::FRAC_PI_2)),
-                    ));
-                    Answer::Bool(true)
+                    if let Some(t) = set(0) {
+                        robot.throttle = (t as f32).clamp(-1.0, 1.0);
+                    }
+                    if let Some(t) = set(1) {
+                        robot.turn = (t as f32).clamp(-1.0, 1.0);
+                    }
+                    if let Some(a) = set(2) {
+                        robot.turret_target = a as f32;
+                    }
+                    let mut fired = false;
+                    if let Some(power) = set(3).filter(|p| *p > 0.0) {
+                        let power = (power as f32).clamp(0.2, 1.0);
+                        let cost = FIRE_COST * (0.25 + power);
+                        if robot.cooldown <= 0.0 && robot.energy >= cost {
+                            robot.energy -= cost;
+                            robot.cooldown = COOLDOWN_MIN + (COOLDOWN_MAX - COOLDOWN_MIN) * power;
+                            let spread = (BASE_SPREAD + rules.noise * 0.1) * rules.wobble();
+                            let angle = robot.turret + spread;
+                            let dir = Vec2::from_angle(angle);
+                            let speed = BULLET_SPEED_FAST + (BULLET_SPEED_SLOW - BULLET_SPEED_FAST) * power;
+                            let damage = BULLET_DAMAGE_MIN + (BULLET_DAMAGE_MAX - BULLET_DAMAGE_MIN) * power;
+                            let image = shots.image_for(me);
+                            let size = 0.7 + 0.6 * power;
+                            commands.spawn((
+                                Bullet { velocity: dir * speed, owner: me, team: robot.team, damage, life: 2.5 },
+                                Sprite { image, custom_size: Some(Vec2::new(size * 0.55, size * 1.3)), ..default() },
+                                Transform::from_xyz(at.x + dir.x * 2.8, at.y + dir.y * 2.8, 2.0)
+                                    .with_rotation(Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2)),
+                            ));
+                            fired = true;
+                        }
+                    }
+                    Answer::List(vec![if fired { 1.0 } else { 0.0 }, robot.energy as f64, robot.cooldown as f64])
                 }
             }
             "arena" => Answer::Num(arena.0 as f64),
@@ -1082,22 +1285,26 @@ fn answer_requests(
     }
 }
 
-/// The nearest living robot of another team, as an offset and a distance.
-fn nearest(
-    me: Entity,
-    team: usize,
-    at: Vec2,
-    all: &[(Entity, usize, Vec2, f32)],
-    range: f32,
-) -> Option<(Vec2, f32)> {
-    all.iter()
-        .filter(|(e, t, _, hp)| *e != me && *t != team && *hp > 0.0)
-        .map(|(_, _, p, _)| (*p - at, (*p - at).length()))
-        .filter(|(_, d)| *d <= range)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
+/// What a robot knows about itself:
+/// [x, y, hp, team, heading, speed, turret, energy, cooldown, arena, time].
+fn status_row(robot: &Robot, at: Vec2, arena: f32, now: f32) -> Vec<f64> {
+    vec![
+        at.x as f64,
+        at.y as f64,
+        robot.hp as f64,
+        robot.team as f64,
+        robot.heading as f64,
+        robot.velocity.dot(Vec2::from_angle(robot.heading)) as f64,
+        robot.turret as f64,
+        robot.energy as f64,
+        robot.cooldown as f64,
+        arena as f64,
+        now as f64,
+    ]
 }
 
 fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut Robot, &mut Transform)>) {
+    use std::f32::consts::{PI, TAU};
     let dt = time.delta_secs();
     for (mut robot, mut transform) in &mut robots {
         robot.cooldown = (robot.cooldown - dt).max(0.0);
@@ -1105,15 +1312,70 @@ fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut R
             robot.velocity = Vec2::ZERO;
             continue;
         }
+        // driving costs energy; an empty tank still crawls, at a third of the speed
+        let tired = if robot.energy > 0.0 { 1.0 } else { 0.35 };
+        robot.energy = (robot.energy + (ENERGY_REGEN - DRIVE_COST * robot.throttle.abs()) * dt).clamp(0.0, ENERGY_MAX);
+
+        robot.heading = (robot.heading + robot.turn * TURN_RATE * dt).rem_euclid(TAU);
+        let top = if robot.throttle >= 0.0 { MAX_SPEED } else { REVERSE_SPEED };
+        let wanted = Vec2::from_angle(robot.heading) * robot.throttle * top * tired;
+        // a tank takes a moment to get going and to stop: about a fifth of a second
+        let grip = 1.0 - (-dt / 0.2).exp();
+        robot.velocity = robot.velocity.lerp(wanted, grip);
+
+        // the turret turns towards where it was told, the short way round, at its own rate
+        let diff = (robot.turret_target - robot.turret + PI).rem_euclid(TAU) - PI;
+        let step = diff.clamp(-TURRET_RATE * dt, TURRET_RATE * dt);
+        robot.turret = (robot.turret + step).rem_euclid(TAU);
+
         let step = robot.velocity * dt;
         let limit = arena.0 - ROBOT_RADIUS;
-        transform.translation.x = (transform.translation.x + step.x).clamp(-limit, limit);
-        transform.translation.y = (transform.translation.y + step.y).clamp(-limit, limit);
-        if robot.velocity.length_squared() > 0.5 {
-            robot.heading = robot.velocity.y.atan2(robot.velocity.x);
+        let x = transform.translation.x + step.x;
+        let y = transform.translation.y + step.y;
+        // a wall stops the part of the motion that goes into it
+        if x.abs() > limit {
+            robot.velocity.x = 0.0;
         }
+        if y.abs() > limit {
+            robot.velocity.y = 0.0;
+        }
+        transform.translation.x = x.clamp(-limit, limit);
+        transform.translation.y = y.clamp(-limit, limit);
         // Kenney's tanks are drawn pointing up, so the sprite is a quarter turn behind the heading
         transform.rotation = Quat::from_rotation_z(robot.heading - std::f32::consts::FRAC_PI_2);
+    }
+}
+
+/// Tanks do not drive through each other: two that overlap are pushed apart, half each (a wreck
+/// does not move, so the one still running takes all of it), and lose the speed that went into
+/// the other.
+fn separate_robots(arena: Res<ArenaSize>, mut robots: Query<(&mut Robot, &mut Transform)>) {
+    let limit = arena.0 - ROBOT_RADIUS;
+    let mut pairs = robots.iter_combinations_mut();
+    while let Some([(mut a, mut ta), (mut b, mut tb)]) = pairs.fetch_next() {
+        let offset = tb.translation.truncate() - ta.translation.truncate();
+        let dist = offset.length();
+        let overlap = ROBOT_RADIUS * 2.0 - dist;
+        if overlap <= 0.0 {
+            continue;
+        }
+        let normal = if dist > 1e-4 { offset / dist } else { Vec2::X };
+        let (share_a, share_b) = match (a.hp > 0.0, b.hp > 0.0) {
+            (true, true) => (0.5, 0.5),
+            (true, false) => (1.0, 0.0),
+            (false, true) => (0.0, 1.0),
+            (false, false) => continue,
+        };
+        ta.translation -= (normal * overlap * share_a).extend(0.0);
+        tb.translation += (normal * overlap * share_b).extend(0.0);
+        for t in [&mut ta, &mut tb] {
+            t.translation.x = t.translation.x.clamp(-limit, limit);
+            t.translation.y = t.translation.y.clamp(-limit, limit);
+        }
+        let into_b = a.velocity.dot(normal).max(0.0);
+        a.velocity -= normal * into_b;
+        let into_a = b.velocity.dot(-normal).max(0.0);
+        b.velocity += normal * into_a;
     }
 }
 
@@ -1136,15 +1398,16 @@ fn move_bullets(
             continue;
         }
         for (target, mut robot, t) in &mut robots {
-            if target == bullet.owner || robot.hp <= 0.0 {
+            // no friendly fire: a team's shots pass over its own robots
+            if target == bullet.owner || robot.team == bullet.team || robot.hp <= 0.0 {
                 continue;
             }
             if t.translation.truncate().distance(at) <= ROBOT_RADIUS {
                 let was_alive = robot.hp > 0.0;
-                robot.hp -= BULLET_DAMAGE;
+                robot.hp -= bullet.damage;
                 commands.entity(entity).despawn();
                 let big = was_alive && robot.hp <= 0.0;
-                let size = if big { ROBOT_RADIUS * 3.5 } else { ROBOT_RADIUS * 1.2 };
+                let size = if big { ROBOT_RADIUS * 3.5 } else { ROBOT_RADIUS * (0.6 + bullet.damage / 16.0) };
                 let image = if big { "sprites/explosion3.png" } else { "sprites/explosion1.png" };
                 commands.spawn((
                     Blast { life: 0.0, span: if big { 0.7 } else { 0.25 }, size },

@@ -1,6 +1,7 @@
 # The match: who is on the field, and what ends it. Ruby decides all of it;
 # the game only moves what it is told to move.
-match "Training" do
+# noise: how far radars and guns stray. Add `seed: 7` to roll the same dice every time.
+match "Training", noise: 0.3 do
   team :red,  robots: %w[scout hunter]
   team :blue, robots: %w[scout scout]
 

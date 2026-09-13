@@ -7,8 +7,10 @@
 class Match
   TEAMS = %w[red blue green yellow]
 
-  def initialize(name)
+  def initialize(name, noise: 0.0, seed: nil)
     @name = name
+    @noise = noise
+    @seed = seed
     @teams = {}
     @rules = []
     @on_destroyed = nil
@@ -66,6 +68,8 @@ class Match
 
   def run
     log "#{@name} begins"
+    # before anyone is on the field: how noisy radars and guns are, and the dice
+    Rubevy.ask("rules", @noise.to_f, @seed ? @seed.to_f : -1.0).pop
     start
     started = now
     loop do
@@ -103,8 +107,11 @@ class Match
   end
 end
 
-def match(name, &block)
-  m = Match.new(name)
+# match "Training", noise: 0.3, seed: 7 do … end
+#   noise: 0 .. 1, how far radar readings and shots stray (0 is exact, but a gun still spreads)
+#   seed:  the same number rolls the same dice; leave it out for a different match every time
+def match(name, noise: 0.0, seed: nil, &block)
+  m = Match.new(name, noise: noise, seed: seed)
   m.instance_eval(&block)
   $match = m
 end

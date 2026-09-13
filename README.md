@@ -29,7 +29,7 @@ Three things the VM gives a game, which is what these are built to show:
 
 * **A script cannot hang the game.** Each brain is a task with a timeslice counted in
   instructions, so `loop { }` in someone's robot costs it its turn, not your frame rate.
-* **Waiting is free.** `sleep 0.05`, or asking the game something (`scan`) parks the task until
+* **Waiting is free.** `sleep 0.05`, or asking the game something (`radar`) parks the task until
   there is an answer. Nothing polls, nothing spins, and the code stays sequential.
 * **Ruby is a good DSL.** `robot "Scout" do … end` is a class built at load time; what a robot can
   do is a method on it. No parser, no configuration format, no rebuild.
