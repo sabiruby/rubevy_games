@@ -185,6 +185,15 @@ rubevy hands the scheduler a budget per frame. A robot that never sleeps is pree
 next frame; a robot that raises has its exception become the task's result, which the game reports
 and the match carries on. Neither can stop the frame.
 
+The instruction count has one blind spot: a block that a native is waiting for cannot be switched
+out. `Array.new(1) { loop { } }` in a robot's `run` used to freeze the whole game. Since
+2026-09-14 each frame also runs under time limits on a clock (rubevy's `frame_time`, 8 ms, and
+`overrun`, 50 ms): past the second, such a robot gets `Task::Overrun`, its brain ends ("script
+failed: #<Task::Overrun …>" in the HUD), and the other robots fight on. Checked headless with that
+line put into `hunter.rb`, and the browser build still passes its checks with the clock (Bevy's
+`Instant`) in place. The slices themselves are still counted in instructions, so a robot thinks
+the same amount on a fast machine as on a slow one.
+
 ## The scoreboard
 
 The panel at the top left has one row per robot, in words and bars:
