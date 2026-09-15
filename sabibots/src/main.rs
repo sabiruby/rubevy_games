@@ -104,6 +104,13 @@ struct Robot {
     /// mark next to the robot's name on the scoreboard
     reflex_runs: u32,
     reflex_running: u32,
+    /// how many of its reflex *tasks* have ended (`Rubevy.ask("reflex", :off)`). A reflex task
+    /// is parked on a subscription for ever unless something ends it; since rubevy `9104f7c`
+    /// that something is the queue closing when the robot's `ScriptTask` goes, and this is what
+    /// shows it happened rather than the task being left `WAITING`.
+    reflex_off: u32,
+    /// when it went down, so a check can wait a moment for its reflex tasks to notice
+    downed_at: Option<f32>,
 }
 
 /// A robot that has lost: its hull is swapped for a grey one and its brain is stopped, once.
@@ -113,6 +120,7 @@ struct Downed;
 fn gray_out_downed(
     mut commands: Commands,
     server: Res<AssetServer>,
+    time: Res<Time>,
     mut robots: Query<(Entity, &mut Robot, &mut Sprite), Without<Downed>>,
 ) {
     for (entity, mut robot, mut sprite) in &mut robots {
@@ -120,7 +128,10 @@ fn gray_out_downed(
             continue;
         }
         // and its brain stops: taking the task away terminates it (Script too, or the plugin
-        // would start it again)
+        // would start it again). Its reflex tasks are not the plugin's to terminate, but taking
+        // the `ScriptTask` away closes the subscriptions they are parked on, and each of them
+        // ends itself on `Rubevy::Unsubscribed` (`prelude.rb`, `start_reflexes`).
+        robot.downed_at = Some(time.elapsed_secs());
         commands.entity(entity).remove::<(ScriptTask, rubevy::ScriptDone, Script)>();
         robot.cpu = 0.0;
         robot.throttle = 0.0;
@@ -808,24 +819,40 @@ fn stop_when_over(
     robots: Query<(&Robot, &ScriptPanel, &Transform)>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let over = hud.line.starts_with("winner") || time.elapsed_secs() >= headless.until;
+    let now = time.elapsed_secs();
+    let over = hud.line.starts_with("winner") || now >= headless.until;
     if !over {
         return;
     }
     for (robot, panel, t) in &robots {
         info!(
-            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}  {} reflexes",
+            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}  {} reflexes  {}/{} reflex tasks ended",
             robot.name,
             robot.hp.max(0.0) as i32,
             t.translation.x,
             t.translation.y,
             panel.spent,
             panel.at,
-            robot.reflex_runs
+            robot.reflex_runs,
+            robot.reflex_off,
+            robot.reflexes
         );
     }
     if let Some(test) = test {
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
+        // a robot that went down took its reflex tasks with it. They are `Task.new` tasks, which
+        // nothing terminates; what ends them is the subscription closing when the game takes the
+        // `ScriptTask` away (rubevy `9104f7c`). Before that they stayed `WAITING` for ever.
+        let settled: Vec<&Robot> = robots
+            .iter()
+            .map(|(r, _, _)| r)
+            .filter(|r| r.reflexes > 0 && r.downed_at.is_some_and(|at| now - at > 0.5))
+            .collect();
+        let ended = settled.iter().filter(|r| r.reflex_off >= r.reflexes).count();
+        ok(
+            !settled.is_empty() && ended == settled.len(),
+            format!("the reflex tasks of every robot that went down ended ({ended}/{})", settled.len()),
+        );
         ok(test.checked > 0, format!("{} hits on a robot with a reflex were checked", test.checked));
         ok(
             test.checked > 0 && test.ran == test.checked,
@@ -1081,6 +1108,8 @@ fn spawn_robot(
                 reflexes: 0,
                 reflex_runs: 0,
                 reflex_running: 0,
+                reflex_off: 0,
+                downed_at: None,
             },
             Script::new(handle).with_name(&name).with_priority(100),
             ScriptPanel { name, ..default() },
@@ -1503,6 +1532,8 @@ fn answer_requests(
                         robot.reflex_runs += 1;
                     }
                     "end" => robot.reflex_running = robot.reflex_running.saturating_sub(1),
+                    // the reflex task itself is over: its subscription was closed
+                    "off" => robot.reflex_off += 1,
                     other => warn!("unknown reflex state {other:?}"),
                 }
                 Answer::Nil

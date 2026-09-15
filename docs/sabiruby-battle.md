@@ -198,11 +198,11 @@ everything that needs one.
   the game pushes onto, and it belongs to the entity whose task asked. A task made with
   `Task.new` carries no entity, so rubevy refuses to subscribe for it — the queue is taken here
   and handed to the block that reads it.
-* **The new task is given the entity too.** For the same reason a reflex could otherwise not ask
-  the game anything at all: `act` from a task with no entity is a question from nobody, and the
-  game answers it `nil`. The prelude copies the `@rubevy_entity` the scheduler put on the robot's
-  own task onto the reflex's. (rubevy could do this itself when a script makes a task; until it
-  does, this is where it happens.)
+* **The new task carries the robot's entity by itself.** A reflex has to be able to `act`, and
+  `act` from a task with no entity is a question from nobody that the game answers `nil`. The
+  prelude used to copy the `@rubevy_entity` the scheduler puts on the robot's own task; since
+  rubevy `9104f7c` a task made with `Task.new` inherits it from the task that made it (rubevy's
+  `docs/host-api.md`, *Events*), so there is nothing here to copy.
 * **Its priority is the brain's less 20** — a smaller number is looked at first, so a reflex that
   is ready runs before the brain does in that frame.
 
@@ -239,16 +239,32 @@ running gets the second reflex when the first has finished, rather than two swer
 
 ### What stops one
 
+Two different endings, and only one of them is the robot's own.
+
 `run_robot` terminates its reflex tasks in an `ensure`, which covers the brain ending by itself or
 raising. It does **not** cover the usual case: when a robot goes down, or its file is saved, the
-game takes its `ScriptTask` away and the VM terminates the task outright — and a task terminated
-from outside does not unwind, so the `ensure` never runs. The reflex task is left parked on a
-queue nobody will publish to again. Measured with a probe task listing `Task.list` through a
-match: after `3 blue/scout` went `DORMANT` its `Scout-hit` task was still there, `WAITING`.
+game takes its `ScriptTask` away and the VM terminates the brain's task outright — and a task
+terminated from outside does not unwind, so that `ensure` never runs.
 
-It costs a context and a task object per robot per life, which a long session with many restarts
-would accumulate. The fix belongs one layer down — rubevy closing the queue when it lets a
-subscription go, so the `pop` raises `Task::Error` and the task ends by itself.
+What ends a reflex task then is **the subscription closing**. rubevy closes the queue when it lets
+a subscription go, and a `pop` waiting on a closed subscription raises `Rubevy::Unsubscribed`
+(rubevy `9104f7c`); the task unwinds through its own `rescue` and is gone:
+
+```ruby
+begin
+  loop { args = queue.pop; … }
+rescue Rubevy::Unsubscribed        # the robot is gone; end here rather than park for ever
+  Rubevy.log "#{bot.name}: reflex #{event} off"
+  Rubevy.ask("reflex", :off)
+end
+```
+
+Before that, a reflex task was left parked on a queue nobody would publish to again — measured
+with a probe task listing `Task.list` through a match: after `3 blue/scout` went `DORMANT` its
+`Scout-hit` task was still there, `WAITING`, costing a context and a task object per robot per
+life. The check that it no longer is runs in the selftest: every robot that has been down for
+more than half a second must have had as many reflex tasks end as it registered reflexes
+(`--headless` prints `1/1 reflex tasks ended` per robot, and `reflex hit off` in the log).
 
 ### What it cost to get right
 
@@ -256,7 +272,13 @@ subscription go, so the `pop` raises `Task::Error` and the task ends by itself.
 a task cannot be parked across one: the first `act` inside a block called that way dies with
 `blocking pop cannot be called from within a C function boundary`. So `reflex` turns the block
 into an ordinary method of the robot's class (`define_method`), and `run_reflex` calls it by a
-name written out in the source — which is why there is a fixed number of slots.
+name written out in the source — which is why there is a fixed number of slots
+(`Robot::REFLEX_SLOTS`, 4).
+
+That limit is about the nested run loop and nothing else. The two other things this cost — a
+child task with no entity, and a reflex task nobody ended — were rubevy's to fix and rubevy has
+fixed them; the slots stay, because a `case` over names written in the source is still the only
+way to call a block and be able to park inside it.
 
 ## The DSL
 
@@ -434,8 +456,6 @@ game points `AssetPlugin` at its own `assets/` directory.
 ## What it does not do yet
 
 * **Sound.**
-* **Letting go of a reflex's task when the robot is destroyed or reloaded** (see *Reflexes*): the
-  task stays parked on a queue nothing will publish to again.
 * **Reflexes for anything but a hit.** `reflex` takes any event name, but `"hit"` is the only one
   the game publishes today.
 * **Keeping edits that were typed and not applied across a restart.** Applied brains are kept.

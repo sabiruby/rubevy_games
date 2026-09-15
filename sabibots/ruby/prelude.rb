@@ -237,39 +237,45 @@ end
 
 # One task per `reflex`, started before the brain.
 #
-# The subscription has to be taken *here*, in the script's own task: a task made with `Task.new`
-# carries no entity, so rubevy refuses to subscribe for it. The queue is an ordinary object, so
-# it is simply handed to the block that reads it.
+# The subscription has to be taken *here*, in the script's own task: `Rubevy.subscribe` belongs to
+# the entity whose task asks, and the queue it answers is an ordinary object, so it is simply
+# handed to the block that reads it.
 #
-# The same missing entity would stop a reflex from asking the game anything at all — `act` from a
-# reflex would be a question from nobody — so the new task is given the entity this one carries.
+# Nothing else is copied onto the new task any more. rubevy's `Task.new` gives a child the entity
+# of the task that made it (its `docs/host-api.md`, *Events*), so a reflex can `act` — and the
+# game closes the subscription when the robot's `ScriptTask` goes, which is what ends this task.
 def start_reflexes(bot, klass, tasks)
   here = Task.current
-  entity = here.instance_variable_get(:@rubevy_entity)
   # a smaller number is a higher priority: a reflex is looked at before the brain is
   priority = here.priority - 20
   priority = 0 if priority < 0
   klass.reflexes.each do |event, slot|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "#{klass.robot_name}-#{event}", priority: priority) do
-      loop do
-        args = queue.pop                       # parked here, costing nothing, until it happens
-        Rubevy.log "#{bot.name}: reflex #{event} #{args.inspect}"
-        # the HUD's mark. A question nobody waits for is a command: `Rubevy.ask` answers the
-        # queue to wait on, and a reflex that never pops it is not parked for a frame
-        Rubevy.ask("reflex", :begin)
-        begin
-          bot.run_reflex(slot, args)
-        rescue => e
-          Rubevy.log "#{bot.name}: reflex #{event}: #{e.class}: #{e.message}"
-        ensure
-          Rubevy.ask("reflex", :end)
+      begin
+        loop do
+          args = queue.pop                     # parked here, costing nothing, until it happens
+          Rubevy.log "#{bot.name}: reflex #{event} #{args.inspect}"
+          # the HUD's mark. A question nobody waits for is a command: `Rubevy.ask` answers the
+          # queue to wait on, and a reflex that never pops it is not parked for a frame
+          Rubevy.ask("reflex", :begin)
+          begin
+            bot.run_reflex(slot, args)
+          rescue => e
+            Rubevy.log "#{bot.name}: reflex #{event}: #{e.class}: #{e.message}"
+          ensure
+            Rubevy.ask("reflex", :end)
+          end
         end
+      rescue Rubevy::Unsubscribed
+        # the robot is gone (destroyed, or its file saved): the game let the subscription go and
+        # closed the queue, so the `pop` above raised instead of parking for ever. This is the
+        # ordinary end of a reflex task, and it is the only one that unwinds — a task the VM
+        # terminates from outside does not.
+        Rubevy.log "#{bot.name}: reflex #{event} off"
+        Rubevy.ask("reflex", :off)             # told, not asked: nothing waits for the answer
       end
     end
-    # the new task is ready but cannot run before this one yields, so it is safe to hand it the
-    # entity here rather than inside it
-    task.instance_variable_set(:@rubevy_entity, entity)
     tasks << task
   end
   Rubevy.ask("reflex", :ready, klass.reflexes.size)
