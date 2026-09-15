@@ -8,7 +8,7 @@
 
 | 段階 | 内容 | 状態 |
 |---|---|---|
-| D1 | `reflex`: 被弾したら別タスクでブロックを動かす（mruby-task の複数タスクを 1 体の中で使う最初の機能） | 未着手 |
+| D1 | `reflex`: 被弾したら別タスクでブロックを動かす（mruby-task の複数タスクを 1 体の中で使う最初の機能） | 済み（`82efcc2`） |
 | D2 | ゲームの窓に VM インスペクタ（選んだロボットのタスクのフレーム・レジスタ・ヒープ） | 未着手 |
 | D3 | ロボットの DSL を `Rubevy::Entity#[]` と `Proxy` で書き直せるか（検討。今の `ask` の形との比較） | 未着手 |
 
@@ -37,6 +37,30 @@ end
   `Task.new` のタスクからの `subscribe` は断られる（B の設計）ので、購読はメインのタスクで取ってブロックに渡す形に。
 * HUD: reflex が走った回数か、走っている間だけロボットの名前の横に印。
 * 確認: `--headless` で命中のたびに reflex のログが出る、selftest に「被弾後 0.3 秒以内に向きが変わる」。
+
+**実装で分かったこと**（`docs/worklog/2026-09-16-reflex.md`、成果は `docs/sabiruby-battle.md` の *Reflexes*）:
+
+* 計画書が書いた「`Task.new` のタスクは `subscribe` できない」は、**`ask` にもそのまま当てはまる**。
+  `Rubevy.ask` も `current_entity` を読むので、エンティティを持たないタスクからの `act` は
+  `entity: None` のリクエストになり `nil` が返る。prelude がメインのタスクの `@rubevy_entity` を
+  新しいタスクに写している。rubevy 側で `Task.new` が引き継ぐか `Rubevy.adopt(task)` を出すのが本筋。
+* **ブロックを `instance_exec` で呼ぶと reflex は何も待てない。** `instance_exec` / `send` /
+  `Method#call` は VM の入れ子の実行ループで、タスクはその境界をまたいで park できない
+  （`blocking pop cannot be called from within a C function boundary`）。`reflex` は
+  `define_method` でクラスの普通のメソッドにし、`run_reflex` がソースに書かれた名前で呼ぶ。
+  そのぶん数は固定（`REFLEX_SLOTS = 4`）。
+* **「後勝ち」と「優先度が高いほど先に走る」を組み合わせると、reflex は必ず負ける。**
+  先に走る＝リクエストが先に積まれる＝あとから来たメインの `act` が上書きする。さらにメインは被弾の瞬間
+  たいてい質問を飛ばしていて、その答えで出す `act` が数フレーム後に舵を打ち消す。後勝ちは仕様として残し、
+  reflex は舵を握り直し（0.05 秒ごとに `act`）、脳は `@swerve` が立っている間は手を引く、という
+  取り決めをロボットの側に置いた。優先度を**下げれば**後勝ちで勝てる、というひっくり返った解もある。
+* **外から `terminate` されたタスクは `ensure` を通らない。** 計画書の「`run_robot` が終わるときに
+  `ensure` で `terminate`」は、脳が自分で終わったときにしか効かない。ロボットが倒れる／ファイルを保存すると
+  ゲームが `ScriptTask` を外し、VM はコンテキストを巻き戻さずに捨てる。reflex のタスクは
+  誰も publish しないキューで `WAITING` のまま残る（`Task.list` で確認）。直す場所は rubevy の
+  `unsubscribe` で、キューを close すれば `pop` が `Task::Error` を上げてタスクが自分で終わる。
+* HUD の印は prelude から `Rubevy.ask("reflex", :begin)` / `:end` で、**答えを `pop` しない**。
+  待たない質問は命令になり、印のために reflex が 1 フレーム損をしない。
 
 ## D2. ゲームの窓に VM インスペクタ
 
