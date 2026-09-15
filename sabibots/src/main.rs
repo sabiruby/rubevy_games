@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
 use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, Watch};
+use sabiruby::Value;
 
 const ROBOT_RADIUS: f32 = 1.6;
 /// A robot is a tank: it moves along its heading, turns at a limited rate, and its turret turns
@@ -97,6 +98,12 @@ struct Robot {
     heat: Vec<f32>,
     /// instructions per frame, smoothed the same way
     cpu: f32,
+    /// how many `reflex`es the brain registered (`Rubevy.ask("reflex", :ready, n)`)
+    reflexes: u32,
+    /// how many reflex blocks have run, and how many are inside their block right now — the
+    /// mark next to the robot's name on the scoreboard
+    reflex_runs: u32,
+    reflex_running: u32,
 }
 
 /// A robot that has lost: its hull is swapped for a grey one and its brain is stopped, once.
@@ -319,6 +326,10 @@ fn main() {
             (restart_match, answer_requests, move_robots, separate_robots, spawn_turrets, follow_turrets, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
                 .chain(),
         );
+    if std::env::var("SABIBOTS_SELFTEST").is_ok() {
+        // the reflex check wants a fight, not a mouse, so it runs in both modes
+        app.init_resource::<ReflexTest>().add_systems(Update, reflex_selftest);
+    }
     if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
         app.insert_resource(SelfTest { at: 2.0, ..default() }).add_systems(Update, selftest);
     }
@@ -509,9 +520,21 @@ fn draw_scoreboard(
                     let brain = robot.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                     let star = if robot.brain.is_some() { "*" } else { "" };
                     let marker = if watched.entity == Some(entity) { "> " } else { "  " };
-                    let name = egui::RichText::new(format!("{marker}{} {brain}{star}", robot.number)).color(team).strong();
+                    // a reflex running now is `!`, and the count stays afterwards so a
+                    // screenshot shows it too (`--shot`)
+                    let reflex = match (robot.reflex_runs, robot.reflex_running > 0) {
+                        (0, false) => String::new(),
+                        (n, true) => format!(" !{n}"),
+                        (n, false) => format!(" x{n}"),
+                    };
+                    let name = egui::RichText::new(format!("{marker}{} {brain}{star}{reflex}", robot.number)).color(team).strong();
                     // the name picks the robot, as its button in the editor does
-                    if ui.add(egui::Label::new(name).sense(egui::Sense::click())).clicked() {
+                    let hint = if robot.reflexes > 0 {
+                        format!("{} reflex(es); {} have run, {} running now", robot.reflexes, robot.reflex_runs, robot.reflex_running)
+                    } else {
+                        "this brain has no reflex".to_string()
+                    };
+                    if ui.add(egui::Label::new(name).sense(egui::Sense::click())).on_hover_text(hint).clicked() {
                         editor.picked = Some(entity.to_bits());
                     }
 
@@ -781,6 +804,7 @@ fn stop_when_over(
     time: Res<Time>,
     headless: Res<Headless>,
     hud: Res<Hud>,
+    test: Option<Res<ReflexTest>>,
     robots: Query<(&Robot, &ScriptPanel, &Transform)>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -790,17 +814,101 @@ fn stop_when_over(
     }
     for (robot, panel, t) in &robots {
         info!(
-            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}",
+            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}  {} reflexes",
             robot.name,
             robot.hp.max(0.0) as i32,
             t.translation.x,
             t.translation.y,
             panel.spent,
-            panel.at
+            panel.at,
+            robot.reflex_runs
+        );
+    }
+    if let Some(test) = test {
+        let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
+        ok(test.checked > 0, format!("{} hits on a robot with a reflex were checked", test.checked));
+        ok(
+            test.checked > 0 && test.ran == test.checked,
+            format!("a reflex ran within 0.3 s of the hit ({}/{})", test.ran, test.checked),
+        );
+        ok(
+            test.checked > 0 && test.turned == test.checked,
+            format!("the heading changed within 0.3 s of the hit ({}/{})", test.turned, test.checked),
         );
     }
     info!("{}", if hud.line.is_empty() { "time" } else { hud.line.as_str() });
     exit.write(AppExit::Success);
+}
+
+/// `SABIBOTS_SELFTEST=1`: the check the reflex is for — a hit is noted with the way the robot was
+/// facing, and 0.3 s later it must have run a reflex and turned. It runs headless as well as in a
+/// window, since a reflex needs a fight rather than a mouse:
+///
+///     SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25
+#[derive(Resource, Default)]
+struct ReflexTest {
+    /// one per hit taken by a robot with a reflex
+    watching: Vec<WatchedHit>,
+    checked: u32,
+    ran: u32,
+    turned: u32,
+}
+
+/// A hit being watched: the robot, when it was hit, which way it faced then, the number of
+/// reflexes it had run by then, and the furthest it has turned from that heading since.
+///
+/// The furthest rather than where it ends up: a robot hit twice swerves one way and then the
+/// other, and its heading 0.3 s later can be the one it started with. What the check is about is
+/// whether the tank moved at all before the brain's next pass.
+#[derive(Clone, Copy)]
+struct WatchedHit {
+    robot: Entity,
+    at: f32,
+    heading: f32,
+    runs: u32,
+    peak: f32,
+}
+
+/// The short way round between two angles, for "how far has it turned".
+fn angle_between(a: f32, b: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    let d = (b - a).rem_euclid(TAU);
+    if d > PI { d - TAU } else { d }
+}
+
+fn reflex_selftest(time: Res<Time>, mut test: ResMut<ReflexTest>, robots: Query<&Robot>) {
+    let now = time.elapsed_secs();
+    for watch in test.watching.iter_mut() {
+        if let Ok(robot) = robots.get(watch.robot) {
+            watch.peak = watch.peak.max(angle_between(watch.heading, robot.heading).abs());
+        }
+    }
+    let mut due: Vec<WatchedHit> = Vec::new();
+    test.watching.retain(|w| {
+        if now - w.at < 0.3 {
+            return true;
+        }
+        due.push(WatchedHit { ..*w });
+        false
+    });
+    for watch in due {
+        let Ok(robot) = robots.get(watch.robot) else { continue };
+        let ran = robot.reflex_runs > watch.runs;
+        // a quarter of the full turning rate over the 0.3 s: the swerve, not the brain's steering
+        let turned = watch.peak > 0.2;
+        test.checked += 1;
+        test.ran += u32::from(ran);
+        test.turned += u32::from(turned);
+        let (at, name, peak) = (watch.at, &robot.name, watch.peak);
+        info!(
+            "selftest: {} {name} ran a reflex within 0.3 s of the hit at {at:.2} s",
+            if ran { "ok  " } else { "FAIL" }
+        );
+        info!(
+            "selftest: {} {name} turned within 0.3 s of the hit at {at:.2} s ({peak:.2} rad)",
+            if turned { "ok  " } else { "FAIL" }
+        );
+    }
 }
 
 /// A crate of the arena wall, so the wall can be rebuilt when the match closes it in.
@@ -970,6 +1078,9 @@ fn spawn_robot(
                 source,
                 heat: Vec::new(),
                 cpu: 0.0,
+                reflexes: 0,
+                reflex_runs: 0,
+                reflex_running: 0,
             },
             Script::new(handle).with_name(&name).with_priority(100),
             ScriptPanel { name, ..default() },
@@ -1381,6 +1492,21 @@ fn answer_requests(
                     Answer::List(vec![if fired { 1.0 } else { 0.0 }, robot.energy as f64, robot.cooldown as f64])
                 }
             }
+            // `reflex(:hit) { … }` telling the game what its tasks are doing, so the scoreboard
+            // can mark it. The prelude asks and does not wait for the answer: a question nobody
+            // pops is a command, and a reflex that parked for a frame here would not be one
+            "reflex" => {
+                match request.text(0).unwrap_or("") {
+                    "ready" => robot.reflexes = request.num_or(1, 0.0).max(0.0) as u32,
+                    "begin" => {
+                        robot.reflex_running += 1;
+                        robot.reflex_runs += 1;
+                    }
+                    "end" => robot.reflex_running = robot.reflex_running.saturating_sub(1),
+                    other => warn!("unknown reflex state {other:?}"),
+                }
+                Answer::Nil
+            }
             "arena" => Answer::Num(arena.0 as f64),
             other => {
                 warn!("unknown request {other:?}");
@@ -1489,12 +1615,19 @@ fn move_bullets(
     time: Res<Time>,
     mut commands: Commands,
     mut events: ResMut<Events>,
+    mut scripts: ResMut<ScriptWorld>,
+    mut test: Option<ResMut<ReflexTest>>,
     server: Res<AssetServer>,
     arena: Res<ArenaSize>,
     mut bullets: Query<(Entity, &mut Bullet, &mut Transform)>,
     mut robots: Query<(Entity, &mut Robot, &Transform), Without<Bullet>>,
 ) {
     let dt = time.delta_secs();
+    let now = time.elapsed_secs();
+    // who is whom, read before the loop takes a robot mutably: what a hit tells the brain is the
+    // attacker's name (`2 red/hunter`), not its entity — a name is what a script can read, log
+    // and compare, and the radar already hands out ids for the rest
+    let names: Vec<(Entity, String)> = robots.iter().map(|(e, r, _)| (e, r.name.clone())).collect();
     for (entity, mut bullet, mut transform) in &mut bullets {
         bullet.life -= dt;
         transform.translation += (bullet.velocity * dt).extend(0.0);
@@ -1523,6 +1656,34 @@ fn move_bullets(
                 if big {
                     // kind 0: a robot is down. The match reads these and decides what they mean
                     events.0.push([0.0, target.to_bits() as f64, bullet.owner.to_bits() as f64]);
+                }
+                // and the robot's own brain hears it at once, in whatever task is waiting on
+                // `Rubevy.subscribe(:hit)` — the payload is a String and a number, which
+                // `Answer::List` (numbers only) cannot carry, so it is built inside the VM
+                let by = names
+                    .iter()
+                    .find(|(e, _)| *e == bullet.owner)
+                    .map(|(_, n)| n.clone())
+                    .unwrap_or_else(|| "?".into());
+                let damage = bullet.damage as f64;
+                scripts.publish_value(Some(target), "hit", move |vm| {
+                    let by = vm.str_new(by.as_bytes());
+                    vm.ary_new(vec![by, Value::Float(damage)])
+                });
+                // The reflex check watches the hits taken by a robot that has a reflex, is still
+                // standing (a wreck cannot turn, so a fatal hit proves nothing) and is not
+                // already in the middle of one: the reflexes of an event share one task, so a
+                // robot hit again mid-swerve gets its second reflex when the first has finished.
+                if let Some(test) = test.as_mut() {
+                    if robot.reflexes > 0 && robot.hp > 0.0 && robot.reflex_running == 0 {
+                        test.watching.push(WatchedHit {
+                            robot: target,
+                            at: now,
+                            heading: robot.heading,
+                            runs: robot.reflex_runs,
+                            peak: 0.0,
+                        });
+                    }
                 }
                 break;
             }
@@ -1598,6 +1759,9 @@ fn reload_changed(
         if let Ok((_, mut r)) = robots.get_mut(entity) {
             r.source = source;
             r.heat.clear();
+            // the new brain announces its own reflexes; the old ones are gone with its task
+            r.reflexes = 0;
+            r.reflex_running = 0;
         }
     }
 }

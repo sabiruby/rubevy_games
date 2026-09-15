@@ -156,12 +156,107 @@ The two robots that come with the game:
   shots (0.9) when its turret is on the lead angle; with nothing on the radar it wanders with its
   turret sweeping.
 
-## Next: reflexes
+## Reflexes
 
-A brain is one loop, so a robot that is sleeping between decisions notices a hit only on its next
-pass. The next step is `reflex(:hit) { … }`: a block that runs as a task of its own when the game
-reports a hit, beside the main loop — mruby-task's scheduler already runs many tasks, and this
-is where a robot would start using more than one.
+A brain is one loop, so a robot sleeping between decisions would notice a hit only on its next
+pass, up to 0.05 s later. `reflex(:hit) { … }` is a block that runs in **a task of its own** the
+moment the game says it happened — the first place a single robot uses more than one of
+mruby-task's tasks.
+
+```ruby
+robot "Scout" do
+  reflex(:hit) do |by, damage|      # `by` is the attacker's name, `damage` a number
+    @swerve = rand < 0.5 ? 1.0 : -1.0
+    6.times { act throttle: 1.0, turn: @swerve; sleep 0.05 }
+    @swerve = nil
+  end
+
+  def run
+    loop do
+      next sleep(0.05) if @swerve    # the reflex has the wheel
+      …
+    end
+  end
+end
+```
+
+| what | who says it |
+|---|---|
+| `reflex(event) { \|*args\| … }` in the class body | registers it; up to `Robot::REFLEX_SLOTS` (4) per robot |
+| `ScriptWorld::publish(Some(entity), "hit", …)` in `move_bullets` | the game, on every hit that lands |
+| the payload | `[by, damage]` — `by` is the attacker's name as the scoreboard writes it (`2 red/hunter`), `damage` the hit points taken |
+
+The attacker crosses as a **name** rather than as an entity or an id: it is what a script can log,
+compare and remember without asking the game anything, and the radar already hands out ids for
+everything that needs one.
+
+### How one is started
+
+`run_robot` (in `prelude.rb`) does it, before `bot.run`:
+
+* **The subscription is taken in the robot's own task.** `Rubevy.subscribe(:hit)` answers a queue
+  the game pushes onto, and it belongs to the entity whose task asked. A task made with
+  `Task.new` carries no entity, so rubevy refuses to subscribe for it — the queue is taken here
+  and handed to the block that reads it.
+* **The new task is given the entity too.** For the same reason a reflex could otherwise not ask
+  the game anything at all: `act` from a task with no entity is a question from nobody, and the
+  game answers it `nil`. The prelude copies the `@rubevy_entity` the scheduler put on the robot's
+  own task onto the reflex's. (rubevy could do this itself when a script makes a task; until it
+  does, this is where it happens.)
+* **Its priority is the brain's less 20** — a smaller number is looked at first, so a reflex that
+  is ready runs before the brain does in that frame.
+
+### Two tasks, one tank: last writer wins
+
+Both tasks call `act` on the same robot, and `act` simply sets the controls: **whichever question
+the game answers last in a frame is what the tank does.** There is no locking and no arbitration,
+and there is a wrinkle worth knowing:
+
+* A reflex is the *higher* priority, so it runs *first* in a frame — and therefore its `act`
+  reaches the game *before* the brain's. Being quicker off the mark makes a reflex lose the tie,
+  not win it.
+* Worse, the brain usually has a question in flight when the hit lands (it looked, then asked for
+  its radar), and the `act` it makes when that answer comes back would undo the swerve a few
+  frames later.
+
+So a reflex that wants the wheel for a while says so again while it holds it, and the brain leaves
+the controls alone — `@swerve` in `scout.rb` is that agreement, and it is an ordinary instance
+variable because both tasks are the same object's. A reflex that only sets a flag, logs, or fires
+once needs none of this.
+
+The reflexes of one robot share one task, on purpose: a robot hit again while its reflex is still
+running gets the second reflex when the first has finished, rather than two swerves fighting.
+
+### Where it shows
+
+* **The scoreboard**, next to the robot's brain: `1 scout !2` while a reflex is running,
+  `1 scout x2` between them — the number is how many have run, so a screenshot (`--shot`) shows
+  it too. The prelude tells the game with `Rubevy.ask("reflex", :begin)` / `:end`, and never pops
+  the answer: **a question nobody waits for is a command**, which is what keeps the mark from
+  costing the reflex a frame.
+* **The log**, one line per reflex: `Scout: reflex hit ["2 red/hunter", 14.8]`. `--headless` shows
+  them, which is how this is checked where there is no window.
+
+### What stops one
+
+`run_robot` terminates its reflex tasks in an `ensure`, which covers the brain ending by itself or
+raising. It does **not** cover the usual case: when a robot goes down, or its file is saved, the
+game takes its `ScriptTask` away and the VM terminates the task outright — and a task terminated
+from outside does not unwind, so the `ensure` never runs. The reflex task is left parked on a
+queue nobody will publish to again. Measured with a probe task listing `Task.list` through a
+match: after `3 blue/scout` went `DORMANT` its `Scout-hit` task was still there, `WAITING`.
+
+It costs a context and a task object per robot per life, which a long session with many restarts
+would accumulate. The fix belongs one layer down — rubevy closing the queue when it lets a
+subscription go, so the `pop` raises `Task::Error` and the task ends by itself.
+
+### What it cost to get right
+
+`instance_exec`, `send` and `Method#call` all run the block in a **nested run loop** of the VM, and
+a task cannot be parked across one: the first `act` inside a block called that way dies with
+`blocking pop cannot be called from within a C function boundary`. So `reflex` turns the block
+into an ordinary method of the robot's class (`define_method`), and `run_reflex` calls it by a
+name written out in the source — which is why there is a fixed number of slots.
 
 ## The DSL
 
@@ -200,7 +295,7 @@ The panel at the top left has one row per robot, in words and bars:
 
 | column | what it is |
 |---|---|
-| robot | its number and brain (`1 scout`, `*` if it runs an applied brain), in its team's colour; click it to show it in the editor |
+| robot | its number and brain (`1 scout`, `*` if it runs an applied brain, `!n` while a reflex is running and `xn` between them), in its team's colour; click it to show it in the editor |
 | health | a bar, green, yellow below half, red below a quarter; `down` when it is out |
 | energy | a bar out of 100: driving and firing spend it, time brings it back |
 | thinking | the instructions its Ruby runs per frame, averaged over about a second; a timeslice's worth (3,000) fills the bar |
@@ -339,7 +434,10 @@ game points `AssetPlugin` at its own `assets/` directory.
 ## What it does not do yet
 
 * **Sound.**
-* **Reflexes** (see above): a brain notices a hit on its next pass, not when it happens.
+* **Letting go of a reflex's task when the robot is destroyed or reloaded** (see *Reflexes*): the
+  task stays parked on a queue nothing will publish to again.
+* **Reflexes for anything but a hit.** `reflex` takes any event name, but `"hit"` is the only one
+  the game publishes today.
 * **Keeping edits that were typed and not applied across a restart.** Applied brains are kept.
 
 ## Running
@@ -348,7 +446,16 @@ game points `AssetPlugin` at its own `assets/` directory.
 cargo run -p sabibots                    # window
 cargo run -p sabibots -- --headless 15   # 15 seconds, result on stdout, no GPU needed
 web/build.sh && web/serve.sh             # in a browser (docs/web.md)
+
+SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the reflex check
+SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the editor's
 ```
+
+`SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above). The reflex
+check needs a fight rather than a mouse, so it runs headless as well: every hit taken by a robot
+that has a reflex, is still standing and is not already in the middle of one is noted with the way
+it was facing, and 0.3 s later it must have run a reflex and turned by more than 0.2 rad at some
+point in between.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
 the end. It is how the game is checked where there is no GPU.
