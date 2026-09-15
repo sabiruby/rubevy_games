@@ -4,6 +4,7 @@
 //! * [`Hud`] — the line of text at the top, and the per-script panel below it.
 //! * [`CodePanel`] — the script a game is showing, with the line it stands on marked.
 //! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game.
+//! * [`VmInspector`] — the frames, registers and heap of the selected script, read out of the VM.
 //! * [`Watch`] — the Ruby directory, watched: saving a file tells the game to start that script
 //!   again. Editing a robot's brain and seeing it change without restarting is the point.
 //!
@@ -17,9 +18,11 @@ use bevy::prelude::*;
 pub mod code;
 pub mod editor;
 pub mod hud;
+pub mod inspect;
 pub use code::{CodePanel, CodePanelPlugin};
 pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
+pub use inspect::{VmInspector, VmInspectorPlugin};
 
 /// Half the width of the square the camera shows, in world units.
 #[derive(Resource, Debug, Clone, Copy)]

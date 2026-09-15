@@ -402,6 +402,47 @@ The editor lives in `rubevy-arena` (`Editor`, `EditorPlugin`) so the other games
 The older read-only panel (`CodePanel`, Bevy UI only) is still there for a game that does not want
 egui.
 
+## The VM panel
+
+`F2` shows and hides it; it is open from the start, so a screenshot has it. It is the browser
+playground's "VM の状態" pane in the game's own window, about the robot the editor is showing.
+
+![the VM panel](vm-inspector.png)
+
+* **The frames the brain is standing in, innermost first.** A robot waiting for a scan is four
+  frames deep — `Task::Queue#pop`, `Rubevy.ask`'s wrapper, `radar` in the DSL, then its own
+  `scout.rb:36` — and seeing that stack is seeing why waiting costs nothing: it is an ordinary
+  Ruby call chain in a context of its own, parked, not a callback that lost its place.
+  A frame of mrblib (`Kernel#loop`, `Task::Queue#pop`) says `(no debug info)`: it is there, it
+  just carries no line table.
+* **The registers of one frame**, named from the debug info — `target`, `threat`, `heading` —
+  with the class and the value of each. `R0` is `self`. The panel follows the innermost frame of
+  the robot's *own* file by default, because the DSL's locals are not what the author came for;
+  clicking a row pins that one instead.
+* **The heap and the collector**: live of total, what has been allocated since the last
+  collection and the threshold that will start the next, how many collections there have been,
+  and what survived the last. Watching that climb and drop while a robot fights is what a
+  garbage collector is.
+* **How many contexts the VM holds, and how many are still live.** One per task: four brains,
+  their reflexes, the match. When a robot goes down its two contexts stop and the count falls —
+  which is how the reflex-task leak in *What stops one* was seen to be gone.
+
+**`P` pauses the scripts** by giving the scheduler a budget of 0 instructions for the frame: the
+VM runs nothing, so the numbers stand still while they are read. The game keeps drawing and the
+tanks keep rolling on the controls their brains last set — it is the Ruby that is stopped, not the
+match. The scheduler's clock is not stopped, so every robot that was sleeping is due the moment it
+starts again.
+
+Nothing in the panel runs Ruby: sabiruby renders a value in Rust (`Vm::render`), so looking at a
+robot cannot move it, allocate, or raise. The cost is that an object with an `inspect` of its own
+shows the default form.
+
+It reads `Vm::snapshot` and `Vm::task_frames`. Joining the two — *which* of the VM's contexts is
+this task's — has no entry point in the VM yet, and `rubevy-arena`'s `inspect.rs` gets it out of
+the way the VM renders a task (`#<Task 12 ctx=3>`) until sabiruby has a `task_context` or a
+`task_snapshot`. The panel lives in `rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the
+other games get it too.
+
 ## Starting again
 
 `Restart (R)` on the scoreboard — `Play again (R)`, once there is a winner — starts the match over
@@ -478,4 +519,14 @@ it was facing, and 0.3 s later it must have run a reflex and turned by more than
 point in between.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
-the end. It is how the game is checked where there is no GPU.
+the end, then the VM panel's own numbers as text — the frames each brain is standing in with the
+locals of the innermost few, the heap, and how many contexts are live. It is how the game is
+checked where there is no GPU.
+
+| key | what it does |
+|---|---|
+| `1`–`8`, `Tab` | which robot the editor and the VM panel are about |
+| `F1` / `F2` | the editor / the VM panel |
+| `P` | pause the scripts (budget 0) |
+| `F5`, `Ctrl+Enter` / `Ctrl+S` | apply the edited brain / save it to its file |
+| `R` | start the match over |

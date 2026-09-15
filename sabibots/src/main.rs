@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
-use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, Watch};
+use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::Value;
 
 const ROBOT_RADIUS: f32 = 1.6;
@@ -313,13 +313,17 @@ fn main() {
                 }),
                 ArenaPlugin::default(),
                 EditorPlugin,
+                VmInspectorPlugin,
                 RubevyPlugin::default(),
             ))
             .init_resource::<Watched>()
             .init_resource::<Hud>()
+            .init_resource::<Paused>()
+            // open from the start, so a screenshot (`--shot`) shows it without a key being pressed
+            .insert_resource(VmInspector::following())
             .add_systems(
                 Update,
-                (restart_key, choose_watched, show_code, do_editor_actions, spawn_nameplates, follow_nameplates, spawn_life_bars, follow_life_bars)
+                (restart_key, choose_watched, show_code, inspect_keys, show_vm, do_editor_actions, spawn_nameplates, follow_nameplates, spawn_life_bars, follow_life_bars)
                     .chain(),
             )
             .add_systems(bevy_egui::EguiPrimaryContextPass, draw_scoreboard);
@@ -342,7 +346,9 @@ fn main() {
         app.init_resource::<ReflexTest>().add_systems(Update, reflex_selftest);
     }
     if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
-        app.insert_resource(SelfTest { at: 2.0, ..default() }).add_systems(Update, selftest);
+        // before `inspect_keys`, so a key it presses is still `just_pressed` when that reads it
+        app.insert_resource(SelfTest { at: 2.0, ..default() })
+            .add_systems(Update, selftest.before(inspect_keys));
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false })
@@ -684,6 +690,78 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     editor.elsewhere = None;
 }
 
+/// The budget the scripts get when they are not paused, kept while they are.
+#[derive(Resource, Default)]
+struct Paused {
+    was: Option<u64>,
+}
+
+/// `F2` shows and hides the VM panel; `P` pauses the scripts.
+///
+/// Pausing is the plugin's instruction budget set to 0: `task_run_limits` returns before it hands
+/// any task the CPU, so nothing in the VM moves and the snapshot the panel reads stands still.
+/// The game keeps drawing, and the tanks keep rolling on the controls their brains last set —
+/// it is the Ruby that is stopped, not the match. The scheduler's clock keeps moving too, so the
+/// robots that were sleeping are all due the moment it starts again.
+fn inspect_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
+    mut panel: ResMut<VmInspector>,
+    mut world: ResMut<ScriptWorld>,
+    mut paused: ResMut<Paused>,
+) {
+    // a `p` typed into the editor is the editor's
+    if typing.is_some_and(|t| t.wants_keyboard_input()) {
+        return;
+    }
+    if keys.just_pressed(KeyCode::F2) {
+        panel.open = !panel.open;
+    }
+    if keys.just_pressed(KeyCode::KeyP) {
+        match paused.was.take() {
+            Some(budget) => {
+                world.budget = budget;
+                panel.paused = false;
+            }
+            None => {
+                paused.was = Some(world.budget);
+                world.budget = 0;
+                panel.paused = true;
+                // pausing is for looking at something: show the panel if it is not up
+                panel.open = true;
+            }
+        }
+    }
+}
+
+/// The VM panel follows the watched robot, as the editor does.
+///
+/// The snapshot is taken only while the panel is open: it walks every context of the VM and
+/// renders the registers of the innermost frames of each, which is not work to do on a frame
+/// nobody is looking.
+fn show_vm(
+    watched: Res<Watched>,
+    world: Res<ScriptWorld>,
+    mut panel: ResMut<VmInspector>,
+    robots: Query<(&Robot, Option<&ScriptTask>, &ScriptPanel)>,
+) {
+    if !panel.open {
+        return;
+    }
+    let Some(entity) = watched.entity else { return };
+    let Ok((robot, script, hud)) = robots.get(entity) else {
+        panel.clear("no robot");
+        return;
+    };
+    let Some(script) = script else {
+        panel.title = robot.name.clone();
+        panel.clear("this robot is down: the game took its task away, and the VM terminated it");
+        return;
+    };
+    panel.spent = hud.spent;
+    panel.fill(&world, script.task(), robot.name.clone(), robot.prelude_lines);
+}
+
 /// `SABIBOTS_SELFTEST=1`: drives the editor's buttons the way a click would (by setting
 /// `Editor::action`) and checks what happened to the robots and to the file — the part of the
 /// editor that cannot be clicked where there is no mouse. Logs `selftest:` lines and exits.
@@ -692,6 +770,8 @@ struct SelfTest {
     step: usize,
     at: f32,
     original: String,
+    /// instructions every brain had run together, for the pause check
+    insn: u64,
 }
 
 fn selftest(
@@ -700,6 +780,10 @@ fn selftest(
     mut editor: ResMut<Editor>,
     mut watched: ResMut<Watched>,
     robots: Query<(Entity, &Robot)>,
+    tasks: Query<&ScriptTask>,
+    world: Res<ScriptWorld>,
+    panel: Res<VmInspector>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     walls: Query<&Transform, With<Wall>>,
     arena: Res<ArenaSize>,
     mut restart: ResMut<Restart>,
@@ -711,6 +795,8 @@ fn selftest(
     }
     let by_number = |n: usize| robots.iter().find(|(_, r)| r.number == n);
     let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
+    // what every brain has run together: the number that must stop moving while the VM is paused
+    let spent = || tasks.iter().map(|t| world.vm.task_instructions(t.task())).sum::<u64>();
     match test.step {
         0 => {
             // show robot 3 and type a different brain into the editor
@@ -772,8 +858,34 @@ fn selftest(
             let edge = walls.iter().map(|t| t.translation.x.abs().max(t.translation.y.abs())).fold(0.0f32, f32::max);
             let corner = walls.iter().any(|t| (t.translation.x - half).abs() < 0.01 && (t.translation.y - half).abs() < 0.01);
             ok((edge - half).abs() < 0.01 && corner, "the wall ends exactly on its corners");
-            exit.write(AppExit::Success);
+            // the VM inspector: `P` stops the scripts by giving the scheduler a budget of 0
+            test.insn = spent();
+            keys.press(KeyCode::KeyP);
             test.step = 6;
+            test.at = now + 0.5;
+        }
+        6 => {
+            ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
+            ok(spent() == test.insn, "nothing ran while it was paused");
+            ok(panel.open && !panel.frames.is_empty(), "the VM panel has the watched robot's frames");
+            ok(
+                panel.heap.as_ref().is_some_and(|h| h.live > 0),
+                "the panel has the heap counters",
+            );
+            test.insn = spent();
+            // `press` on a key already held sets nothing: nothing released it, since nothing
+            // here is a real keyboard
+            keys.release(KeyCode::KeyP);
+            keys.press(KeyCode::KeyP);
+            test.step = 7;
+            test.at = now + 0.5;
+        }
+        7 => {
+            ok(!panel.paused && world.budget > 0, "P again gives the budget back");
+            ok(spent() > test.insn, "the brains are running again");
+            keys.release(KeyCode::KeyP);
+            exit.write(AppExit::Success);
+            test.step = 8;
         }
         _ => {}
     }
@@ -816,7 +928,8 @@ fn stop_when_over(
     headless: Res<Headless>,
     hud: Res<Hud>,
     test: Option<Res<ReflexTest>>,
-    robots: Query<(&Robot, &ScriptPanel, &Transform)>,
+    world: Res<ScriptWorld>,
+    robots: Query<(&Robot, &ScriptPanel, &Transform, Option<&ScriptTask>)>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -824,7 +937,7 @@ fn stop_when_over(
     if !over {
         return;
     }
-    for (robot, panel, t) in &robots {
+    for (robot, panel, t, _) in &robots {
         info!(
             "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}  {} reflexes  {}/{} reflex tasks ended",
             robot.name,
@@ -845,7 +958,7 @@ fn stop_when_over(
         // `ScriptTask` away (rubevy `9104f7c`). Before that they stayed `WAITING` for ever.
         let settled: Vec<&Robot> = robots
             .iter()
-            .map(|(r, _, _)| r)
+            .map(|(r, _, _, _)| r)
             .filter(|r| r.reflexes > 0 && r.downed_at.is_some_and(|at| now - at > 0.5))
             .collect();
         let ended = settled.iter().filter(|r| r.reflex_off >= r.reflexes).count();
@@ -862,6 +975,16 @@ fn stop_when_over(
             test.checked > 0 && test.turned == test.checked,
             format!("the heading changed within 0.3 s of the hit ({}/{})", test.turned, test.checked),
         );
+    }
+    // the VM inspector's own numbers, where there is no window to draw them in (D2): the frames
+    // each brain is standing in with the locals of the innermost of them, and the heap
+    let mut panel = VmInspector::default();
+    for (robot, _, _, script) in &robots {
+        let Some(script) = script else { continue };
+        panel.fill(&world, script.task(), robot.name.clone(), robot.prelude_lines);
+        for line in panel.log_lines() {
+            info!("{line}");
+        }
     }
     info!("{}", if hud.line.is_empty() { "time" } else { hud.line.as_str() });
     exit.write(AppExit::Success);
