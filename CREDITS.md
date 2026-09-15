@@ -26,7 +26,7 @@ the engine; nothing is added to this repository for it.
 ## In the browser build
 
 The page (`web/dist/`, built by `web/build.sh`) also carries two things from
-[sabiruby-playground](https://github.com/kishima/sabiruby-playground), copied at build time and
+[sabiruby-playground](https://github.com/sabiruby/sabiruby-playground), copied at build time and
 not kept in this repository:
 
 * `compiler/sabiruby.wasm` and `compiler/sabi.js` — the SabiRuby playground's module, with the
@@ -37,5 +37,5 @@ not kept in this repository:
 ## Code
 
 MIT (`LICENSE`), © 2026 Kishima Craft Works. The VM is
-[SabiRuby](https://github.com/kishima/sabiruby) and the plugin is
-[rubevy](https://github.com/kishima/rubevy), both MIT and by the same author.
+[SabiRuby](https://github.com/sabiruby/sabiruby) and the plugin is
+[rubevy](https://github.com/sabiruby/rubevy), both MIT and by the same author.

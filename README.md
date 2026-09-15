@@ -1,7 +1,7 @@
 # rubevy_games
 
-Games whose brains are Ruby. They run on [rubevy](https://github.com/kishima/rubevy) — the
-[SabiRuby](https://github.com/kishima/sabiruby) VM (mruby 4.1 bytecode, written in Rust) inside
+Games whose brains are Ruby. They run on [rubevy](https://github.com/sabiruby/rubevy) — the
+[SabiRuby](https://github.com/sabiruby/sabiruby) VM (mruby 4.1 bytecode, written in Rust) inside
 [Bevy](https://bevyengine.org) — and the Ruby in them is read from `.rb` files as the game runs,
 so editing a file changes what happens on screen without a rebuild.
 
@@ -11,7 +11,7 @@ so editing a file changes what happens on screen without a rebuild.
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
-**Play it in a browser:** <https://kishima.github.io/rubevy_games/> — the same game, built for
+**Play it in a browser:** <https://sabiruby.github.io/rubevy_games/> — the same game, built for
 the web. Or on a PC:
 
 ```
@@ -67,7 +67,7 @@ compiler (`sabiruby-compiler`), so nothing has to be built ahead of time.
 
 The browser build needs the `wasm32-unknown-unknown` target, `wasm-bindgen-cli` of the version
 in `Cargo.lock`, optionally `wasm-opt`, and a checkout of
-[sabiruby-playground](https://github.com/kishima/sabiruby-playground) next to this one with its
+[sabiruby-playground](https://github.com/sabiruby/sabiruby-playground) next to this one with its
 `tools/build.sh` run (that is where the compiler module comes from). See `docs/web.md`.
 
 ## License

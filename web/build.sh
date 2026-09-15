@@ -9,7 +9,7 @@
 # Needs: rustup target wasm32-unknown-unknown; wasm-bindgen-cli of the same version as the
 # wasm-bindgen crate in Cargo.lock; wasm-opt (binaryen) on PATH, optional.
 # Ruby is compiled in the page by the SabiRuby playground's module: its sabiruby.wasm, sabi.js and
-# browser_wasi_shim are taken from a checkout of kishima/sabiruby-playground (SABIRUBY_PLAYGROUND,
+# browser_wasi_shim are taken from a checkout of sabiruby/sabiruby-playground (SABIRUBY_PLAYGROUND,
 # default ../sabiruby-playground) after `tools/build.sh` there.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

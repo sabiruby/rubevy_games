@@ -1,4 +1,4 @@
-# The browser version of the games, on GitHub Pages: https://kishima.github.io/rubevy_games/
+# The browser version of the games, on GitHub Pages: https://sabiruby.github.io/rubevy_games/
 # Built by web/build.sh, as locally. The Ruby compiler module comes from sabiruby-playground,
 # built against the same SabiRuby commit as the game's VM (the one Cargo.lock names).
 name: pages
@@ -28,15 +28,15 @@ jobs:
           path: rubevy_games
       - name: the SabiRuby commit of Cargo.lock
         id: vm
-        run: echo "ref=$(grep -m1 -o 'github.com/kishima/sabiruby#[0-9a-f]*' rubevy_games/Cargo.lock | cut -d'#' -f2)" >> "$GITHUB_OUTPUT"
+        run: echo "ref=$(grep -m1 -o 'github.com/sabiruby/sabiruby#[0-9a-f]*' rubevy_games/Cargo.lock | cut -d'#' -f2)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
-          repository: kishima/sabiruby-playground
+          repository: sabiruby/sabiruby-playground
           ref: ${{ env.PLAYGROUND_REF }}
           path: sabiruby-playground
       - uses: actions/checkout@v4
         with:
-          repository: kishima/sabiruby
+          repository: sabiruby/sabiruby
           ref: ${{ steps.vm.outputs.ref }}
           path: sabiruby
       - uses: dtolnay/rust-toolchain@stable

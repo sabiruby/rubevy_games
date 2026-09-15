@@ -34,7 +34,7 @@ a victory — all of it is in that file, and saving it starts the match again.
 
 How a question travels from the Ruby to the system that answers it, and why this is smoother than
 with the C mruby, is written up (in Japanese) in rubevy's
-[`docs/rust-bridge.ja.md`](https://github.com/kishima/rubevy/blob/main/docs/rust-bridge.ja.md).
+[`docs/rust-bridge.ja.md`](https://github.com/sabiruby/rubevy/blob/main/docs/rust-bridge.ja.md).
 
 The game owns the world; Ruby owns the decisions. What a robot gets is deliberately raw — a tank's
 controls and noisy readings — so there is room to write a brain that is better than another one.

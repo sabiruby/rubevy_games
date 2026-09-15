@@ -12,10 +12,10 @@ bevy = { version = "0.19.1", default-features = false, features = [
 ] }
 # what differs between the PC build and the browser build (threads, X11, WebGL) is added per
 # target in each game's Cargo.toml, so the one `cargo build` picks the right set
-rubevy = { git = "https://github.com/kishima/rubevy" }
+rubevy = { git = "https://github.com/sabiruby/rubevy" }
 # the same source as rubevy's, so there is one VM in the binary and one set of types
-sabiruby = { git = "https://github.com/kishima/sabiruby" }
-sabiruby-compiler = { git = "https://github.com/kishima/sabiruby", features = ["host"] }
+sabiruby = { git = "https://github.com/sabiruby/sabiruby" }
+sabiruby-compiler = { git = "https://github.com/sabiruby/sabiruby", features = ["host"] }
 rubevy-arena = { path = "crates/rubevy-arena" }
 # the in-game editor (the code panel); 0.42 is the one built for Bevy 0.19
 bevy_egui = { version = "0.42", default-features = false, features = ["render", "default_fonts"] }
@@ -23,7 +23,7 @@ bevy_egui = { version = "0.42", default-features = false, features = ["render", 
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/kishima/rubevy_games"
+repository = "https://github.com/sabiruby/rubevy_games"
 
 [profile.dev]
 opt-level = 1          # Bevy is unusable at 0

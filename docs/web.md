@@ -1,7 +1,7 @@
 # The browser build
 
 SabiRuby Battle runs in a browser as well as in a window on a PC:
-**https://kishima.github.io/rubevy_games/**. The two are the same game — the same systems, the same
+**https://sabiruby.github.io/rubevy_games/**. The two are the same game — the same systems, the same
 Ruby, the same editor — and what differs is chosen by the target at compile time.
 
 ```
