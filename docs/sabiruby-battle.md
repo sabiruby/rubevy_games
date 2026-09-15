@@ -75,11 +75,75 @@ loop do
 end
 ```
 
-A question costs about a frame: the task asks, the game answers in its next pass, the scheduler
-resumes the task. That is why `act` sets all four controls at once and `radar` brings the robot's
-own status back with it — a brain that asked one question per control would react a few frames
-late. The game answers everything in the frame it is asked today; `Rubevy.ask` also allows an
-answer that comes frames later (a path request, an asset load), and the robot simply waits.
+**A question costs two frames**, measured (`docs/worklog/2026-09-16-showpieces-d2-d3.md`): the
+task asks and parks, the request reaches the game with that frame's commands, `answer_requests`
+answers it — and the scheduler only reaches the task again on the frame after that, because
+`answer_requests` is an ordinary system of this game and nothing orders it before rubevy's
+`tick_scripts`. Answering in `PreUpdate` instead makes it one frame; that is a change to the
+game's schedule and is the author's to make, so it has not been made.
+
+Either way the cost is per *question*, which is why `act` sets all four controls at once and
+`radar` brings the robot's own status back with it: a brain that asked one question per control
+would react several frames late. `Rubevy.ask` also allows an answer that comes frames later (a
+path request, an asset load), and the robot simply waits.
+
+### Why not `Rubevy.entity[:Transform]` and `Rubevy::Proxy`
+
+rubevy has another way to reach the world — a component by name, and a proxy that turns any method
+call into a question — and the obvious question is whether the robots would read better written
+that way. They were measured against each other with a robot that does nothing but count frames
+(it and the numbers are in `docs/worklog/2026-09-16-showpieces-d2-d3.md`). One decision of the
+scout, with three other robots on the field:
+
+```ruby
+# as it is: three questions, six frames
+target = nearest_enemy(45)                                   # ask("radar", 45)  — 2 frames
+threat = incoming(18).find { |shot| on_collision?(shot) }    # ask("incoming",18) — 2 frames
+act throttle: 1.0, turn: steer_to(heading), aim: angle, fire: 0.3   # ask("act") — 2 frames
+```
+
+```ruby
+# over the ECS bridge: nine reads and a question — eleven frames — and it knows less
+me    = Rubevy.entity
+here  = me[:Transform]                     # 1 frame — where I am, which way I point
+mine  = me[:Robot]                         # 1 frame — hp, energy, cooldown: a component
+foes  = Rubevy.find(:Robot)                # 1 frame — every robot in the world, near or far
+seen  = foes.map { |f| [f[:Transform], f[:Robot]] }   # 2 reads each: 6 frames
+robot = Rubevy::Proxy.new("robot")
+robot.act(1.0, turn, angle, 0.3)           # 2 frames — a proxy call *is* `Rubevy.ask`
+```
+
+One decision of the scout, three other robots on the field, measured:
+
+| | questions per decision | frames |
+|---|---|---|
+| `ask("radar")` / `incoming` / `act` (today) | 3 | 6 |
+| `Entity#[]` + `Proxy`, positions only | 5 | 6 |
+| `Entity#[]` + `Proxy`, everything the scout uses | 10 | 11 |
+
+* **A component read is a round trip, and there is one per component per entity.** A question can
+  carry a whole table back (`radar` answers every contact with its position, velocity, heading,
+  distance and bearing in one `Answer::Rows`); `e[:Transform]` answers one component of one
+  entity. What the boundary costs is questions, and the component form asks one per fact.
+* **A component read is quicker than a question, though** — one frame against two — because
+  rubevy answers the four kinds it reserves itself (`component.get`, `component.has`,
+  `components`, `entities.with`) in a system that runs *before* `tick_scripts`. That is where the
+  `PreUpdate` note above comes from: the difference is the ordering, not the mechanism.
+* **`Rubevy.find` walks the world.** In this game it answers 345 entities (every crate of the
+  wall, every shot, every nameplate) unless the game registers a component that means "a robot" —
+  and `radar` already answers "the robots within 45 units, as this robot can see them".
+* **The noise would be lost.** How far a radar reading strays is a rule of the match, and the
+  rules live in Rust (rubevy's `rust-bridge.ja.md`). A component read is the truth; a radar
+  reading is what a robot can know. `Contact#distance` and `#bearing` are computed on the game's
+  side for the same reason.
+* **`Rubevy::Proxy` is `Rubevy.ask` with a method name on it** — `proxy.act(…)` is
+  `Rubevy.ask("robot.act", …).pop`, measured at the same two frames. It reads well, and it hides
+  the one thing a robot's author must see: which calls wait. `act` is a word that says "do this";
+  `robot.act` is a word that says "ask and wait", written to look like neither.
+
+So the robots stay as they are. The bridge's other half is not unused — a robot *is* an entity, and
+the VM panel and the reflexes both go through it — but for a brain's own decisions, one question
+that brings a table back beats nine that each bring one field.
 
 ## A tank, not a cursor
 

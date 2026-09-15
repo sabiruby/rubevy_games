@@ -222,3 +222,151 @@ vm:   #3 prelude.rb:228         run_robot        pc 85    tasks=[#<Task 887 ctx=
 ```
 
 `tasks=[#<Task 887 ctx=4>]` が、上に書いた `ctx=` そのもの。
+
+## 2. D3 — 今の `ask`/`act` と、`Entity#[]` + `Proxy` の比較
+
+「往復回数（フレーム）で比べる」と書いてあるので、**数えずに測った**。フレーム数を数えるだけの
+ロボットを 1 体書き、`ruby/matches/training.rb` をそれ 1 体（と的の scout 1 体）に差し替えて
+`--headless` で回す。このロボットと差し替えたマッチは**コミットしていない**——D3 は検討で、
+ゲームに残すものではないため。全文をここに残す（`--headless` でそのまま再現できる）。
+
+```ruby
+# D3: the two ways of writing the same robot, measured. Not a fighter.
+robot "Study" do
+  # how many frames `n` round trips of `what` take
+  def bench(what, n)
+    f0 = $rubevy[:frame]
+    n.times { yield }
+    f1 = $rubevy[:frame]
+    per = (f1 - f0).to_f / n
+    Rubevy.log "study: #{what} x#{n} = #{f1 - f0} frames (#{per} each)"
+    per
+  end
+
+  def run
+    e = Rubevy.entity
+    Rubevy.log "study: components #{e.components.inspect}"
+    bench("ask status", 20) { Rubevy.ask("status").pop }
+    bench("ask radar", 20) { Rubevy.ask("radar", 60.0).pop }
+    bench("act", 20) { Rubevy.ask("act", -999.0, -999.0, -999.0, -999.0).pop }
+    bench("A: the scout's decision (radar + incoming + act)", 20) do
+      Rubevy.ask("radar", 45.0).pop
+      Rubevy.ask("incoming", 18.0).pop
+      Rubevy.ask("act", -999.0, -999.0, -999.0, -999.0).pop
+    end
+    bench("entity[:Transform]", 20) { e[:Transform] }
+    bench("entity.has?(:Transform)", 20) { e.has?(:Transform) }
+    bench("Rubevy.find(:Transform)", 5) { Rubevy.find(:Transform) }
+    others = Rubevy.find(:Transform)
+    Rubevy.log "study: find(:Transform) = #{others.size} entities"
+    few = others[0, 3]
+    bench("B: find + 3 Transforms (one decision)", 5) do
+      Rubevy.find(:Transform)
+      few.each { |o| o[:Transform] }
+    end
+    proxy = Proxy.new("act")
+    bench("Proxy#method_missing -> ask", 20) { proxy.set(-999.0, -999.0, -999.0, -999.0) }
+    Rubevy.log "study: done"
+    loop { sleep 1.0 }
+  end
+end
+
+# rubevy's assets/scripts/proxy.rb, copied here so the study needs no `require`.
+class Proxy
+  def initialize(kind) = @kind = kind
+  def method_missing(name, *args, &blk) = Rubevy.ask("#{@kind}.#{name}", *args).pop
+  def respond_to_missing?(name, include_private = false) = true
+end
+```
+
+`bench` がブロックを `yield` で呼んでいるのは意図的で、ここが D1 で踏んだ穴だからである。
+`instance_exec` / `send` / `Method#call` は VM の入れ子の実行ループになり、その中で
+`pop` が park できない。`yield` は**このタスクの普通のフレーム**なので park できる。
+実際に通った——つまり「ブロックを呼ぶと待てなくなる」のは `yield` には当てはまらない、
+というのがここで確かめられた。
+
+### 一時的に要った 2 つの変更（どちらも戻した）
+
+* **`app.register_type::<Transform>()`**。`--headless` は `MinimalPlugins` なので、
+  型レジストリに何も登録されていない。最初の走りは `components` が `[]`、
+  `e[:Transform]` が `nil`、`Rubevy.find(:Transform)` が 0 件だった——**エラーではなく静かに空**で、
+  rubevy の `docs/host-api.md` が書いているとおり。窓の `DefaultPlugins` では登録されるので、
+  同じスクリプトが窓では動いてヘッドレスでは無言で空を返す。これは D3 の範囲外だが、
+  ゲーム側に残っている食い違いなので記録しておく。
+* **`answer_requests` を `PreUpdate` に移す**（下記の実験）。
+
+### 測った値
+
+```
+study: components ["Transform"]
+study: ask status x20 = 40 frames (2.0 each)
+study: ask radar x20 = 40 frames (2.0 each)
+study: act x20 = 40 frames (2.0 each)
+study: A: radar + act (one decision) x20 = 80 frames (4.0 each)
+study: A: the scout's decision (radar + incoming + act) x20 = 120 frames (6.0 each)
+study: entity[:Transform] x20 = 20 frames (1.0 each)
+study: entity.has?(:Transform) x20 = 20 frames (1.0 each)
+study: Rubevy.find(:Transform) x5 = 5 frames (1.0 each)
+study: find(:Transform) = 345 entities
+study: B: find + 3 Transforms (one decision) x5 = 20 frames (4.0 each)
+study: Proxy#method_missing -> ask x20 = 40 frames (2.0 each)
+```
+
+
+**ゲームが答える質問は 2 フレーム、rubevy が自分で答える質問は 1 フレーム。** これは予想していなかった。
+計画書も `docs/sabiruby-battle.md` も「質問はだいたい 1 フレーム」と書いていて、それが間違っていた。
+
+理由は**システムの順序**である。`RubevyPlugin` は `Update` に
+`start_scripts → deliver_answers → answer_components → tick_scripts → drain_commands →
+apply_component_writes` を `chain()` で並べる。成分の読み（rubevy が自分で答える 4 種）は
+`answer_components` が答え、それは `tick_scripts` の**前**にあるので、フレーム N で聞いた答えは
+フレーム N+1 の `tick_scripts` で受け取れる——1 フレーム。ゲームの `answer_requests` は
+このゲームが自分で `Update` に足したシステムで、rubevy の鎖に対する順序は**何も指定されていない**。
+実測 2 フレームということは、`tick_scripts` より後ろに置かれている。
+
+確かめた: `answer_requests` を `PreUpdate` に移す（1 行）と、
+
+```
+study: ask status x20 = 20 frames (1.0 each)
+study: A: the scout's decision (radar + incoming + act) x20 = 60 frames (3.0 each)
+study: Proxy#method_missing -> ask x20 = 20 frames (1.0 each)
+```
+
+**すべてのロボットの反応が半分のフレーム数になる。** ただしこれはゲームのスケジュールを変える話で、
+`answer_requests` は `spawn` で `Commands` を積み、`Time` を読み、`Events` を掃く。
+戦いの手触りと selftest の数字が変わる。指示の範囲外なので**戻した**。著者判断で入れるなら、
+`rubevy` 側に公開の `SystemSet` があるほうが素直（今は `tick_scripts` が非公開なので、
+ゲームは `.before(...)` で指定できず、別のスケジュールに逃がすしかない）。
+
+### 結論
+
+`docs/sabiruby-battle.md` の *Why not `Rubevy.entity[:Transform]` and `Rubevy::Proxy`* に書いた。
+要点だけ:
+
+* 境界の値段は**質問の数**で、`ask` は 1 回で表を持って帰れる（`radar` は全接触の位置・速度・向き・
+  距離・方位を 1 つの `Answer::Rows` で返す）。成分読みは 1 エンティティ 1 成分につき 1 往復なので、
+  同じ判断がスカウトで 3 質問 6 フレーム対 10 質問 11 フレームになる。
+* `Rubevy.find(:Transform)` はこのゲームで **345 件**返す（壁のクレート、弾、名札）。
+  「ロボットだけ」を取るにはゲームが目印の成分を登録しなければならず、それは `radar` が
+  「45 以内のロボットを、このロボットに見える形で」既にやっていることの下位互換になる。
+* レーダーの**ノイズが失われる**。どれだけずれるかは試合の規則で、規則は Rust に閉じる
+  （`rust-bridge.ja.md`）。成分読みは真実で、レーダーは「知りうること」である。
+* `Rubevy::Proxy` は**メソッド名のついた `Rubevy.ask`** そのもの（`proxy.act(…)` =
+  `Rubevy.ask("robot.act", …).pop`、実測でも同じ 2 フレーム）。読みやすいが、
+  ロボットの作者が唯一見なければならないもの——**どの呼び出しが待つか**——を隠す。
+  `act` は「やれ」と読め、`robot.act` は「聞いて待つ」なのに、どちらにも読めない綴りになる。
+
+**Proxy 形が「厳密に良くて同じ速さ」ではない**ので、指示のとおり出荷しているロボットは書き換えない。
+
+## 確認
+
+* `cargo build --release` 通る（警告なし）。
+* `SABIBOTS_SELFTEST=1 ./target/release/sabibots --headless 20`:
+  reflex 21/21・21/21、`the reflex tasks of every robot that went down ended (1/1)`。
+* 窓（`docker/build.sh` + `SABIBOTS_SELFTEST=1 docker/run.sh`、lavapipe）: エディタの自己テストと
+  新しい `P` の 6 項目が通る。`every robot starts with full health` は落ちることがあるが、
+  これは D1 の worklog が「元から」と測って書いてあるもの（再開の 2 秒後に見ているので、
+  もう撃ち合いが始まっている）。範囲外なので触っていない。
+* `--shot`（docker/lavapipe）: `docs/vm-inspector.png`。
+* `web/build.sh`: 通る。`wasm-opt` が無いので縮まないと言われるだけ（`docs/web.md` のとおり）。
+  `game_bg.wasm` 29,992,043 バイト（gzip 7,698,249）。
