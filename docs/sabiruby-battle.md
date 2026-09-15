@@ -75,11 +75,75 @@ loop do
 end
 ```
 
-A question costs about a frame: the task asks, the game answers in its next pass, the scheduler
-resumes the task. That is why `act` sets all four controls at once and `radar` brings the robot's
-own status back with it — a brain that asked one question per control would react a few frames
-late. The game answers everything in the frame it is asked today; `Rubevy.ask` also allows an
-answer that comes frames later (a path request, an asset load), and the robot simply waits.
+**A question costs two frames**, measured (`docs/worklog/2026-09-16-showpieces-d2-d3.md`): the
+task asks and parks, the request reaches the game with that frame's commands, `answer_requests`
+answers it — and the scheduler only reaches the task again on the frame after that, because
+`answer_requests` is an ordinary system of this game and nothing orders it before rubevy's
+`tick_scripts`. Answering in `PreUpdate` instead makes it one frame; that is a change to the
+game's schedule and is the author's to make, so it has not been made.
+
+Either way the cost is per *question*, which is why `act` sets all four controls at once and
+`radar` brings the robot's own status back with it: a brain that asked one question per control
+would react several frames late. `Rubevy.ask` also allows an answer that comes frames later (a
+path request, an asset load), and the robot simply waits.
+
+### Why not `Rubevy.entity[:Transform]` and `Rubevy::Proxy`
+
+rubevy has another way to reach the world — a component by name, and a proxy that turns any method
+call into a question — and the obvious question is whether the robots would read better written
+that way. They were measured against each other with a robot that does nothing but count frames
+(it and the numbers are in `docs/worklog/2026-09-16-showpieces-d2-d3.md`). One decision of the
+scout, with three other robots on the field:
+
+```ruby
+# as it is: three questions, six frames
+target = nearest_enemy(45)                                   # ask("radar", 45)  — 2 frames
+threat = incoming(18).find { |shot| on_collision?(shot) }    # ask("incoming",18) — 2 frames
+act throttle: 1.0, turn: steer_to(heading), aim: angle, fire: 0.3   # ask("act") — 2 frames
+```
+
+```ruby
+# over the ECS bridge: nine reads and a question — eleven frames — and it knows less
+me    = Rubevy.entity
+here  = me[:Transform]                     # 1 frame — where I am, which way I point
+mine  = me[:Robot]                         # 1 frame — hp, energy, cooldown: a component
+foes  = Rubevy.find(:Robot)                # 1 frame — every robot in the world, near or far
+seen  = foes.map { |f| [f[:Transform], f[:Robot]] }   # 2 reads each: 6 frames
+robot = Rubevy::Proxy.new("robot")
+robot.act(1.0, turn, angle, 0.3)           # 2 frames — a proxy call *is* `Rubevy.ask`
+```
+
+One decision of the scout, three other robots on the field, measured:
+
+| | questions per decision | frames |
+|---|---|---|
+| `ask("radar")` / `incoming` / `act` (today) | 3 | 6 |
+| `Entity#[]` + `Proxy`, positions only | 5 | 6 |
+| `Entity#[]` + `Proxy`, everything the scout uses | 10 | 11 |
+
+* **A component read is a round trip, and there is one per component per entity.** A question can
+  carry a whole table back (`radar` answers every contact with its position, velocity, heading,
+  distance and bearing in one `Answer::Rows`); `e[:Transform]` answers one component of one
+  entity. What the boundary costs is questions, and the component form asks one per fact.
+* **A component read is quicker than a question, though** — one frame against two — because
+  rubevy answers the four kinds it reserves itself (`component.get`, `component.has`,
+  `components`, `entities.with`) in a system that runs *before* `tick_scripts`. That is where the
+  `PreUpdate` note above comes from: the difference is the ordering, not the mechanism.
+* **`Rubevy.find` walks the world.** In this game it answers 345 entities (every crate of the
+  wall, every shot, every nameplate) unless the game registers a component that means "a robot" —
+  and `radar` already answers "the robots within 45 units, as this robot can see them".
+* **The noise would be lost.** How far a radar reading strays is a rule of the match, and the
+  rules live in Rust (rubevy's `rust-bridge.ja.md`). A component read is the truth; a radar
+  reading is what a robot can know. `Contact#distance` and `#bearing` are computed on the game's
+  side for the same reason.
+* **`Rubevy::Proxy` is `Rubevy.ask` with a method name on it** — `proxy.act(…)` is
+  `Rubevy.ask("robot.act", …).pop`, measured at the same two frames. It reads well, and it hides
+  the one thing a robot's author must see: which calls wait. `act` is a word that says "do this";
+  `robot.act` is a word that says "ask and wait", written to look like neither.
+
+So the robots stay as they are. The bridge's other half is not unused — a robot *is* an entity, and
+the VM panel and the reflexes both go through it — but for a brain's own decisions, one question
+that brings a table back beats nine that each bring one field.
 
 ## A tank, not a cursor
 
@@ -198,11 +262,11 @@ everything that needs one.
   the game pushes onto, and it belongs to the entity whose task asked. A task made with
   `Task.new` carries no entity, so rubevy refuses to subscribe for it — the queue is taken here
   and handed to the block that reads it.
-* **The new task is given the entity too.** For the same reason a reflex could otherwise not ask
-  the game anything at all: `act` from a task with no entity is a question from nobody, and the
-  game answers it `nil`. The prelude copies the `@rubevy_entity` the scheduler put on the robot's
-  own task onto the reflex's. (rubevy could do this itself when a script makes a task; until it
-  does, this is where it happens.)
+* **The new task carries the robot's entity by itself.** A reflex has to be able to `act`, and
+  `act` from a task with no entity is a question from nobody that the game answers `nil`. The
+  prelude used to copy the `@rubevy_entity` the scheduler puts on the robot's own task; since
+  rubevy `9104f7c` a task made with `Task.new` inherits it from the task that made it (rubevy's
+  `docs/host-api.md`, *Events*), so there is nothing here to copy.
 * **Its priority is the brain's less 20** — a smaller number is looked at first, so a reflex that
   is ready runs before the brain does in that frame.
 
@@ -239,16 +303,32 @@ running gets the second reflex when the first has finished, rather than two swer
 
 ### What stops one
 
+Two different endings, and only one of them is the robot's own.
+
 `run_robot` terminates its reflex tasks in an `ensure`, which covers the brain ending by itself or
 raising. It does **not** cover the usual case: when a robot goes down, or its file is saved, the
-game takes its `ScriptTask` away and the VM terminates the task outright — and a task terminated
-from outside does not unwind, so the `ensure` never runs. The reflex task is left parked on a
-queue nobody will publish to again. Measured with a probe task listing `Task.list` through a
-match: after `3 blue/scout` went `DORMANT` its `Scout-hit` task was still there, `WAITING`.
+game takes its `ScriptTask` away and the VM terminates the brain's task outright — and a task
+terminated from outside does not unwind, so that `ensure` never runs.
 
-It costs a context and a task object per robot per life, which a long session with many restarts
-would accumulate. The fix belongs one layer down — rubevy closing the queue when it lets a
-subscription go, so the `pop` raises `Task::Error` and the task ends by itself.
+What ends a reflex task then is **the subscription closing**. rubevy closes the queue when it lets
+a subscription go, and a `pop` waiting on a closed subscription raises `Rubevy::Unsubscribed`
+(rubevy `9104f7c`); the task unwinds through its own `rescue` and is gone:
+
+```ruby
+begin
+  loop { args = queue.pop; … }
+rescue Rubevy::Unsubscribed        # the robot is gone; end here rather than park for ever
+  Rubevy.log "#{bot.name}: reflex #{event} off"
+  Rubevy.ask("reflex", :off)
+end
+```
+
+Before that, a reflex task was left parked on a queue nobody would publish to again — measured
+with a probe task listing `Task.list` through a match: after `3 blue/scout` went `DORMANT` its
+`Scout-hit` task was still there, `WAITING`, costing a context and a task object per robot per
+life. The check that it no longer is runs in the selftest: every robot that has been down for
+more than half a second must have had as many reflex tasks end as it registered reflexes
+(`--headless` prints `1/1 reflex tasks ended` per robot, and `reflex hit off` in the log).
 
 ### What it cost to get right
 
@@ -256,7 +336,13 @@ subscription go, so the `pop` raises `Task::Error` and the task ends by itself.
 a task cannot be parked across one: the first `act` inside a block called that way dies with
 `blocking pop cannot be called from within a C function boundary`. So `reflex` turns the block
 into an ordinary method of the robot's class (`define_method`), and `run_reflex` calls it by a
-name written out in the source — which is why there is a fixed number of slots.
+name written out in the source — which is why there is a fixed number of slots
+(`Robot::REFLEX_SLOTS`, 4).
+
+That limit is about the nested run loop and nothing else. The two other things this cost — a
+child task with no entity, and a reflex task nobody ended — were rubevy's to fix and rubevy has
+fixed them; the slots stay, because a `case` over names written in the source is still the only
+way to call a block and be able to park inside it.
 
 ## The DSL
 
@@ -380,6 +466,47 @@ The editor lives in `rubevy-arena` (`Editor`, `EditorPlugin`) so the other games
 The older read-only panel (`CodePanel`, Bevy UI only) is still there for a game that does not want
 egui.
 
+## The VM panel
+
+`F2` shows and hides it; it is open from the start, so a screenshot has it. It is the browser
+playground's "VM の状態" pane in the game's own window, about the robot the editor is showing.
+
+![the VM panel](vm-inspector.png)
+
+* **The frames the brain is standing in, innermost first.** A robot waiting for a scan is four
+  frames deep — `Task::Queue#pop`, `Rubevy.ask`'s wrapper, `radar` in the DSL, then its own
+  `scout.rb:36` — and seeing that stack is seeing why waiting costs nothing: it is an ordinary
+  Ruby call chain in a context of its own, parked, not a callback that lost its place.
+  A frame of mrblib (`Kernel#loop`, `Task::Queue#pop`) says `(no debug info)`: it is there, it
+  just carries no line table.
+* **The registers of one frame**, named from the debug info — `target`, `threat`, `heading` —
+  with the class and the value of each. `R0` is `self`. The panel follows the innermost frame of
+  the robot's *own* file by default, because the DSL's locals are not what the author came for;
+  clicking a row pins that one instead.
+* **The heap and the collector**: live of total, what has been allocated since the last
+  collection and the threshold that will start the next, how many collections there have been,
+  and what survived the last. Watching that climb and drop while a robot fights is what a
+  garbage collector is.
+* **How many contexts the VM holds, and how many are still live.** One per task: four brains,
+  their reflexes, the match. When a robot goes down its two contexts stop and the count falls —
+  which is how the reflex-task leak in *What stops one* was seen to be gone.
+
+**`P` pauses the scripts** by giving the scheduler a budget of 0 instructions for the frame: the
+VM runs nothing, so the numbers stand still while they are read. The game keeps drawing and the
+tanks keep rolling on the controls their brains last set — it is the Ruby that is stopped, not the
+match. The scheduler's clock is not stopped, so every robot that was sleeping is due the moment it
+starts again.
+
+Nothing in the panel runs Ruby: sabiruby renders a value in Rust (`Vm::render`), so looking at a
+robot cannot move it, allocate, or raise. The cost is that an object with an `inspect` of its own
+shows the default form.
+
+It reads `Vm::snapshot` and `Vm::task_frames`. Joining the two — *which* of the VM's contexts is
+this task's — has no entry point in the VM yet, and `rubevy-arena`'s `inspect.rs` gets it out of
+the way the VM renders a task (`#<Task 12 ctx=3>`) until sabiruby has a `task_context` or a
+`task_snapshot`. The panel lives in `rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the
+other games get it too.
+
 ## Starting again
 
 `Restart (R)` on the scoreboard — `Play again (R)`, once there is a winner — starts the match over
@@ -434,8 +561,6 @@ game points `AssetPlugin` at its own `assets/` directory.
 ## What it does not do yet
 
 * **Sound.**
-* **Letting go of a reflex's task when the robot is destroyed or reloaded** (see *Reflexes*): the
-  task stays parked on a queue nothing will publish to again.
 * **Reflexes for anything but a hit.** `reflex` takes any event name, but `"hit"` is the only one
   the game publishes today.
 * **Keeping edits that were typed and not applied across a restart.** Applied brains are kept.
@@ -451,11 +576,25 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the reflex check
 SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the editor's
 ```
 
-`SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above). The reflex
-check needs a fight rather than a mouse, so it runs headless as well: every hit taken by a robot
-that has a reflex, is still standing and is not already in the middle of one is noted with the way
-it was facing, and 0.3 s later it must have run a reflex and turned by more than 0.2 rad at some
-point in between.
+`SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
+`P`: pressing it must give the scripts a budget of 0 and stop them running, and pressing it again
+must start them. The reflex check needs a fight rather than a mouse, so it runs headless as well:
+every hit taken by a robot that has a reflex, is still standing and is not already in the middle of
+one is noted with the way it was facing, and 0.3 s later it must have run a reflex and turned by
+more than 0.2 rad at some point in between. A robot destroyed inside those 0.3 s is not counted at
+all — the game takes its task away and zeroes its controls, so it is not a robot that failed to
+swerve. At the end, every robot that has been down for more than half a second must have had as
+many reflex tasks end as it registered reflexes.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
-the end. It is how the game is checked where there is no GPU.
+the end, then the VM panel's own numbers as text — the frames each brain is standing in with the
+locals of the innermost few, the heap, and how many contexts are live. It is how the game is
+checked where there is no GPU.
+
+| key | what it does |
+|---|---|
+| `1`–`8`, `Tab` | which robot the editor and the VM panel are about |
+| `F1` / `F2` | the editor / the VM panel |
+| `P` | pause the scripts (budget 0) |
+| `F5`, `Ctrl+Enter` / `Ctrl+S` | apply the edited brain / save it to its file |
+| `R` | start the match over |
