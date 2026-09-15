@@ -1109,7 +1109,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2231,7 +2231,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3314,7 +3314,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4057,7 +4057,7 @@ dependencies = [
 [[package]]
 name = "rubevy"
 version = "0.0.1"
-source = "git+https://github.com/sabiruby/rubevy#a5c59c50fce90f1aa9d6219cf47c25fd9516d698"
+source = "git+https://github.com/sabiruby/rubevy#67e2649cd938b77714965c34a1c2c1564dea0d40"
 dependencies = [
  "bevy",
  "sabiruby",
@@ -4113,7 +4113,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4149,7 +4149,7 @@ dependencies = [
 [[package]]
 name = "sabiruby"
 version = "0.4.0"
-source = "git+https://github.com/sabiruby/sabiruby#0d0808ec2b9b724d3e3d624049708a4f5a1f3144"
+source = "git+https://github.com/sabiruby/sabiruby#9b11478069cc7f75f8ec00662ee5e035cc428efb"
 dependencies = [
  "hashbrown 0.15.5",
  "libm",
@@ -4159,7 +4159,7 @@ dependencies = [
 [[package]]
 name = "sabiruby-compiler"
 version = "0.2.1"
-source = "git+https://github.com/sabiruby/sabiruby#0d0808ec2b9b724d3e3d624049708a4f5a1f3144"
+source = "git+https://github.com/sabiruby/sabiruby#9b11478069cc7f75f8ec00662ee5e035cc428efb"
 dependencies = [
  "cc",
  "sabiruby",
@@ -5033,7 +5033,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
