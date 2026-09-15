@@ -361,8 +361,18 @@ study: Proxy#method_missing -> ask x20 = 20 frames (1.0 each)
 ## 確認
 
 * `cargo build --release` 通る（警告なし）。
-* `SABIBOTS_SELFTEST=1 ./target/release/sabibots --headless 20`:
-  reflex 21/21・21/21、`the reflex tasks of every robot that went down ended (1/1)`。
+* `SABIBOTS_SELFTEST=1 ./target/release/sabibots --headless 25` を 5 回:
+  `a reflex ran` / `the heading changed` が 10/10、16/16、13/13、9/9、20/20。
+  `the reflex tasks of every robot that went down ended` は 5 回とも `(1/1)`。
+
+  **ここで selftest の穴を 2 つ塞いだ**（どちらも D1 のチェックのもので、今回の変更が原因ではない）。
+  1 つ目: 20 秒で誰も倒れない走りがあり、新しいチェックが `(0/0)` で **FAIL** になっていた。
+  走らなかったチェックを「落ちた」と言うのは間違いなので、`--` の行にした。
+  2 つ目: 4 回に 1 回 `the heading changed (13/14)` が出た。落ちていたのは
+  19.37 秒に被弾した scout で、0.04 rad しか回っていない——**0.3 秒のうちに撃破されていた**。
+  倒れた機体はゲームが `ScriptTask` を外して操舵をゼロにするので、避けられなかったのではなく
+  避ける機体がもう無い。`downed_at` が窓の中なら**数えない**ことにした（`--` の行が出る）。
+  これで 5 回とも全部 ok。
 * 窓（`docker/build.sh` + `SABIBOTS_SELFTEST=1 docker/run.sh`、lavapipe）: エディタの自己テストと
   新しい `P` の 6 項目が通る。`every robot starts with full health` は落ちることがあるが、
   これは D1 の worklog が「元から」と測って書いてあるもの（再開の 2 秒後に見ているので、

@@ -9,8 +9,9 @@
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | D1 | `reflex`: 被弾したら別タスクでブロックを動かす（mruby-task の複数タスクを 1 体の中で使う最初の機能） | 済み（`82efcc2`） |
-| D2 | ゲームの窓に VM インスペクタ（選んだロボットのタスクのフレーム・レジスタ・ヒープ） | 未着手 |
-| D3 | ロボットの DSL を `Rubevy::Entity#[]` と `Proxy` で書き直せるか（検討。今の `ask` の形との比較） | 未着手 |
+| D2 | ゲームの窓に VM インスペクタ（選んだロボットのタスクのフレーム・レジスタ・ヒープ） | 済み（`0100ec9`） |
+| D3 | ロボットの DSL を `Rubevy::Entity#[]` と `Proxy` で書き直せるか（検討。今の `ask` の形との比較） | 済み・**書き直さない**（`ab7114f`） |
+| D0 | D1 が rubevy に投げ返した 2 つを、rubevy `9104f7c` で外す | 済み（`755a8d1`, `537177e`） |
 
 ## D1. `reflex`
 
@@ -73,7 +74,52 @@ sabiruby 側の小さな追加）。rubevy の `ScriptWorld::stats` の隣に `s
 
 **確認**: `--shot` で撮った画面にフレームと変数が出ている。ヘッドレスでは `snapshot` の中身をログに。
 
+**実装で分かったこと**（`docs/worklog/2026-09-16-showpieces-d2-d3.md`、成果は `docs/sabiruby-battle.md` の *The VM panel*、画は `docs/vm-inspector.png`）:
+
+* **`task_snapshot(task)` は無い。そして「無い」は「作れない」ではなかった。** sabiruby `564434e` にあるのは
+  VM 全体を返す `Vm::snapshot(regs_frames)` だけで、`Vm::task_*` の側とつなぐ入り口がない
+  （`ObjKind::Task(t).ctx` は VM の中にしかない）。ところが `Vm::render` がタスクを
+  `#<Task 12 ctx=3>` と描くので、**ctx は文字列としてなら公開されている**。arena の
+  `inspect.rs::task_context` はそれを読んでいる。VM に欲しいのは
+  `Vm::task_context(task) -> Option<usize>`（`vm.rs` の `task_frames` の隣、6 行）か、
+  計画書が書いた `Vm::task_snapshot(task, regs_frames) -> Option<TaskSnapshot>`
+  （`inspect.rs`、`snapshot` の 1 コンテキストぶんを `context_view` に切り出すだけ）。
+  **小さいほうで足りる。** 入ったらこの関数は中身が入れ替わるだけで消える。
+* **フレームのファイル名は `FrameView` に無い。** `Vm::task_frames(task)` にはあるが、
+  こちらにはフレームの中身が無い。2 つは**同じフレームを同じ順で飛ばす**（`ir.lines.is_empty()`、
+  内側から）ので、`line.is_some()` のフレームだけを順に対応させれば合う。飛ばされるのは mrblib で、
+  パネルには `(no debug info)` と出る。
+* **既定で選ぶのは「ロボット自身のフレーム」。** 待っている脳はいちばん内側では
+  `Task::Queue#pop` に立っていて、そこのローカルは `non_block=false` と `**={}` である。
+  作者が見たいのは 3 つ外の `scout.rb:36` の `target` / `threat` / `heading`。
+  最初の `--shot` が `pop` のローカルを大写しにしたので直した。
+* **一時停止は budget 0 で効く**（`task_run_limits` がループの頭で見るので 1 命令も走らない）。
+  ただし**スケジューラの時計は止まらない**ので、再開の瞬間に寝ていたタスクが全部起きる。
+  止めるなら rubevy の `tick_scripts` の `task_advance_ticks` の側。
+* selftest で `P` を**実際に押して**確かめた。`ButtonInput::press` は既に押されているキーには
+  `just_pressed` を立てない（誰も離さないので）——`release` してから `press` する。
+
 ## D3. DSL の書き直しの検討
 
 `ask("radar")`/`act` の今の形と、`Rubevy.entity[:Transform]` + `Rubevy::Proxy.new("robot")` で書いた場合を並べ、往復回数（フレーム）とコードの読みやすさで比べる。
 結論だけ `docs/sabiruby-battle.md` に。ゲームの規則を Rust に閉じる方針（`rust-bridge.ja.md`）は変えない。
+
+**実装で分かったこと**（同じ worklog、結論は `docs/sabiruby-battle.md` の *Why not `Rubevy.entity[:Transform]` and `Rubevy::Proxy`*）:
+
+* 数えずに**測った**。フレームを数えるだけのロボットを 1 体書いて `--headless` で回す（worklog に全文。
+  ゲームには残していない）。スカウトの 1 判断は今の形で **3 質問 6 フレーム**、成分読み + Proxy で
+  **10 質問 11 フレーム**。境界の値段は質問の数で、`ask` は 1 回で表を持って帰れる。
+* **`Rubevy.find(:Transform)` はこのゲームで 345 件返す**（壁のクレート、弾、名札）。
+  「ロボットだけ」にはゲームが目印の成分を登録する必要があり、それは `radar` の下位互換になる。
+  レーダーのノイズ（試合の規則）も失われる。
+* **`Rubevy::Proxy` はメソッド名のついた `Rubevy.ask`** そのもので、実測でも同じ 2 フレーム。
+  読みやすいが「どの呼び出しが待つか」を隠す。**厳密に良くて同じ速さ、ではない**ので書き換えない。
+* **ついでに測れてしまったこと（著者判断）**: 質問の往復は **2 フレーム**で、`docs/sabiruby-battle.md` が
+  「だいたい 1 フレーム」と書いていたのは間違いだった。rubevy が自分で答える 4 種（成分読み）は
+  `answer_components` が `tick_scripts` の**前**にあるので 1 フレーム、ゲームの `answer_requests` は
+  順序が指定されていないので 2 フレーム。`PreUpdate` に移すと**全ロボットの反応が半分のフレーム数**に
+  なる（スカウトの 1 判断 6 → 3。試して戻した）。ゲームのスケジュールを変える話なので入れていない。
+  入れるなら rubevy 側に公開の `SystemSet` があるほうが素直（`tick_scripts` は非公開）。
+* **ヘッドレスでは型が登録されていない**（`MinimalPlugins`）。`e[:Transform]` は**エラーではなく nil**、
+  `components` は `[]`。窓では `DefaultPlugins` が登録するので同じスクリプトの振る舞いが違う。
+  計測のために一時的に `register_type::<Transform>()` を足して戻した。範囲外だが食い違いは残っている。

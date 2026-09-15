@@ -962,10 +962,16 @@ fn stop_when_over(
             .filter(|r| r.reflexes > 0 && r.downed_at.is_some_and(|at| now - at > 0.5))
             .collect();
         let ended = settled.iter().filter(|r| r.reflex_off >= r.reflexes).count();
-        ok(
-            !settled.is_empty() && ended == settled.len(),
-            format!("the reflex tasks of every robot that went down ended ({ended}/{})", settled.len()),
-        );
+        if settled.is_empty() {
+            // a short match where nobody was destroyed does not exercise this; saying FAIL
+            // there would be saying a check failed when it never ran
+            info!("selftest: --   no robot with a reflex was down long enough to check its tasks");
+        } else {
+            ok(
+                ended == settled.len(),
+                format!("the reflex tasks of every robot that went down ended ({ended}/{})", settled.len()),
+            );
+        }
         ok(test.checked > 0, format!("{} hits on a robot with a reflex were checked", test.checked));
         ok(
             test.checked > 0 && test.ran == test.checked,
@@ -1043,6 +1049,14 @@ fn reflex_selftest(time: Res<Time>, mut test: ResMut<ReflexTest>, robots: Query<
     });
     for watch in due {
         let Ok(robot) = robots.get(watch.robot) else { continue };
+        // A robot destroyed inside the window is not a robot that failed to swerve: the game
+        // takes its task away and sets its controls to zero. The hit is not counted either way.
+        // (Found here: one run in four ended with `turned (13/14)`, the miss being a scout hit at
+        // 19.37 s that went down before the 0.3 s were up — 0.04 rad.)
+        if robot.downed_at.is_some_and(|down| down < watch.at + 0.3) {
+            info!("selftest: --   {} went down within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
+            continue;
+        }
         let ran = robot.reflex_runs > watch.runs;
         // a quarter of the full turning rate over the 0.3 s: the swerve, not the brain's steering
         let turned = watch.peak > 0.2;

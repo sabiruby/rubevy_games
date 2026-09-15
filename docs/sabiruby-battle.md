@@ -576,11 +576,15 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the reflex check
 SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the editor's
 ```
 
-`SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above). The reflex
-check needs a fight rather than a mouse, so it runs headless as well: every hit taken by a robot
-that has a reflex, is still standing and is not already in the middle of one is noted with the way
-it was facing, and 0.3 s later it must have run a reflex and turned by more than 0.2 rad at some
-point in between.
+`SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
+`P`: pressing it must give the scripts a budget of 0 and stop them running, and pressing it again
+must start them. The reflex check needs a fight rather than a mouse, so it runs headless as well:
+every hit taken by a robot that has a reflex, is still standing and is not already in the middle of
+one is noted with the way it was facing, and 0.3 s later it must have run a reflex and turned by
+more than 0.2 rad at some point in between. A robot destroyed inside those 0.3 s is not counted at
+all — the game takes its task away and zeroes its controls, so it is not a robot that failed to
+swerve. At the end, every robot that has been down for more than half a second must have had as
+many reflex tasks end as it registered reflexes.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
 the end, then the VM panel's own numbers as text — the frames each brain is standing in with the
