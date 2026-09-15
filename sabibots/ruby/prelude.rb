@@ -94,6 +94,50 @@ class Robot
 
   def name = self.class.robot_name
 
+  # === reflexes =============================================================
+  #
+  # `reflex(:hit) { |by, damage| … }` in a robot's class body registers a block that runs in a
+  # task of its own, the moment the game says the event happened — not on the brain's next pass.
+  # `run_robot` starts one task per reflex before `run`.
+  #
+  # The controls are last-writer-wins: the brain and a reflex both call `act`, and whichever
+  # question the game answers last in a frame is what the tank does. A reflex that wants the
+  # wheel for a while has to say so and the brain has to leave it alone — the scout does it with
+  # an instance variable, which is shared because both tasks are the same object's.
+  # How many reflexes one robot may have. There is a limit because of how a reflex is called:
+  # see `run_reflex`.
+  REFLEX_SLOTS = 4
+
+  def self.reflexes
+    @reflexes ||= []
+  end
+
+  def self.reflex(event, &block)
+    raise "reflex needs a block" if block.nil?
+    slot = reflexes.size
+    raise "a robot may have #{REFLEX_SLOTS} reflexes at most" if slot >= REFLEX_SLOTS
+    # the block becomes an ordinary method of this robot's class, which is what lets it wait
+    define_method("__reflex_#{slot}", &block)
+    reflexes << [event.to_sym, slot]
+    block
+  end
+
+  # Runs reflex `slot` with the arguments the game published.
+  #
+  # The `case` is not decoration. `instance_exec`, `send` and `Method#call` all run the block in
+  # a nested run loop of the VM, and a task cannot be parked across one: the first `act` inside
+  # such a block dies with "blocking pop cannot be called from within a C function boundary".
+  # An ordinary call written out in Ruby is a frame in this task, which can wait — so the name
+  # has to be there in the source, and that is what fixes the number of slots.
+  def run_reflex(slot, args)
+    case slot
+    when 0 then __reflex_0(*args)
+    when 1 then __reflex_1(*args)
+    when 2 then __reflex_2(*args)
+    when 3 then __reflex_3(*args)
+    end
+  end
+
   # === a library of helpers, in plain Ruby ======================================
 
   # the angle from `a` to `b`, the short way round: -PI .. PI
@@ -173,14 +217,61 @@ end
 
 # Called by the game after the robot's file has been read.
 def run_robot
+  tasks = []
   klass = $robot_class
   raise "this file defines no robot" if klass.nil?
   # a robot's `rand` is rolled from the match's dice, so a match with a seed repeats its luck
   srand(Rubevy.ask("seed").pop.to_i)
   bot = klass.new
+  start_reflexes(bot, klass, tasks)
   bot.log "online"
   bot.run
 rescue => e
   Rubevy.log "#{klass ? klass.robot_name : '?'}: #{e.class}: #{e.message}"
   raise
+ensure
+  # the reflexes are tasks of their own: nothing else stops them when the brain ends. (A task
+  # the game terminates from outside does not run this — see docs/sabiruby-battle.md.)
+  tasks.each { |t| t.terminate }
+end
+
+# One task per `reflex`, started before the brain.
+#
+# The subscription has to be taken *here*, in the script's own task: a task made with `Task.new`
+# carries no entity, so rubevy refuses to subscribe for it. The queue is an ordinary object, so
+# it is simply handed to the block that reads it.
+#
+# The same missing entity would stop a reflex from asking the game anything at all — `act` from a
+# reflex would be a question from nobody — so the new task is given the entity this one carries.
+def start_reflexes(bot, klass, tasks)
+  here = Task.current
+  entity = here.instance_variable_get(:@rubevy_entity)
+  # a smaller number is a higher priority: a reflex is looked at before the brain is
+  priority = here.priority - 20
+  priority = 0 if priority < 0
+  klass.reflexes.each do |event, slot|
+    queue = Rubevy.subscribe(event)
+    task = Task.new(name: "#{klass.robot_name}-#{event}", priority: priority) do
+      loop do
+        args = queue.pop                       # parked here, costing nothing, until it happens
+        Rubevy.log "#{bot.name}: reflex #{event} #{args.inspect}"
+        # the HUD's mark. A question nobody waits for is a command: `Rubevy.ask` answers the
+        # queue to wait on, and a reflex that never pops it is not parked for a frame
+        Rubevy.ask("reflex", :begin)
+        begin
+          bot.run_reflex(slot, args)
+        rescue => e
+          Rubevy.log "#{bot.name}: reflex #{event}: #{e.class}: #{e.message}"
+        ensure
+          Rubevy.ask("reflex", :end)
+        end
+      end
+    end
+    # the new task is ready but cannot run before this one yields, so it is safe to hand it the
+    # entity here rather than inside it
+    task.instance_variable_set(:@rubevy_entity, entity)
+    tasks << task
+  end
+  Rubevy.ask("reflex", :ready, klass.reflexes.size)
+  tasks
 end
