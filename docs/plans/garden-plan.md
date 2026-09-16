@@ -20,7 +20,7 @@
 
 | 段階 | 内容 | 状態 |
 |---|---|---|
-| G0 | 世界（Rust だけ）: 草が生え、生き物が `Velocity` で動き、腹が減り、草を食べ、死に、昼夜が回る。headless + selftest | 未着手 |
+| G0 | 世界（Rust だけ）: 草が生え、生き物が `Velocity` で動き、腹が減り、草を食べ、死に、昼夜が回る。headless + selftest | 済み（`2ece3a6` + 当たり判定） |
 | G0a | 軽いフリーの 3D アセットに置き換え（下記「アセット」。G0 は基本形状で始めてよい） | 未着手 |
 | G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 未着手 |
 | G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 未着手 |
@@ -57,6 +57,36 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
   押し戻されたフレームに `publish(Some(creature), "bumped", …)`（相手のエンティティ）を出し、G1 で `reflex(:bumped)` が向きを変える材料にする。
   selftest: 「90 秒間、生き物どうし・生き物と木の中心距離が半径の和の 90% を下回るフレームが無い」。
 * `--headless N` と `SABIBOTS_SELFTEST` に当たる `GARDEN_SELFTEST`: 「10 秒以内に誰かが食べる」「60 秒で夜が来る」「餓死したエンティティが消える」「すり抜けが無い」。
+
+**実装で分かったこと**（`docs/worklog/2026-09-17-garden-G0.md`、成果は `docs/garden.md`、画は `docs/garden.png`）:
+
+* **3D の代金は features 3 つ。** `bevy_pbr` だけでは足りない。`Camera3d` の既定のトーンマッパーは曲線を KTX2 のテーブルから読むので
+  `tonemapping_luts` が要り、それは `bevy_image/zstd` を要求するが、その `zstd` は**中身の無いマーカー feature**で、実装は
+  `zstd_c`（C）か `zstd_rust`（ruzstd）を別に選ぶ形（`bevy_image-0.19.1/Cargo.toml:63`）。G5 のブラウザ版を考えて `zstd_rust` にした。
+  workspace の `bevy` は 1 つなので sabibots もビルド時間だけ払う。bevy 0.19 では `DirectionalLight` のフィールドは `shadows_enabled` ではなく
+  `shadow_maps_enabled`、`AmbientLight` はカメラに付けるコンポーネントで、既定値の方が `GlobalAmbientLight` というリソース。
+* **headless で 3D はそのまま走る。** sabibots の `.init_asset::<Image>()` に当たるものとして `init_asset::<Mesh>()` と
+  `init_asset::<StandardMaterial>()` を足すだけで、レンダラ抜きで同じ startup が通る。**窓と headless で世界の作り方が完全に同じ**になった。
+  render 側が入れる `GlobalAmbientLight` と `ClearColor` だけが headless に無いので、そこは `Option<ResMut<_>>`。
+* **登録しないことがアクセス制御。** 仮の脳 `Wander`、`Sun`、selftest 用の `Fasting` は `Reflect` を derive せず `register_type` もしない。
+  rubevy の `docs/host-api.md` の通り、登録されていない型は Ruby から `nil`・`has?` は `false`・`components` に出ない。
+  おかげで Ruby から見えるコンポーネントは計画書が挙げたものちょうど（`Plant`/`Tree`/`Rock`/`Collider`/`Creature`/`Hunger`/`Velocity`/`Sight`/`Memory` + `Transform`）になっている。
+* **`Transform` は自分で登録する。** `MinimalPlugins` は登録しない（同文書）。headless が確認の場なので `app.register_type::<Transform>()` を書いた。
+* **メッシュは子エンティティに置いた。** 親の `Transform` を「位置・向き・大きさ」だけにしておくと、甲虫のカプセルを寝かせる 90 度回転のような
+  見た目の都合が Ruby の読むものに混ざらない。G0a の `.glb` 差し替えでコンポーネントが 1 つも変わらない形でもある。
+* **selftest の 3 つ目は運任せにしない。** 「餓死したエンティティが消える」は、仮の脳がランダムに歩く以上たまたま起きないことがある。
+  `GARDEN_SELFTEST=1` のときだけ、隅に空腹 3.0 の Beetle を 1 匹、**`Wander` を付けずに**置いた（動かすのは `Wander` だけなので動かない）。
+  世界の規則には手を入れていない。90 秒の実測では、これとは別に「運の悪い Beetle」が自然に餓死している回もあった。
+* **当たり判定（途中で増えた要求、`2299365`）**: `Collider { radius }` を Reflect 登録して生き物・木 7・岩 9 に付け、移動の後に
+  1.6 単位のマスの格子で近傍を拾って円を押し戻す（生き物どうし半分ずつ、木・岩は不動、**1 フレーム 4 パス**）。
+  草に `Collider` を付けないことが「食えるもの／避けるもの」の定義になった。
+  4 つ目の selftest は 3 回の 90 秒走行で最接近 0.974 / 0.998 / 1.000（半径の和に対する比）、0.9 を下回ったフレームは 0。
+  **岩どうしは押し戻さない**ので、木と岩は初期配置の側で 1.5 以上離している（規則が直せないものは配置で作らない）。
+* **決めなかったこと 2 つ（著者の確認待ち）。**
+  1. `Hunger` の向き。計画書の規則の欄は「食べたら `Hunger` が減り」だが、`Hunger(f32)`（0 で餓死）と G1 の
+     `if me[:Hunger] < 30 → 草を探す` とは逆。後者 2 つに合わせて**満腹度（0 が死、食べると増える）**として実装した。
+  2. `"bumped"` の頻度。計画書は「押し戻されたフレームに publish」。字義通りだと木に寄りかかった 1.5 秒で ≒90 回出て、
+     rubevy のキュー（64、古いものから落ちる）が 1 つの出来事で埋まる。`"touched"` と同じく**接触が始まったフレームだけ**にした。戻すのは 1 行。
 
 ## アセット（G0a）
 

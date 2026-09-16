@@ -763,6 +763,7 @@ dependencies = [
  "bevy_material",
  "bevy_math",
  "bevy_mesh",
+ "bevy_pbr",
  "bevy_reflect",
  "bevy_render",
  "bevy_shader",
@@ -793,6 +794,7 @@ dependencies = [
  "guillotiere 0.6.2",
  "half",
  "image",
+ "ktx2",
  "rectangle-pack",
  "ruzstd",
  "serde",
@@ -858,6 +860,7 @@ dependencies = [
  "bevy_image",
  "bevy_input",
  "bevy_input_focus",
+ "bevy_light",
  "bevy_log",
  "bevy_material",
  "bevy_math",
@@ -1109,7 +1112,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2231,7 +2234,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2449,6 +2452,18 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "garden"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "js-sys",
+ "rubevy",
+ "sabiruby-compiler",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -3021,6 +3036,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ktx2"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d50be8a24c37debdf3170be6ca396d5b5b165f37f94837891adac735ca416b8"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3314,7 +3338,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4113,7 +4137,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4149,7 +4173,7 @@ dependencies = [
 [[package]]
 name = "sabiruby"
 version = "0.4.0"
-source = "git+https://github.com/sabiruby/sabiruby#564434ee5dd068e2242fab618026f25a010540fb"
+source = "git+https://github.com/sabiruby/sabiruby#1c747bfe811ae6c14f7dcc3e25b280240019f081"
 dependencies = [
  "hashbrown 0.15.5",
  "libm",
@@ -4159,7 +4183,7 @@ dependencies = [
 [[package]]
 name = "sabiruby-compiler"
 version = "0.2.1"
-source = "git+https://github.com/sabiruby/sabiruby#564434ee5dd068e2242fab618026f25a010540fb"
+source = "git+https://github.com/sabiruby/sabiruby#1c747bfe811ae6c14f7dcc3e25b280240019f081"
 dependencies = [
  "cc",
  "sabiruby",
@@ -5033,7 +5057,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

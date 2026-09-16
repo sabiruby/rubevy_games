@@ -1,0 +1,25 @@
+[package]
+name = "garden"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Garden — a small 3D world whose creatures read and write their own ECS components from Ruby"
+
+[dependencies]
+bevy.workspace = true
+rubevy.workspace = true
+
+# The PC build: the Ruby compiler (C) is linked in, Bevy runs on threads and opens an X11 or
+# Wayland window.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sabiruby-compiler.workspace = true
+bevy = { workspace = true, features = ["multi_threaded", "x11"] }
+
+# The browser build (G5): Bevy draws with WebGL2 into a canvas, and Ruby is compiled by a second
+# wasm module (the playground's compiler) that the page loads beside the game.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { workspace = true, features = ["web", "webgl2"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Storage", "Document", "Location"] }
