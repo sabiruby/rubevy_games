@@ -323,9 +323,20 @@ impl Genome {
   「1 フレーム 3 匹ずつ」でも止まるので、フレームあたりではなく**短い間の総数**。
   時計で 0.4 秒に 1 匹に散らすと 12 匹でも平気だったので、ゲーム側は待ち行列で渡している
   （`window.rs` の `Restarting`）。sabibots が踏んでいないのは 4 体・反射 1 本だから。
+  * **2026-09-17 追記: VM が直ったので待ち行列は消した。** 原因は「古い context の解放が追いつかない」
+    ではなかった。`ScriptTask` を外すと反射タスクが `Rubevy::Unsubscribed` で起こされ、
+    中身のない `rescue` がブロックの値を `nil` にする。`Vm::task_run_limited` はその `nil` を
+    「ready が無い」と読んでホストの 1 フレームを丸ごと終わらせていた（反射 1 本＝1 フレーム、
+    甲虫 1 匹＝6 フレーム、10 匹＝60 フレーム）。sabiruby 0.5.1（`bd6829b`、
+    sabiruby `docs/worklog/2026-09-17-task-end-nil.md`）で 2 つが区別されるようになったので、
+    `Restarting` / `RESTARTS_PER_FRAME` / `RESTART_GAP` と `restart_queued` を削除し、
+    Apply は押されたフレームで種の全個体を入れ替える。lavapipe の窓で 1/4/9/10/12/全部 を
+    測り直して、どれも VM は進み続ける（表は `docs/garden.md`、記録は
+    `docs/worklog/2026-09-17-garden-vm-0.5.1.md`）。
 * **エディタの単位はゲームで違う。** sabibots はロボット 1 体＝1 ファイルなので Apply が 2 つ
   （この 1 体 / 同じファイル全員）。箱庭はファイル＝**種**なので 2 つは同じ集合で、Apply は 1 つ。
-  押すとその種が全部（0.4 秒に 1 匹ずつ）再起動し、**そのあと生まれる子にも配られる**（`Brains`）。
+  押すとその種が全部（同じフレームで。0.4 秒に 1 匹ずつ渡していたのは上の追記のとおり VM の
+  バグ回避で、いまは無い）再起動し、**そのあと生まれる子にも配られる**（`Brains`）。
   `rubevy-arena` に足したのは `Editor` の 4 フィールド（`apply_label` / `apply_all_label: Option`（None で描かない）/
   `apply_key: Option<KeyCode>`（箱庭の `F5` は保存で埋まっている）/ `noun`）だけで、sabibots の変更は 1 行。
 * **「1 判断のフレーム数」は定義が仕事。** タスクが止まる理由は「聞いた」か「寝た」かの 2 つだけ。

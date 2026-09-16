@@ -818,7 +818,6 @@ fn main() {
             .init_resource::<Orbit>()
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
-            .init_resource::<window::Restarting>()
             // open from the start, so a picture (`--shot`) has it without a key being pressed
             .insert_resource(VmInspector::following())
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
@@ -836,7 +835,6 @@ fn main() {
                     window::show_vm,
                     window::do_editor_actions,
                     window::reload_changed,
-                    window::restart_queued,
                 )
                     .chain()
                     .after(watch_minds),

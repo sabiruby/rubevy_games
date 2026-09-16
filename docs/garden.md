@@ -651,22 +651,35 @@ task, closes the queues it had subscribed to, and the reflex tasks parked on the
 old script made; the new script makes a new one. That is the honest behaviour — a brain that has
 been rewritten is not the brain that learnt those things — and it is the same in Battle.
 
-**They are handed over one at a time, and that is a limit of the VM.** A beetle is seven tasks (a
-brain and six reflexes) and six subscriptions; restarting it means terminating all seven and
-closing all six queues in one frame. Do that to nine beetles at once and everything is fine. Do it
-to **ten** and the VM's scheduler stops for good: `Vm::task_pending()` stays true, `task_run_limits`
-runs nothing, and *every* task in the VM freezes — the rabbits included, which nobody touched, and
-it never comes back. Measured in the window under lavapipe, three seconds after the Apply: nine
-restarts and the whole VM's instruction count has moved on by nine thousand; ten restarts and it
-has not moved at all. Three a frame does not help either, so it is not "how many in one frame" —
-it is how many *within a short while*, which reads like the old contexts not being let go of fast
-enough (`docs/worklog/2026-09-17-garden-G4.md`; it is a VM matter, not the game's, and is reported
-rather than worked around in the VM).
+**Every beetle is handed over in the frame Apply was pressed**, and for one release of the VM it
+could not be. A beetle is seven tasks (a brain and six reflexes) and six subscriptions; restarting
+it means terminating all seven and closing all six queues at once. G4 measured that nine beetles
+at a time were fine and **ten** stopped the VM's scheduler for good — `Vm::task_pending()` stayed
+true, `task_run_limits` ran nothing, and every task in the VM froze, the rabbits included, which
+nobody had touched. The game got round it with a queue that handed one creature over every 0.4 s
+(`RESTARTS_PER_FRAME`, `RESTART_GAP`), and reported the rest as a VM matter.
 
-So the game hands them over on a clock: one creature every 0.4 s (`RESTARTS_PER_FRAME`,
-`RESTART_GAP`). A garden of a dozen beetles takes about five seconds to come round to the new
-brain, one after another — which is visible, and honest about what it is. When the VM can take
-them all at once, the queue in `window.rs` is what goes.
+It was one, and the reading in this document was wrong: nothing was slow to be let go of. Ending a
+`ScriptTask` wakes each of the creature's reflex tasks with `Rubevy::Unsubscribed`, their empty
+`rescue` makes the block's value `nil`, and `Vm::task_run_limited` could not tell *that* `nil` from
+"the scheduler has nothing ready" — so it ended the host's whole frame. One frame per reflex task,
+six per beetle, sixty for ten of them: at 30 fps, two seconds of a VM that looks stopped. sabiruby
+0.5.1 tells the two apart (sabiruby `docs/worklog/2026-09-17-task-end-nil.md`), and with it the
+queue is gone. Measured again in the window under lavapipe, with the same instrument — the whole
+VM's instruction count 0.6 s after the Apply and again three seconds later:
+
+| beetles replaced at once | instructions 0.6 s after Apply | 3.6 s after | moved by |
+|---|---|---|---|
+| 1 of 13 | 242,913 | 248,619 | +5,706 |
+| 4 of 10 | 174,569 | 179,731 | +5,162 |
+| 9 of 11 | 112,371 | 118,692 | +6,321 |
+| 10 of 10 | 87,777 | 93,941 | +6,164 |
+| 12 of 12 | 91,039 | 98,871 | +7,832 |
+| all (11 of 11) | 96,086 | 103,681 | +7,595 |
+
+Ten is no longer a cliff, and there is no cliff anywhere else either. (The count differs per row
+because the garden breeds and starves while the check is getting to the Apply; the instruction
+total falls at the Apply itself because a restarted task counts from zero again.)
 
 Saving `garden/ruby/creatures/beetle.rb` from any other editor does what Save does, through
 `rubevy-arena`'s directory watcher; a species running an applied text is left alone until it is

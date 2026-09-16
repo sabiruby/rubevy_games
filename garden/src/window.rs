@@ -234,13 +234,13 @@ pub fn show_code(
 /// What the editor's buttons asked for. Nothing here writes a file except Save.
 #[allow(clippy::too_many_arguments)]
 pub fn do_editor_actions(
+    mut commands: Commands,
     mut editor: ResMut<Editor>,
     watched: Res<Watched>,
     ruby: Res<RubyDir>,
     mut brains: ResMut<Brains>,
-    mut queue: ResMut<Restarting>,
     mut mrb: ResMut<Assets<MrbAsset>>,
-    minds: Query<(Entity, &Mind)>,
+    mut minds: Query<(Entity, &mut Mind)>,
 ) {
     let Some(action) = editor.action.take() else { return };
     let Some(shown) = watched.entity else { return };
@@ -258,7 +258,7 @@ pub fn do_editor_actions(
                 return;
             };
             brains.set(species, Some(text));
-            let n = restart_species(&mut queue, &minds, species, handle, lines, true);
+            let n = restart_species(&mut commands, &mut minds, species, handle, lines, true);
             editor.applied(format!(
                 "{n} {}s restarted on it — in memory, and so is anything born into it. Save to keep it.",
                 species.name()
@@ -275,7 +275,7 @@ pub fn do_editor_actions(
                 editor.message = format!("saved {}, but it would not compile", species.file());
                 return;
             };
-            restart_species(&mut queue, &minds, species, handle, lines, false);
+            restart_species(&mut commands, &mut minds, species, handle, lines, false);
             editor.applied(format!("saved to {}", species.file()));
         }
         EditorAction::Revert => {
@@ -288,50 +288,14 @@ pub fn do_editor_actions(
                 return;
             };
             brains.set(species, None);
-            restart_species(&mut queue, &minds, species, handle, lines, false);
+            restart_species(&mut commands, &mut minds, species, handle, lines, false);
             editor.reset_to(source, format!("back to {}", species.file()));
         }
     }
 }
 
-/// How many creatures may be started over in one frame.
-///
-/// **This is a limit of the VM's scheduler, measured here.** Starting a creature over means
-/// dropping its `ScriptTask`, and rubevy answers that by terminating the task and *closing the
-/// four to six queues it had subscribed to*, which wakes the reflex tasks parked on them so that
-/// they unwind and end. A beetle is seven tasks. Do that to nine beetles in one frame and
-/// everything is fine; do it to **ten**, and the VM's scheduler stops for good —
-/// `Vm::task_pending()` stays true, `task_run_limits` runs nothing, and *every* task in the VM
-/// freezes, the rabbits included, which nobody touched. Measured in the window under lavapipe,
-/// three seconds after the Apply: nine restarts and the instruction count has moved on by nine
-/// thousand; ten restarts and it has not moved at all, then or ever
-/// (`docs/worklog/2026-09-17-garden-G4.md`).
-///
-/// **And it is not "how many in one frame".** Three a frame, over four frames, wedges it just the
-/// same. What works is a *clock*: one creature every 0.4 s, which took a dozen beetles over to a
-/// new brain with the VM none the worse — so what the old tasks need is time, not frames, which
-/// reads like their contexts not being let go of fast enough.
-///
-/// So the game hands them over on a clock. A garden of a dozen beetles takes about five seconds
-/// to come round to the new brain, one after another, which is visible and honest about what it
-/// is; the day the VM can take them all at once, these two numbers and the queue below are what
-/// goes.
-const RESTARTS_PER_FRAME: usize = 1;
-/// and how long it waits between them
-const RESTART_GAP: f32 = 0.4;
-
-/// Creatures waiting to be started over on a freshly compiled program (Apply, Revert, a file
-/// saved from outside), and the program they are waiting for.
-#[derive(Resource, Default)]
-pub struct Restarting {
-    next_at: f32,
-    waiting: Vec<Entity>,
-    program: Option<Handle<MrbAsset>>,
-    prelude_lines: u32,
-    in_memory: bool,
-}
-
-/// Every creature of one species, lined up to be started over.
+/// Every creature of one species, started over on a freshly compiled program — all of them, in
+/// this frame.
 ///
 /// Dropping `ScriptTask` is what stops the old script: rubevy terminates the task, closes the
 /// queues it had subscribed to and ends the reflex tasks waiting on them (`stop_removed_task`).
@@ -339,47 +303,33 @@ pub struct Restarting {
 /// back is what the creature remembered**: `@memory` is a Hash on the object the old script made,
 /// and the new script makes a new one. That is the same in sabibots and it is the honest
 /// behaviour — a brain that has been rewritten is not the brain that learnt those things.
+///
+/// **This used to be a queue.** Until sabiruby 0.5.1 the game handed the creatures over one at a
+/// time, one every 0.4 s (`Restarting`, `RESTARTS_PER_FRAME`, `RESTART_GAP`), because replacing
+/// ten of them at once stopped the VM's scheduler for good: `Vm::task_pending()` stayed true,
+/// `task_run_limits` ran nothing, and every task in the VM froze, the rabbits included
+/// (`docs/worklog/2026-09-17-garden-G4.md` §5a). The cause was not the contexts being slow to go,
+/// as it looked from here: ending a `ScriptTask` wakes each of the creature's six reflex tasks
+/// with `Rubevy::Unsubscribed`, their empty `rescue` makes the block's value `nil`, and
+/// `Vm::task_run_limited` read that `nil` as "nothing left to run" and ended the host's whole
+/// frame — one frame per task, so sixty frames for ten beetles
+/// (sabiruby `docs/worklog/2026-09-17-task-end-nil.md`). 0.5.1 tells the two apart, and the queue
+/// went with it: every creature of the species is handed over here, in the frame Apply was pressed.
 fn restart_species(
-    queue: &mut Restarting,
-    minds: &Query<(Entity, &Mind)>,
+    commands: &mut Commands,
+    minds: &mut Query<(Entity, &mut Mind)>,
     species: Species,
     handle: Handle<MrbAsset>,
     prelude_lines: u32,
     in_memory: bool,
 ) -> usize {
-    queue.waiting = minds.iter().filter(|(_, m)| m.species == species).map(|(e, _)| e).collect();
-    queue.program = Some(handle);
-    queue.prelude_lines = prelude_lines;
-    queue.in_memory = in_memory;
-    queue.waiting.len()
-}
-
-/// [`RESTARTS_PER_FRAME`] of them every [`RESTART_GAP`] seconds, until the queue is empty.
-pub fn restart_queued(
-    time: Res<Time>,
-    mut queue: ResMut<Restarting>,
-    mut commands: Commands,
-    mut minds: Query<&mut Mind>,
-) {
-    if queue.waiting.is_empty() {
-        return;
-    }
-    let now = time.elapsed_secs();
-    if now < queue.next_at {
-        return;
-    }
-    queue.next_at = now + RESTART_GAP;
-    let Some(handle) = queue.program.clone() else {
-        queue.waiting.clear();
-        return;
-    };
-    let (lines, in_memory) = (queue.prelude_lines, queue.in_memory);
-    let take = RESTARTS_PER_FRAME.min(queue.waiting.len());
-    let now: Vec<Entity> = queue.waiting.drain(..take).collect();
-    for entity in now {
-        let Ok(mut mind) = minds.get_mut(entity) else { continue };
+    let mut n = 0;
+    for (entity, mut mind) in minds.iter_mut() {
+        if mind.species != species {
+            continue;
+        }
         mind.in_memory = in_memory;
-        mind.prelude_lines = lines;
+        mind.prelude_lines = prelude_lines;
         // everything the HUD says about this creature is about the script it is running, and
         // that is about to be a different one: the heat, the line, what it has spent, and what a
         // round trip has cost it all start again with the new brain
@@ -395,20 +345,19 @@ pub fn restart_queued(
             .remove::<ScriptTask>()
             .remove::<rubevy::ScriptDone>()
             .insert(Script::new(handle.clone()).with_name(&mind.name).with_priority(100));
+        n += 1;
     }
-    if queue.waiting.is_empty() {
-        queue.program = None;
-    }
+    n
 }
 
 /// A creature file saved from outside the game restarts that species, exactly as Save does.
 pub fn reload_changed(
+    mut commands: Commands,
     watch: Option<Res<Watch>>,
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
-    mut queue: ResMut<Restarting>,
     mut mrb: ResMut<Assets<MrbAsset>>,
-    minds: Query<(Entity, &Mind)>,
+    mut minds: Query<(Entity, &mut Mind)>,
     mut editor: ResMut<Editor>,
 ) {
     let Some(watch) = watch else { return };
@@ -432,7 +381,7 @@ pub fn reload_changed(
             {
                 editor.reset_to(source, "the file changed");
             }
-            let n = restart_species(&mut queue, &minds, species, handle, lines, false);
+            let n = restart_species(&mut commands, &mut minds, species, handle, lines, false);
             info!("{} changed: {n} restarted", species.file());
         }
     }
@@ -748,8 +697,6 @@ pub struct WindowTest {
     insn: u64,
     /// ticks until the earliest sleeper is due, sampled on the first frame of the pause
     wake: Option<u32>,
-    /// how long a step that polls will wait before it gives up and checks anyway
-    deadline: f32,
 }
 
 impl WindowTest {
@@ -770,7 +717,6 @@ pub fn window_selftest(
     brains: Res<Brains>,
     panel: Res<VmInspector>,
     world: Res<ScriptWorld>,
-    queue: Res<Restarting>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     minds: Query<(Entity, &Mind, Option<&ScriptTask>)>,
     tasks: Query<&ScriptTask>,
@@ -859,21 +805,13 @@ pub fn window_selftest(
             ok(editor.changed(), "typing marks the text edited");
             test.insn = spent();
             editor.action = Some(EditorAction::Apply);
+            // Every beetle is handed over in the frame `do_editor_actions` runs — there is no
+            // queue any more (see `restart_species`) — so this is a breath for the new tasks to
+            // be made and to run their first instructions, not a wait for a queue to drain.
             test.step = 7;
-            test.at = now + 0.5;
-            test.deadline = now + 20.0;
-        }
-        7 => {
-            // the creatures are handed over one at a time (`RESTART_GAP`), so this waits for the
-            // queue rather than for a clock — and then for a breath, so that the last one handed
-            // over has had a frame to run
-            if !queue.waiting.is_empty() && now < test.deadline {
-                return;
-            }
-            test.step = 8;
             test.at = now + 0.6;
         }
-        8 => {
+        7 => {
             let on_disk = platform::read(&brains.path(&ruby.0, Species::Beetle)).unwrap_or_default();
             let every = beetles().count();
             let applied = beetles().filter(|(_, m, _)| m.in_memory).count();
@@ -892,21 +830,17 @@ pub fn window_selftest(
                 "every restarted beetle's new task has run",
             );
             test.insn = spent();
-            test.step = 9;
+            test.step = 8;
             test.at = now + 9.0;
         }
-        9 => {
+        8 => {
             // the VM did not stop: every task, restarted or not, is still being given the CPU
             ok(spent() > test.insn, "the whole VM is still running afterwards");
             editor.action = Some(EditorAction::Revert);
-            test.step = 10;
-            test.at = now + 0.5;
-            test.deadline = now + 20.0;
+            test.step = 9;
+            test.at = now + 0.6;
         }
-        10 => {
-            if !queue.waiting.is_empty() && now < test.deadline {
-                return;
-            }
+        9 => {
             ok(
                 beetles().count() > 0 && beetles().all(|(_, m, _)| !m.in_memory),
                 "Revert puts every beetle back on the file",
@@ -931,7 +865,7 @@ pub fn window_selftest(
                 );
             }
             exit.write(AppExit::Success);
-            test.step = 11;
+            test.step = 10;
         }
         _ => {}
     }
