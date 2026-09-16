@@ -66,6 +66,21 @@ const FOOD_VALUE: f32 = 60.0;
 const REACH: f32 = 1.1;
 const TOUCH_REACH: f32 = 1.3;
 
+/// Solid things. Circles on XZ, pushed apart after the move; no physics crate, because the rule
+/// is three lines and a physics crate is a megabyte of wasm and a second vocabulary.
+const BEETLE_RADIUS: f32 = 0.40;
+const RABBIT_RADIUS: f32 = 0.50;
+const TREE_RADIUS: f32 = 0.70;
+const ROCK_RADIUS: f32 = 0.60;
+const TREES: usize = 7;
+const ROCKS: usize = 9;
+/// the side of one cell of the neighbour grid: at least twice the largest radius, so two circles
+/// that touch are always in the same cell or in neighbouring ones
+const CELL: f32 = 1.6;
+/// how many times the push is repeated in a frame. One pass settles a pair; a huddle of three or
+/// four wants a few, and four is enough that nothing is ever seen overlapping.
+const SEPARATE_PASSES: usize = 4;
+
 // ---------------------------------------------------------------------------------------------
 // The components. This block is the Ruby API of the game, and the only reason it is an API is
 // the two derives and the `register_type` calls in `main`.
@@ -142,6 +157,24 @@ pub struct Sight(pub f32);
 #[reflect(Component)]
 pub struct Memory;
 
+/// How much room a solid thing takes on the ground: a circle on XZ. Creatures, trees and rocks
+/// have one; grass does not, because walking into grass is how it is eaten.
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[reflect(Component)]
+pub struct Collider {
+    pub radius: f32,
+}
+
+/// A tree. Not `Plant`: it is not food, it is something to walk round.
+#[derive(Component, Reflect, Debug, Clone, Copy, Default)]
+#[reflect(Component)]
+pub struct Tree;
+
+/// A rock. The same, lower down.
+#[derive(Component, Reflect, Debug, Clone, Copy, Default)]
+#[reflect(Component)]
+pub struct Rock;
+
 // ---------------------------------------------------------------------------------------------
 // Components Ruby is **not** meant to see: no `Reflect`, no `register_type`. Keeping them out of
 // the registry is the whole of the access control there is, and it is enough.
@@ -200,6 +233,16 @@ struct Sky {
 #[derive(Resource, Default)]
 struct Contacts(Vec<(Entity, Entity)>);
 
+/// The same for `"bumped"`: which pairs the separation pass was pushing apart last frame. The key
+/// is the two entities' bits, smaller first, so it does not depend on the order the query happened
+/// to walk them in.
+#[derive(Resource, Default)]
+struct Bumps(Vec<(u64, u64)>);
+
+fn pair_key(a: Entity, b: Entity) -> (u64, u64) {
+    if a.to_bits() <= b.to_bits() { (a.to_bits(), b.to_bits()) } else { (b.to_bits(), a.to_bits()) }
+}
+
 /// The meshes and materials, made once. Plants come up while the world runs, so the handles have
 /// to outlive `Startup`.
 #[derive(Resource)]
@@ -209,9 +252,15 @@ struct Look {
     beetle: Handle<Mesh>,
     rabbit_body: Handle<Mesh>,
     rabbit_ear: Handle<Mesh>,
+    trunk: Handle<Mesh>,
+    canopy: Handle<Mesh>,
+    boulder: Handle<Mesh>,
     leaf: Handle<StandardMaterial>,
     shell: Handle<StandardMaterial>,
     fur: Handle<StandardMaterial>,
+    bark: Handle<StandardMaterial>,
+    needle: Handle<StandardMaterial>,
+    stone: Handle<StandardMaterial>,
 }
 
 /// `--headless N`: how long the world may run.
@@ -242,8 +291,8 @@ impl Default for Orbit {
     }
 }
 
-/// `GARDEN_SELFTEST=1`: the three things the plan asks the world to prove about itself.
-#[derive(Resource, Default)]
+/// `GARDEN_SELFTEST=1`: the four things the plan asks the world to prove about itself.
+#[derive(Resource)]
 struct SelfTest {
     /// when somebody first ate
     ate_at: Option<f32>,
@@ -251,6 +300,19 @@ struct SelfTest {
     night_at: Option<f32>,
     /// the creature that starved, and when
     starved: Option<(Entity, f32)>,
+    /// the closest two colliders ever came, as a fraction of the sum of their radii: 1.0 is
+    /// touching, below 0.9 is the check failing
+    closest: f32,
+    /// how many frames had a pair below 0.9, and how many frames were looked at
+    overlaps: u32,
+    frames: u32,
+}
+
+impl Default for SelfTest {
+    fn default() -> Self {
+        // `closest` is a minimum, so it starts where nothing can be worse
+        SelfTest { ate_at: None, night_at: None, starved: None, closest: f32::INFINITY, overlaps: 0, frames: 0 }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -327,11 +389,15 @@ fn main() {
         .register_type::<Hunger>()
         .register_type::<Velocity>()
         .register_type::<Sight>()
-        .register_type::<Memory>();
+        .register_type::<Memory>()
+        .register_type::<Collider>()
+        .register_type::<Tree>()
+        .register_type::<Rock>();
 
     app.insert_resource(Dice(platform::clock_seed()))
         .init_resource::<Sky>()
         .init_resource::<Contacts>()
+        .init_resource::<Bumps>()
         .add_systems(Startup, (make_look, spawn_world).chain())
         .add_systems(
             Update,
@@ -339,6 +405,7 @@ fn main() {
                 day_night,
                 wander,        // G0 only; G1's Ruby writes `Velocity` instead
                 move_creatures,
+                separate,
                 grow_plants,
                 sprout_plants,
                 get_hungry,
@@ -349,7 +416,8 @@ fn main() {
                 .chain(),
         );
     if selftest {
-        app.init_resource::<SelfTest>();
+        // after `separate`, so what it measures is the world as the frame leaves it
+        app.init_resource::<SelfTest>().add_systems(Update, watch_overlap.after(separate));
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
@@ -372,6 +440,9 @@ fn make_look(
         beetle: meshes.add(Capsule3d::new(0.32, 0.55)),
         rabbit_body: meshes.add(Cuboid::new(0.55, 0.5, 0.85)),
         rabbit_ear: meshes.add(Cuboid::new(0.1, 0.45, 0.08)),
+        trunk: meshes.add(Cylinder::new(0.18, 2.0)),
+        canopy: meshes.add(Cone { radius: 1.0, height: 2.4 }),
+        boulder: meshes.add(Sphere::new(ROCK_RADIUS)),
         leaf: materials.add(StandardMaterial {
             base_color: Color::srgb(0.30, 0.62, 0.22),
             perceptual_roughness: 0.9,
@@ -386,6 +457,21 @@ fn make_look(
         fur: materials.add(StandardMaterial {
             base_color: Color::srgb(0.88, 0.84, 0.78),
             perceptual_roughness: 0.95,
+            ..default()
+        }),
+        bark: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.35, 0.24, 0.16),
+            perceptual_roughness: 1.0,
+            ..default()
+        }),
+        needle: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.13, 0.33, 0.16),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
+        stone: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.52, 0.52, 0.55),
+            perceptual_roughness: 0.8,
             ..default()
         }),
     });
@@ -431,10 +517,42 @@ fn spawn_world(
     let fasting_at = Vec2::new(-HALF_W + 3.0, -HALF_D + 3.0);
     let keep_clear = selftest.is_some();
 
+    // trees and rocks first: they never move, so everything else is placed around them. They are
+    // kept apart from each other at the start, because the separation pass moves creatures only
+    // and two rocks left inside one another would overlap for the whole run.
+    let mut solid: Vec<(Vec2, f32)> = Vec::new();
+    for i in 0..(TREES + ROCKS) {
+        let tree = i < TREES;
+        let radius = if tree { TREE_RADIUS } else { ROCK_RADIUS };
+        let mut at = Vec2::ZERO;
+        let mut room = false;
+        for _ in 0..40 {
+            at = Vec2::new(dice.between(-HALF_W + 2.0, HALF_W - 2.0), dice.between(-HALF_D + 2.0, HALF_D - 2.0));
+            let clear_of_fasting = !keep_clear || at.distance(fasting_at) > 6.0;
+            if clear_of_fasting && solid.iter().all(|(p, r)| p.distance(at) > r + radius + 1.5) {
+                room = true;
+                break;
+            }
+        }
+        if !room {
+            continue;
+        }
+        if tree {
+            spawn_tree(&mut commands, &look, at);
+        } else {
+            spawn_rock(&mut commands, &look, at, dice.between(0.8, 1.25));
+        }
+        solid.push((at, radius));
+    }
+
     let mut grass: Vec<Vec2> = Vec::new();
     for _ in 0..PLANTS_AT_START {
         let at = Vec2::new(dice.between(-HALF_W + 1.0, HALF_W - 1.0), dice.between(-HALF_D + 1.0, HALF_D - 1.0));
         if keep_clear && at.distance(fasting_at) < 6.0 {
+            continue;
+        }
+        // grass under a tree cannot be reached, so it is not put there
+        if solid.iter().any(|(p, r)| p.distance(at) < r + 1.2) {
             continue;
         }
         let size = dice.between(0.3, PLANT_MAX);
@@ -443,19 +561,27 @@ fn spawn_world(
         grass.push(at);
     }
 
+    let mut taken: Vec<Vec2> = Vec::new();
     for i in 0..(BEETLES + RABBITS) {
         let species = if i < BEETLES { Species::Beetle } else { Species::Rabbit };
         // not standing on its dinner: a creature that starts inside a plant has eaten before it
         // has moved, and then "somebody ate within 10 s" says nothing about walking or about the
         // contact test. The positions are kept in hand because the plants above are still
         // commands and are not in the world to be queried yet.
+        let radius = radius_of(species);
         let mut at = Vec2::ZERO;
-        for _ in 0..24 {
+        for _ in 0..40 {
             at = Vec2::new(dice.between(-HALF_W + 2.0, HALF_W - 2.0), dice.between(-HALF_D + 2.0, HALF_D - 2.0));
-            if grass.iter().all(|g| g.distance(at) > 2.5) {
+            let clear_of_grass = grass.iter().all(|g| g.distance(at) > 2.5);
+            // nothing starts inside anything: the separation pass would otherwise have a pileup
+            // to undo on the first frame, and the overlap check looks at that frame too
+            let clear_of_solid = solid.iter().all(|(p, r)| p.distance(at) > r + radius + 0.6);
+            let clear_of_kin = taken.iter().all(|p: &Vec2| p.distance(at) > 2.0);
+            if clear_of_grass && clear_of_solid && clear_of_kin {
                 break;
             }
         }
+        taken.push(at);
         let hunger = dice.between(45.0, 90.0);
         let entity = spawn_creature(&mut commands, &look, species, at, hunger);
         commands.entity(entity).insert(Wander { until: dice.between(0.3, 1.4) });
@@ -483,15 +609,66 @@ fn spawn_plant(commands: &mut Commands, look: &Look, at: Vec2, size: f32, round:
         });
 }
 
+/// A tree: a trunk and a cone of needles, and a `Collider` that does not move. `Tree`, not
+/// `Plant` — walking into grass is eating, walking into a tree is not.
+fn spawn_tree(commands: &mut Commands, look: &Look, at: Vec2) {
+    commands
+        .spawn((
+            Tree,
+            Collider { radius: TREE_RADIUS },
+            Transform::from_xyz(at.x, 0.0, at.y),
+            Visibility::default(),
+        ))
+        .with_children(|tree| {
+            tree.spawn((
+                Mesh3d(look.trunk.clone()),
+                MeshMaterial3d(look.bark.clone()),
+                Transform::from_xyz(0.0, 1.0, 0.0),
+            ));
+            tree.spawn((
+                Mesh3d(look.canopy.clone()),
+                MeshMaterial3d(look.needle.clone()),
+                Transform::from_xyz(0.0, 3.0, 0.0),
+            ));
+        });
+}
+
+/// A rock: a squashed sphere, and the same immovable circle.
+fn spawn_rock(commands: &mut Commands, look: &Look, at: Vec2, squash: f32) {
+    commands
+        .spawn((
+            Rock,
+            Collider { radius: ROCK_RADIUS },
+            Transform::from_xyz(at.x, 0.0, at.y),
+            Visibility::default(),
+        ))
+        .with_children(|rock| {
+            rock.spawn((
+                Mesh3d(look.boulder.clone()),
+                MeshMaterial3d(look.stone.clone()),
+                Transform::from_xyz(0.0, ROCK_RADIUS * 0.55, 0.0)
+                    .with_scale(Vec3::new(squash, 0.62, 1.0 / squash)),
+            ));
+        });
+}
+
 /// A creature: the same split. The entity's `Transform` is position and facing and nothing else,
 /// which is what a brain reads and writes; the shape is a child, and G0a swaps it for a `.glb`
 /// without a single component changing.
+fn radius_of(species: Species) -> f32 {
+    match species {
+        Species::Beetle => BEETLE_RADIUS,
+        Species::Rabbit => RABBIT_RADIUS,
+    }
+}
+
 fn spawn_creature(commands: &mut Commands, look: &Look, species: Species, at: Vec2, hunger: f32) -> Entity {
     let mut entity = commands.spawn((
         Creature { species, age: 0.0 },
         Hunger(hunger),
         Velocity(Vec2::ZERO),
         Sight(species.sight()),
+        Collider { radius: radius_of(species) },
         Memory,
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
@@ -685,6 +862,148 @@ fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocit
         transform.translation.z = z;
         if velocity.0.length_squared() > 0.04 {
             transform.rotation = Quat::from_rotation_y((-velocity.0.x).atan2(-velocity.0.y));
+        }
+    }
+}
+
+/// Nothing walks through anything solid. Circles on XZ, pushed apart until they only touch: two
+/// creatures give half each, a tree or a rock gives nothing. This is the whole of the physics in
+/// the game, and it is deliberately not a physics crate — avian or rapier would be a megabyte of
+/// wasm and a second vocabulary for a rule that fits on a screen.
+///
+/// Neighbours come from a grid of `CELL`-sided squares (`HashMap<(i32, i32), Vec<usize>>`), so the
+/// cost is the number of pairs that are actually near each other rather than n². At a dozen
+/// creatures it makes no difference; it is here because the world is meant to grow.
+///
+/// A pair that was not touching last frame and is now gets `"bumped"` published to the creature,
+/// with the other thing as a `Rubevy::Entity`.
+fn separate(
+    mut world: ResMut<ScriptWorld>,
+    mut bumps: ResMut<Bumps>,
+    mut movers: Query<(Entity, &Collider, &mut Transform), With<Creature>>,
+    fixed: Query<(Entity, &Collider, &Transform), Without<Creature>>,
+) {
+    // one list of everything solid: the movers first, so an index below `mover_count` is one
+    let mut at: Vec<Vec2> = Vec::new();
+    let mut radius: Vec<f32> = Vec::new();
+    let mut who: Vec<Entity> = Vec::new();
+    for (entity, collider, transform) in &movers {
+        at.push(Vec2::new(transform.translation.x, transform.translation.z));
+        radius.push(collider.radius);
+        who.push(entity);
+    }
+    let mover_count = at.len();
+    for (entity, collider, transform) in &fixed {
+        at.push(Vec2::new(transform.translation.x, transform.translation.z));
+        radius.push(collider.radius);
+        who.push(entity);
+    }
+    if at.len() < 2 {
+        return;
+    }
+
+    let mut touching: Vec<(Entity, Entity)> = Vec::new();
+    for pass in 0..SEPARATE_PASSES {
+        let mut grid: bevy::platform::collections::HashMap<(i32, i32), Vec<usize>> = default();
+        for (i, p) in at.iter().enumerate() {
+            grid.entry(((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)).or_default().push(i);
+        }
+        for i in 0..at.len() {
+            let cell = ((at[i].x / CELL).floor() as i32, (at[i].y / CELL).floor() as i32);
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(near) = grid.get(&(cell.0 + dx, cell.1 + dz)) else { continue };
+                    for &j in near {
+                        // each pair once, and two immovable things have nothing to settle
+                        if j <= i || (i >= mover_count && j >= mover_count) {
+                            continue;
+                        }
+                        let sum = radius[i] + radius[j];
+                        let gap = at[j] - at[i];
+                        let distance = gap.length();
+                        if distance >= sum {
+                            continue;
+                        }
+                        if pass == 0 {
+                            touching.push((who[i], who[j]));
+                        }
+                        // exactly on top of each other: any direction will do, and it must be the
+                        // same one every frame or the pair jitters
+                        let dir = if distance > 1e-4 {
+                            gap / distance
+                        } else {
+                            Vec2::new(1.0, 0.0)
+                        };
+                        let push = sum - distance;
+                        match (i < mover_count, j < mover_count) {
+                            (true, true) => {
+                                at[i] -= dir * push * 0.5;
+                                at[j] += dir * push * 0.5;
+                            }
+                            (true, false) => at[i] -= dir * push,
+                            (false, true) => at[j] += dir * push,
+                            (false, false) => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // back into the world, and back inside the walls: a push can put a creature through one
+    let mut i = 0;
+    for (_, _, mut transform) in &mut movers {
+        transform.translation.x = at[i].x.clamp(-HALF_W + 0.5, HALF_W - 0.5);
+        transform.translation.z = at[i].y.clamp(-HALF_D + 0.5, HALF_D - 0.5);
+        i += 1;
+    }
+
+    // `"bumped"` is published when a contact begins, not on every frame of it: a creature leaning
+    // on a tree is pushed a hundred times in the second and a half its heading lasts, and a
+    // hundred messages would only fill the queue (rubevy keeps 64 and drops the oldest) and fire
+    // G1's `reflex(:bumped)` over and over for one event. The plan says "the frame it is pushed";
+    // this is the first of them.
+    let mut now: Vec<(u64, u64)> = Vec::with_capacity(touching.len());
+    for (a, b) in &touching {
+        let key = pair_key(*a, *b);
+        now.push(key);
+        if bumps.0.contains(&key) {
+            continue;
+        }
+        // the creature is always the first of the pair, by how the list was built
+        world.publish(Some(*a), "bumped", Answer::Entity(*b));
+        if movers.get(*b).is_ok() {
+            world.publish(Some(*b), "bumped", Answer::Entity(*a));
+        }
+    }
+    bumps.0 = now;
+}
+
+/// `GARDEN_SELFTEST=1`: nothing ever gets inside anything. Run after `separate`, so what it sees
+/// is the world as the frame leaves it; a dozen creatures and sixteen obstacles is few enough to
+/// look at every pair, and a check that walks the same grid as the thing it is checking would be
+/// checking the grid against itself.
+fn watch_overlap(mut test: ResMut<SelfTest>, solids: Query<(&Collider, &Transform, Option<&Creature>)>) {
+    let all: Vec<(Vec2, f32, bool)> = solids
+        .iter()
+        .map(|(c, t, creature)| (Vec2::new(t.translation.x, t.translation.z), c.radius, creature.is_some()))
+        .collect();
+    let mut worst = f32::INFINITY;
+    for (i, (p, r, creature)) in all.iter().enumerate() {
+        for (q, s, other_creature) in all.iter().skip(i + 1) {
+            // the rule pushes creatures; two rocks are placed apart and are nobody's business
+            if !creature && !other_creature {
+                continue;
+            }
+            let ratio = p.distance(*q) / (r + s);
+            worst = worst.min(ratio);
+        }
+    }
+    test.frames += 1;
+    if worst < f32::INFINITY {
+        test.closest = test.closest.min(worst);
+        if worst < 0.9 {
+            test.overlaps += 1;
         }
     }
 }
@@ -887,6 +1206,13 @@ fn stop_when_over(
             ),
             None => ok(false, "a creature starved and its entity is gone (nobody starved)".into()),
         }
+        ok(
+            test.overlaps == 0 && test.frames > 0,
+            format!(
+                "nothing walked through anything over {} frames (closest pair {:.3} of the radii, {} frames under 0.9)",
+                test.frames, test.closest, test.overlaps
+            ),
+        );
     }
     exit.write(AppExit::Success);
 }

@@ -6,11 +6,11 @@ mentioned on the Ruby side. Here **the Ruby reads and writes the ECS components 
 name** — `me[:Hunger]`, `plant[:Transform][:translation]`, `me[:Velocity] = [vx, vz]` — and the
 game writes no glue for any of it.
 
-It is 3D: a plane of grass, creatures on it, one sun that goes round once a minute and casts the
-shadows. That is Bevy being Bevy; what it costs the Ruby side is two lines, and they are listed
+It is 3D: a plane of grass, creatures on it, trees and rocks they cannot walk through, and one sun
+that goes round once a minute and casts the shadows. That is Bevy being Bevy; what it costs the Ruby side is two lines, and they are listed
 below.
 
-![the garden at 22 seconds: evening, long shadows, grass, four rabbits and six beetles](garden.png)
+![the garden at 22 seconds: evening, long shadows, grass, trees, rocks, four rabbits and six beetles](garden.png)
 
 **This file describes stage G0** (`docs/plans/garden-plan.md`), which is the world without any
 script in it. G1 puts the minds in.
@@ -36,7 +36,7 @@ There is nothing else yet. The editor and the VM panel (`rubevy-arena`) arrive i
 
 ## The components
 
-This table is the Ruby API. Nothing else in `garden/src/main.rs` mentions Ruby except three
+This table is the Ruby API. Nothing else in `garden/src/main.rs` mentions Ruby except five
 `ScriptWorld::publish` calls, and there is no per-component code at all: rubevy walks Bevy's type
 registry, so **the whole of what it takes for a component to be readable from Ruby is
 `#[derive(Component, Reflect)]`, `#[reflect(Component)]` and `app.register_type::<T>()`**
@@ -44,7 +44,10 @@ registry, so **the whole of what it takes for a component to be readable from Ru
 
 | component | fields | as Ruby sees it | what the rules do with it |
 |---|---|---|---|
-| `Plant` | `size: f32` | `{size: 0.42}` | grows by 0.06/s up to 1.4, is eaten down, and the entity goes when there is nothing left |
+| `Plant` | `size: f32` | `{size: 0.42}` | grass: grows by 0.06/s up to 1.4, is eaten down, and the entity goes when there is nothing left. No `Collider` — walking into grass is how it is eaten |
+| `Tree` | — (unit) | `{}` | an obstacle, not food. Fixed, with a `Collider` |
+| `Rock` | — (unit) | `{}` | the same, lower down |
+| `Collider` | `radius: f32` | `{radius: 0.4}` | how much room a solid thing takes on the ground. Creatures, trees and rocks have one |
 | `Creature` | `species: Species`, `age: f32` | `{species: :Beetle, age: 12.5}` | `species` fixes the top speed and the sight radius (G2 moves that to `Genome`); `age` counts up |
 | `Hunger` | `f32` (tuple) | `[62.3]` | 100 is full, 0 is dead. Falls by 1.6/s, rises by eating |
 | `Velocity` | `Vec2` (tuple) | `[[1.2, -0.7]]` | integrated into `Transform` on XZ, clipped to the creature's top speed, stopped by the walls |
@@ -71,6 +74,7 @@ Every rule is a Rust system in `garden/src/main.rs`, in this order each frame:
 | `day_night` | turns the sun, recolours it, the ambient light and the sky | `"night"` / `"day"` to everyone, at the moment it flips |
 | `wander` | **the placeholder brain — G1 deletes it** | |
 | `move_creatures` | `Velocity` into `Transform` on XZ, top speed, walls, facing | |
+| `separate` | nothing walks through anything solid (below) | `"bumped"` to each creature pushed, with the other thing |
 | `grow_plants` | `Plant.size` up, and into `Transform.scale` | |
 | `sprout_plants` | a new plant now and then, up to 90, not on top of another | |
 | `get_hungry` | `Hunger` down, `age` up | |
@@ -86,6 +90,31 @@ script in G0; the path is here so G1 does not have to build it.
 
 `publish` to a name nobody has subscribed to does nothing at all, which is why the game may
 publish freely — and why all of the above is already wired up with no script in the world.
+
+## Solid things
+
+Creatures, trees and rocks do not pass through one another. There is no physics crate: avian or
+rapier would be a megabyte of wasm, a second vocabulary and a set of rules the reader cannot see.
+What there is instead is a circle on XZ per solid thing (`Collider { radius }`) and one system that
+runs after the move:
+
+* neighbours come out of a grid of 1.6-unit cells (`HashMap<(i32, i32), Vec<usize>>`), so the work
+  is the pairs that are actually near each other rather than every pair. At a dozen creatures that
+  is a wash; it is written that way because the world is meant to grow;
+* a pair whose centres are closer than the sum of their radii is pushed apart until they only
+  touch — **half each between two creatures, all of it on the creature when the other thing is a
+  tree or a rock**, which is what makes an obstacle an obstacle;
+* four passes a frame, because a huddle of three or four takes more than one;
+* and then the walls again, since a push can send a creature through one.
+
+Grass has no collider on purpose: walking into grass is eating it.
+
+**`"bumped"`** is published to a creature when a contact *begins*, with the other thing as a
+`Rubevy::Entity`, and it is the material for G1's `reflex(:bumped) { turn away }`. The plan says
+"on the frame it is pushed"; a creature leaning on a tree is pushed on every frame of the second
+and a half its heading lasts, and a hundred messages for one event would only fill the queue
+(rubevy keeps 64 and drops the oldest) and fire the reflex over and over. So it is the first of
+those frames, the way `"touched"` is.
 
 ## The placeholder brain
 
@@ -112,7 +141,8 @@ well.
 
 The meshes are Bevy's own primitives with a `StandardMaterial` and no assets at all: a `Plane3d`
 of 40 × 30 for the ground, a `Cone` or a `Sphere` for a plant, a `Capsule3d` lying down for a
-beetle, a `Cuboid` with two smaller ones for a rabbit's ears. Every one of them is a **child** of
+beetle, a `Cuboid` with two smaller ones for a rabbit's ears, a `Cylinder` and a `Cone` for a
+tree, a squashed `Sphere` for a rock. Every one of them is a **child** of
 the entity that carries the components, so the parent's `Transform` is position, facing and size
 and nothing else — which is what keeps the "lie the capsule down" rotation out of what Ruby reads,
 and is what lets G0a swap in a `.glb` without a single component changing.
@@ -132,30 +162,33 @@ sleep when it arrives, and the picture says so.
 
 `--headless N` runs exactly the same systems for N seconds with no renderer and prints every
 creature, the plant count and where in the day it stopped. `GARDEN_SELFTEST=1` adds the plan's
-three checks, printed as `selftest: ok` / `selftest: FAIL` lines the way sabibots does:
+four checks, printed as `selftest: ok` / `selftest: FAIL` lines the way sabibots does:
 
 1. **somebody ate within 10 s** — the world has to be dense enough, and the contact test has to work.
 2. **night arrived by 60 s** — the clock, and the publish on the flip.
 3. **the starved creature's entity is gone** — the despawn path.
+4. **nothing walked through anything** — over every frame of the run, no two colliders' centres
+   came closer than 90% of the sum of their radii, where at least one of the two is a creature.
 
 ```
 $ GARDEN_SELFTEST=1 ./target/release/garden --headless 90
 selftest: a beetle with nothing to eat stands at (-17.0, -12.0)
-selftest: first meal at 0.94 s
-Beetle 178v0 starved at 1.9 s (age 1.9 s)
+selftest: first meal at 1.04 s
+Beetle 198v0 starved at 1.9 s (age 1.9 s)
 night at 25.2 s
-Beetle 160v0 starved at 35.7 s (age 35.7 s)
+Beetle 174v0 starved at 52.9 s (age 52.9 s)
 day at 55.2 s
 night at 85.2 s
-Beetle  hunger  98.4  age  90.0  at (  -4.3,   -6.9)  v ( -1.7,   0.5)
+Beetle  hunger  87.6  age  90.0  at (  14.9,    5.1)  v (  0.8,   1.5)
 …
-9 creatures, 48 plants, night at phase 0.58
-selftest: ok   somebody ate within 10 s (first at 0.94 s)
+9 creatures, 50 plants, night at phase 0.58
+selftest: ok   somebody ate within 10 s (first at 1.04 s)
 selftest: ok   night arrived by 60 s (at 25.21 s)
-selftest: ok   the starved creature's entity is gone (178v0 starved at 1.88 s)
+selftest: ok   the starved creature's entity is gone (198v0 starved at 1.88 s)
+selftest: ok   nothing walked through anything over 5363 frames (closest pair 0.998 of the radii, 0 frames under 0.9)
 ```
 
-The second starvation in that run is nobody's fixture: a beetle that wandered badly for 35 seconds
+The second starvation in that run is nobody's fixture: a beetle that wandered badly for 53 seconds
 and died of it. The world does kill on its own; the fixture is only there so the *check* does not
 depend on it happening.
 
