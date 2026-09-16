@@ -590,7 +590,7 @@ wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記�
    縁に Nature Kit の木を数本（既に同梱の `tree_default.glb`）を置いて「柵」ではなく「景色の端」に見せる。Skybox（キューブマップ画像）は使わない。
 2. **色分け**: ウサギは**白〜クリーム**の掛け色（`StandardMaterial.base_color`。テクスチャの濃淡は残る）、虫は**青緑**。HUD の名前色と揃える。
 3. **虫のモデル候補**: 同梱の Cube Pets から `animal-caterpillar.glb`（578 tri）と `animal-bee.glb`（742 tri）を候補に、**カニ・イモムシ・ハチの 3 案で同じ構図の絵を撮って著者に選んでもらう**（`docs/garden-beetle-{crab,caterpillar,bee}.png`）。
-   決まるまでの既定はカニのまま。選ばれなかったモデルはリポジトリに入れない。
+   **著者の選択（2026-09-17）: カニ**。既定のまま、`BEETLE_MODEL` も変えない。イモムシ・ハチの `.glb` はリポジトリに入れない（候補の絵 2 枚は記録として残す）。
 4. 記録: `--shot` を昼・夕・夜の 3 枚（`docs/garden.png`、`garden-dusk.png`、`garden-night.png`）、wasm の増分と VM 時間、三角形数の増分を `docs/garden.md` に。
 
 確認: 既存の判定すべて（headless 10、窓 21、sabibots）、`web/build.sh all`、ブラウザで 60 秒（フォグと空が WebGL2 で出る）。
