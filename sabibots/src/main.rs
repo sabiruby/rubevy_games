@@ -709,8 +709,10 @@ struct Paused {
 /// Pausing is the plugin's instruction budget set to 0: `task_run_limits` returns before it hands
 /// any task the CPU, so nothing in the VM moves and the snapshot the panel reads stands still.
 /// The game keeps drawing, and the tanks keep rolling on the controls their brains last set —
-/// it is the Ruby that is stopped, not the match. The scheduler's clock keeps moving too, so the
-/// robots that were sleeping are all due the moment it starts again.
+/// it is the Ruby that is stopped, not the match. The scheduler's clock stops with it (rubevy
+/// `fa37eaa`: a budget of 0 skips `task_advance_ticks`), so a robot that was half way through a
+/// `sleep 0.05` is still half way through it when the budget comes back; there is nothing here to
+/// call for that, and nothing to undo.
 fn inspect_keys(
     keys: Res<ButtonInput<KeyCode>>,
     typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
@@ -780,6 +782,8 @@ struct SelfTest {
     original: String,
     /// instructions every brain had run together, for the pause check
     insn: u64,
+    /// ticks until the earliest sleeping task is due, sampled on the first frame of the pause
+    wake: Option<u32>,
 }
 
 fn selftest(
@@ -870,9 +874,17 @@ fn selftest(
             test.insn = spent();
             keys.press(KeyCode::KeyP);
             test.step = 6;
-            test.at = now + 0.5;
+            test.at = now + 0.1;
         }
         6 => {
+            // The pause has taken hold. How many ticks the earliest sleeping task still has to
+            // wait is the measure of the scheduler's clock: a budget of 0 stops that clock too
+            // (rubevy `fa37eaa`), so this number must be the same when the pause ends.
+            test.wake = world.vm.task_next_wakeup_ticks();
+            test.step = 7;
+            test.at = now + 0.5;
+        }
+        7 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
             ok(panel.open && !panel.frames.is_empty(), "the VM panel has the watched robot's frames");
@@ -880,20 +892,39 @@ fn selftest(
                 panel.heap.as_ref().is_some_and(|h| h.live > 0),
                 "the panel has the heap counters",
             );
+            // Half a second paused is ten times a brain's `sleep 0.05`. Before the clock was
+            // stopped as well, every one of those sleeps came due while nothing was running and
+            // the lot of them woke on the frame the budget came back. The ticks left before the
+            // earliest is due say so exactly: unchanged, and nothing is due yet.
+            let what = "nothing that was sleeping woke on the resume frame";
+            match test.wake {
+                Some(was) if was > 0 => {
+                    let left = world.vm.task_next_wakeup_ticks();
+                    let same = left == Some(was);
+                    info!(
+                        "selftest: {} {what}: the next one is due in {was} ticks, as it was half a second ago{}",
+                        if same { "ok  " } else { "FAIL" },
+                        if same { String::new() } else { format!(" (now {left:?})") },
+                    );
+                }
+                // Nothing to measure: a task was already due when the pause began (or none was
+                // sleeping at all), so the clock standing still cannot be told from it running.
+                other => info!("selftest: --   {what}: the next wakeup was {other:?} ticks off when the pause began"),
+            }
             test.insn = spent();
             // `press` on a key already held sets nothing: nothing released it, since nothing
             // here is a real keyboard
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::KeyP);
-            test.step = 7;
+            test.step = 8;
             test.at = now + 0.5;
         }
-        7 => {
+        8 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the brains are running again");
             keys.release(KeyCode::KeyP);
             exit.write(AppExit::Success);
-            test.step = 8;
+            test.step = 9;
         }
         _ => {}
     }

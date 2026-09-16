@@ -107,6 +107,15 @@ sabiruby 側の小さな追加）。rubevy の `ScriptWorld::stats` の隣に `s
 * **一時停止は budget 0 で効く**（`task_run_limits` がループの頭で見るので 1 命令も走らない）。
   ただし**スケジューラの時計は止まらない**ので、再開の瞬間に寝ていたタスクが全部起きる。
   止めるなら rubevy の `tick_scripts` の `task_advance_ticks` の側。
+* **（2026-09-17）時計も止まった。ゲーム側で呼ぶものは無い。** rubevy `fa37eaa` が
+  「`budget == 0` のフレームは `task_advance_ticks` を呼ばない」という規則にした
+  （`ScriptWorld::pause(bool)` を足す案は採らなかった——向こうの worklog に理由がある）。
+  `P` は今までどおり `world.budget = 0` のままでよい。selftest に
+  `nothing that was sleeping woke on the resume frame` を足した。測るのは
+  `Vm::task_next_wakeup_ticks()`——いちばん早い寝ているタスクがあと何ティックで起きるか——で、
+  0.5 秒止めたあとも同じ数であること。命令数で測る形も考えたが、1 フレームは 4 ティックで
+  `sleep 0.05` は 13 ティックなので「再開のフレームで起きるタスクが 0 である」ことは
+  止める瞬間の位相しだいであり、判定にならない。
 * selftest で `P` を**実際に押して**確かめた。`ButtonInput::press` は既に押されているキーには
   `just_pressed` を立てない（誰も離さないので）——`release` してから `press` する。
 

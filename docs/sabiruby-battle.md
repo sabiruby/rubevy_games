@@ -520,8 +520,16 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
 **`P` pauses the scripts** by giving the scheduler a budget of 0 instructions for the frame: the
 VM runs nothing, so the numbers stand still while they are read. The game keeps drawing and the
 tanks keep rolling on the controls their brains last set — it is the Ruby that is stopped, not the
-match. The scheduler's clock is not stopped, so every robot that was sleeping is due the moment it
-starts again.
+match.
+
+The scheduler's clock stops with it. It did not at first, and a pause used to end with every
+`sleep` in the VM coming due at once, because the frames the pause lasted were still counted
+against them; rubevy `fa37eaa` made a budget of 0 skip the tick as well, so a robot half way
+through a `sleep 0.05` is still half way through it when the budget comes back. There is nothing
+for the game to call: setting the budget to 0 is the whole of it. The selftest measures it —
+`nothing that was sleeping woke on the resume frame` — as the ticks the earliest sleeper still has
+to wait (`Vm::task_next_wakeup_ticks`), which must be the same number after half a second paused
+as it was when the pause began.
 
 Nothing in the panel runs Ruby: sabiruby renders a value in Rust (`Vm::render`), so looking at a
 robot cannot move it, allocate, or raise. The cost is that an object with an `inspect` of its own
@@ -603,8 +611,11 @@ SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the edi
 ```
 
 `SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
-`P`: pressing it must give the scripts a budget of 0 and stop them running, and pressing it again
-must start them. The reflex check needs a fight rather than a mouse, so it runs headless as well:
+`P`: pressing it must give the scripts a budget of 0 and stop them running, nothing that was
+sleeping may wake on the frame the budget comes back (the pause lasts half a second, ten times a
+brain's `sleep 0.05`), and pressing `P` again must start them.
+
+The reflex check needs a fight rather than a mouse, so it runs headless as well:
 every hit taken by a robot that has a reflex, is still standing and is not already in the middle of
 one is noted with the way it was facing, and 0.3 s later it must have run a reflex and turned by
 more than 0.2 rad at some point in between. A robot destroyed inside those 0.3 s is not counted at
