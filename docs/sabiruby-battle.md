@@ -298,21 +298,40 @@ so the rule that matters is which of the two asks last:
   "stronger"), and with last-writer-wins a reflex that runs first always loses the tie. The scout
   coped by saying `act` again every 0.05 s for the whole swerve — a workaround that is gone now
   that the order is right: one `act` and a `sleep 0.3`.
-* The brain usually has a question in flight when the hit lands (it looked at `@swerve`, then
-  asked for its radar), and the `act` it makes when that answer comes back would undo the swerve
-  a frame or two later. That is the part the priority cannot fix.
+* **The priority fixes the frame, not the decision already in flight.** The brain usually has a
+  question out when the hit lands: it looked at `@swerve`, saw nothing, and asked for its radar.
+  The `act` it makes when that answer comes back is a decision taken *before* the swerve, and it
+  arrives three frames later — after the reflex has thrown the wheel.
 
-So a reflex that wants the wheel for longer than a frame says so, and the brain leaves the
-controls alone while it does — `@swerve` in `scout.rb` is that agreement, and it is an ordinary
-instance variable because both tasks are the same object's. A reflex that only sets a flag, logs,
-or fires once needs none of this.
+So the two tasks keep an agreement, and `@swerve` in `scout.rb` is it: an ordinary instance
+variable, shared because both tasks are the same object's. The brain reads it **twice** — once at
+the top of its loop, so it does not waste questions, and once **immediately before it calls
+`act`**, which is the reading that matters. The controls are what the agreement is about, so it
+is checked where the controls are touched. A reflex that only sets a flag, logs, or fires once
+needs none of this.
 
-What the order is worth, measured with the selftest's own check (`the heading changed within
-0.3 s of the hit`, 20 s headless runs): with the reflex at the lower priority and one `act`,
-five runs out of five pass and every swerve turns the hull at least 0.48 rad. With the priority
-the other way round and the same one `act`, two runs out of three fail. The old
-say-it-again-every-frame reflex passes either way, but turns as little as 0.25 rad when it has to
-fight the brain for the wheel.
+Measured with the selftest's own check (`the heading changed within 0.3 s of the hit`, 20 s
+headless runs):
+
+| the reflex | the brain's guard | a question costs | runs passed |
+|---|---|---|---|
+| one `act`, lower priority | before `act` | 1 frame | **10 of 10** (every swerve 0.74 rad) |
+| one `act`, lower priority | top of the loop only | 1 frame | 2 of 5 |
+| one `act`, lower priority | top of the loop only | 2 frames | 5 of 5 |
+| one `act`, *higher* priority | top of the loop only | 2 frames | 1 of 3 |
+| `act` again every 0.05 s, higher priority | top of the loop only | 2 frames | 3 of 3, swerves as small as 0.25 rad |
+
+The bottom row is how it was written first. The row above it is why the priority was turned
+round. The two middle rows are the same robot before and after questions got a frame cheaper, and
+they are the reason for the second reading of `@swerve`: the brain's stale `act` used to arrive
+about 100 ms after the hit and now arrives about 50 ms after it, which is not long enough a swerve
+to pass. A failed run is always that shape — the reflex ran, and the hull turned 0.09–0.18 rad
+where the check wants 0.2.
+
+With both guards there is no margin to worry about: over three more runs, all 57 swerves turned
+**0.74 rad**, which is exactly as far as the tank can turn in 0.3 s. Nothing takes the wheel back
+at all any more, and the spread of 0.25–0.78 rad the other rows show is the brain and the reflex
+taking it from each other.
 
 The reflexes of one robot share one task, on purpose: a robot hit again while its reflex is still
 running gets the second reflex when the first has finished, rather than two swerves fighting.
@@ -615,13 +634,21 @@ SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the edi
 sleeping may wake on the frame the budget comes back (the pause lasts half a second, ten times a
 brain's `sleep 0.05`), and pressing `P` again must start them.
 
-The reflex check needs a fight rather than a mouse, so it runs headless as well:
-every hit taken by a robot that has a reflex, is still standing and is not already in the middle of
-one is noted with the way it was facing, and 0.3 s later it must have run a reflex and turned by
-more than 0.2 rad at some point in between. A robot destroyed inside those 0.3 s is not counted at
-all — the game takes its task away and zeroes its controls, so it is not a robot that failed to
-swerve. At the end, every robot that has been down for more than half a second must have had as
-many reflex tasks end as it registered reflexes.
+The reflex check needs a fight rather than a mouse, so it runs headless as well: every hit taken
+by a robot that has a reflex, is still standing and is not already in the middle of one is noted
+with the way it was facing, and 0.3 s later it must have run a reflex and turned by more than
+0.2 rad at some point in between. Two kinds of hit are not counted at all, and say so with a `--`
+line rather than passing or failing quietly:
+
+* **a robot destroyed inside those 0.3 s** — the game takes its task away and zeroes its
+  controls, so it is not a robot that failed to swerve;
+* **a robot whose brain was replaced inside those 0.3 s** (the editor's Apply, a saved file). The
+  old task is terminated and the new one subscribes afresh, so a `hit` published in between
+  reaches nobody and a swerve already under way is cut off with it. What the check watches is the
+  task the robot's brain is running: a different one is a different brain.
+
+At the end, every robot that has been down for more than half a second must have had as many
+reflex tasks end as it registered reflexes.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
 the end, then the VM panel's own numbers as text — the frames each brain is standing in with the

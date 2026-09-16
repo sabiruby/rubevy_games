@@ -784,6 +784,10 @@ struct SelfTest {
     insn: u64,
     /// ticks until the earliest sleeping task is due, sampled on the first frame of the pause
     wake: Option<u32>,
+    /// the robots there were before the restart, so the new ones can be told from them
+    before: Vec<Entity>,
+    /// how long a step that polls will wait before it gives up and checks anyway
+    deadline: f32,
 }
 
 fn selftest(
@@ -855,12 +859,27 @@ fn selftest(
             let on_disk = platform::read(&r3.file).unwrap_or_default();
             ok(on_disk == test.original, "nothing was written");
             restart.0 = true;
+            test.before = robots.iter().map(|(e, _)| e).collect();
             test.step = 5;
-            test.at = now + 2.0;
+            test.at = now;
+            test.deadline = now + 2.0;
         }
         5 => {
-            ok(robots.iter().count() == 4, "after a restart there are four robots again, not eight");
+            // On the frame the four new robots are there, and not two seconds later: since a
+            // question costs one frame instead of two the robots decide half again as often, and
+            // by two seconds into a fresh match one of them has taken a hit. What is being
+            // checked is that a restart hands out new robots at full health, so it is checked
+            // the moment the new robots exist.
+            let fresh = robots.iter().filter(|(e, _)| !test.before.contains(e)).count();
+            if fresh < 4 && now < test.deadline {
+                return;
+            }
+            ok(robots.iter().count() == 4 && fresh == 4, "after a restart there are four robots again, not eight");
             ok(robots.iter().all(|(_, r)| r.hp == 100.0), "every robot starts with full health");
+            test.step = 6;
+            test.at = now + 1.0;
+        }
+        6 => {
             let r3 = by_number(3).map(|(_, r)| r);
             let r4 = by_number(4).map(|(_, r)| r);
             ok(r3.is_some_and(|r| r.brain.is_none()), "robot 3 comes back on its file");
@@ -873,18 +892,18 @@ fn selftest(
             // the VM inspector: `P` stops the scripts by giving the scheduler a budget of 0
             test.insn = spent();
             keys.press(KeyCode::KeyP);
-            test.step = 6;
+            test.step = 7;
             test.at = now + 0.1;
         }
-        6 => {
+        7 => {
             // The pause has taken hold. How many ticks the earliest sleeping task still has to
             // wait is the measure of the scheduler's clock: a budget of 0 stops that clock too
             // (rubevy `fa37eaa`), so this number must be the same when the pause ends.
             test.wake = world.vm.task_next_wakeup_ticks();
-            test.step = 7;
+            test.step = 8;
             test.at = now + 0.5;
         }
-        7 => {
+        8 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
             ok(panel.open && !panel.frames.is_empty(), "the VM panel has the watched robot's frames");
@@ -916,15 +935,15 @@ fn selftest(
             // here is a real keyboard
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::KeyP);
-            test.step = 8;
+            test.step = 9;
             test.at = now + 0.5;
         }
-        8 => {
+        9 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the brains are running again");
             keys.release(KeyCode::KeyP);
             exit.write(AppExit::Success);
-            test.step = 9;
+            test.step = 10;
         }
         _ => {}
     }
@@ -1062,6 +1081,10 @@ struct WatchedHit {
     heading: f32,
     runs: u32,
     peak: f32,
+    /// the task its brain was running then. A different one (or none) when the window is up
+    /// means the game took its brain away and started it over inside the window, which is not a
+    /// robot that failed to swerve.
+    task: Option<sabiruby::value::ObjId>,
 }
 
 /// The short way round between two angles, for "how far has it turned".
@@ -1071,7 +1094,12 @@ fn angle_between(a: f32, b: f32) -> f32 {
     if d > PI { d - TAU } else { d }
 }
 
-fn reflex_selftest(time: Res<Time>, mut test: ResMut<ReflexTest>, robots: Query<&Robot>) {
+fn reflex_selftest(
+    time: Res<Time>,
+    mut test: ResMut<ReflexTest>,
+    robots: Query<&Robot>,
+    tasks: Query<&ScriptTask>,
+) {
     let now = time.elapsed_secs();
     for watch in test.watching.iter_mut() {
         if let Ok(robot) = robots.get(watch.robot) {
@@ -1094,6 +1122,16 @@ fn reflex_selftest(time: Res<Time>, mut test: ResMut<ReflexTest>, robots: Query<
         // 19.37 s that went down before the 0.3 s were up — 0.04 rad.)
         if robot.downed_at.is_some_and(|down| down < watch.at + 0.3) {
             info!("selftest: --   {} went down within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
+            continue;
+        }
+        // Nor is a robot whose brain was taken away and started again inside the window (the
+        // editor's Apply, or a saved file). The old task is terminated and the new one subscribes
+        // afresh, so a `hit` published in between reaches nobody — and a swerve already under way
+        // is cut off with it. The task it is running is how that shows from here: a different one
+        // is a different brain. It is not rare in the editor's selftest, which applies a brain
+        // three times while the match is being fought.
+        if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
+            info!("selftest: --   {}'s brain was replaced within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
             continue;
         }
         let ran = robot.reflex_runs > watch.runs;
@@ -1828,6 +1866,7 @@ fn move_bullets(
     arena: Res<ArenaSize>,
     mut bullets: Query<(Entity, &mut Bullet, &mut Transform)>,
     mut robots: Query<(Entity, &mut Robot, &Transform), Without<Bullet>>,
+    tasks: Query<&ScriptTask>,
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
@@ -1889,6 +1928,7 @@ fn move_bullets(
                             heading: robot.heading,
                             runs: robot.reflex_runs,
                             peak: 0.0,
+                            task: tasks.get(target).ok().map(|t| t.task()),
                         });
                     }
                 }

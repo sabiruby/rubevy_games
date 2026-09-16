@@ -48,6 +48,12 @@ robot "Scout" do
         heading, throttle = me.heading + wander_turn, 0.7
       end
 
+      # The agreement is checked again *here*, where the controls are actually touched. A hit can
+      # land while the brain is asking its questions, and this decision was made before the
+      # reflex took the wheel: acting on it now would undo the swerve a few frames after it
+      # started. Checking only at the top of the loop is a frame too early.
+      next sleep(0.05) if @swerve
+
       if target
         angle = lead(target, 0.3)
         act throttle: throttle, turn: steer_to(heading), aim: angle,
