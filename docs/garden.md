@@ -207,11 +207,14 @@ pub const CJK: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Guide.subset.t
 
 Noto Sans JP (SIL Open Font License 1.1; `CREDITS.md`, with `OFL.txt` beside the file), which is
 9.6 MB as it comes — a variable font with the whole `wght` axis and every Japanese glyph. What is
-in the binary is **66,796 bytes**: pinned to one weight, and cut down to the 337 characters the
+in the binary is **65,904 bytes**: pinned to one weight, and cut down to the 334 characters the
 guides actually use (G6 was 62,780 bytes and 327 characters; G6b's paragraph about
 handlers and the `日本語` button between them brought fourteen new ones —
 `ブ勝受始専届後瞬繰自語身返預` — and dropped one, the `·` that only the old bilingual footer
-used; the script found all of that by itself by reading the three files again). It is added as a **fallback**, appended to both of egui's families rather
+used; G7 renamed 「頭脳」to 「行動アルゴリズム」 and 「反射」to 「イベントの処理」, which
+brought `ゴベ処理` and took `う反専応考脳頭` away — 337 characters down to 334, and the file
+smaller for the first time; the script found all of that by itself by reading the three files
+again). It is added as a **fallback**, appended to both of egui's families rather
 than replacing them, so egui reaches it only for characters the defaults do not have and every
 Latin glyph in the editor and the panels is what it was.
 

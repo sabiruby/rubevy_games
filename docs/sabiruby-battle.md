@@ -630,7 +630,7 @@ character is drawn as a blank box. The licence is in `CREDITS.md`.
 
 `--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
 over the middle of the window; the two pictures above are
-`--shot docs/battle-guide.png 8 --guide --lang en` and the same with `--lang ja`.
+`--shot docs/battle-guide.png 6 --guide --lang en` and the same with `--lang ja`.
 
 ## Seeing it where there is no window
 
