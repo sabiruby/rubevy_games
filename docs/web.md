@@ -212,8 +212,9 @@ not the download**, and this is the first time the two were measured side by sid
 
 The guide (`H`) is written in English and Japanese — one of the two at a time from G6b, switched
 by a button — and egui's default fonts have no CJK at all, so a subset of Noto Sans JP,
-62,780 bytes at G6, 66,796 after G6b re-cut it and **65,904** after G7 renamed the words in it
-(four characters in, seven out), is
+62,780 bytes at G6, 66,796 after G6b re-cut it, 65,904 after G7 renamed the words in it
+(four characters in, seven out) and **64,616** after G9 changed the `F2` and `P` rows
+(one character in — `く`, from 「続く」 — and six out), is
 `include_bytes!`d into `rubevy-arena` and added to egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
 condition that the font be subset rather than shipped whole. Measured on the same machine and the
 same binaryen, all four numbers after `wasm-opt -Os`:

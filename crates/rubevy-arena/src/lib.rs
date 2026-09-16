@@ -30,7 +30,7 @@ pub use code::{CodePanel, CodePanelPlugin};
 pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin};
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
-pub use inspect::{VmInspector, VmInspectorPlugin};
+pub use inspect::{VmClock, VmInspector, VmInspectorPlugin, Waiting};
 pub use settings::Settings;
 
 /// Half the width of the square the camera shows, in world units.

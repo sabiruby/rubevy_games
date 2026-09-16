@@ -12,11 +12,12 @@ below.
 
 ![the garden at 22 seconds: evening, long shadows over a green field that runs on past the wall and fades into the sky, a line of trees along the far edge, Kenney tufts and bushes of grass, scattered rocks, cream rabbits and blue-green beetles walking about](garden.png)
 
-**This file describes stages G0 to G8** (`docs/plans/garden-plan.md`): the
+**This file describes stages G0 to G9** (`docs/plans/garden-plan.md`): the
 world, the models in it, the two kinds of behaviour — a Ruby task per creature and a task per handler —
 the `Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to
 breed, the save file, which is the world and every creature's own memory as JSON, the window —
-a creature's file rewritten while the garden runs, the VM looked into while it is paused, and a
+a creature's file rewritten while the garden runs, the whole world stopped with `P` and the VM
+looked into while it stands still, and a
 HUD that says what a decision costs — and the browser build, which is the same game at
 <https://sabiruby.github.io/rubevy_games/garden/>.
 
@@ -33,6 +34,7 @@ cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture 
 cargo run -p garden -- --shot n.png 12 --at midnight    # the same, with the sun where it is at midnight
 cargo run -p garden -- --shot c.png 12 --eye 18         # …from 18 units back instead of 42
 cargo run -p garden -- --shot g.png 10 --guide --lang ja  # …with the H panel open, in Japanese
+cargo run -p garden -- --shot v.png 15 --vm             # …with the VM panel open (G9; it is closed otherwise)
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
 
@@ -54,8 +56,8 @@ hand against volumes of its own.
 | Tab | the next creature |
 | H, or ? | the in-game guide, in English or Japanese — the buttons at its top switch (G6, G6b) |
 | F1 | the editor |
-| F2 | the VM panel |
-| P | pause the scripts (the VM gets a budget of 0; the garden keeps drawing) |
+| F2 | the VM panel — **closed until it is asked for** (G9) |
+| P | **stop the world** (G9): every rule of the garden and the VM both; the garden keeps drawing |
 | Ctrl+Enter | Apply: run the edited text in every creature of that species |
 | Ctrl+S | Save: write it to `beetle.rb` / `rabbit.rb` |
 | F5 | write the garden to `garden.save.json` (G3) — the HUD has a button for it too |
@@ -829,14 +831,18 @@ the host a whole frame. Nothing in the game needed fixing.
 What has not been pressed is the key itself; this machine has no GPU driver and the window goes
 through the container in `docker/` (`docs/wsl-gpu.md`).
 
-## The window (G4)
+## The window (G4, and G9)
 
-Three panels, all of them draggable, and the garden behind them. Two of the three are
-`rubevy-arena`'s — the same editor and the same VM inspector SabiRuby Battle uses — so what the
-garden added is the game's half of each: which creature is being looked at, what a species' file
-is, and what the HUD says. That half is one file, `garden/src/window.rs`.
+Two panels and the garden behind them — and a third, the VM panel, which `F2` opens. Two of the
+three are `rubevy-arena`'s — the same editor and the same VM inspector SabiRuby Battle uses — so
+what the garden added is the game's half of each: which creature is being looked at, what a
+species' file is, and what the HUD says. That half is one file, `garden/src/window.rs`.
 
-![the garden with its three panels](garden.png)
+**The VM panel used to open with the game and no longer does** (G9): a debugger over the middle of
+the window is not what somebody who came to look at a garden asked for. `F2` opens it, and
+`--shot … --vm` opens it for a picture.
+
+![the garden with its panels](garden.png)
 
 ### The editor: the unit is the species, not the creature
 
@@ -906,23 +912,56 @@ which key applies (`apply_key: Option<KeyCode>` — the garden's `F5` is taken b
 it is `None` here), and what one of the things being edited is called, for the hover texts
 (`noun`). sabibots changed by one line.
 
-### The VM panel (F2)
+### The VM panel (F2), and what it is waiting on
 
-The same `VmInspector` Battle has, about the selected creature's *behaviour* task: the frames it is
-standing in with the author's own line numbers, the registers of one of them named from the debug
-info, the heap and the collector's counters, and how many contexts the VM holds. A garden of
-fifteen creatures is about a hundred contexts — one per behaviour, one per handler, and the six
-handlers of a beetle are six of them — which is what a creature with a handler per event costs, and
-it is readable at a glance for the first time here.
+The same `VmInspector` Battle has, about the selected creature's *behaviour* task. **It reads top
+down, and the top of it is for a person** (G9):
 
-A creature parked on `garden.nearest` stands in `Task::Queue#pop`, then `Rubevy::Proxy#method_missing`
-at `prelude.rb:47`, then its own `rabbit.rb:77`; the panel says so while it waits.
+![the VM panel: a rabbit waiting for a component read](garden-vm.png)
 
-**`P` pauses the scripts** by setting `ScriptWorld::budget` to 0. Nothing in the VM runs, so the
-panel's numbers stand still while they are read; the garden keeps drawing and the creatures keep
-walking on the velocity their scripts last wrote. The scheduler's clock stops with it (rubevy
-`fa37eaa`), so a creature half way through a `sleep 0.2` is still half way through it when the
-budget comes back.
+* **why it is waiting**, in a sentence — `waiting for a component read — [:Transform]`,
+  `waiting for the game to answer nearest(:Plant)`, `sleeping — it asked for time, not for an
+  answer`, `waiting for an event — an on(:…) block, parked on its queue`;
+* **the line of its own file** it is standing on, and the frames of that file and no others:
+  `prelude.rb:47` and `(no debug info)` are true and are not what a reader of `rabbit.rb` came for;
+* insn/frame, how many tasks the VM is running, and the VM's share of the frame.
+
+Registers, the heap and the collector's counters, the contexts and the whole stack are under
+**details**, which starts closed. A garden of fifteen creatures is about a hundred contexts — one
+per behaviour, one per handler, and the six handlers of a beetle are six of them — which is what a
+creature with a handler per event costs.
+
+**How the panel knows what it is waiting for.** It never runs Ruby and never asks the task: it
+reads the frames, and the frames say it.
+
+| what the frames show | what the panel says |
+|---|---|
+| innermost `pop`, then `Rubevy::Subscription#pop` | an event: `on(:…)`, parked on the queue `Rubevy.subscribe` gave it |
+| innermost `pop`, then `Rubevy::Entity#get` | a component read; the component is that frame's `name` local |
+| innermost `pop`, then `Rubevy::Proxy#method_missing` | a question to the game, named from `name` and `args`: `nearest(:Plant)` |
+| innermost `pop`, then anything else | a question to the game, named by the method that asked (`radar`) |
+| no `pop` at all | a `sleep` — and the frames start at the line that called it |
+
+`Task::Queue#pop` is Ruby, in mrblib, so a task parked on a queue *has* a frame for it; `sleep` is
+a native and pushes none, so a task that is parked and not on a queue has nothing but the line it
+called `sleep` from. **The last row is the one guess in the table**, and the panel's hover says so:
+a task that had used up its timeslice — ready to run, not asleep — looks exactly the same from
+here, and the VM has no read-only way to ask a task which it is (`Task#status` is Ruby). In these
+two games nothing else parks a task. Six unit tests in `rubevy-arena` hold the five shapes, copied
+out of a running garden.
+
+**A creature's handlers are tasks of their own and the panel does not follow them**: it is about
+the `ScriptTask` the entity carries, which is the behaviour. So the event row is what a creature
+whose *own* `run` waits on a subscription would show; in `beetle.rb` as it stands, the `on(:…)`
+blocks are the six other tasks, and the panel counts them rather than standing in them.
+
+**`P` stops the world** (G9). `ScriptWorld::budget` goes to 0, so nothing in the VM runs and the
+panel's numbers stand still while they are read; and `is_still` — the run condition every rule of
+the garden carries — goes false, so nothing grows, walks, eats, breeds or starves either, and
+`hold_the_clock` walks `Sky::shift` back by the frame's length so the hour stands still with them.
+The scheduler's clock stops with the budget (rubevy `fa37eaa`), so a creature half way through a
+`sleep 0.2` is still half way through it when the world starts again — and since the garden's
+clock did not move, no `"night"` or `"day"` can have been published and missed.
 
 ### The HUD, and what "frames per decision" means
 
@@ -972,30 +1011,44 @@ The panel at the top left is one line for the garden and one line per creature:
 VM panel is `vm:` lines from the same `VmInspector::log_lines()` the window draws from:
 
 ```
-hud: 15 creatures · 30 plants · day 0.50 · VM 1.28 / 8.0 ms this frame (1.30 ms smoothed)
-hud:   Beetle 99v0     hunger  92.1      13 insn/frame   1.0 frames/decision  beetle.rb:125
+hud: 12 creatures · 41 plants · day 0.50 · VM 0.35 / 8.0 ms this frame (0.35 ms smoothed)
+hud:   Beetle 109v0    hunger  65.2      13 insn/frame   1.0 frames/decision  beetle.rb:125
 hud: frames/decision — 403 questions the game answered, 1.000 frames each; 2352 component reads, 1.000 frames each
-vm: Rabbit 104v0 — context 9  Suspended — 37887 insn — contexts 99 live of 99 — heap live 5049 of 6386 …
-vm:   #0 (no debug info)        pop              pc 133   …
-vm:   #1 prelude.rb:47          method_missing   pc 43    name=:nearest  args=[:Creature]  blk=nil
-vm:   #2 rabbit.rb:77           run              pc 137   spot=[18.5, 0.0, -3.9]  plant=nil  other=nil …
+vm: Rabbit 117v0 — waiting for a component read — `[:Creature]` — rabbit.rb:78 — 30 insn/frame, 45564 in all — 63 tasks
+vm:   details: context 8  Suspended — contexts 63 live of 63 — heap live 5325 of 5886 (561 free, …
+vm:   #0 (no debug info)        pop              pc 133   non_block=false  timeout_ms=nil  deadline=nil …
+vm:   #1 (no debug info)        get              pc 25    name=:Creature
+vm:   #2 (no debug info)        []               pc 11    name=:Creature
+vm:   #3 rabbit.rb:78           run              pc 155   spot=[9.1, 0.0, -10.6]  plant=nil  other=#<Data …
 ```
+
+The first `vm:` line is the panel's top half, in one line: who, why, where, what it spends and how
+many tasks the VM holds. The rest is what the window folds under **details**.
 
 ### The window's own checks
 
 `GARDEN_SELFTEST=1` with a window drives the editor the way a click would (by setting
 `Editor::action`) and presses the two keys, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
-for Battle. Save is left out on purpose, since it writes to the repository. Twenty-one lines, all
-`ok` (through `docker`, lavapipe — and all twenty-one in a browser too, at `garden/?selftest`):
+for Battle. Save is left out on purpose, since it writes to the repository. **Twenty-nine lines**
+(twenty-one until G9), all `ok` (through `docker`, lavapipe — and all of them in a browser too, at
+`garden/?selftest`):
 
 ```
+selftest: ok   the VM panel starts closed
+selftest: ok   F2 opens it
 selftest: ok   P pauses: the scripts' budget is 0
 selftest: ok   nothing ran while it was paused
+selftest: ok   2 s paused: every creature is where it was
+selftest: ok   2 s paused: nobody got hungrier
+selftest: ok   2 s paused: the day did not turn
 selftest: ok   the VM panel has the creature's frames
 selftest: ok   the panel has the heap counters
-selftest: ok   nothing that was sleeping woke on the resume frame: the next one is due in 6 ticks, as it was half a second ago
+selftest: ok   nothing that was sleeping woke on the resume frame: the next one is due in 16 ticks, as it was two seconds ago
 selftest: ok   P again gives the budget back
 selftest: ok   the creatures are thinking again
+selftest: ok   and the garden moves again: somebody has walked
+selftest: ok   the meters move again
+selftest: ok   the day turns again
 selftest: ok   F2 hides the VM panel
 selftest: ok   F2 shows it again
 selftest: ok   the editor shows the file of the creature that was clicked
@@ -1022,6 +1075,16 @@ drawn stays on the screen looking like a garden that has quietly stopped taking 
 
 The keys are checked **before** the editor, and on purpose: the editor restarts scripts, and a
 check about the scheduler asked after that would be a check about the restart.
+
+**Two seconds, and "the same" rather than "about the same"** (G9). The pause used to be checked
+over half a second and only against the VM's instruction count. The three world checks compare the
+whole garden — every creature's `Transform`, every creature's `Hunger`, and `Sky::phase` — with
+what it was two seconds earlier, and they are exact equalities, because a rule that does not run
+writes nothing at all. Two seconds is long enough that anything running would show: a creature
+walks about four units, the meters fall by a tenth of themselves, the day turns by 1/30 of itself.
+Coming back is "somebody has walked" and "the meters move" rather than "everybody" and "fall": a
+creature may be asleep or standing on a plant, and the check is that the rules are running again,
+not that the garden went one particular way.
 
 ## Battle and the Garden, in numbers
 

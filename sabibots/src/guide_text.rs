@@ -58,10 +58,10 @@ pub fn guide() -> Guide {
     .key("click a name", "the same, from the scoreboard", "同じこと(スコアボードから)")
     .key("Tab", "the next robot", "次のロボット")
     .key("F1", "the editor", "エディタ")
-    .key("F2", "the VM panel: frames, registers, heap", "VM パネル(フレーム・レジスタ・ヒープ)")
+    .key("F2", "look inside the VM — which line each behaviour is waiting on", "VM の中を見る(どの行で何を待っているか)")
     .key("Ctrl+Enter  F5", "apply the edited behaviour", "編集した行動アルゴリズムを適用")
     .key("Ctrl+S", "write the behaviour to its file", "行動アルゴリズムをファイルに保存")
-    .key("P", "pause the scripts; the arena goes on being drawn", "スクリプトを一時停止(闘技場は描かれ続ける)")
+    .key("P", "stop the match — the rules too; it goes on being drawn", "試合ごと一時停止(規則も止まる。描画は続く)")
     .key("R", "a new match, keeping the behaviours applied so far", "適用済みの行動アルゴリズムのまま試合をやり直す")
 }
 

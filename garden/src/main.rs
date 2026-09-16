@@ -1064,6 +1064,10 @@ fn main() {
     };
     let save_to = after("--save");
     let load_from = after("--load");
+    // `--vm` (G9): open the VM panel. The panel is closed unless somebody asks for it, and on a
+    // command line this is the asking — `--shot docs/garden-vm.png 14 --vm` is how the picture in
+    // `docs/garden.md` is taken. A player asks with `F2`.
+    let wants_vm = args.iter().any(|a| a == "--vm");
     // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
     // player's own click is (`rubevy_arena::Settings`), and a picture asked for in Japanese on
     // the command line should not change what the next run shows a person.
@@ -1148,14 +1152,20 @@ fn main() {
             .insert_resource(Orbit { distance: eye.unwrap_or(Orbit::default().distance), ..default() })
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
-            // open from the start, so a picture (`--shot`) has it without a key being pressed
-            .insert_resource(VmInspector::following())
+            // **Closed** (G9). It used to open with the game, which is a debugger thrown over the
+            // middle of the window at somebody who came to look at a garden; `F2` opens it, and a
+            // picture gets it only where `--vm` asks — `--shot docs/garden-vm.png 14 --vm`.
+            .insert_resource(VmInspector::following().opened(wants_vm))
             .init_resource::<Tints>()
             // G8: the loaded model's materials, cloned and tinted per species the moment the
             // loader has built the model's entities
             .add_observer(tint_species)
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
             .add_systems(Update, (orbit_camera, dress_animations, animate_creatures))
+            // G9: `P` stops the world, and this is the half of it that is not a run condition —
+            // the garden's own clock, held where it stands for as long as the pause lasts. Only
+            // a window can pause, so only a window has it.
+            .add_systems(Update, hold_the_clock.run_if(is_paused).before(day_night))
             // G8: the fog, the sky's gradient and where the two of them stand. `after(day_night)`
             // because the hour it draws is the one that system has just worked out, and
             // `after(orbit_camera)` because the eye it hangs the sky on is the one that system has
@@ -1339,15 +1349,20 @@ fn main() {
         // `docs/host-api.md`, "Where the game's systems go in the frame").
         .add_systems(Update, answer_garden.in_set(RubevySet::Answer))
         .add_systems(Update, watch_minds.after(RubevySet::Answer))
-        // G4's other HUD number: the wall time the frame's scripts took, measured round the set
-        // that runs them, against `ScriptWorld::frame_time`. Both builds keep it — the headless
-        // run prints it at the end, which is where the figure in `docs/garden.md` comes from.
-        .init_resource::<window::VmClock>()
-        .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick))
-        .add_systems(
-            Update,
-            window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
-        );
+        // (G4's other HUD number, the wall time the frame's scripts took, is added below: in a
+        // window `VmInspectorPlugin` measures it, and only the headless build adds it itself.)
+        ;
+    if headless.is_some() {
+        // G4's other HUD number, measured round the set that runs the scripts. In a window it is
+        // `VmInspectorPlugin`'s, because the VM panel is what shows it (G9); here there is no
+        // plugin and no panel, and the figure is printed at the end of the run.
+        app.init_resource::<window::VmClock>()
+            .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick))
+            .add_systems(
+                Update,
+                window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
+            );
+    }
     if selftest && headless.is_none() {
         // G6: and the camera, which is the one thing a browser check has no other way to read
         app.insert_resource(CameraLog);
@@ -2733,12 +2748,17 @@ fn startle(
 /// derives on it (`garden/src/genome.rs`).
 fn court(
     time: Res<Time>,
+    sky: Res<Sky>,
     mut world: ResMut<ScriptWorld>,
     births: Res<Births>,
     mut test: Option<ResMut<SelfTest>>,
     mut creatures: Query<(Entity, &Creature, &Hunger, &Collider, &Transform, &mut Breeding)>,
 ) {
-    let now = time.elapsed_secs();
+    // **the world's clock, not the process's** (G9). `Breeding::ready_at` is a cooldown in the
+    // garden's own time, and the garden's time is what `P` holds still: with the process's clock
+    // a minute spent paused was a minute off every pair's wait, and the first frame after the
+    // pause had every creature in the garden ready to breed at once.
+    let now = world_now(&time, &sky);
     // the cap is the rule's, and the children already asked for this frame count against it
     let population = creatures.iter().count() + births.0.len();
     if population >= POP_MAX {
@@ -2799,6 +2819,7 @@ fn court(
 /// worked out in Ruby.
 fn hatch(
     time: Res<Time>,
+    sky: Res<Sky>,
     mut commands: Commands,
     mut births: ResMut<Births>,
     look: Option<Res<Look>>,
@@ -2808,7 +2829,8 @@ fn hatch(
     mut test: Option<ResMut<SelfTest>>,
     mut parents: Query<(&mut Hunger, &mut Breeding)>,
 ) {
-    let now = time.elapsed_secs();
+    // the same clock `court` reads the cooldown against (G9)
+    let now = world_now(&time, &sky);
     for birth in births.0.drain(..) {
         let at = Vec2::new(
             birth.at.x.clamp(-HALF_W + 1.0, HALF_W - 1.0),
@@ -3558,9 +3580,41 @@ fn finish_restore(mut commands: Commands, restoring: Res<Restoring>) {
     }
 }
 
-/// The run condition of every rule: a garden that is still being restored does not move.
-fn is_still(restoring: Option<Res<Restoring>>) -> bool {
-    restoring.is_none()
+/// **The run condition of every rule.** A garden that is still being restored does not move —
+/// and, from G9, neither does one the player has stopped with `P`.
+///
+/// The two reasons are the same shape and they are the same condition on purpose: whatever the
+/// world is waiting for, the whole of it waits together. Everything the garden *is* hangs off
+/// this — `day_night`, `move_creatures`, `separate`, `grow_plants`, `sprout_plants`,
+/// `get_hungry`, `eat`, `startle`, `court`, `starve` and `hatch` — while everything that only
+/// *looks* at the garden (the camera, the models, the horizon, the HUD, the editor, the VM
+/// panel, saving and loading) runs on.
+///
+/// `Paused` is an `Option` because the headless build has no keyboard to press `P` with and
+/// never inserts the resource; `None` is a world nobody can pause.
+fn is_still(restoring: Option<Res<Restoring>>, paused: Option<Res<window::Paused>>) -> bool {
+    restoring.is_none() && !paused.is_some_and(|p| p.on())
+}
+
+/// The other half of `P` (G9): while the world is stopped, so is its clock.
+fn is_paused(paused: Option<Res<window::Paused>>) -> bool {
+    paused.is_some_and(|p| p.on())
+}
+
+/// **The garden's clock, held still while `P` is on.**
+///
+/// The world's hour is `world_now` — the process's clock plus `Sky::shift` — so holding it is
+/// walking `shift` back by exactly the frame that has just passed. Nothing else is needed and
+/// nothing else would do: `day_night` is not running, so `sky.phase` stands where it stood, and
+/// when the budget comes back the sun is where it was rather than where the wall clock says. It
+/// is `restore_memory`'s trick (`sky.shift = tick - elapsed`) written as a difference, because
+/// here there is no hour to go back to — only one to stay at.
+///
+/// It is why the pause loses no event. `"night"` and `"day"` are published by `day_night` at the
+/// moment the phase crosses, and a clock that does not move cannot cross anything: there is no
+/// message to be dropped while the scripts cannot read their queues.
+fn hold_the_clock(time: Res<Time>, mut sky: ResMut<Sky>) {
+    sky.shift -= time.delta_secs();
 }
 
 /// `GARDEN_RELOAD_AT` (checks only): F9, pressed by the clock instead of by a finger.
@@ -3928,6 +3982,9 @@ fn stop_when_over(
         );
         let mut panel = VmInspector::default();
         for (mind, script) in &tasks {
+            // the same two figures the window's panel is handed (`window::show_vm`)
+            panel.spent = mind.spent;
+            panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
             panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
             for line in panel.log_lines() {
                 info!("{line}");

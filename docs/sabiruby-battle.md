@@ -513,10 +513,27 @@ egui.
 
 ## The VM panel
 
-`F2` shows and hides it; it is open from the start, so a screenshot has it. It is the browser
+`F2` shows and hides it. **It starts closed** (G9) — a debugger over the middle of a match is not
+what a player asked for — and a screenshot gets it with `--shot … --vm`. It is the browser
 playground's "VM の状態" pane in the game's own window, about the robot the editor is showing.
 
-![the VM panel](vm-inspector.png)
+![the VM panel: a scout waiting for the game to answer `incoming`](vm-inspector.png)
+
+**The top of it is four things for a person** (G9):
+
+* **Why the behaviour is waiting**, in a sentence: `waiting for the game to answer incoming`,
+  `sleeping — it asked for time, not for an answer`, `waiting for a component read — [:Hunger]`,
+  `waiting for an event — an on(:…) block, parked on its queue`. How the panel knows is a table in
+  `docs/garden.md` (*The VM panel (F2), and what it is waiting on*): it reads the frames and
+  nothing else — a parked task carries a `Task::Queue#pop` frame and the frame behind it says
+  which queue, while `sleep` is a native and pushes no frame at all. The one guess is the last of
+  those, and the panel's hover says so.
+* **The line of its own file** it is standing on, and the frames of that file only. `prelude.rb`
+  and `(no debug info)` are true and are not what the author of `scout.rb` came for.
+* **insn/frame, the tasks the VM is running, and the VM's share of the frame** — the same
+  `VM x / 8.0 ms` the garden's HUD has, which moved into the panel in G9 so both games show it.
+
+Under **details**, which starts closed:
 
 * **The frames the behaviour is standing in, innermost first.** A robot waiting for a scan is four
   frames deep — `Task::Queue#pop`, `Rubevy.ask`'s wrapper, `radar` in the DSL, then its own
@@ -536,19 +553,28 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
   their handlers, the match. When a robot goes down its two contexts stop and the count falls —
   which is how the handler-task leak in *What stops one* was seen to be gone.
 
-**`P` pauses the scripts** by giving the scheduler a budget of 0 instructions for the frame: the
-VM runs nothing, so the numbers stand still while they are read. The game keeps drawing and the
-tanks keep rolling on the controls their behaviours last set — it is the Ruby that is stopped, not the
-match.
+**`P` stops the match** (G9). The scripts stop because the scheduler is given a budget of 0
+instructions for the frame, and the match stops because `world_moves` — a run condition on
+`answer_requests`, `move_robots`, `separate_robots`, `move_bullets` and `fade_blasts` — is false:
+no tank rolls on the controls its behaviour last set, no bullet crosses the arena, and `WorldClock`,
+which is what `Rubevy.ask("clock")`, `status` and `radar` are answered from, does not advance. That
+last one is the match's own rules: `rule(:sudden_death, after: 20, every: 2.0)` compares that clock
+with the time it started, and a clock that ran while the match did not would come back from a pause
+with every missed repeat due at once — the walls closing in five crates in as many passes. The
+scoreboard, the nameplates, the editor, the file watcher and `R` go on working.
 
-The scheduler's clock stops with it. It did not at first, and a pause used to end with every
-`sleep` in the VM coming due at once, because the frames the pause lasted were still counted
+Until G9 `P` stopped the Ruby only, and the match went on around it. The garden's author found it
+there — *"the VM panel cannot be followed unless the world stops"* — and it is one decision for
+both games.
+
+The scheduler's clock stops with the budget. It did not at first, and a pause used to end with
+every `sleep` in the VM coming due at once, because the frames the pause lasted were still counted
 against them; rubevy `fa37eaa` made a budget of 0 skip the tick as well, so a robot half way
 through a `sleep 0.05` is still half way through it when the budget comes back. There is nothing
 for the game to call: setting the budget to 0 is the whole of it. The selftest measures it —
 `nothing that was sleeping woke on the resume frame` — as the ticks the earliest sleeper still has
-to wait (`Vm::task_next_wakeup_ticks`), which must be the same number after half a second paused
-as it was when the pause began.
+to wait (`Vm::task_next_wakeup_ticks`), which must be the same number after two seconds paused as
+it was when the pause began.
 
 Nothing in the panel runs Ruby: sabiruby renders a value in Rust (`Vm::render`), so looking at a
 robot cannot move it, allocate, or raise. The cost is that an object with an `inspect` of its own
@@ -664,6 +690,7 @@ cargo run -p sabibots                    # window
 cargo run -p sabibots -- --headless 15   # 15 seconds, result on stdout, no GPU needed
 cargo run -p sabibots -- --shot p.png 6 --guide   # a picture with the H panel open
 cargo run -p sabibots -- --shot p.png 6 --guide --lang ja   # …in Japanese
+cargo run -p sabibots -- --shot p.png 13 --vm      # …with the VM panel open (G9; it is closed otherwise)
 web/build.sh && web/serve.sh             # in a browser (docs/web.md)
 
 SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the handler check
@@ -671,9 +698,12 @@ SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the edi
 ```
 
 `SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
-`P`: pressing it must give the scripts a budget of 0 and stop them running, nothing that was
-sleeping may wake on the frame the budget comes back (the pause lasts half a second, ten times a
-behaviour's `sleep 0.05`), and pressing `P` again must start them.
+`F2` and `P`: the VM panel must start closed and open on `F2` (G9); pressing `P` must give the
+scripts a budget of 0 and stop them running, **and stop the match with them** — two seconds later
+every robot must be exactly where it was and `WorldClock` must read exactly what it read; nothing
+that was sleeping may wake on the frame the budget comes back (two seconds is forty times a
+behaviour's `sleep 0.05`); and pressing `P` again must start the robots driving and the clock
+running.
 
 The handler check needs a fight rather than a mouse, so it runs headless as well: every hit taken
 by a robot that has a handler, is still standing and is not already in the middle of one is noted
@@ -692,14 +722,15 @@ At the end, every robot that has been down for more than half a second must have
 handler tasks end as it registered handlers.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
-the end, then the VM panel's own numbers as text — the frames each behaviour is standing in with the
-locals of the innermost few, the heap, and how many contexts are live. It is how the game is
+the end, then the VM panel's own numbers as text — what each behaviour is waiting for and the line
+of its own file it waits on, then, as "details", the frames with the locals of the innermost few,
+the heap, and how many contexts are live. It is how the game is
 checked where there is no GPU.
 
 | key | what it does |
 |---|---|
 | `1`–`8`, `Tab` | which robot the editor and the VM panel are about |
-| `F1` / `F2` | the editor / the VM panel |
-| `P` | pause the scripts (budget 0) |
+| `F1` / `F2` | the editor / the VM panel (closed until `F2`, G9) |
+| `P` | stop the match: the scripts (budget 0) and the game's own rules with them (G9) |
 | `F5`, `Ctrl+Enter` / `Ctrl+S` | apply the edited behaviour / save it to its file |
 | `R` | start the match over |

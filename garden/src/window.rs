@@ -16,7 +16,6 @@
 //! * **`F5` is taken.** It saves the garden (G3), so the editor's apply key here is
 //!   `Ctrl+Enter` and the button (`Editor::apply_key`).
 
-use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use rubevy::{MrbAsset, Script, ScriptTask, ScriptWorld};
@@ -33,41 +32,34 @@ pub struct Watched {
     pub entity: Option<Entity>,
 }
 
-/// The budget the scripts get when they are not paused, kept while they are (`P`).
+/// **`P`: the world is stopped.** The budget the scripts get when they are not paused, kept
+/// while they are — and the flag every rule of the garden is gated on ([`crate::is_still`]).
+///
+/// G4 stopped the Ruby and nothing else: the scheduler got a budget of 0, and the garden went on
+/// growing, eating, breeding and starving round a set of creatures that slid along the velocity
+/// their last thought had written. The author's third play said what that is worth — *"the VM
+/// panel cannot be followed unless the world stops"* — so from G9 `P` is the world: the rules,
+/// the clock, the breeding, the starving and the walking all stop together, and the drawing, the
+/// camera, the panels, the editor and the save do not (G9).
 #[derive(Resource, Default)]
 pub struct Paused {
     was: Option<u64>,
 }
 
-/// How long the VM had this frame, against what it is allowed.
-///
-/// The span is measured round `RubevySet::Tick` — `tick_scripts`, then `drain_commands` and
-/// `apply_component_writes`, which are the frame's scripts and everything they asked for. It is
-/// wall time, not CPU: it is the number the budget is *about* (`ScriptWorld::frame_time`, 8 ms),
-/// so it is the number to show beside it.
-#[derive(Resource, Default)]
-pub struct VmClock {
-    started: Option<Instant>,
-    /// milliseconds the last frame's scripts took
-    pub spent_ms: f32,
-    /// smoothed, because a single frame's figure flickers faster than it can be read
-    pub mean_ms: f32,
-    /// what `ScriptWorld::frame_time` allows, in milliseconds
-    pub budget_ms: f32,
+impl Paused {
+    /// Whether the world is stopped. It is the same fact as `ScriptWorld::budget == 0`, said by
+    /// the thing that decided it: a run condition has no business reading the VM's budget.
+    pub fn on(&self) -> bool {
+        self.was.is_some()
+    }
 }
 
-pub fn vm_clock_start(mut clock: ResMut<VmClock>) {
-    clock.started = Some(Instant::now());
-}
-
-pub fn vm_clock_end(mut clock: ResMut<VmClock>, world: Res<ScriptWorld>) {
-    let Some(started) = clock.started.take() else { return };
-    let spent = started.elapsed().as_secs_f32() * 1000.0;
-    clock.spent_ms = spent;
-    // a fifth of the new reading: about a sixth of a second of memory at 60 Hz
-    clock.mean_ms = clock.mean_ms * 0.8 + spent * 0.2;
-    clock.budget_ms = world.frame_time.map(|d| d.as_secs_f32() * 1000.0).unwrap_or(0.0);
-}
+/// **The VM's share of the frame lives in `rubevy-arena` now** (G9). It was written here in G4,
+/// and the VM panel — which both games have — is where it is shown, so it moved to the panel:
+/// `VmInspectorPlugin` measures it in the windowed build and the headless one adds the two
+/// systems itself (`main`). The names are re-exported because the callers here, the HUD and
+/// `crate::stop_when_over`, are the garden's own.
+pub use rubevy_arena::inspect::{vm_clock_end, vm_clock_start, VmClock};
 
 // ---------------------------------------------------------------------------------------------
 // Picking a creature
@@ -397,14 +389,25 @@ pub fn reload_changed(
 // The VM panel
 // ---------------------------------------------------------------------------------------------
 
-/// `F2` shows and hides the VM panel; `P` pauses the scripts.
+/// `F2` shows and hides the VM panel; `P` stops the world and starts it again.
 ///
-/// Pausing is `ScriptWorld::budget = 0`: the scheduler returns before handing any task the CPU,
-/// so nothing in the VM moves and the panel's numbers stand still while they are read. The garden
-/// keeps drawing and the creatures keep walking on the velocity their scripts last wrote — it is
-/// the Ruby that is stopped, not the world. rubevy `fa37eaa` stops the scheduler's clock with it,
-/// so a creature half way through a `sleep 0.2` is still half way through it when the budget comes
-/// back, and there is nothing here to call for that.
+/// **Two halves, and they are a pair.** The Ruby stops because `ScriptWorld::budget` goes to 0:
+/// the scheduler returns before handing any task the CPU, so nothing in the VM moves and the
+/// panel's numbers stand still while they are read. rubevy `fa37eaa` stops the scheduler's clock
+/// with it, so a creature half way through a `sleep 0.2` is still half way through it when the
+/// budget comes back. The **world** stops because [`Paused::on`] is false in
+/// [`crate::is_still`], the run condition every rule of the garden already carried for the sake
+/// of loading a save — so `day_night`, `move_creatures`, `get_hungry`, `eat`, `court`, `starve`
+/// and the rest are simply not run, and `crate::hold_the_clock` walks `Sky::shift` back by the
+/// frame's own length so that the garden's clock does not run on either.
+///
+/// Stopping only the first half is what G4 did, and the author's third play is why it is not
+/// enough: the creatures slid on along the velocity their last thought had written, the day
+/// turned over, and a garden left paused for a minute came back with everything starved.
+///
+/// **`P` does not open the VM panel any more.** From G9 the pause is about the world rather than
+/// about the panel, and the panel opens on `F2` (and on `--shot --vm`) — a player who pauses to
+/// watch a rabbit should not have a debugger thrown over the middle of the window.
 pub fn inspect_keys(
     keys: Res<ButtonInput<KeyCode>>,
     typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
@@ -428,7 +431,6 @@ pub fn inspect_keys(
                 paused.was = Some(world.budget);
                 world.budget = 0;
                 panel.paused = true;
-                panel.open = true;
             }
         }
     }
@@ -455,6 +457,8 @@ pub fn show_vm(
         return;
     };
     panel.spent = mind.spent;
+    // G9: the panel's top half says insn/frame, and this is the same average the HUD's column is
+    panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
     panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
 }
 
@@ -753,6 +757,13 @@ pub struct WindowTest {
     insn: u64,
     /// ticks until the earliest sleeper is due, sampled on the first frame of the pause
     wake: Option<u32>,
+    /// where every creature stood when the pause began — the whole world, entity by entity, so
+    /// that "nothing moved" is an equality rather than a tolerance (G9)
+    places: Vec<(Entity, Vec3)>,
+    /// what each of them had left in its meter
+    hunger: Vec<(Entity, f32)>,
+    /// where the sun stood
+    phase: f32,
 }
 
 impl WindowTest {
@@ -773,8 +784,12 @@ pub fn window_selftest(
     brains: Res<Brains>,
     panel: Res<VmInspector>,
     world: Res<ScriptWorld>,
+    sky: Res<Sky>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     minds: Query<(Entity, &Mind, Option<&ScriptTask>)>,
+    // G9: the world itself, for the checks about `P` — where everything stands and what it has
+    // left in its meter
+    bodies: Query<(Entity, &Transform, &Hunger), With<Creature>>,
     tasks: Query<&ScriptTask>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -784,6 +799,9 @@ pub fn window_selftest(
     }
     let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
     let spent = || tasks.iter().map(|t| world.vm.task_instructions(t.task())).sum::<u64>();
+    // the world in three numbers: where everybody is, what they have eaten, and the hour
+    let places = || -> Vec<(Entity, Vec3)> { bodies.iter().map(|(e, t, _)| (e, t.translation)).collect() };
+    let hunger = || -> Vec<(Entity, f32)> { bodies.iter().map(|(e, _, h)| (e, h.0)).collect() };
     let a_beetle = || minds.iter().find(|(_, m, _)| m.species == Species::Beetle);
     let beetles = || minds.iter().filter(|(_, m, _)| m.species == Species::Beetle);
     let rabbits = || minds.iter().filter(|(_, m, _)| m.species == Species::Rabbit);
@@ -794,21 +812,42 @@ pub fn window_selftest(
             let Some((entity, mind, _)) = a_beetle() else { return };
             watched.entity = Some(entity);
             test.original = platform::read(&brains.path(&ruby.0, mind.species)).unwrap_or_default();
-            keys.press(KeyCode::KeyP);
+            // G9: the panel starts closed, so the first key of the run is the one that opens it.
+            // Everything below wants to see the frames it draws.
+            ok(!panel.open, "the VM panel starts closed");
+            keys.press(KeyCode::F2);
             test.step = 1;
             test.at = now + 0.2;
         }
         1 => {
-            // once the pause has taken hold, and not on the frame it was asked for: the scripts
-            // of *that* frame had already run when the key was read
-            test.insn = spent();
-            test.wake = world.vm.task_next_wakeup_ticks();
+            ok(panel.open, "F2 opens it");
+            keys.release(KeyCode::F2);
+            keys.press(KeyCode::KeyP);
             test.step = 2;
-            test.at = now + 0.5;
+            test.at = now + 0.2;
         }
         2 => {
+            // once the pause has taken hold, and not on the frame it was asked for: the scripts
+            // and the rules of *that* frame had already run when the key was read
+            test.insn = spent();
+            test.wake = world.vm.task_next_wakeup_ticks();
+            test.places = places();
+            test.hunger = hunger();
+            test.phase = sky.phase;
+            test.step = 3;
+            // **two seconds** (G9), not the half second the scripts-only pause was checked over:
+            // a creature walks about four units in two seconds, the meters fall by a tenth of
+            // themselves, and the day turns by 1/30 of itself — each of them far past anything a
+            // comparison could miss
+            test.at = now + 2.0;
+        }
+        3 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
+            // the three the author asked for: **the world**, not only the VM
+            ok(places() == test.places, "2 s paused: every creature is where it was");
+            ok(hunger() == test.hunger, "2 s paused: nobody got hungrier");
+            ok(sky.phase == test.phase, "2 s paused: the day did not turn");
             ok(panel.open && !panel.frames.is_empty(), "the VM panel has the creature's frames");
             ok(panel.heap.as_ref().is_some_and(|h| h.live > 0), "the panel has the heap counters");
             let what = "nothing that was sleeping woke on the resume frame";
@@ -817,7 +856,7 @@ pub fn window_selftest(
                     let left = world.vm.task_next_wakeup_ticks();
                     let same = left == Some(was);
                     info!(
-                        "selftest: {} {what}: the next one is due in {was} ticks, as it was half a second ago{}",
+                        "selftest: {} {what}: the next one is due in {was} ticks, as it was two seconds ago{}",
                         if same { "ok  " } else { "FAIL" },
                         if same { String::new() } else { format!(" (now {left:?})") },
                     );
@@ -825,34 +864,52 @@ pub fn window_selftest(
                 other => info!("selftest: --   {what}: the next wakeup was {other:?} ticks off when the pause began"),
             }
             test.insn = spent();
+            test.places = places();
+            test.hunger = hunger();
+            test.phase = sky.phase;
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::KeyP);
-            test.step = 3;
+            test.step = 4;
             test.at = now + 0.5;
         }
-        3 => {
+        4 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the creatures are thinking again");
+            // and the world with them. Positions are "somebody moved" rather than "everybody
+            // did": a creature that is asleep, or one a handler has told to stand still, is
+            // allowed to be where it was.
+            let moved = places()
+                .iter()
+                .any(|(e, at)| test.places.iter().any(|(was, place)| was == e && place != at));
+            ok(moved, "and the garden moves again: somebody has walked");
+            // "changed", not "fell": a creature standing on a plant is *filling* its meter, and
+            // over half a second the garden as a whole can go either way. What the check is about
+            // is that `get_hungry` and `eat` are running again at all.
+            let meters = hunger()
+                .iter()
+                .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now));
+            ok(meters, "the meters move again");
+            ok(sky.phase > test.phase, "the day turns again");
             keys.release(KeyCode::KeyP);
-            keys.press(KeyCode::F2);
-            test.step = 4;
-            test.at = now + 0.2;
-        }
-        4 => {
-            ok(!panel.open, "F2 hides the VM panel");
-            keys.release(KeyCode::F2);
             keys.press(KeyCode::F2);
             test.step = 5;
             test.at = now + 0.2;
         }
         5 => {
-            ok(panel.open, "F2 shows it again");
+            ok(!panel.open, "F2 hides the VM panel");
             keys.release(KeyCode::F2);
+            keys.press(KeyCode::F2);
             test.step = 6;
             test.at = now + 0.2;
         }
-        // --- and then the editor, which restarts the scripts ---------------
         6 => {
+            ok(panel.open, "F2 shows it again");
+            keys.release(KeyCode::F2);
+            test.step = 7;
+            test.at = now + 0.2;
+        }
+        // --- and then the editor, which restarts the scripts ---------------
+        7 => {
             ok(
                 editor.file == "beetle.rb" && editor.text.contains("creature \"Beetle\""),
                 "the editor shows the file of the creature that was clicked",
@@ -864,10 +921,10 @@ pub fn window_selftest(
             // Every beetle is handed over in the frame `do_editor_actions` runs — there is no
             // queue any more (see `restart_species`) — so this is a breath for the new tasks to
             // be made and to run their first instructions, not a wait for a queue to drain.
-            test.step = 7;
+            test.step = 8;
             test.at = now + 0.6;
         }
-        7 => {
+        8 => {
             let on_disk = platform::read(&brains.path(&ruby.0, Species::Beetle)).unwrap_or_default();
             let every = beetles().count();
             let applied = beetles().filter(|(_, m, _)| m.in_memory).count();
@@ -886,17 +943,17 @@ pub fn window_selftest(
                 "every restarted beetle's new task has run",
             );
             test.insn = spent();
-            test.step = 8;
+            test.step = 9;
             test.at = now + 9.0;
         }
-        8 => {
+        9 => {
             // the VM did not stop: every task, restarted or not, is still being given the CPU
             ok(spent() > test.insn, "the whole VM is still running afterwards");
             editor.action = Some(EditorAction::Revert);
-            test.step = 9;
+            test.step = 10;
             test.at = now + 0.6;
         }
-        9 => {
+        10 => {
             ok(
                 beetles().count() > 0 && beetles().all(|(_, m, _)| !m.in_memory),
                 "Revert puts every beetle back on the file",
@@ -929,7 +986,7 @@ pub fn window_selftest(
             } else {
                 info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
             }
-            test.step = 10;
+            test.step = 11;
         }
         _ => {}
     }
