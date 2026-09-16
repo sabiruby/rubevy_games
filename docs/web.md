@@ -176,13 +176,16 @@ older build wrote. `docs/garden.md` has the rest.
 
 ## Size
 
-Measured on this commit, `--profile web` (release, `opt-level = "s"`, thin LTO, stripped), with
-binaryen 132 — the version CI installs:
+Measured with `--profile web` (release, `opt-level = "s"`, thin LTO, stripped) and binaryen 132 —
+the version CI installs. The garden's two `wasm-opt` columns are from the sabiruby 0.5.1 build (the
+restart queue gone, `GARDEN_RELOAD_AT` and `CHECKS_EXIT_WHEN_DONE` in); it is 10 KB smaller than
+the 0.5.0 one and 5 KB smaller gzipped, which is nothing, and the unoptimized columns were not
+re-measured:
 
 | | bytes | gzip -9 | with `wasm-opt -Os` | its gzip |
 |---|---|---|---|---|
 | `sabibots/pkg/game_bg.wasm` | 38,772,420 | 9,877,837 | 34,794,885 | 10,593,843 |
-| `garden/pkg/game_bg.wasm` | 39,250,403 | 10,011,507 | 35,227,348 | 10,719,867 |
+| `garden/pkg/game_bg.wasm` | 39,250,403 | 10,011,507 | 35,216,938 | 10,715,122 |
 | `compiler/sabiruby.wasm` (each game's copy) | 2,435,191 | 835,234 | — | — |
 | `sabibots/assets/` (16 files) | 234,202 | | | |
 | `garden/assets/` (10 files) | 322,924 | 64,744 | | |

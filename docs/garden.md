@@ -811,8 +811,8 @@ vm:   #2 rabbit.rb:77           run              pc 137   spot=[18.5, 0.0, -3.9]
 
 `GARDEN_SELFTEST=1` with a window drives the editor the way a click would (by setting
 `Editor::action`) and presses the two keys, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
-for Battle. Save is left out on purpose, since it writes to the repository. Sixteen lines, all
-`ok` (through `docker`, lavapipe):
+for Battle. Save is left out on purpose, since it writes to the repository. Twenty-one lines, all
+`ok` (through `docker`, lavapipe — and all twenty-one in a browser too, at `garden/?selftest`):
 
 ```
 selftest: ok   P pauses: the scripts' budget is 0
@@ -838,6 +838,13 @@ selftest: ok   Revert shows the file again
 selftest: ok   nothing was written
 selftest: Rabbit 400v0 — 21 ask round trips, 83 component reads, 1.00 frames/decision
 ```
+
+**They end by asking the app to exit, and only where there is something to exit to.**
+`platform::CHECKS_EXIT_WHEN_DONE` is `true` on a PC — the checks were asked for on a command line
+and the shell wants its prompt back — and `false` in a browser, where `AppExit` does not end a run
+but stops the canvas: winit's wasm loop is no longer pumped, every system stops, and the last frame
+drawn stays on the screen looking like a garden that has quietly stopped taking keys. A page says
+`selftest: done — the garden keeps running` instead and goes on being a garden (`docs/web.md`).
 
 The keys are checked **before** the editor, and on purpose: the editor restarts scripts, and a
 check about the scheduler asked after that would be a check about the restart.
