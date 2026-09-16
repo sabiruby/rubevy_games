@@ -2575,6 +2575,7 @@ dependencies = [
  "bevy",
  "js-sys",
  "rubevy",
+ "sabiruby",
  "sabiruby-compiler",
  "wasm-bindgen",
  "web-sys",
@@ -4355,6 +4356,7 @@ dependencies = [
  "hashbrown 0.15.5",
  "libm",
  "regex-automata",
+ "sabiruby-macros",
 ]
 
 [[package]]
@@ -4364,6 +4366,16 @@ source = "git+https://github.com/sabiruby/sabiruby#9c8ebf2dabf61585d6099fed1e4ef
 dependencies = [
  "cc",
  "sabiruby",
+]
+
+[[package]]
+name = "sabiruby-macros"
+version = "0.1.0"
+source = "git+https://github.com/sabiruby/sabiruby#9c8ebf2dabf61585d6099fed1e4efa0869f936fe"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

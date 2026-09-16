@@ -140,6 +140,37 @@ class Creature
     body[:species]
   end
 
+  # === the genome: the same three numbers, twice (G2) ========================
+  #
+  # `Genome` is a Rust struct with two derives on it (`garden/src/genome.rs`). One of them is
+  # Bevy's `Reflect`, which is why it is readable as a Hash like any other component field:
+  #
+  #     me[:Creature][:genome]     # => {speed: 2.31, sight: 8.4, appetite: 0.97}
+  #
+  # The other is sabiruby's `RubyClass`, which makes it a Ruby class whose objects **are** the
+  # Rust value — not a copy of it. `Rubevy.ask("genome")` is answered with one of those, so
+  # `my_genome.mix(other).mutate(0.1)` is three Rust functions called from Ruby, and the only
+  # thing that crosses the boundary is a handle.
+  #
+  # Which one to use is a real choice. The Hash is free of ceremony and is already there; the
+  # object has the arithmetic in it. This creature uses both: its own genome as the object,
+  # because it is going to do sums with it, and a partner's as the Hash, because reading a
+  # component of another entity is something it can already do and asking the game a second
+  # question would not be.
+
+  # Ours, as the object. It never changes, so it is asked for once.
+  def my_genome
+    @my_genome ||= Rubevy.ask("genome").pop
+  end
+
+  # Somebody else's, out of their `Creature` component and back into a `Genome`. One frame, no
+  # question asked of the game, and `Genome.new` is the class method the macro wrote.
+  def genome_of(thing)
+    body = thing && thing[:Creature]
+    genes = body && body[:genome]
+    genes && Genome.new(genes[:speed], genes[:sight], genes[:appetite])
+  end
+
   def log(text)
     Rubevy.log "#{name}: #{text}"
   end
@@ -262,7 +293,7 @@ class Creature
   # called from within a C function boundary". An ordinary call written out in Ruby is a frame
   # in this task, which can wait. So the names have to be in the source, and that is what fixes
   # the number of slots (rubevy_games `docs/worklog/2026-09-16-reflex.md`).
-  REFLEX_SLOTS = 5
+  REFLEX_SLOTS = 6
 
   def self.reflexes
     @reflexes ||= []
@@ -287,6 +318,7 @@ class Creature
     when 2 then __reflex_2(*args)
     when 3 then __reflex_3(*args)
     when 4 then __reflex_4(*args)
+    when 5 then __reflex_5(*args)
     end
   end
 

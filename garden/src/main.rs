@@ -24,6 +24,7 @@
 //!
 //! Mouse: drag to orbit, wheel to zoom.
 
+mod genome;
 mod platform;
 
 use std::path::{Path, PathBuf};
@@ -33,6 +34,9 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
+use sabiruby::IntoRuby;
+
+use crate::genome::{Birth, Genome, read_birth};
 
 // ---------------------------------------------------------------------------------------------
 // The field. It lies on XZ with y up, which is the only thing 3D costs the Ruby side: a position
@@ -72,6 +76,56 @@ const FOOD_VALUE: f32 = 60.0;
 /// how close is touching, for eating and for a rabbit startling a beetle
 const REACH: f32 = 1.1;
 const TOUCH_REACH: f32 = 1.3;
+
+/// How long a creature has been alive before the selftest expects its reflexes to answer for it.
+/// A newborn (G2) is spawned with a `Script`, which rubevy turns into a task on a later frame,
+/// and the task's first act is to subscribe to its five or six events — so for the first moments
+/// of a life there is nobody listening, and an event published then is dropped. It is not a
+/// *rule*: a creature that hears nothing simply carries on wandering. It is only that "did the
+/// reflex turn it?" cannot be asked of a creature that had no reflexes yet, and before G2 every
+/// creature in the world was as old as the world.
+const NEWBORN_GRACE: f32 = 2.0;
+
+/// Breeding (G2). Two creatures of one species that meet while this full are told to make a
+/// child — the rule is Rust's, the arithmetic of the child is Ruby's.
+///
+/// Three quarters full, not nine tenths. The first number here was 85, and it made breeding a
+/// thing that happened twice in a ninety-second run and sometimes not at all: a creature is only
+/// over 85 for the nine seconds after a meal, and two of them have to be over it *at the same
+/// time and in the same place*. 75 is still well past the 55 at which a beetle's own script goes
+/// looking for grass, and it is above what a parent is left with afterwards.
+const MATE_HUNGER: f32 = 75.0;
+/// what it costs each parent, which is most of the reason the population does not run away: a
+/// parent is left under its own script's "go and find something to eat" line and has to eat its
+/// way back up past `MATE_HUNGER` before it can do this again
+const MATE_COST: f32 = 30.0;
+/// and how long it may not, whatever it eats. Both are charged when the **child arrives**, not
+/// when the rule speaks: whether a creature does anything at all with `"mate"` is its script's
+/// business, and a rule that charged for the message would be charging for a message the script
+/// may never have subscribed to.
+const MATE_COOLDOWN: f32 = 20.0;
+/// how often the rule may tell the same creature about a partner. A creature whose script does
+/// not listen (the rabbit has no `reflex(:mate)`) is told again and again and nothing whatever
+/// happens — that is what `publish` to nobody costs — and one whose script does listen answers
+/// within a frame or two. This is only what keeps one meeting from becoming sixty messages.
+const COURT_RETRY: f32 = 2.0;
+/// a newborn starts hungry — well under `MATE_HUNGER`, so nothing is born breeding
+const CHILD_HUNGER: f32 = 50.0;
+/// how many creatures the garden holds. The cap is the rule's, checked before `"mate"` goes out
+/// and again when the child is asked for, because a script answers a frame later.
+const POP_MAX: usize = 24;
+/// How close two creatures have to be to court: within about a body's length or two of each
+/// other, not overlapping.
+///
+/// "When they touch" was the first rule, and it almost never fires. Two creatures only overlap
+/// for the single frame it takes `separate` to push them apart, and the frame it does,
+/// `"bumped"` goes out and both scripts run from each other — so the sum of the radii (0.8 for
+/// two beetles) is a distance the world spends almost no time at. Measured over forty seconds
+/// with `GARDEN_DEBUG=1`: the nearest two *well-fed* beetles of the same species ever came was
+/// **1.24**, and the pair never once reached 1.05. What a meeting actually looks like here is two
+/// creatures eating at the same clump of grass, which `eat`'s own reach (1.1 plus half the
+/// plant) leaves about two units apart — so that is the number.
+const MATE_REACH: f32 = 2.0;
 
 /// Solid things. Circles on XZ, pushed apart after the move; no physics crate, because the rule
 /// is three lines and a physics crate is a megabyte of wasm and a second vocabulary.
@@ -118,27 +172,25 @@ impl Species {
             Species::Rabbit => "Rabbit",
         }
     }
-    /// how fast it may go, and how far it sees — the two numbers G2's `Genome` will decide
-    fn speed(self) -> f32 {
-        match self {
-            Species::Beetle => 2.2,
-            Species::Rabbit => 3.4,
-        }
-    }
-    fn sight(self) -> f32 {
-        match self {
-            Species::Beetle => 8.0,
-            Species::Rabbit => 12.0,
-        }
-    }
 }
 
-/// A living thing, and how long it has been one.
+/// A living thing, how long it has been one, and what it was born with.
+///
+/// `genome` is G2's: how fast it may go, how far it sees and how fast it uses itself up, all
+/// three read by the Rust rules below. Because `Genome` derives `Reflect` like everything else
+/// here, a script reads it with no extra ceremony —
+///
+///     me[:Creature][:genome]      # => {speed: 2.31, sight: 8.4, appetite: 0.97}
+///
+/// — and because it *also* derives `RubyClass`, the same three numbers can come back as an
+/// object with methods on them (`Rubevy.ask("genome")`, answered in `answer_garden`). Two views
+/// of one value, and neither cost a line of glue.
 #[derive(Component, Reflect, Debug, Clone, Copy)]
 #[reflect(Component)]
 pub struct Creature {
     pub species: Species,
     pub age: f32,
+    pub genome: Genome,
 }
 
 /// How full it is: `HUNGER_MAX` is stuffed, 0 is dead. (The name is the plan's; read it as "the
@@ -230,6 +282,18 @@ enum Gait {
     Idle,
     Walk,
     Eat,
+}
+
+/// When a creature may court again. Private, like `Mind` and `Eating`: a cooldown is the rule's
+/// bookkeeping, not something a creature knows about itself, and *not registering it* is the
+/// whole of saying so.
+#[derive(Component)]
+struct Breeding {
+    /// the earliest the rule may tell this creature about a partner again
+    ready_at: f32,
+    /// who it was last told about, so that the cost of the child can be charged to both parents
+    /// when the child actually arrives — a frame or two later, and from Ruby
+    partner: Option<Entity>,
 }
 
 /// The selftest's fasting beetle: no script, almost no hunger left.
@@ -347,6 +411,15 @@ struct RubyDir(PathBuf);
 #[derive(Resource, Default)]
 struct Eaters(Vec<Entity>);
 
+/// The children a script has asked for this frame (`garden.spawn`), read out of the Ruby Hash in
+/// `answer_garden` and spawned by `hatch` a moment later.
+///
+/// The two are separated because the answering system has the whole `World` and no `Commands`,
+/// while spawning a creature wants `Look`, `RubyDir` and `Assets<MrbAsset>` — which are three
+/// ordinary system parameters. Reading the Hash needs the VM; making the creature does not.
+#[derive(Resource, Default)]
+struct Births(Vec<Birth>);
+
 /// `--headless N`: how long the world may run.
 #[derive(Resource)]
 struct Headless {
@@ -413,6 +486,18 @@ struct SelfTest {
     asleep_at: Option<f32>,
     awake_speed: f32,
     asleep_counted: u32,
+
+    // --- G2: the genome ----------------------------------------------------
+    /// every `"mate"` the rule has published: who was told, its own genome, its partner's, when
+    matings: Vec<(Entity, Genome, Genome, f32)>,
+    /// how many went out, and how many children came back
+    courtings: u32,
+    births: u32,
+    /// the first child a script asked the game for: when it was asked for, and what the check
+    /// below made of its three genes against its parents'
+    born_at: Option<f32>,
+    born_says: String,
+    born_ok: bool,
 }
 
 impl Default for SelfTest {
@@ -435,6 +520,12 @@ impl Default for SelfTest {
             asleep_at: None,
             awake_speed: 0.0,
             asleep_counted: 0,
+            matings: Vec::new(),
+            courtings: 0,
+            births: 0,
+            born_at: None,
+            born_says: String::new(),
+            born_ok: false,
         }
     }
 }
@@ -510,6 +601,7 @@ fn main() {
         .register_type::<Plant>()
         .register_type::<Creature>()
         .register_type::<Species>()
+        .register_type::<Genome>()
         .register_type::<Hunger>()
         .register_type::<Velocity>()
         .register_type::<Sight>()
@@ -524,6 +616,12 @@ fn main() {
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
         .init_resource::<Eaters>()
+        .init_resource::<Births>()
+        // The one thing this game puts in the VM (G2): the `Genome` class and its seven methods.
+        // `ScriptWorld::vm` is public and the resource exists as soon as `RubevyPlugin` is added,
+        // while no script runs before the first `Update` — so `Startup` is the place and rubevy
+        // needs no entry point for it (rubevy `docs/host-api.md`, "Adding to the VM").
+        .add_systems(Startup, install_genome)
         // `spawn_world` asks for `Option<Res<Look>>`, and a `None` there is how the headless
         // build says "no models". That makes the order load-bearing: without this the windowed
         // build's `spawn_world` may run before `make_look` and then it is `None` there too —
@@ -547,10 +645,14 @@ fn main() {
                 get_hungry,
                 eat,
                 startle,
+                court,
                 starve,
             )
                 .chain(),
         )
+        // after the answers, because what it spawns was asked for in this frame's
+        // `answer_garden` and the request is answered there too
+        .add_systems(Update, hatch.after(RubevySet::Answer))
         // The one system that answers a script. It goes in `RubevySet::Answer`, which is the
         // only placement where a question is answered on the frame it was asked — anywhere else
         // costs a second frame per round trip, and where it landed used to be luck (rubevy
@@ -701,9 +803,15 @@ fn spawn_world(
     // everything else.
     let probe_at = Vec2::new(HALF_W - 3.0, HALF_D - 3.0);
     let dinner_at = probe_at + Vec2::new(-4.0, -3.0);
+    // and, for G2, a third corner: a tight clump of grass with a beetle on either side of it.
+    // Nothing about the rules is bent for it — the two walk to the grass because they are hungry,
+    // eat because they are standing on it, are full because they ate, and are told about each
+    // other because they are full and touching. What is arranged is only that it happens.
+    let meadow_at = Vec2::new(-HALF_W + 6.0, HALF_D - 6.0);
     let keep_clear = selftest.is_some();
     let clear_of_fixtures = |at: Vec2| {
-        !keep_clear || (at.distance(fasting_at) > 6.0 && at.distance(probe_at) > 7.0)
+        !keep_clear
+            || (at.distance(fasting_at) > 6.0 && at.distance(probe_at) > 7.0 && at.distance(meadow_at) > 8.0)
     };
 
     // trees and rocks first: they never move, so everything else is placed around them. They are
@@ -771,19 +879,25 @@ fn spawn_world(
         }
         taken.push(at);
         let hunger = dice.between(45.0, 90.0);
-        let entity = spawn_creature(&mut commands, look, species, at, hunger);
+        // no two creatures alike, so that `Genome#mix` has something to average
+        let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
+        let entity = spawn_creature(&mut commands, look, species, at, hunger, genome);
         give_mind(&mut commands, &ruby.0, &mut mrb, entity, species);
     }
 
     if keep_clear {
-        let entity = spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0);
+        let entity =
+            spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle));
         commands.entity(entity).insert(Fasting);
         info!("selftest: a beetle with no brain and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
         let dinner = spawn_plant(&mut commands, look, dinner_at, PLANT_MAX, false);
         // hungry enough that its script goes looking rather than wandering (the beetle's own
         // threshold is 55), and far enough that getting there has to be walking
-        let probe = spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0);
+        // the species' own genome, not a rolled one: the check below is written for a beetle
+        // that sees exactly eight units, and a rolled `Sight` of 6.6 would be testing the dice
+        let probe =
+            spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle));
         commands.entity(probe).insert(Probe { dinner });
         give_mind(&mut commands, &ruby.0, &mut mrb, probe, Species::Beetle);
         info!(
@@ -791,6 +905,26 @@ fn spawn_world(
             probe_at.x,
             probe_at.y,
             probe_at.distance(dinner_at)
+        );
+
+        // G2's pair. Four plants in a clump about a unit across, so that two beetles eating at it
+        // stand close enough to touch, and two hungry beetles four and a half units away on
+        // either side — inside the `Sight` of seven the smaller of the two genomes gives.
+        for offset in [Vec2::ZERO, Vec2::new(0.7, 0.2), Vec2::new(-0.2, 0.7), Vec2::new(0.5, -0.6)] {
+            spawn_plant(&mut commands, look, meadow_at + offset, PLANT_MAX, offset.x > 0.4);
+        }
+        // and they are not alike: `mix` averaging two copies of one thing would say nothing
+        let lovers = [
+            (Vec2::new(-4.5, 0.0), Genome { speed: 2.0, sight: 7.0, appetite: 0.9 }),
+            (Vec2::new(4.5, 0.0), Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }),
+        ];
+        for (offset, genome) in lovers {
+            let lover = spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome);
+            give_mind(&mut commands, &ruby.0, &mut mrb, lover, Species::Beetle);
+        }
+        info!(
+            "selftest: two hungry beetles {:.1} apart, with four plants between them at ({:.1}, {:.1})",
+            9.0, meadow_at.x, meadow_at.y
         );
     }
 }
@@ -859,13 +993,24 @@ fn radius_of(species: Species) -> f32 {
 /// A creature: the same split. The entity's `Transform` is position and facing and nothing else,
 /// which is what a brain reads and writes; the model is a child — which is exactly why G0a swapped
 /// six primitives for six `.glb` files without a single component changing.
-fn spawn_creature(commands: &mut Commands, look: Option<&Look>, species: Species, at: Vec2, hunger: f32) -> Entity {
+fn spawn_creature(
+    commands: &mut Commands,
+    look: Option<&Look>,
+    species: Species,
+    at: Vec2,
+    hunger: f32,
+    genome: Genome,
+) -> Entity {
     let mut entity = commands.spawn((
-        Creature { species, age: 0.0 },
+        Creature { species, age: 0.0, genome },
         Hunger(hunger),
         Velocity(Vec2::ZERO),
-        Sight(species.sight()),
+        // G2: how far it sees is its genome's, not its species'. `Sight` stays a component of
+        // its own because that is what `answer_garden` reads to decide how far `garden.nearest`
+        // may look, and what a script reads with `me[:Sight]`.
+        Sight(genome.sight),
         Collider { radius: radius_of(species) },
+        Breeding { ready_at: 0.0, partner: None },
         Memory,
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
@@ -1060,8 +1205,9 @@ fn day_night(
 fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocity, &mut Transform)>) {
     let dt = time.delta_secs();
     for (creature, mut velocity, mut transform) in &mut creatures {
-        // a brain may ask for more than the body can give; the rule is the body's
-        let limit = creature.species.speed();
+        // a brain may ask for more than the body can give; the rule is the body's, and from G2
+        // the body's number comes off its own genome rather than off its species
+        let limit = creature.genome.speed;
         if velocity.0.length() > limit {
             velocity.0 = velocity.0.normalize_or_zero() * limit;
         }
@@ -1260,7 +1406,10 @@ fn get_hungry(time: Res<Time>, mut creatures: Query<(&mut Creature, &mut Hunger)
     let dt = time.delta_secs();
     for (mut creature, mut hunger) in &mut creatures {
         creature.age += dt;
-        hunger.0 -= HUNGER_RATE * dt;
+        // G2: `appetite` is the third gene, and it is the price of the other two — a creature
+        // that was born fast and far-sighted burns through itself at the same rate unless the
+        // dice were kind, which is what makes a genome something to select rather than a wish
+        hunger.0 -= HUNGER_RATE * creature.genome.appetite * dt;
     }
 }
 
@@ -1355,7 +1504,11 @@ fn startle(
                 if !contacts.0.contains(&(*rabbit, beetle)) {
                     world.publish(Some(beetle), "touched", Answer::Entity(*rabbit));
                     // and, for the selftest, which way it was going when it was told
-                    if let Some(test) = test.as_mut() && velocity.0.length() > 0.5 && !by_a_wall(at) {
+                    if let Some(test) = test.as_mut()
+                        && velocity.0.length() > 0.5
+                        && !by_a_wall(at)
+                        && creature.age > NEWBORN_GRACE
+                    {
                         // and only when this beetle has been left alone for a while. A rabbit
                         // that keeps walking into one publishes again every time the contact is
                         // remade, the reflex takes half a second over each message, and the rest
@@ -1385,6 +1538,176 @@ fn startle(
     contacts.0 = touching;
 }
 
+/// **Breeding (G2): the rule is Rust's, the child is Ruby's.**
+///
+/// Two creatures of one species that are touching and both this full are a pair, and the game
+/// publishes `"mate"` to **one** of them — the one with the lower entity id, so that a meeting is
+/// one message and not two, and one child and not two — with the other as a `Rubevy::Entity`.
+/// That is the whole of what Rust decides: who may breed with whom, how often, and how many
+/// creatures the garden holds.
+///
+/// What the child *is* — the average of two genomes, mutated — is worked out in Ruby, by calling
+/// three methods on a Rust struct:
+///
+/// ```ruby
+/// reflex(:mate) do |partner|
+///   child = my_genome.mix(genome_of(partner)).mutate(0.1)
+///   garden.spawn(species: species.to_s, genome: child.to_h, at: [...])
+/// end
+/// ```
+///
+/// so the division is: the rules are Rust, the arithmetic is Ruby, and the arithmetic is done by
+/// calling Rust. Neither side needed a line of glue for it — `Genome` is one struct with two
+/// derives on it (`garden/src/genome.rs`).
+fn court(
+    time: Res<Time>,
+    mut world: ResMut<ScriptWorld>,
+    births: Res<Births>,
+    mut test: Option<ResMut<SelfTest>>,
+    mut creatures: Query<(Entity, &Creature, &Hunger, &Collider, &Transform, &mut Breeding)>,
+) {
+    let now = time.elapsed_secs();
+    // the cap is the rule's, and the children already asked for this frame count against it
+    let population = creatures.iter().count() + births.0.len();
+    if population >= POP_MAX {
+        return;
+    }
+    // one pass to look, because the publish and the bookkeeping both want `&mut`
+    let ready: Vec<(Entity, Species, Vec2)> = creatures
+        .iter()
+        .filter(|(_, _, hunger, _, _, breeding)| hunger.0 >= MATE_HUNGER && now >= breeding.ready_at)
+        .map(|(entity, creature, _, _, at, _)| {
+            (entity, creature.species, Vec2::new(at.translation.x, at.translation.z))
+        })
+        .collect();
+
+    let mut spoken: Vec<Entity> = Vec::new();
+    let mut room = POP_MAX - population;
+    for (i, (a, species, here)) in ready.iter().enumerate() {
+        for (b, other_species, there) in ready.iter().skip(i + 1) {
+            if room == 0 {
+                return;
+            }
+            if species != other_species || here.distance(*there) > MATE_REACH {
+                continue;
+            }
+            if spoken.contains(a) || spoken.contains(b) {
+                continue;
+            }
+            // the lower id is told, so that one meeting is one message: both of them computing a
+            // child would make two, of the same two parents, in the same frame
+            let (told, partner) = if a.to_bits() <= b.to_bits() { (*a, *b) } else { (*b, *a) };
+            world.publish(Some(told), "mate", Answer::Entity(partner));
+            spoken.push(*a);
+            spoken.push(*b);
+            room -= 1;
+            if let Some(test) = test.as_mut() {
+                test.courtings += 1;
+                let genome_of = |e: Entity| creatures.get(e).map(|c| c.1.genome).ok();
+                if let (Some(one), Some(two)) = (genome_of(told), genome_of(partner)) {
+                    test.matings.push((told, one, two, now));
+                }
+            }
+            for (who, mate) in [(told, partner), (partner, told)] {
+                if let Ok((.., mut breeding)) = creatures.get_mut(who) {
+                    breeding.ready_at = now + COURT_RETRY;
+                    breeding.partner = Some(mate);
+                }
+            }
+        }
+    }
+}
+
+/// The children a script asked for in this frame's `answer_garden`, made.
+///
+/// This is where the cost of one lands: both parents lose `MATE_COST` from their meter and may
+/// not be told about a partner again for `MATE_COOLDOWN`, so a garden's population is held down
+/// by the same thing that holds an individual down — having to eat. The child is an ordinary
+/// creature with an ordinary script; what is not ordinary about it is that its three numbers were
+/// worked out in Ruby.
+fn hatch(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut births: ResMut<Births>,
+    look: Option<Res<Look>>,
+    ruby: Res<RubyDir>,
+    mut mrb: ResMut<Assets<MrbAsset>>,
+    mut test: Option<ResMut<SelfTest>>,
+    mut parents: Query<(&mut Hunger, &mut Breeding)>,
+) {
+    let now = time.elapsed_secs();
+    for birth in births.0.drain(..) {
+        let at = Vec2::new(
+            birth.at.x.clamp(-HALF_W + 1.0, HALF_W - 1.0),
+            birth.at.y.clamp(-HALF_D + 1.0, HALF_D - 1.0),
+        );
+        let child = spawn_creature(&mut commands, look.as_deref(), birth.species, at, CHILD_HUNGER, birth.genome);
+        commands.entity(child).insert(Breeding { ready_at: now + MATE_COOLDOWN, partner: None });
+        give_mind(&mut commands, &ruby.0, &mut mrb, child, birth.species);
+        info!(
+            "a {} was born at {now:.1} s ({}) — {}",
+            birth.species.name(),
+            child,
+            birth.genome.describe()
+        );
+
+        // the parents pay for it, now that it is here
+        let mother = birth.parent;
+        let father = mother.and_then(|m| parents.get(m).ok().and_then(|(_, b)| b.partner));
+        for who in [mother, father].into_iter().flatten() {
+            if let Ok((mut hunger, mut breeding)) = parents.get_mut(who) {
+                hunger.0 = (hunger.0 - MATE_COST).max(1.0);
+                breeding.ready_at = now + MATE_COOLDOWN;
+                breeding.partner = None;
+            }
+        }
+
+        if let Some(test) = test.as_mut() {
+            test.births += 1;
+            if test.born_at.is_none() {
+                let mating = mother.and_then(|m| test.matings.iter().rev().find(|(e, ..)| *e == m).copied());
+                let (says, ok) = match mating {
+                    Some((_, one, two, _)) => judge_child(&birth.genome, &one, &two),
+                    None => ("its parents' pairing was not recorded".into(), false),
+                };
+                test.born_at = Some(now);
+                test.born_says = says;
+                test.born_ok = ok;
+            }
+        }
+    }
+}
+
+/// Is this child the mutated average of those two parents? Every gene has to lie within the
+/// mutation rate of the parents' mean, and at least one has to have actually moved — a child
+/// exactly on the mean would mean `mutate` did nothing, and a child on a parent would mean `mix`
+/// did nothing. The rate is the one the beetle's script passes to `mutate`, which is 0.1.
+fn judge_child(child: &Genome, one: &Genome, two: &Genome) -> (String, bool) {
+    const RATE: f32 = 0.1;
+    let genes = [
+        ("speed", child.speed, one.speed, two.speed),
+        ("sight", child.sight, one.sight, two.sight),
+        ("appetite", child.appetite, one.appetite, two.appetite),
+    ];
+    let mut moved = false;
+    let mut said = Vec::new();
+    let mut ok = true;
+    for (name, got, a, b) in genes {
+        let mean = (a + b) * 0.5;
+        let drift = (got - mean).abs();
+        // the mutation is a multiplication by 1 ± rate, so this is how far from the mean it may
+        // be; the epsilon is the f32 round trip through the Ruby Float and back
+        if drift > RATE * mean.abs() + 1e-3 {
+            ok = false;
+        }
+        if got != a && got != b {
+            moved = true;
+        }
+        said.push(format!("{name} {got:.3} vs {a:.3}/{b:.3}, mean {mean:.3}"));
+    }
+    (format!("{} ({})", said.join("; "), if moved { "mutated off both parents" } else { "identical to a parent" }), ok && moved)
+}
+
 /// An empty meter is the end of it. Despawning takes the entity's `ScriptTask` with it, and
 /// rubevy's `on_remove` hook terminates the task and closes the queues anything of its was parked
 /// on (`docs/host-api.md`, "Events"). Nothing runs a script in G0; the path is here so that G1
@@ -1412,6 +1735,19 @@ fn starve(
 // The two questions the game answers (G1)
 // ---------------------------------------------------------------------------------------------
 
+/// The `Genome` class, put in the VM once (G2).
+///
+/// `ScriptWorld::vm` is the VM the scheduler runs, and it exists from the moment `RubevyPlugin`
+/// is added, while the first script does not start until the first `Update` — so a `Startup`
+/// system is the whole of what "install a class" takes, and rubevy needed no entry point for it
+/// (rubevy `docs/host-api.md`, "Adding to the VM"). What `register` adds is the methods: the
+/// class and its store would appear by themselves on the first `into_ruby`.
+fn install_genome(mut world: ResMut<ScriptWorld>) {
+    if let Err(e) = Genome::register(&mut world.vm) {
+        error!("the Genome class would not register: {e:?}");
+    }
+}
+
 /// `garden.nearest(:Plant)` and `garden.count(:Plant)` — the whole of this game's `ask` surface.
 /// SabiRuby Battle answers six kinds (`status`, `radar`, `incoming`, `act`, `seed`, `reflex`);
 /// the garden answers two, because everything else a creature wants to know is a component it
@@ -1429,6 +1765,10 @@ fn starve(
 fn answer_garden(world: &mut World) {
     let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
     let registry = registry.read();
+    // what `garden.spawn` was asked for, filled in below and handed to `Births` at the end: the
+    // answering system has the whole `World` but no `Commands`, and reading the Hash is the part
+    // that needs the VM
+    let mut newborn: Vec<Birth> = Vec::new();
     world.resource_scope(|world: &mut World, mut scripts: Mut<ScriptWorld>| {
         let world = &*world;
         for request in scripts.take_requests() {
@@ -1475,6 +1815,45 @@ fn answer_garden(world: &mut World) {
                     };
                     scripts.answer(&request, Answer::Num(count as f64));
                 }
+                // G2. The asker's own genome, as **the Rust value**: `answer_value` hands the
+                // host the `&mut Vm`, and `into_ruby` (written by `#[derive(RubyClass)]`) puts
+                // the `Genome` in the VM's host store and answers with the `Data` object naming
+                // it. The script gets something with methods on it, not a copy — and the same
+                // three numbers are readable as a plain Hash through `me[:Creature][:genome]`,
+                // by reflection, without this or any other question being asked.
+                "genome" => {
+                    let genome = asker.and_then(|me| world.get::<Creature>(me)).map(|c| c.genome);
+                    match genome {
+                        Some(genome) => scripts.answer_value(&request, move |vm| genome.into_ruby(vm)),
+                        None => scripts.answer(&request, Answer::Nil),
+                    }
+                }
+                // G2. `garden.spawn(species:, genome:, at:)` — the one question whose argument
+                // has a shape. It arrives as `Arg::Value`, which is the Ruby Hash itself rather
+                // than a copy of it (rubevy `docs/host-api.md`, "What a question may carry"), and
+                // it is read here with `Vm::hash_entries` and `FromRuby`. The population cap is
+                // checked again at this point because the script answered a frame after the rule
+                // spoke, and a frame is long enough for the garden to have filled up.
+                "garden.spawn" => {
+                    let population =
+                        world.iter_entities().filter(|e| e.contains::<Creature>()).count() + newborn.len();
+                    let outcome = match request.value(0) {
+                        _ if population >= POP_MAX => Err(format!("the garden is full ({population} creatures)")),
+                        Some(asked) => read_birth(&mut scripts.vm, asked),
+                        None => Err("spawn wants a Hash: species:, genome:, at:".to_string()),
+                    };
+                    match outcome {
+                        Ok((species, genome, at)) => {
+                            newborn.push(Birth { species, genome, at, parent: asker });
+                            scripts.answer(&request, Answer::Bool(true));
+                        }
+                        Err(why) => {
+                            // the script hears why, because a creature that asked for a child and
+                            // got silence has no way of finding out
+                            scripts.answer(&request, Answer::Text(why));
+                        }
+                    }
+                }
                 other => {
                     warn!("garden: nobody answers {other:?}");
                     scripts.answer(&request, Answer::Nil);
@@ -1482,6 +1861,9 @@ fn answer_garden(world: &mut World) {
             }
         }
     });
+    if !newborn.is_empty() {
+        world.resource_mut::<Births>().0.extend(newborn);
+    }
 }
 
 /// What a script has cost and where it is standing, read every frame out of
@@ -1738,6 +2120,23 @@ fn stop_when_over(
         if sky.night { "night" } else { "day" },
         sky.phase
     );
+    // what the population is made of (G2). The world starts with each species' own numbers
+    // jittered by a sixth either way; anything the run has moved is breeding and starving —
+    // the average of the survivors, not of the born.
+    for species in [Species::Beetle, Species::Rabbit] {
+        let mine: Vec<Genome> =
+            creatures.iter().filter(|(c, ..)| c.species == species).map(|(c, ..)| c.genome).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let n = mine.len() as f32;
+        let mean = Genome {
+            speed: mine.iter().map(|g| g.speed).sum::<f32>() / n,
+            sight: mine.iter().map(|g| g.sight).sum::<f32>() / n,
+            appetite: mine.iter().map(|g| g.appetite).sum::<f32>() / n,
+        };
+        info!("{} × {}: mean genome {} (its species' own is {})", mine.len(), species.name(), mean.describe(), Genome::of(species).describe());
+    }
 
     if let Some(test) = test {
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
@@ -1802,6 +2201,23 @@ fn stop_when_over(
                 ),
             ),
             None => ok(false, "the creatures were asleep a second after night fell (night never came)".into()),
+        }
+        // --- G2: the genome ------------------------------------------------
+        match test.born_at {
+            Some(at) => ok(
+                test.born_ok,
+                format!(
+                    "a child was born whose genome is its parents' mixed and mutated (at {at:.2} s: {}) [{} pairings, {} children]",
+                    test.born_says, test.courtings, test.births
+                ),
+            ),
+            None => ok(
+                false,
+                format!(
+                    "a child was born whose genome is its parents' mixed and mutated (none was, from {} pairings)",
+                    test.courtings
+                ),
+            ),
         }
     }
     exit.write(AppExit::Success);
