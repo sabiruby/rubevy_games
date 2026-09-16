@@ -256,32 +256,46 @@ several shorter ones:
   They are egui windows and can be dragged and collapsed. This is what moved the save buttons
   above the creature list.
 
-### Three things it found
+### Three things it found, and where they went
 
-**A restart that replaces every creature at once leaves their new tasks made but never run.** This
-is the shape G4 recorded on a PC ("ten at once and the scheduler stops"), and in the browser it
-shows in two places. The window checks that `?selftest` also runs pass 21 of 22, and the one that
-fails is *every restarted beetle's new task has run* — 0.6 s after Apply has handed the beetles
-over one at a time, not one of them has run an instruction, and the VM panel says `Created, 0 insn
-total, no frames` for each. It is not permanent: the two checks after it pass and seventeen
-`[script] Beetle:` lines follow. Worse is **F9 into a running garden**, which despawns everything
-and builds eleven creatures in one frame with no queue at all: `11 creatures never started; the
-garden is running anyway`, and every creature comes back with an empty memory (`{"meals":1}`,
-counting from the beginning) while the world itself is exactly right. The same load at *start-up*
-on a PC restores all eleven memories — that is what the round-trip check proves — so it is the
-"into a running world" path that is over the line. Not fixed here: it belongs to the VM's
-scheduler.
+**A restart that replaces every creature at once left their new tasks made but never run — the
+VM's doing, and fixed in sabiruby 0.5.1.** In the browser it showed in two places. The window
+checks that `?selftest` also runs passed 21 of 22, and the one that failed was *every restarted
+beetle's new task has run*: 0.6 s after Apply had handed the beetles over one at a time, not one
+of them had run an instruction and the VM panel said `Created, 0 insn total, no frames` for each.
+Worse was **F9 into a running garden**, which despawns everything and builds eleven creatures in
+one frame: `11 creatures never started; the garden is running anyway`, and every creature came
+back with an empty memory while the world itself was exactly right.
 
-**With the checks turned on, the page stops answering the mouse and the keyboard.** After
-`?selftest`'s window checks have finished driving the editor, neither F5, F9 nor P reaches the
-game, and neither do clicks on the HUD's buttons or on a creature's row — while the panels keep
-drawing and the world keeps living. A page *without* `?selftest` stays answerable: F5 saves at 25,
-45, 65 and 85 seconds, and both buttons work. So this is the checks' own doing and not something a
-player meets, which is why it is written down rather than worked around. What it is not: the DOM
-(the canvas keeps focus and the `keydown` arrives at `#garden`, `prevented=true`), and not the
-`EguiWantsInput` guard that F5 and F9 briefly had (taking it off changed nothing). The suspicion
-left is what `window_selftest` does to `ButtonInput<KeyCode>` by hand, or egui keeping keyboard
-focus in a text box it will not give up; neither was proved.
+Both were the same bug, and it was not "the scheduler stops": ending a creature's `ScriptTask`
+wakes its six reflex tasks with `Rubevy::Unsubscribed`, their empty `rescue` makes the block's
+value `nil`, and `Vm::task_run_limited` read that `nil` as "nothing ready" and ended the host's
+whole frame — six frames a creature, and a browser has fewer frames a second to spare than a PC
+does. sabiruby 0.5.1 tells the two apart. Driven again on the same machine and the same Chromium,
+with the game's own workaround queue deleted: **21 of 21**, *every restarted beetle's new task has
+run* among them, and F9 into a garden that has been running for three quarters of a minute gives
+`loaded 10 creatures, 46 plants, 7 trees, 9 rocks at 45.3 s (78 entities made way)` with no
+`never started` line and all ten memories back — a re-save from the page a moment later has
+`meals: 10` in it, not `meals: 1`.
+
+**With the checks turned on, the page stopped answering the mouse and the keyboard — and it was
+the checks ending the app.** After `?selftest`'s window checks had finished driving the editor,
+neither F5, F9 nor P reached the game. G5 recorded it unexplained, having cleared the DOM (the
+canvas keeps focus and the `keydown` arrives at `#garden`) and the `EguiWantsInput` guard that F5
+and F9 briefly had. The answer was in the last line of `window_selftest`: `exit.write(AppExit::
+Success)`. On a PC that is right — the checks were asked for on a command line and the shell wants
+its prompt back. **In a browser there is nothing to exit to.** winit's wasm event loop stops being
+pumped, every system stops running, and the last frame drawn stays on the canvas, so the page goes
+on *looking* like a garden while nothing in it will ever move again. That is also why the earlier
+reading that "the world keeps living" was wrong: the log stops dead at the last check.
+
+`platform::CHECKS_EXIT_WHEN_DONE` is `true` on a PC and `false` in a page, where the checks say
+`selftest: done — the garden keeps running (a page has nothing to exit to)` instead. Measured
+after the change, on the same 150-second run: F5 gives `saved 15 creatures, 30 plants at 150.2 s`,
+F9 gives `loaded 15 creatures … (62 entities made way)` and the rabbits say what trees they
+remember, and `P` — which prints nothing of its own — is measured by what stops: `[script]` lines
+in four seconds, **2 running, 0 paused, 3 resumed**. The world goes on living too (`night at
+145.4 s`, long after the checks ended).
 
 **The page's compiler cannot pass a file's name on**, so the HUD's "the line it is waiting on"
 column reads `playground.rb:102` in a browser where a PC says `beetle.rb:102`. The line numbers

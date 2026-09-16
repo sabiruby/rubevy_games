@@ -1141,14 +1141,17 @@ same Ruby, the same editor, and 315 KiB of models fetched beside the wasm. What 
 `localStorage` (under `garden:`, the game's own prefix, so the two games on one site cannot
 overwrite each other), Ruby is compiled by a second wasm module the page loads, and the checks are
 asked for with `?selftest` in the address rather than with an environment variable. `docs/web.md`
-is the whole of it, including what was driven in a headless browser and the two things that came
-out of doing so — the save's version number earning its keep, and a restart that leaves tasks
-created but never run.
+is the whole of it, including what was driven in a headless browser and the three things that came
+out of doing so — the save's version number earning its keep, a restart that left tasks created but
+never run (the VM's, fixed in sabiruby 0.5.1), and a page that stopped answering the keyboard once
+the checks had finished, because the checks ended the app and a page has nothing to exit to.
 
 ## What is not here yet
 
 Sound, and a creature file per *creature* rather than per species (the editor could do it; the
-game has no reason to want it yet), are not planned. The one thing G5 found and did not fix is in
-`docs/web.md`: after Apply or a load replaces every creature at once, their new tasks can sit
-`Created` without ever being run — G4 saw the same shape on a PC at ten creatures and worked
-around it by handing them over one at a time, and the VM's scheduler is where it belongs.
+game has no reason to want it yet), are not planned. The two things G5 found and did not fix are
+both fixed now: the tasks that sat `Created` after every creature was replaced at once were the
+VM's (sabiruby 0.5.1, and the game's workaround queue is gone with it), and the page that stopped
+answering the keyboard after `?selftest` was the checks writing `AppExit` in a place where there is
+nothing to exit to. What is left is the browser compiler's missing file name (`docs/web.md`), which
+belongs to sabiruby-playground.

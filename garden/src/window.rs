@@ -864,7 +864,15 @@ pub fn window_selftest(
                     }
                 );
             }
-            exit.write(AppExit::Success);
+            // A PC run was asked for the checks on a command line and should give the prompt
+            // back. A page was asked for them in its address, by somebody who is looking at the
+            // garden — and `AppExit` there does not end a run, it stops the canvas for good
+            // (`platform::CHECKS_EXIT_WHEN_DONE`).
+            if platform::CHECKS_EXIT_WHEN_DONE {
+                exit.write(AppExit::Success);
+            } else {
+                info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
+            }
             test.step = 10;
         }
         _ => {}

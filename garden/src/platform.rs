@@ -75,6 +75,10 @@ mod imp {
         std::env::var("GARDEN_SELFTEST").is_ok()
     }
 
+    /// Whether the window's checks end the run when they are done. On a PC they do: the checks
+    /// are asked for on a command line and the shell wants its prompt back.
+    pub const CHECKS_EXIT_WHEN_DONE: bool = true;
+
     /// `GARDEN_RELOAD_AT=SECONDS`, the checks' only way to press F9 without a keyboard.
     ///
     /// A headless run has no `ButtonInput` at all, so the one path a key drives — "read a file
@@ -187,6 +191,15 @@ mod imp {
             .and_then(|w| w.location().search().ok())
             .is_some_and(|q| q.contains("selftest"))
     }
+
+    /// **A page has nothing to exit to**, and `AppExit` in a browser is not "the run ended", it is
+    /// "this canvas stops". winit's wasm event loop stops being pumped, every system stops running,
+    /// and the last frame drawn stays on the screen looking like a garden — so the page goes on
+    /// *looking* alive while no key, no click and no creature does anything ever again. That is
+    /// G5's second finding (`docs/web.md`, "the page stops answering the mouse and the keyboard"):
+    /// not egui holding the keyboard and not the DOM, but the checks ending the app under the
+    /// player's feet. So the checks do not exit here; they say they are done and the garden goes on.
+    pub const CHECKS_EXIT_WHEN_DONE: bool = false;
 
     /// A page has no environment and no `--load`: the browser's checks press F9 for real
     /// (`web/garden.html` sends the key), so there is nothing to defer here.

@@ -404,11 +404,29 @@ wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記�
   DOM は無実（canvas にフォーカス、`keydown` は `#garden` に届く）、上の guard でもない（外しても直らない）。
   残る疑いは `window_selftest` が `ButtonInput` を手で押していること、または egui がテキストボックスの
   キーボードフォーカスを離さないこと。**確かめていない。**
+  * **2026-09-17 追記: どちらでもなかった。直した。** 犯人は `window_selftest` の最後の
+    `exit.write(AppExit::Success)`。PC ではそれが正しい（コマンドラインで頼まれた判定なので、
+    シェルにプロンプトを返す）が、**ページには終了する先が無い**。winit の wasm ループが
+    回らなくなり、全システムが止まり、最後に描いたフレームが canvas に残るので「庭は動いて見えるのに
+    何をしても効かない」になる。「世界は動き続けている」という前の読みも間違いで、ログは最後の判定で
+    途切れている。`platform::CHECKS_EXIT_WHEN_DONE`（PC は true、ページは false）にして、
+    ページでは `selftest: done — the garden keeps running` と言って庭を続ける。
+    同じ Chromium で測り直し: F5 `saved 15 creatures …`、F9 `loaded 15 creatures …`、
+    `P` は 4 秒間の `[script]` 行で **動作中 2 / 一時停止 0 / 再開 3**。世界も生きている（`night at 145.4 s`）。
 * **全部を一度に入れ替えると新しいタスクが `Created` のまま走らない**（G4 の「10 匹で止まる」と同じ形）。
   窓の判定 22 本のうち 1 本（`every restarted beetle's new task has run`）が落ち、
   **F9 のロードでは `11 creatures never started` で記憶が戻らない**（`load_world` は待ち行列を使わず同じフレームで
   11 匹作り直す）。起動時の `--load` は PC で 11 匹とも記憶が戻る（往復がバイト単位で同一）ので、
   「動いている庭に読み込む」側だけが踏んでいる。**VM のスケジューラ側の仕事**として記録した。
+  * **2026-09-17 追記: sabiruby 0.5.1（`bd6829b`）で直った。** 原因は G4 の追記のとおり
+    「nil で終わったタスクがホストの 1 フレームを食う」で、ブラウザのほうが 1 秒あたりのフレームが
+    少ない分だけ先に見えていた（PC の起動時 `--load` が平気だったのは、待ちが
+    `RESTORE_PATIENCE` の 5 秒に収まっていたから — 同じコンテナで測ると復元にかかる時間は
+    0.5.0 で 1.48 秒、0.5.1 で 6 ms）。ゲーム側に直すところは無かった。
+    同じ Chromium で測り直して窓の判定は **21/21**、動いている庭への F9 は
+    `loaded 10 creatures, 46 plants, 7 trees, 9 rocks at 45.3 s (78 entities made way)` で
+    `never started` は出ず、記憶も 10 匹とも戻る。headless で F9 の道を通すために
+    `GARDEN_RELOAD_AT`（`GARDEN_SELFTEST` のときだけ読む）を足した。
 * **ブラウザのコンパイラはファイル名を渡せない。** ページの橋は `window.gardenCompile(source)` でソースしか取らず、
   debug info の名前は playground の `playground.rb` になる。HUD の「待っている行」の列がそう出る。
   行番号は正しく、行番号を使うもの（箱庭は prelude の長さを引いて自分の行を出す）は全部正しい。
