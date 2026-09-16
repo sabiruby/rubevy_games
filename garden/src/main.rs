@@ -556,6 +556,42 @@ struct SaveFile {
 #[derive(Resource, Default)]
 struct SaveNow(bool);
 
+/// The last thing a save or a load said, for the HUD to show (G5).
+///
+/// A headless run has the log and nothing else, and a page has a console nobody opens. The window
+/// had neither: F5 wrote a line into stdout that the player never sees. A refused version is the
+/// reason this exists now — "your garden was saved by another build" has to reach the person
+/// whose garden it was — but the successes go through it too, because a line that only ever
+/// appears when something is wrong is a line nobody reads in time.
+#[derive(Resource, Default)]
+struct SaveNote {
+    text: String,
+    /// the world clock when it was said, so the HUD can let it fade
+    at: f32,
+    /// nothing was written or read: the HUD says it in amber
+    bad: bool,
+}
+
+impl SaveNote {
+    fn say(&mut self, at: f32, bad: bool, text: String) {
+        self.text = text;
+        self.at = at;
+        self.bad = bad;
+    }
+}
+
+/// What the HUD's Save and Load buttons asked for (G5).
+///
+/// The buttons cannot do the work themselves: `draw_hud` runs in egui's own schedule, after the
+/// frame's systems, and a load has to happen before rubevy looks at the world. So they leave a
+/// flag that `save_load_keys` reads on the next frame, exactly as if the key had been pressed
+/// then — a sixtieth of a second nobody can see, and one code path for a key and a button.
+#[derive(Resource, Default)]
+struct Asked {
+    save: bool,
+    load: bool,
+}
+
 /// A garden read out of a file and not yet built. `--load PATH` puts one here before the first
 /// frame; F9 puts one here at any time, and `load_world` does the same thing in both cases —
 /// which is why there is no second code path for "load while the world is running".
@@ -668,6 +704,11 @@ struct SelfTest {
     /// what the game told the tester script when it asked for a creature whose genome is missing
     /// a gene: serde's message, as the script heard it
     bad_spawn: Option<String>,
+
+    // --- G5: the save's version ---------------------------------------------
+    /// why the save from another version was not loaded, as `--load` said it. `None` means it was
+    /// loaded — or that this run was given a `--load` of its own and the check did not run
+    version_refused: Option<String>,
 }
 
 impl Default for SelfTest {
@@ -697,6 +738,7 @@ impl Default for SelfTest {
             born_says: String::new(),
             born_ok: false,
             bad_spawn: None,
+            version_refused: None,
         }
     }
 }
@@ -718,7 +760,9 @@ fn main() {
             args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(6.0),
         )
     });
-    let selftest = std::env::var("GARDEN_SELFTEST").is_ok();
+    // `GARDEN_SELFTEST=1` on a PC, `?selftest` in the page's address (G5): a browser has no
+    // environment, and the checks are what says from outside that the world is alive
+    let selftest = platform::selftest_asked();
     // `--save PATH` / `--load PATH` (G3): the same two things F5 and F9 do in the window, for a
     // run that has no keyboard. A `--save` is written when the run ends, which is what makes
     // "save, load in a second process, save again, compare the two files" one shell line each.
@@ -838,15 +882,29 @@ fn main() {
         path: save_to.clone().unwrap_or_else(|| platform::SAVE_FILE.to_string()),
         on_exit: save_to.is_some(),
     })
-    .init_resource::<SaveNow>();
-    if let Some(path) = &load_from {
+    .init_resource::<SaveNow>()
+    .init_resource::<SaveNote>()
+    .init_resource::<Asked>();
+    // G5's tenth check, and it is put here because here is what it is about. A save from another
+    // version has to be refused by the thing that reads one, so the check writes such a file and
+    // then hands it to `--load` — the arm below, unchanged — rather than to a function called
+    // beside it. A run that was given a real `--load` keeps it; the check then says it did not run.
+    let probe = (selftest && load_from.is_none()).then(write_a_save_from_another_version);
+    let mut version_refused = None;
+    if let Some(path) = load_from.as_ref().or(probe.as_ref()) {
         match read_save(path) {
             // the world is not built by `spawn_world` at all in this case: `load_world` does it on
             // the first frame, exactly as F9 does it on the four-hundredth
             Ok(save) => {
                 app.insert_resource(Loading { save });
             }
-            Err(e) => error!("{e}"),
+            // nothing is loaded, and nothing else happens: `spawn_world` builds a new garden on
+            // the first frame because no `Loading` is there to stop it
+            Err(e) => {
+                error!("{e}");
+                version_refused = Some(e.clone());
+                app.insert_resource(SaveNote { text: e, at: 0.0, bad: true });
+            }
         }
     }
 
@@ -938,7 +996,7 @@ fn main() {
     }
     if selftest {
         // after `separate`, so what it measures is the world as the frame leaves it
-        app.init_resource::<SelfTest>()
+        app.insert_resource(SelfTest { version_refused, ..default() })
             .add_systems(Update, watch_overlap.after(separate))
             .add_systems(Update, (watch_probe, watch_turning, watch_sleep).after(RubevySet::Answer));
     }
@@ -2376,6 +2434,15 @@ fn watch_minds(
 // the stage is for: the same crate does both halves, and the Ruby half is three lines longer.
 // ---------------------------------------------------------------------------------------------
 
+/// What this build writes into a save, and the only number it will read back (G5).
+///
+/// It is here rather than derived from the struct because the struct is not a version: a field
+/// added to `CreatureSave` that serde can default, and a field taken away, both leave a file that
+/// parses and means something else. The number is a promise about the *meaning*, and only a
+/// person can make it. The rule for changing it is the rule for changing the format: if a garden
+/// written by the old build would come back wrong rather than not at all, this goes up.
+const SAVE_VERSION: u32 = 1;
+
 /// A garden, written down. This struct **is** the file format; there is no schema anywhere else.
 ///
 /// What is not in it is as much of a decision as what is. A rock's squash and whether a plant is
@@ -2384,6 +2451,12 @@ fn watch_minds(
 /// about a world. What is here is what a creature could tell you about itself.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 struct GardenSave {
+    /// which build wrote this (G5). First, so that it is the first thing a person opening the
+    /// file sees, and refused by number rather than by whichever field happened to change:
+    /// `read_save` reads this alone before it reads the rest. A browser keeps a save in
+    /// `localStorage` until it is cleared, so the first garden a new build meets is very often
+    /// one the old build wrote.
+    version: u32,
     /// seconds the world has lived, on the world's own clock (`Sky::shift`)
     tick: f32,
     /// where the sun is: 0 sunrise, 0.25 noon, 0.5 sunset
@@ -2467,6 +2540,7 @@ fn save_world(
     sky: Res<Sky>,
     file: Res<SaveFile>,
     mut now: ResMut<SaveNow>,
+    mut note: ResMut<SaveNote>,
     mut scripts: ResMut<ScriptWorld>,
     creatures: Query<(&Creature, &Transform, &Hunger, Option<&ScriptTask>)>,
     plants: Query<(&Plant, &Transform)>,
@@ -2480,6 +2554,7 @@ fn save_world(
 
     let ground = |at: &Transform| [at.translation.x, at.translation.z];
     let mut save = GardenSave {
+        version: SAVE_VERSION,
         tick: world_now(&time, &sky),
         day_phase: sky.phase,
         night: sky.night,
@@ -2511,26 +2586,80 @@ fn save_world(
         Ok(text) => text,
         Err(e) => {
             error!("the garden would not turn into JSON: {e}");
+            note.say(save.tick, true, format!("the garden would not turn into JSON: {e}"));
             return;
         }
     };
     let bytes = text.len();
     match platform::write(Path::new(&file.path), &text) {
-        Ok(()) => info!(
-            "saved {} creatures, {} plants at {:.1} s to {} ({bytes} bytes)",
-            save.creatures.len(),
-            save.plants.len(),
-            save.tick,
-            file.path
-        ),
-        Err(e) => error!("{}: {e}", file.path),
+        Ok(()) => {
+            info!(
+                "saved {} creatures, {} plants at {:.1} s to {} ({bytes} bytes)",
+                save.creatures.len(),
+                save.plants.len(),
+                save.tick,
+                file.path
+            );
+            note.say(
+                save.tick,
+                false,
+                format!("saved {} creatures, {} plants ({bytes} bytes)", save.creatures.len(), save.plants.len()),
+            );
+        }
+        Err(e) => {
+            error!("{}: {e}", file.path);
+            note.say(save.tick, true, format!("{}: {e}", file.path));
+        }
     }
 }
 
 /// Reads the file (or the browser's local storage) and hands the result to `load_world`.
+///
+/// The version is read first and on its own (G5). A whole `GardenSave` cannot do the job: a save
+/// from another build fails on whichever field differs, and the message is serde's
+/// (``missing field `sight` at line 214``), which says nothing about what actually happened. So
+/// a struct with one field goes through the same text first — serde_json ignores what it has no
+/// field for, so this parses any JSON object at all — and only a file that says `1` is read the
+/// rest of the way. Nothing is loaded when this answers `Err`: the garden the player is in keeps
+/// going (F9), or a new one is built (`--load`, the browser's first frame).
 fn read_save(path: &str) -> Result<GardenSave, String> {
     let text = platform::read(Path::new(path))?;
+
+    #[derive(Deserialize)]
+    struct Stamp {
+        version: Option<u32>,
+    }
+    let stamp: Stamp = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    match stamp.version {
+        Some(SAVE_VERSION) => {}
+        // the two ways a file can be from somewhere else: a number that is not ours, and no
+        // number at all — which is every garden saved before G5
+        Some(other) => {
+            return Err(format!("{path}: saved with version {other}, this garden reads {SAVE_VERSION}"))
+        }
+        None => {
+            return Err(format!("{path}: saved with no version, this garden reads {SAVE_VERSION}"))
+        }
+    }
     serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The tenth check's file (G5): a save that is this build's format in every respect except the
+/// one that matters.
+///
+/// It is `GardenSave::default()` — an empty world, which is a perfectly loadable one — with the
+/// version changed. That is deliberate: every other field is exactly what this build writes, so
+/// the only thing that can refuse it is the number, and if `read_save` ever stopped looking at the
+/// number the file would load and the check would fail rather than pass by accident. It goes in
+/// the temporary directory because the thing under test is `--load`, not where a file lives.
+fn write_a_save_from_another_version() -> String {
+    let path = platform::another_version_file();
+    let save = GardenSave { version: 99, ..Default::default() };
+    let text = serde_json::to_string_pretty(&save).expect("an empty garden is JSON");
+    if let Err(e) = platform::write(Path::new(&path), &text) {
+        error!("the selftest could not write {path}: {e}");
+    }
+    path
 }
 
 /// F9, and `--load PATH` before the first frame: the garden in the file, built.
@@ -2545,6 +2674,7 @@ fn load_world(
     time: Res<Time>,
     loading: Res<Loading>,
     mut sky: ResMut<Sky>,
+    mut note: ResMut<SaveNote>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
@@ -2601,6 +2731,11 @@ fn load_world(
         save.trees.len(),
         save.rocks.len(),
         save.tick
+    );
+    note.say(
+        save.tick,
+        false,
+        format!("loaded {} creatures, {} plants at {:.1} s", save.creatures.len(), save.plants.len(), save.tick),
     );
     commands.remove_resource::<Loading>();
     commands.insert_resource(Restoring {
@@ -2662,22 +2797,48 @@ fn is_still(restoring: Option<Res<Restoring>>) -> bool {
     restoring.is_none()
 }
 
-/// F5 and F9, in the window. The headless build has no `ButtonInput` at all (`MinimalPlugins`
-/// brings no input), which is why this system is only added there and the command line is what
-/// asks for a save without one.
+/// F5 and F9, and the HUD's two buttons, in the window. The headless build has no `ButtonInput`
+/// at all (`MinimalPlugins` brings no input), which is why this system is only added there and the
+/// command line is what asks for a save without one.
+///
+/// The keys are the same two in both builds (G5). A browser would take F5 for itself — it is
+/// Reload, and a reload is the one thing a player who meant to save must not get — so the page
+/// takes the key back before the game sees it (`web/garden.html`, `keydown` in the capture phase),
+/// which is what SabiRuby Battle already does for its own F5. F9 no browser wants. The buttons are
+/// there because a key that only works because a page remembered to intercept it is a thin thing
+/// to hang a garden on, and because nobody opening a link knows that F5 is Save.
 fn save_load_keys(
     keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    sky: Res<Sky>,
     file: Res<SaveFile>,
+    mut asked: ResMut<Asked>,
     mut now: ResMut<SaveNow>,
+    mut note: ResMut<SaveNote>,
     mut commands: Commands,
 ) {
-    if keys.just_pressed(KeyCode::F5) {
+    // These two are **not** behind `EguiWantsInput::wants_keyboard_input()`, and `inspect_keys`'
+    // two are — the difference is what the key is. `P` is a letter, and a letter pressed while the
+    // caret is in the editor belongs to the editor. F5 and F9 are keys egui never wants, and
+    // guarding them was measured to be worse than useless: once the editor's text box has taken
+    // keyboard focus it does not give it up when the pointer clicks the garden, so a guarded F5
+    // is a save key that stops working for the rest of the session after the first edit (seen in
+    // a browser: after the window checks had typed into the editor, neither F5 nor P did anything
+    // again). The buttons are the other half of the same answer.
+    let save = asked.save || keys.just_pressed(KeyCode::F5);
+    let load = asked.load || keys.just_pressed(KeyCode::F9);
+    asked.save = false;
+    asked.load = false;
+    if save {
         now.0 = true;
     }
-    if keys.just_pressed(KeyCode::F9) {
+    if load {
         match read_save(&file.path) {
             Ok(save) => commands.insert_resource(Loading { save }),
-            Err(e) => error!("{e}"),
+            Err(e) => {
+                error!("{e}");
+                note.say(world_now(&time, &sky), true, e);
+            }
         }
     }
 }
@@ -3080,6 +3241,18 @@ fn stop_when_over(
                 format!("a spawn Hash with a gene missing names the gene ({why})"),
             ),
             None => ok(false, "a spawn Hash with a gene missing names the gene (nothing was refused)".into()),
+        }
+        // --- G5: the save's version -----------------------------------------
+        match &test.version_refused {
+            Some(why) => ok(
+                why.contains("version 99") && why.ends_with(&format!("reads {SAVE_VERSION}")),
+                format!("a save with the wrong version is refused ({why})"),
+            ),
+            None => ok(
+                false,
+                "a save with the wrong version is refused (it was loaded, or this run was given a --load of its own)"
+                    .into(),
+            ),
         }
     }
     // `--save PATH`: the last thing the run does, in `save_world`, which is ordered after this

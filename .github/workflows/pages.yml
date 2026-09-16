@@ -1,6 +1,8 @@
 # The browser version of the games, on GitHub Pages: https://sabiruby.github.io/rubevy_games/
-# Built by web/build.sh, as locally. The Ruby compiler module comes from sabiruby-playground,
-# built against the same SabiRuby commit as the game's VM (the one Cargo.lock names).
+# One site, two games (G5): the entry page at the top, SabiRuby Battle at /sabibots/ and the
+# garden at /garden/. Built by `web/build.sh all`, as locally. The Ruby compiler module comes from
+# sabiruby-playground, built against the same SabiRuby commit as the games' VM (the one Cargo.lock
+# names), and each game gets its own copy of it.
 name: pages
 on:
   push:
@@ -59,9 +61,9 @@ jobs:
       - name: the Ruby compiler module
         working-directory: sabiruby-playground
         run: tools/build.sh
-      - name: web/build.sh
+      - name: web/build.sh all
         working-directory: rubevy_games
-        run: web/build.sh
+        run: web/build.sh all
       - uses: actions/upload-pages-artifact@v3
         with:
           path: rubevy_games/web/dist

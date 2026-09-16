@@ -548,6 +548,8 @@ pub fn hud_rows(creatures: &Query<(Entity, &Creature, &Hunger, &Mind)>) -> Vec<H
 pub fn draw_hud(
     mut contexts: EguiContexts,
     clock: Res<VmClock>,
+    note: Res<crate::SaveNote>,
+    mut asked: ResMut<crate::Asked>,
     sky: Res<Sky>,
     world: Res<ScriptWorld>,
     plants: Query<&Plant>,
@@ -592,6 +594,37 @@ pub fn draw_hud(
                     );
                 if paused {
                     ui.label(egui::RichText::new("paused (P)").color(amber).strong());
+                }
+            });
+            // The garden's own save, as two buttons (G5), **above** the list of creatures rather
+            // than below it. The first version had them at the foot, beside the key hint, where
+            // they read better — and in a browser at 1280×800 with fourteen creatures they were
+            // off the bottom of the panel and under the VM window, which is the one place a
+            // player cannot get at them. What is above the list cannot be pushed anywhere by the
+            // list. The keys do the same thing and are what a PC player uses; the buttons are for
+            // the browser, where F5 is the browser's Reload until the page takes it back and
+            // where nobody has been told which key saves. They set a flag rather than saving
+            // here: see `crate::Asked`.
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button("Save the garden (F5)")
+                    .on_hover_text(platform::SAVE_WHERE)
+                    .clicked()
+                {
+                    asked.save = true;
+                }
+                if ui.button("Load it back (F9)").on_hover_text(platform::SAVE_WHERE).clicked() {
+                    asked.load = true;
+                }
+                if !note.text.is_empty() {
+                    let text = egui::RichText::new(format!("{} · at {:.0} s", note.text, note.at))
+                        .monospace();
+                    ui.label(if note.bad {
+                        text.color(amber).strong()
+                    } else {
+                        text.color(egui::Color32::from_gray(170))
+                    });
                 }
             });
             ui.separator();
@@ -700,7 +733,7 @@ fn hunger_bar(ui: &mut egui::Ui, hunger: f32) {
 // The window's own checks (`GARDEN_SELFTEST=1` with a window)
 // ---------------------------------------------------------------------------------------------
 
-/// What the nine headless checks cannot reach: the editor's buttons and the two keys.
+/// What the ten headless checks cannot reach: the editor's buttons and the two keys.
 ///
 /// It is sabibots' arrangement (`SABIBOTS_SELFTEST=1 docker/run.sh`) — drive the editor the way a
 /// click would, by setting `Editor::action`, and look at what happened to the creatures and to the

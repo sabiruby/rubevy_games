@@ -34,6 +34,10 @@ mod imp {
     /// is the workspace root when it is `cargo run`. `--save PATH` overrides it.
     pub const SAVE_FILE: &str = "garden.save.json";
 
+    /// What the HUD's two buttons say when the pointer rests on them (G5). The same two buttons
+    /// mean two different things, and this is the sentence that says which.
+    pub const SAVE_WHERE: &str = "the whole garden, as JSON, in garden.save.json beside the game";
+
     /// Where the Ruby lives: next to the crate, from the workspace root or from the crate.
     pub fn ruby_dir() -> PathBuf {
         let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("ruby");
@@ -63,6 +67,20 @@ mod imp {
         sabiruby_compiler::compile(src.as_bytes(), &opts).map_err(|e| format!("{name}: {e}"))
     }
 
+    /// Whether the run was asked for the checks (G0's `GARDEN_SELFTEST`).
+    ///
+    /// An environment variable here, and the page's query string in a browser: the checks are the
+    /// only way to see from outside that the world is alive, and a browser has no environment.
+    pub fn selftest_asked() -> bool {
+        std::env::var("GARDEN_SELFTEST").is_ok()
+    }
+
+    /// Where the tenth check's file goes (G5). A temporary directory on a PC, because the file is
+    /// about `--load` and not about where a file lives.
+    pub fn another_version_file() -> String {
+        std::env::temp_dir().join("garden-from-another-version.json").to_string_lossy().into_owned()
+    }
+
     /// A seed for a world that did not name one.
     pub fn clock_seed() -> u64 {
         std::time::SystemTime::now()
@@ -84,7 +102,14 @@ mod imp {
     /// Where a saved garden goes (G3). There are no files here: `read` and `write` below turn a
     /// path into a `localStorage` key, so this name is the key `garden:garden.save.json` and the
     /// save survives the page being closed, in that browser and nowhere else.
+    ///
+    /// That is also why the save got a version number in G5: a file a player can see and delete
+    /// is one thing, and a string that sits in a browser across every future build of this page is
+    /// another. The first garden a new build meets here is usually one the old build wrote.
     pub const SAVE_FILE: &str = "garden.save.json";
+
+    pub const SAVE_WHERE: &str =
+        "the whole garden, as JSON, in this browser's local storage (key garden:garden.save.json)";
 
     /// Keys of `localStorage` are this followed by the file's path.
     const STORE: &str = "garden:";
@@ -137,6 +162,26 @@ mod imp {
         js_compile(src)
             .map(|bytes| bytes.to_vec())
             .map_err(|e| format!("{name}: {}", e.as_string().unwrap_or_else(|| format!("{e:?}"))))
+    }
+
+    /// Whether the page was asked for the checks: `garden/?selftest`.
+    ///
+    /// A page has no environment to put `GARDEN_SELFTEST` in, and until G5 that meant the browser
+    /// build could be watched but not *checked* — the lines that say a creature ate, that the
+    /// probe beetle reached its plant, that the sleepers were asleep, are all written by the
+    /// checks. The query string is the environment a page has. It is read once, at startup, by the
+    /// same `main` that reads the variable on a PC; everything after it is the same code.
+    pub fn selftest_asked() -> bool {
+        web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .is_some_and(|q| q.contains("selftest"))
+    }
+
+    /// Where the tenth check's file goes (G5). There is no temporary directory here: it is a
+    /// `localStorage` key beside the save's own, `garden:garden.from-another-version.json`, which
+    /// clears with the rest of the site's storage. A page asked for the checks is asked for this.
+    pub fn another_version_file() -> String {
+        "garden.from-another-version.json".into()
     }
 
     pub fn clock_seed() -> u64 {
