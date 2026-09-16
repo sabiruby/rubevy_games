@@ -12,21 +12,23 @@ below.
 
 ![the garden at 22 seconds: evening, long shadows over a green field, Kenney tufts and bushes of grass, five trees, scattered rocks, and rabbits and beetles walking about](garden.png)
 
-**This file describes stages G0, G0a, G1, G2, G3 and G4** (`docs/plans/garden-plan.md`): the
+**This file describes stages G0 to G5** (`docs/plans/garden-plan.md`): the
 world, the models in it, the two kinds of mind — a Ruby task per creature and a task per reflex —
 the `Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to
-breed, the save file, which is the world and every creature's own memory as JSON, and the window:
+breed, the save file, which is the world and every creature's own memory as JSON, the window —
 a creature's file rewritten while the garden runs, the VM looked into while it is paused, and a
-HUD that says what a decision costs. G5 is the browser build.
+HUD that says what a decision costs — and the browser build, which is the same game at
+<https://sabiruby.github.io/rubevy_games/garden/>.
 
 ```
 cargo run -p garden                                     # a window
 cargo run -p garden -- --headless 90                    # no window, 90 seconds, the result on stdout
-GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the nine checks
+GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the ten checks
 GARDEN_SELFTEST=1 cargo run -p garden                   # a window, and the editor's and the keys'
 cargo run -p garden -- --headless 30 --save g.json      # and write the garden down at the end
 cargo run -p garden -- --load g.json                    # and pick it up again
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
+web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
 
 On WSL without a GPU driver the windowed mode and `--shot` go through the container in `docker/`
@@ -47,8 +49,12 @@ hand against volumes of its own.
 | P | pause the scripts (the VM gets a budget of 0; the garden keeps drawing) |
 | Ctrl+Enter | Apply: run the edited text in every creature of that species |
 | Ctrl+S | Save: write it to `beetle.rb` / `rabbit.rb` |
-| F5 | write the garden to `garden.save.json` (G3) |
-| F9 | read it back |
+| F5 | write the garden to `garden.save.json` (G3) — the HUD has a button for it too |
+| F9 | read it back (likewise) |
+
+In a browser the same keys do the same things (the page takes F5 back from the browser, which
+would otherwise reload it), and the two buttons in the HUD are what a player who has not read this
+finds. `docs/web.md` has the rest.
 
 The window is described under **The window (G4)** below.
 
@@ -400,12 +406,13 @@ collected, and that is the VM's doing, not rubevy's — `set_on_free`, which rub
 `Rubevy::Entity`, is a different place. A creature that has asked for its genome holds it for its
 life; a child's genome, once read out into a component, is the game's.
 
-## Saving and loading (G3)
+## Saving and loading (G3, and a version in G5)
 
-**F5** writes the garden to `garden.save.json`, **F9** reads it back; without a window it is
-`--save PATH` (written when the run ends) and `--load PATH` (read before the first frame). In the
-browser there is no file — `platform::write` puts the same text in `localStorage` under
-`garden:garden.save.json`, which is where a saved creature file already goes.
+**F5** writes the garden to `garden.save.json`, **F9** reads it back — or the two buttons at the
+foot of the HUD, which do exactly the same thing and say what happened beside them. Without a
+window it is `--save PATH` (written when the run ends) and `--load PATH` (read before the first
+frame). In the browser there is no file — `platform::write` puts the same text in `localStorage`
+under `garden:garden.save.json`, which is where a saved creature file already goes.
 
 ```
 cargo run -p garden -- --headless 30 --save garden.save.json   # a garden, written down
@@ -530,6 +537,41 @@ already in the garden, could not spawn anything, and could not answer `true` or 
 would have to leave a note behind for a system to pick up, which is exactly what a `Request`
 already is. So `garden.spawn` stays in `RubevySet::Answer` with the other questions, and the serde
 crate is used for the half it is needed for — reading the argument.
+
+### The version, and what happens to a file that has another one (G5)
+
+The first field of the file is `"version": 1`, and a file that says anything else, or says
+nothing, is **not loaded**:
+
+```
+$ ./target/release/garden --headless 3 --load v2.json
+ERROR garden: v2.json: saved with version 2, this garden reads 1
+...
+10 creatures, 42 plants, day at phase 0.13      ← a new garden, built as if there had been no --load
+```
+
+The same sentence goes to the HUD, in amber, where F9 put it. Nothing else changes: `--load` lets
+`spawn_world` build a new world because no `Loading` was inserted, and F9 leaves the garden that
+is already running exactly as it was.
+
+Two small decisions are inside that. **The number is read on its own, before the rest.** A whole
+`GardenSave` cannot do the job: a file from another build fails on whichever field happens to
+differ, and what comes out is serde's sentence about that field (``missing field `sight` at line
+214``), which says nothing about what really happened. So a struct with one `Option<u32>` in it
+goes through the same text first — serde_json ignores what it has no field for, so that parses any
+JSON object at all — and only a file that says `1` is read the rest of the way.
+
+**And the number is a constant, not something derived from the struct.** A field that serde can
+default, added or taken away, leaves a file that still parses and now means something else; the
+number is a promise about the *meaning* of the file, and only a person can make it. `SAVE_VERSION`
+goes up when a garden written by the old build would come back **wrong** rather than not at all.
+
+This is a browser feature before it is a file feature (the author asked for it when G5 was made
+required). A file on a PC is something you can see, look at and delete. A save in `localStorage`
+is a string that sits in a browser across every future version of the page, so the first garden a
+new build meets there is very often one an older build wrote — and before G5 what that produced
+was `missing field` in a console nobody opens, or worse, a garden that loaded and was subtly not
+the one that was saved.
 
 ### What is not in the file, and why
 
@@ -876,7 +918,7 @@ place.
 That is what makes `"night"` legible on screen rather than a number in a log: the creatures stop
 where they stand when it arrives, and the picture says so.
 
-## Running without a window, and the nine checks
+## Running without a window, and the ten checks
 
 `--headless N` runs exactly the same systems for N seconds with no renderer and prints every
 creature — where it is, what it has cost its script, and the line of its own file that script is
@@ -959,7 +1001,7 @@ and one is about the genome (G2), which is the whole round trip in a single line
    standing together. In four consecutive runs the first child arrived at 1.95, 1.96, 2.00 and
    6.42 seconds. Wild pairings happen too, and are counted in the same line.
 
-and one is about the save file (G3):
+and two are about the save file (G3 and G5):
 
 9. **a spawn Hash with a gene missing names the gene.** The only script in the game that is not a
    creature — four lines of Ruby, in `main.rs` rather than in `ruby/`, started under
@@ -968,6 +1010,15 @@ and one is about the save file (G3):
    own words and nobody else's: **``missing field `sight` (TypeError)``**. What it is really
    checking is that a Hash of the wrong shape fails *legibly* on the way from a script into a Rust
    struct, which is the half of `sabiruby-serde` this game leans on.
+
+10. **a save with the wrong version is refused.** The run writes a file that is this build's format
+    in every respect except the number — `GardenSave::default()`, an empty world, which is a
+    perfectly loadable one, with `version: 99` — and hands it to the very arm that `--load PATH`
+    goes through. What comes back has to be an error, and the error has to name both numbers:
+    **`saved with version 99, this garden reads 1`**. Writing it as a valid file in every other
+    respect is the point: if `read_save` ever stopped looking at the version, the file would load
+    and the check would fail rather than pass by luck. (A run given a `--load` of its own keeps it,
+    and then this check says it did not run.)
 
 ```
 $ GARDEN_SELFTEST=1 ./target/release/garden --headless 90
@@ -1003,6 +1054,7 @@ selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (42/42)
 selftest: ok   the creatures were asleep a second after night fell (15 of them, fastest 0.000 at 26.22 s)
 selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 5.39 s: speed 2.166 vs 2.184/2.069, mean 2.127; sight 8.124 vs 8.757/8.667, mean 8.712; appetite 0.985 vs 0.966/1.107, mean 1.037 (mutated off both parents)) [8 pairings, 7 children]
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
+selftest: ok   a save with the wrong version is refused (/tmp/garden-from-another-version.json: saved with version 99, this garden reads 1)
 ```
 
 Eight runs of that at G2, and four more at G3. The genome check has passed every time — the first
@@ -1028,9 +1080,22 @@ the first line that belongs to the creature's own file rather than the prelude),
 thing this VM can tell a HUD and an engine's usual scripting cannot. At the end of a 90-second run
 it is night, so everybody is standing on the `sleep 0.5` of their `@asleep` branch.
 
+## In a browser (G5)
+
+The same garden runs at <https://sabiruby.github.io/rubevy_games/garden/>: the same systems, the
+same Ruby, the same editor, and 315 KiB of models fetched beside the wasm. What differs is in
+`garden/src/platform.rs` and nowhere else — the save and a saved creature file go to
+`localStorage` (under `garden:`, the game's own prefix, so the two games on one site cannot
+overwrite each other), Ruby is compiled by a second wasm module the page loads, and the checks are
+asked for with `?selftest` in the address rather than with an environment variable. `docs/web.md`
+is the whole of it, including what was driven in a headless browser and the two things that came
+out of doing so — the save's version number earning its keep, and a restart that leaves tasks
+created but never run.
+
 ## What is not here yet
 
-G5 is the browser build, where the 314 KiB of models are fetched beside the wasm — and where the
-save file above becomes a `localStorage` key, which the code already does and nothing has yet run.
-`docs/plans/garden-plan.md` has all of it. Sound, and a creature file per *creature* rather than
-per species (the editor could do it; the game has no reason to want it yet), are not planned.
+Sound, and a creature file per *creature* rather than per species (the editor could do it; the
+game has no reason to want it yet), are not planned. The one thing G5 found and did not fix is in
+`docs/web.md`: after Apply or a load replaces every creature at once, their new tasks can sit
+`Created` without ever being run — G4 saw the same shape on a PC at ten creatures and worked
+around it by handing them over one at a time, and the VM's scheduler is where it belongs.

@@ -8,12 +8,18 @@ so editing a file changes what happens on screen without a rebuild.
 | game | what it is | state |
 |---|---|---|
 | [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's brain is one Ruby file | playable v0.1 |
-| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | the world, the minds, the genome, the save file and the window (G0–G4); the browser build is next |
+| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | playable v0.1: the world, the minds, the genome, the save file, the window and the browser build (G0–G5) |
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
-**Play it in a browser:** <https://sabiruby.github.io/rubevy_games/> — the same game, built for
-the web. Or on a PC:
+**Play them in a browser:** <https://sabiruby.github.io/rubevy_games/> — both games, built for
+the web, from the same source as the PC build:
+
+* SabiRuby Battle: <https://sabiruby.github.io/rubevy_games/sabibots/>
+* Garden: <https://sabiruby.github.io/rubevy_games/garden/>
+
+(Battle used to be at the top address itself; it moved down one when the garden arrived, and the
+top address is now the page that links to both.) Or on a PC:
 
 ```
 cargo run -p sabibots                   # a window, 2D, 16:9
@@ -22,13 +28,14 @@ cargo run -p garden                     # the other one, 3D: click a creature, e
                                         #   (F2 the VM panel, P pause, F5 saves the garden, F9 brings it back)
 cargo run -p garden -- --headless 90    # no window: 90 seconds
 cargo run -p garden -- --headless 30 --save garden.save.json   # ... and write it down at the end
-web/build.sh && web/serve.sh            # the browser build, at http://localhost:8080/
+web/build.sh && web/serve.sh            # both browser builds, at http://localhost:8080/
+web/build.sh garden                     # just one, at http://localhost:8080/garden/
 ```
 
 The PC build and the browser build are the same code; which one you get is chosen by the target
-(`sabibots/src/platform.rs`, and [`docs/web.md`](docs/web.md) for how the browser one is put
-together). In the browser, **Save** keeps the brain in the browser's local storage instead of a
-file, and there is no file to edit from outside.
+(`sabibots/src/platform.rs` and `garden/src/platform.rs`, and [`docs/web.md`](docs/web.md) for how
+the browser one is put together). In the browser, **Save** keeps the brain — or the whole garden —
+in the browser's local storage instead of a file, and there is no file to edit from outside.
 
 Then change how a robot fights in the editor on the right of the game window: **Apply** (F5)
 runs the edited brain in that robot straight away, in memory, without touching the file; **Save
@@ -64,7 +71,8 @@ garden/               Garden: the 3D world, and the components its creatures rea
   src/platform.rs     the same split as sabibots'
   ruby/prelude.rb     the DSL the creatures are written in
   ruby/creatures/*.rb one file per species
-web/                  the browser build: build.sh, serve.sh, index.html (dist/ is the output)
+web/                  the browser build: build.sh, serve.sh, index.html (the entry page) and
+                      one page per game, sabibots.html and garden.html (dist/ is the output)
 docs/                 how it is put together, and what is next
 ```
 
