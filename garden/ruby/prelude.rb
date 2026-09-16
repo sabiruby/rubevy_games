@@ -15,6 +15,9 @@
 # "what is the nearest plant", "how many are there" — go through `garden`, which is a
 # `Rubevy::Proxy`, and they are the only two the game answers.
 #
+# What a creature remembers (`memory`, G3) is the other way round again: a plain Ruby Hash that
+# the ECS knows nothing about, which the game reads out of the VM when the garden is saved.
+#
 # Every read costs one frame: the question goes out with the frame's commands, the game answers
 # it in `RubevySet::Answer`, and the task wakes in the next frame with the answer. The task is
 # parked meanwhile and costs nothing, which is why this reads as plain sequential Ruby — but it
@@ -173,6 +176,34 @@ class Creature
 
   def log(text)
     Rubevy.log "#{name}: #{text}"
+  end
+
+  # === what it remembers (G3) ===============================================
+  #
+  # An ordinary Ruby Hash, on this object, belonging to nobody but the script. The game reads it
+  # when the garden is saved — from the outside, without asking, with two `ivar_get`s into the VM
+  # (`garden/src/main.rs`, `read_memory`) — and puts it back the same way when the garden is
+  # loaded. So a creature does not implement a save format and cannot refuse to be saved; it just
+  # remembers things.
+  #
+  # **The keys are Strings.** A Hash that goes through JSON comes back with String keys — that is
+  # what JSON has — so a memory written with Symbol keys would quietly become a *different* Hash
+  # after a load, and the creature's `memory[:meals]` would find nothing where `"meals"` sits. The
+  # rule is only for `@memory`; everywhere else in the garden a Hash key is a Symbol, because
+  # everywhere else it never leaves the VM.
+  #
+  # It is read lazily, and that matters on the way back in: the object this Hash hangs on does not
+  # exist until this file's `run_creature` has run, so the game cannot put a memory back before the
+  # script's first frame. It puts it back *during* that frame — and a creature that touched
+  # `memory` before then finds the empty Hash below, which the restore then replaces.
+  def memory
+    @memory ||= {}
+  end
+
+  # What the log shows when a creature is asked what it remembers: `JSON` is in the VM because the
+  # game put it there (`install_host_api`), not because the VM has one.
+  def remember_out_loud
+    log JSON.generate(memory)
   end
 
   # === a library of helpers, in plain Ruby ==================================
@@ -350,10 +381,30 @@ def run_creature
   klass = $creature_class
   raise "this file defines no creature" if klass.nil?
   being = klass.new
+  # The creature, where the game can find it (G3).
+  #
+  # A task's `self` is the VM's `main` object and **every task shares it**, so a top-level
+  # `@ivar` in one creature's file is the same variable in every other creature's — which is why
+  # a creature is an object of its own in the first place. The host has the task (rubevy's
+  # `ScriptTask`) and nothing else, so the way from a task to the creature has to be laid down
+  # here, in one line: the save reads `@being` off the task and `@memory` off that.
+  # rubevy hangs the entity on the task in exactly the same way (`@rubevy_entity`).
+  Task.current.instance_variable_set(:@being, being)
   # Each creature rolls its own luck, from the bits of its own entity — no question asked, and
   # two beetles spawned in the same frame do not walk in step.
   srand(being.me.to_i)
   start_reflexes(being, klass, tasks)
+  # One breath before the first thought (G3).
+  #
+  # A creature that comes out of a save file is handed its `@memory` by the game, and the game
+  # cannot do that until this object exists — which is now, in the middle of this task's first
+  # frame. The hand-over happens at the end of that frame (`restore_memory`), so a `run` that
+  # started reading `memory` on the line below would read the empty Hash and then have its work
+  # replaced. Measured, before this line was here: a loaded rabbit walked the whole garden with
+  # `Rubevy.find(:Tree)` to learn what it already remembered.
+  #
+  # The subscriptions are taken first, above, so nothing published in this moment is missed.
+  sleep 0.05
   being.run
 rescue => e
   Rubevy.log "#{klass ? klass.creature_name : '?'}: #{e.class}: #{e.message}"

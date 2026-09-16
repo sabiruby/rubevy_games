@@ -21,8 +21,10 @@
 //!     cargo run -p garden                     # a window
 //!     cargo run -p garden -- --headless 90    # no window, 90 seconds, the result on stdout
 //!     GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90
+//!     cargo run -p garden -- --headless 30 --save garden.save.json   # and write it down
+//!     cargo run -p garden -- --load garden.save.json                 # and pick it up again
 //!
-//! Mouse: drag to orbit, wheel to zoom.
+//! Mouse: drag to orbit, wheel to zoom. F5 saves the garden, F9 brings it back.
 
 mod genome;
 mod platform;
@@ -34,9 +36,11 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
-use sabiruby::IntoRuby;
+use sabiruby::value::ObjId;
+use sabiruby::{IntoRuby, Vm};
+use serde::{Deserialize, Serialize};
 
-use crate::genome::{Birth, Genome, read_birth};
+use crate::genome::{Birth, CreatureSpec, Genome};
 
 // ---------------------------------------------------------------------------------------------
 // The field. It lies on XZ with y up, which is the only thing 3D costs the Ruby side: a position
@@ -157,8 +161,11 @@ pub struct Plant {
 }
 
 /// Which sort of creature. A field-less enum reflects as a Symbol (`:Beetle`), which is what a
-/// script wants to compare against.
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// script wants to compare against — and serde writes a unit variant as a Symbol too, while
+/// reading takes a Symbol or a String either way round (sabiruby `docs/design/serde.md`). So
+/// `species: name` in a script, where `name` is the String `"Beetle"`, fits `Species` without
+/// anything being written for it, and the save file has `"species": "Beetle"`.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Species {
     #[default]
     Beetle,
@@ -210,8 +217,12 @@ pub struct Velocity(pub Vec2);
 #[reflect(Component)]
 pub struct Sight(pub f32);
 
-/// What it remembers. Empty until G3, where it becomes the Ruby `@memory` written to the save
-/// file — it is here from G0 so that the component table does not change shape later.
+/// That this creature remembers things. It stayed a marker in G3, and that is the finding rather
+/// than an omission: what a creature remembers is a Ruby Hash (`@memory`) living in the VM, on the
+/// object its script made, and the save file reads it *from there* (`save_world` below) instead of
+/// copying it into a component every time it changes. A component would be a second copy of the
+/// same Hash, kept in step by whom? So what is in the ECS is the fact that this entity has a
+/// memory, which is what a rule could want to know; the memory itself is the script's.
 #[derive(Component, Reflect, Debug, Clone, Copy, Default)]
 #[reflect(Component)]
 pub struct Memory;
@@ -337,10 +348,17 @@ impl Dice {
 }
 
 /// Where the sun is, and whether the world thinks it is night. The flip is what gets published.
+///
+/// `shift` is G3's: the world's clock is `Time::elapsed_secs() + shift`, and a garden read back
+/// from a file sets it so that the day goes on from where it was saved. It is the only clock that
+/// is shifted — a cooldown or a contact is bookkeeping about *this* run and is not in the save —
+/// and while a loaded world's minds are starting (`Restoring`) it is held so that the world's
+/// clock stands perfectly still.
 #[derive(Resource, Default)]
 struct Sky {
     phase: f32,
     night: bool,
+    shift: f32,
 }
 
 /// Which rabbit is standing on which beetle right now, so `"touched"` is published when a contact
@@ -426,6 +444,56 @@ struct Headless {
     until: f32,
 }
 
+/// Where a saved garden goes and comes from: `--save PATH`, or `platform::SAVE_FILE` for F5 in
+/// the window. On the web the "path" is a `localStorage` key (`platform.rs`).
+#[derive(Resource)]
+struct SaveFile {
+    path: String,
+    /// `--save` was asked for on the command line, so a headless run writes one when it ends
+    on_exit: bool,
+}
+
+/// Somebody asked for a save this frame: F5, or the end of a `--save` run. A flag rather than a
+/// call, because the thing that asks (a key, the system that ends the run) has none of the twenty
+/// queries the save itself wants.
+#[derive(Resource, Default)]
+struct SaveNow(bool);
+
+/// A garden read out of a file and not yet built. `--load PATH` puts one here before the first
+/// frame; F9 puts one here at any time, and `load_world` does the same thing in both cases —
+/// which is why there is no second code path for "load while the world is running".
+#[derive(Resource)]
+struct Loading {
+    save: GardenSave,
+}
+
+/// A loaded world whose minds are still starting.
+///
+/// A creature's `@memory` cannot be put back until there is something to put it on: the Hash
+/// belongs to the object the script makes in `run_creature`, which does not exist until rubevy
+/// has turned the `Script` into a task and that task has run its first instructions. That is a
+/// frame or two, and **the world does not age through them** — the rules do not run and the
+/// clock does not move (`Sky::shift` is held), so a garden that is read back is the garden that
+/// was written down, not that garden plus two frames of walking.
+#[derive(Resource)]
+struct Restoring {
+    /// the creatures whose memory has not been handed over yet
+    pending: Vec<(Entity, serde_json::Value)>,
+    /// the world's clock, held while this lasts
+    tick: f32,
+    /// real time when the load happened, so that a script that never starts cannot freeze the
+    /// world for ever
+    since: f32,
+    /// every memory is in place (or has been given up on); the world may move again at the end of
+    /// this frame
+    done: bool,
+}
+
+/// How long a load waits for a script that is not starting before it gives up and lets the world
+/// run. A creature whose file does not compile has no task at all, and the garden should not stop
+/// for it.
+const RESTORE_PATIENCE: f32 = 5.0;
+
 /// `--shot FILE [SECONDS]`: where the picture goes, and when.
 #[derive(Resource)]
 struct Shot {
@@ -498,6 +566,11 @@ struct SelfTest {
     born_at: Option<f32>,
     born_says: String,
     born_ok: bool,
+
+    // --- G3: the save file -------------------------------------------------
+    /// what the game told the tester script when it asked for a creature whose genome is missing
+    /// a gene: serde's message, as the script heard it
+    bad_spawn: Option<String>,
 }
 
 impl Default for SelfTest {
@@ -526,6 +599,7 @@ impl Default for SelfTest {
             born_at: None,
             born_says: String::new(),
             born_ok: false,
+            bad_spawn: None,
         }
     }
 }
@@ -548,6 +622,14 @@ fn main() {
         )
     });
     let selftest = std::env::var("GARDEN_SELFTEST").is_ok();
+    // `--save PATH` / `--load PATH` (G3): the same two things F5 and F9 do in the window, for a
+    // run that has no keyboard. A `--save` is written when the run ends, which is what makes
+    // "save, load in a second process, save again, compare the two files" one shell line each.
+    let after = |flag: &str| {
+        args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
+    };
+    let save_to = after("--save");
+    let load_from = after("--load");
 
     let mut app = App::new();
     match headless {
@@ -564,7 +646,9 @@ fn main() {
             // entities with the same components, and only the child that carries the look is
             // missing. What the headless run tests is the world, not the picture of it.
             .insert_resource(Headless { until: seconds })
-            .add_systems(Update, stop_when_over);
+            // between the restore and the save (G3): a `--save` run writes its file as the last
+            // thing it does, and a `--load --save` run does both in the frame the world is whole
+            .add_systems(Update, stop_when_over.after(restore_memory).before(save_world));
         }
         None => {
             app.add_plugins((
@@ -588,7 +672,11 @@ fn main() {
             ))
             .init_resource::<Orbit>()
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
-            .add_systems(Update, (orbit_camera, dress_animations, animate_creatures));
+            .add_systems(Update, (orbit_camera, dress_animations, animate_creatures))
+            // F5 and F9 (G3). Only the windowed build has a keyboard to read: `MinimalPlugins`
+            // brings no input plugin at all, which is why the headless run is asked on the
+            // command line instead.
+            .add_systems(Update, save_load_keys.before(save_world));
             register_scene_types(&mut app);
         }
     }
@@ -615,6 +703,24 @@ fn main() {
         .register_type::<Tree>()
         .register_type::<Rock>();
 
+    // G3. The file a save goes to: `--save`'s path, or the game's own name for F5 (on the web
+    // that name is a `localStorage` key rather than a file — `platform.rs`).
+    app.insert_resource(SaveFile {
+        path: save_to.clone().unwrap_or_else(|| platform::SAVE_FILE.to_string()),
+        on_exit: save_to.is_some(),
+    })
+    .init_resource::<SaveNow>();
+    if let Some(path) = &load_from {
+        match read_save(path) {
+            // the world is not built by `spawn_world` at all in this case: `load_world` does it on
+            // the first frame, exactly as F9 does it on the four-hundredth
+            Ok(save) => {
+                app.insert_resource(Loading { save });
+            }
+            Err(e) => error!("{e}"),
+        }
+    }
+
     app.insert_resource(Dice(platform::clock_seed()))
         .insert_resource(RubyDir(platform::ruby_dir()))
         .init_resource::<Sky>()
@@ -626,7 +732,7 @@ fn main() {
         // `ScriptWorld::vm` is public and the resource exists as soon as `RubevyPlugin` is added,
         // while no script runs before the first `Update` — so `Startup` is the place and rubevy
         // needs no entry point for it (rubevy `docs/host-api.md`, "Adding to the VM").
-        .add_systems(Startup, install_genome)
+        .add_systems(Startup, install_host_api)
         // `spawn_world` asks for `Option<Res<Look>>`, and a `None` there is how the headless
         // build says "no models". That makes the order load-bearing: without this the windowed
         // build's `spawn_world` may run before `make_look` and then it is `None` there too —
@@ -653,11 +759,33 @@ fn main() {
                 court,
                 starve,
             )
-                .chain(),
+                .chain()
+                // G3: a garden that is being read back does not age while its minds are starting
+                .after(load_world)
+                .run_if(is_still),
         )
+        // G3: `--load` before the first frame, F9 at any time. It is before the scripts are dealt
+        // with, so a creature that was despawned here has lost its `ScriptTask` — and with it its
+        // task in the VM and its queues — before rubevy looks at the world again.
+        .add_systems(Update, load_world.run_if(resource_exists::<Loading>).before(RubevySet::Deliver))
         // after the answers, because what it spawns was asked for in this frame's
         // `answer_garden` and the request is answered there too
-        .add_systems(Update, hatch.after(RubevySet::Answer))
+        .add_systems(Update, hatch.after(RubevySet::Answer).run_if(is_still))
+        // G3, in this order and after the scripts have had their frame: put the memories back
+        // (which needs the object a script makes in its first frame), then write the file if
+        // anybody asked for one, then — last — let a restored world start moving. A run that
+        // loads and saves in one go therefore writes the world it read, not that world plus a
+        // frame, which is what makes the round-trip check a plain `diff`.
+        .add_systems(
+            Update,
+            (
+                restore_memory.run_if(resource_exists::<Restoring>),
+                save_world,
+                finish_restore.run_if(resource_exists::<Restoring>),
+            )
+                .chain()
+                .after(RubevySet::Answer),
+        )
         // The one system that answers a script. It goes in `RubevySet::Answer`, which is the
         // only placement where a question is answered on the frame it was asked — anywhere else
         // costs a second frame per round trip, and where it landed used to be luck (rubevy
@@ -770,6 +898,7 @@ fn spawn_world(
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
     selftest: Option<Res<SelfTest>>,
+    loading: Option<Res<Loading>>,
 ) {
     let look = look.as_deref();
 
@@ -797,6 +926,14 @@ fn spawn_world(
         .build(),
         Transform::default(),
     ));
+
+    // `--load PATH` (G3): the ground and the sun are this world's furniture and are made either
+    // way; everything that lives in it comes out of the file, on the first frame, in `load_world`
+    // — the same system F9 uses, so there is one way to build a garden from a save and not two.
+    if loading.is_some() {
+        info!("the world will come from the save file");
+        return;
+    }
 
     // the selftest wants a creature that certainly starves, which means one that certainly does
     // not eat: it is spawned in the far corner **with no script at all**, so it never moves, and
@@ -931,8 +1068,28 @@ fn spawn_world(
             "selftest: two hungry beetles {:.1} apart, with four plants between them at ({:.1}, {:.1})",
             9.0, meadow_at.x, meadow_at.y
         );
+
+        // G3's ninth check, and the only script in the game that is not a creature: it asks the
+        // game for a creature whose genome has no `sight` and reports what it is told. The point
+        // is the message — a Hash of the wrong shape has to say what is wrong with it, in the
+        // script's own terms, and with serde doing the reading that message is written by nobody.
+        if let Some((handle, _)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb) {
+            commands.spawn(Script::new(handle).with_name("Tester").with_priority(120));
+            info!("selftest: a tester script will ask for a creature with a gene missing");
+        }
     }
 }
+
+/// The selftest's tester (G3). It is a creature by the prelude's reckoning — it has to be, because
+/// `garden` is a `Creature` method — and it never moves.
+const TESTER: &str = r#"creature "Tester" do
+  def run
+    answer = garden.spawn(species: "Beetle", genome: {speed: 2.0, appetite: 1.0}, at: [0.0, 0.0])
+    log "a genome with no sight: #{answer}"
+    sleep 1000
+  end
+end
+"#;
 
 /// A plant: the entity carries the component and the scale, the model hangs under it. Splitting
 /// them is what lets `Transform.scale` be the plant's size without the model having to know.
@@ -1070,6 +1227,17 @@ fn compile(ruby: &Path, creature: &Path, mrb: &mut Assets<MrbAsset>) -> Option<(
         }
     };
     let name = creature.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    compile_source(ruby, &name, &body, mrb)
+}
+
+/// The same, for a creature whose file is not a file: the selftest's tester (G3), which is four
+/// lines of Ruby in this source and wants the prelude in front of it like any other creature.
+fn compile_source(
+    ruby: &Path,
+    name: &str,
+    body: &str,
+    mrb: &mut Assets<MrbAsset>,
+) -> Option<(Handle<MrbAsset>, u32)> {
     let prelude = match platform::read(&ruby.join("prelude.rb")) {
         Ok(p) => p,
         Err(e) => {
@@ -1079,7 +1247,7 @@ fn compile(ruby: &Path, creature: &Path, mrb: &mut Assets<MrbAsset>) -> Option<(
     };
     let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_creature\n");
     let prelude_lines = prelude.lines().count() as u32 + 2;
-    match platform::compile(&src, &name) {
+    match platform::compile(&src, name) {
         Ok(bytes) => Some((mrb.add(MrbAsset { bytes }), prelude_lines)),
         Err(e) => {
             error!("{e}");
@@ -1148,7 +1316,9 @@ fn day_night(
     ambient: Option<ResMut<GlobalAmbientLight>>,
     clear: Option<ResMut<ClearColor>>,
 ) {
-    let now = time.elapsed_secs();
+    // the world's clock, not the process's: a garden read back from a file goes on from the hour
+    // it was saved at (`Sky::shift`), and in a run that loaded nothing the two are the same number
+    let now = world_now(&time, &sky);
     sky.phase = (now / DAY_LENGTH + DAWN_OFFSET).fract();
     let angle = sky.phase * std::f32::consts::TAU;
     // the sun's place in the sky: sunrise at phase 0, overhead at 0.25, gone at 0.5
@@ -1740,17 +1910,23 @@ fn starve(
 // The two questions the game answers (G1)
 // ---------------------------------------------------------------------------------------------
 
-/// The `Genome` class, put in the VM once (G2).
+/// What this game puts in the VM, once: the `Genome` class (G2) and `JSON` (G3).
 ///
 /// `ScriptWorld::vm` is the VM the scheduler runs, and it exists from the moment `RubevyPlugin`
 /// is added, while the first script does not start until the first `Update` — so a `Startup`
 /// system is the whole of what "install a class" takes, and rubevy needed no entry point for it
 /// (rubevy `docs/host-api.md`, "Adding to the VM"). What `register` adds is the methods: the
 /// class and its store would appear by themselves on the first `into_ruby`.
-fn install_genome(mut world: ResMut<ScriptWorld>) {
+///
+/// `JSON` is one line and it is the game's line, not the engine's. The VM has no JSON of its own
+/// and never links `serde_json` — a host that does not want a parser does not pay for one — so a
+/// game that wants `JSON.generate(memory)` in its scripts says so here, and that is also what
+/// says whose decision it was (sabiruby `docs/design/serde.md`, "Why JSON lives here").
+fn install_host_api(mut world: ResMut<ScriptWorld>) {
     if let Err(e) = Genome::register(&mut world.vm) {
         error!("the Genome class would not register: {e:?}");
     }
+    sabiruby_serde::install_json(&mut world.vm);
 }
 
 /// `garden.nearest(:Plant)` and `garden.count(:Plant)` — the whole of this game's `ask` surface.
@@ -1774,6 +1950,8 @@ fn answer_garden(world: &mut World) {
     // answering system has the whole `World` but no `Commands`, and reading the Hash is the part
     // that needs the VM
     let mut newborn: Vec<Birth> = Vec::new();
+    // and the first `garden.spawn` this frame that was refused, for the selftest's malformed Hash
+    let mut refused: Option<String> = None;
     world.resource_scope(|world: &mut World, mut scripts: Mut<ScriptWorld>| {
         let world = &*world;
         for request in scripts.take_requests() {
@@ -1833,28 +2011,46 @@ fn answer_garden(world: &mut World) {
                         None => scripts.answer(&request, Answer::Nil),
                     }
                 }
-                // G2. `garden.spawn(species:, genome:, at:)` — the one question whose argument
-                // has a shape. It arrives as `Arg::Value`, which is the Ruby Hash itself rather
-                // than a copy of it (rubevy `docs/host-api.md`, "What a question may carry"), and
-                // it is read here with `Vm::hash_entries` and `FromRuby`. The population cap is
-                // checked again at this point because the script answered a frame after the rule
-                // spoke, and a frame is long enough for the garden to have filled up.
+                // G2, rewritten in G3. `garden.spawn(species:, genome:, at:)` — the one question
+                // whose argument has a shape. It arrives as `Arg::Value`, which is the Ruby Hash
+                // itself rather than a copy of it (rubevy `docs/host-api.md`, "What a question may
+                // carry"), and **one line reads it**: `from_value::<CreatureSpec>` walks the Hash
+                // and fills a Rust struct, nested `Genome` and `Species` and all. G2 did the same
+                // work by hand, key by key, in 72 lines of `genome.rs` (`docs/garden.md`, "The
+                // spawn Hash, by hand and by serde"); what is left of them is the clamp in
+                // `CreatureSpec::into_birth`, which was never about reading.
+                //
+                // The error is worth as much as the reading. A Hash with a gene missing raises a
+                // `TypeError` naming it — "missing field `sight`" — and the script hears that
+                // sentence as the answer to its question, because a creature that asked for a
+                // child and got silence has no way of finding out why.
+                //
+                // It stays an `ask` rather than becoming a native taking `Serde<CreatureSpec>`:
+                // a native is handed the `&mut Vm` and nothing else, so it could not see the
+                // population, could not spawn anything, and could not answer `true` or the reason
+                // — it would have to leave a note for a system to read, which is what a `Request`
+                // already is. The population cap is checked here because the script answered a
+                // frame after the rule spoke, and a frame is long enough for the garden to fill.
                 "garden.spawn" => {
                     let population =
                         world.iter_entities().filter(|e| e.contains::<Creature>()).count() + newborn.len();
                     let outcome = match request.value(0) {
                         _ if population >= POP_MAX => Err(format!("the garden is full ({population} creatures)")),
-                        Some(asked) => read_birth(&mut scripts.vm, asked),
+                        Some(asked) => sabiruby_serde::from_value::<CreatureSpec>(&mut scripts.vm, asked)
+                            .map_err(|e| scripts.vm.describe_error(&e)),
                         None => Err("spawn wants a Hash: species:, genome:, at:".to_string()),
                     };
                     match outcome {
-                        Ok((species, genome, at)) => {
-                            newborn.push(Birth { species, genome, at, parent: asker });
+                        Ok(spec) => {
+                            newborn.push(spec.into_birth(asker));
                             scripts.answer(&request, Answer::Bool(true));
                         }
                         Err(why) => {
-                            // the script hears why, because a creature that asked for a child and
-                            // got silence has no way of finding out
+                            // "missing field `sight`" and its like; "the garden is full" is a
+                            // rule, not a shape, and is not what the check is about
+                            if refused.is_none() && why.contains("field") {
+                                refused = Some(why.clone());
+                            }
                             scripts.answer(&request, Answer::Text(why));
                         }
                     }
@@ -1868,6 +2064,14 @@ fn answer_garden(world: &mut World) {
     });
     if !newborn.is_empty() {
         world.resource_mut::<Births>().0.extend(newborn);
+    }
+    // the selftest's tester asks for a creature whose genome has no `sight`; what it is told is
+    // serde's own message, and the check is that the message names the gene
+    if let Some(why) = refused
+        && let Some(mut test) = world.get_resource_mut::<SelfTest>()
+        && test.bad_spawn.is_none()
+    {
+        test.bad_spawn = Some(why);
     }
 }
 
@@ -1893,6 +2097,329 @@ fn watch_minds(world: Res<ScriptWorld>, mut minds: Query<(&mut Mind, Option<&Scr
                 None => "-".into(),
             },
         };
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Saving and loading (G3)
+//
+// The world as JSON, and the creatures' own memories with it. Two directions cross the boundary
+// here and they are not symmetrical:
+//
+//   * **out** — `@memory` is a Ruby Hash on the object a script made, and the game reads it out
+//     of the VM with two `ivar_get`s and `sabiruby_serde::from_value::<serde_json::Value>`. No
+//     script is asked for anything and no script can refuse: the save button does not wake a
+//     creature up.
+//   * **in** — `sabiruby_serde::to_value` builds the Hash again and `ivar_set` hangs it back on
+//     the object, once that object exists.
+//
+// Everything else in the file — the plants, where the trees are, how hungry a beetle is — is
+// ordinary Rust data with `#[derive(Serialize, Deserialize)]` on it, and that is the comparison
+// the stage is for: the same crate does both halves, and the Ruby half is three lines longer.
+// ---------------------------------------------------------------------------------------------
+
+/// A garden, written down. This struct **is** the file format; there is no schema anywhere else.
+///
+/// What is not in it is as much of a decision as what is. A rock's squash and whether a plant is
+/// a bush or a tuft are the model's business and are rolled again on the way back in; a breeding
+/// cooldown, a contact, who bumped into whom last frame are bookkeeping about a run rather than
+/// about a world. What is here is what a creature could tell you about itself.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+struct GardenSave {
+    /// seconds the world has lived, on the world's own clock (`Sky::shift`)
+    tick: f32,
+    /// where the sun is: 0 sunrise, 0.25 noon, 0.5 sunset
+    day_phase: f32,
+    night: bool,
+    plants: Vec<PlantSave>,
+    /// trees and rocks are positions and nothing else — they have no state to have
+    trees: Vec<[f32; 2]>,
+    rocks: Vec<[f32; 2]>,
+    creatures: Vec<CreatureSave>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct PlantSave {
+    at: [f32; 2],
+    size: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CreatureSave {
+    species: Species,
+    at: [f32; 2],
+    hunger: f32,
+    age: f32,
+    /// the same `Genome` the component holds and the same one a script mixes: one type, and now
+    /// three derives on it — `Reflect` for the component read, `RubyClass` for the object, and
+    /// serde for this
+    genome: Genome,
+    /// the script's own `@memory`, exactly as it was in the VM. `serde_json::Value` rather than a
+    /// struct of the game's: what a creature remembers is the *script's* shape, and a game that
+    /// insisted on knowing it would be telling the Ruby what it may think about.
+    memory: serde_json::Value,
+}
+
+/// The instance variable the prelude hangs the creature object on, in the task rubevy made
+/// (`run_creature`: `Task.current.instance_variable_set(:@being, being)`).
+///
+/// This is the one line of arrangement the memory needed, and it is worth saying why. A script's
+/// `@memory` is not on the task — a task's `self` is the VM's `main` object, shared by every task
+/// in the VM, so a top-level `@ivar` in one creature's file would be the *same* variable in every
+/// other creature's. That is why the prelude puts a creature in an object of its own in the first
+/// place (`Creature.new`, one per script), and it is why the host cannot find that object without
+/// being shown it. rubevy hangs the entity on the task the same way (`@rubevy_entity`), for the
+/// same reason.
+const BEING_IVAR: &str = "@being";
+
+/// The world's own clock: `Time` plus whatever a load shifted it by.
+fn world_now(time: &Time, sky: &Sky) -> f32 {
+    time.elapsed_secs() + sky.shift
+}
+
+/// One creature's `@memory`, read out of the VM.
+///
+/// Two `ivar_get`s and a conversion — the task's `@being`, that object's `@memory`, and
+/// `from_value` into the `serde_json::Value` the save file wants. A script that has not reached
+/// `run_creature` yet, or one that has never touched `@memory`, gives `null`, which reads back as
+/// an empty memory.
+fn read_memory(vm: &mut Vm, task: ObjId) -> serde_json::Value {
+    let Some(being) = vm.ivar_get(task, BEING_IVAR).obj() else { return serde_json::Value::Null };
+    let memory = vm.ivar_get(being, "@memory");
+    match sabiruby_serde::from_value::<serde_json::Value>(vm, memory) {
+        Ok(value) => value,
+        Err(e) => {
+            // a Hash with something in it that JSON has no name for: a Proxy, an entity, a Task.
+            // The creature keeps it; the file does not get it.
+            warn!("a memory would not convert: {}", vm.describe_error(&e));
+            serde_json::Value::Null
+        }
+    }
+}
+
+/// F5, and the end of a `--save` run: the whole world into one file.
+///
+/// It is an ordinary system with ordinary queries — the only thing in it that is not Bevy is the
+/// `ScriptWorld`, and that is only there for the memories. Sorting by position is what makes two
+/// saves of one world the same text: Bevy's iteration order is by archetype, and a creature whose
+/// script has ended is in a different archetype from one whose script is running, so the order a
+/// query walks in is not something a file should inherit.
+fn save_world(
+    time: Res<Time>,
+    sky: Res<Sky>,
+    file: Res<SaveFile>,
+    mut now: ResMut<SaveNow>,
+    mut scripts: ResMut<ScriptWorld>,
+    creatures: Query<(&Creature, &Transform, &Hunger, Option<&ScriptTask>)>,
+    plants: Query<(&Plant, &Transform)>,
+    trees: Query<&Transform, With<Tree>>,
+    rocks: Query<&Transform, With<Rock>>,
+) {
+    if !now.0 {
+        return;
+    }
+    now.0 = false;
+
+    let ground = |at: &Transform| [at.translation.x, at.translation.z];
+    let mut save = GardenSave {
+        tick: world_now(&time, &sky),
+        day_phase: sky.phase,
+        night: sky.night,
+        plants: plants.iter().map(|(plant, at)| PlantSave { at: ground(at), size: plant.size }).collect(),
+        trees: trees.iter().map(ground).collect(),
+        rocks: rocks.iter().map(ground).collect(),
+        creatures: creatures
+            .iter()
+            .map(|(creature, at, hunger, task)| CreatureSave {
+                species: creature.species,
+                at: ground(at),
+                hunger: hunger.0,
+                age: creature.age,
+                genome: creature.genome,
+                memory: match task {
+                    Some(task) => read_memory(&mut scripts.vm, task.task()),
+                    None => serde_json::Value::Null,
+                },
+            })
+            .collect(),
+    };
+    let by_place = |a: &[f32; 2], b: &[f32; 2]| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
+    save.plants.sort_by(|a, b| by_place(&a.at, &b.at));
+    save.trees.sort_by(|a, b| by_place(a, b));
+    save.rocks.sort_by(|a, b| by_place(a, b));
+    save.creatures.sort_by(|a, b| by_place(&a.at, &b.at));
+
+    let text = match serde_json::to_string_pretty(&save) {
+        Ok(text) => text,
+        Err(e) => {
+            error!("the garden would not turn into JSON: {e}");
+            return;
+        }
+    };
+    let bytes = text.len();
+    match platform::write(Path::new(&file.path), &text) {
+        Ok(()) => info!(
+            "saved {} creatures, {} plants at {:.1} s to {} ({bytes} bytes)",
+            save.creatures.len(),
+            save.plants.len(),
+            save.tick,
+            file.path
+        ),
+        Err(e) => error!("{}: {e}", file.path),
+    }
+}
+
+/// Reads the file (or the browser's local storage) and hands the result to `load_world`.
+fn read_save(path: &str) -> Result<GardenSave, String> {
+    let text = platform::read(Path::new(path))?;
+    serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))
+}
+
+/// F9, and `--load PATH` before the first frame: the garden in the file, built.
+///
+/// Everything that was living is despawned first — which takes each creature's `ScriptTask` with
+/// it, and rubevy's `on_remove` hook terminates the task and closes the queues it was waiting on,
+/// so a loaded garden has no minds left over from the one before it. Then the same three spawn
+/// functions the world was built with the first time, and `give_mind` again: a creature read out
+/// of a file is not a special kind of creature.
+fn load_world(
+    mut commands: Commands,
+    time: Res<Time>,
+    loading: Res<Loading>,
+    mut sky: ResMut<Sky>,
+    look: Option<Res<Look>>,
+    ruby: Res<RubyDir>,
+    mut mrb: ResMut<Assets<MrbAsset>>,
+    mut dice: ResMut<Dice>,
+    old: Query<Entity, Or<(With<Plant>, With<Tree>, With<Rock>, With<Creature>)>>,
+) {
+    let save = loading.save.clone();
+    let look = look.as_deref();
+    let mut gone = 0;
+    for entity in &old {
+        commands.entity(entity).despawn();
+        gone += 1;
+    }
+
+    for plant in &save.plants {
+        // whether a plant is a bush or a tuft is the model's business, so it is rolled again
+        // rather than written down
+        spawn_plant(&mut commands, look, Vec2::from(plant.at), plant.size, dice.roll() < 0.35);
+    }
+    for at in &save.trees {
+        spawn_tree(&mut commands, look, Vec2::from(*at));
+    }
+    for at in &save.rocks {
+        spawn_rock(&mut commands, look, Vec2::from(*at), dice.between(0.8, 1.25));
+    }
+    let mut pending = Vec::new();
+    for creature in &save.creatures {
+        let entity = spawn_creature(
+            &mut commands,
+            look,
+            creature.species,
+            Vec2::from(creature.at),
+            creature.hunger,
+            creature.genome,
+        );
+        // the age it had, not a newborn's: `spawn_creature` makes an ordinary creature and this is
+        // the one field of it that a file can be older than
+        commands.entity(entity).insert(Creature { species: creature.species, age: creature.age, genome: creature.genome });
+        give_mind(&mut commands, &ruby.0, &mut mrb, entity, creature.species);
+        if !creature.memory.is_null() {
+            pending.push((entity, creature.memory.clone()));
+        }
+    }
+
+    // the day goes on from where it stopped
+    sky.shift = save.tick - time.elapsed_secs();
+    sky.phase = save.day_phase;
+    sky.night = save.night;
+    info!(
+        "loaded {} creatures, {} plants, {} trees, {} rocks at {:.1} s ({gone} entities made way)",
+        save.creatures.len(),
+        save.plants.len(),
+        save.trees.len(),
+        save.rocks.len(),
+        save.tick
+    );
+    commands.remove_resource::<Loading>();
+    commands.insert_resource(Restoring {
+        pending,
+        tick: save.tick,
+        since: time.elapsed_secs(),
+        done: false,
+    });
+}
+
+/// Puts each creature's `@memory` back, as soon as there is something to put it on.
+///
+/// It runs after the scripts have had their frame, because what it is waiting for is the object
+/// `run_creature` makes — the task exists a frame before that object does. Until every memory is
+/// in place the world is still (`is_still` below is the run condition of every rule) and its clock
+/// is held here, so the creature that got its memory first has not walked a step further than the
+/// one that got it last.
+fn restore_memory(
+    time: Res<Time>,
+    mut restoring: ResMut<Restoring>,
+    mut sky: ResMut<Sky>,
+    mut scripts: ResMut<ScriptWorld>,
+    tasks: Query<&ScriptTask>,
+) {
+    // the world's clock stands still while this lasts
+    sky.shift = restoring.tick - time.elapsed_secs();
+    let vm = &mut scripts.vm;
+    restoring.pending.retain(|(entity, memory)| {
+        let Ok(task) = tasks.get(*entity) else { return true };
+        // `@being` appears when the script reaches `run_creature`, which is its first frame
+        let Some(being) = vm.ivar_get(task.task(), BEING_IVAR).obj() else { return true };
+        match sabiruby_serde::to_value(vm, memory) {
+            Ok(value) => vm.ivar_set(being, "@memory", value),
+            Err(e) => error!("a memory would not go back: {}", vm.describe_error(&e)),
+        }
+        false
+    });
+    let waited = time.elapsed_secs() - restoring.since;
+    if restoring.pending.is_empty() {
+        restoring.done = true;
+    } else if waited > RESTORE_PATIENCE {
+        warn!("{} creatures never started; the garden is running anyway", restoring.pending.len());
+        restoring.done = true;
+    }
+}
+
+/// The last thing in a frame that finished restoring: the world may move again.
+///
+/// It is a system of its own, and after the save, so that a run which loads and saves in one go
+/// (the round-trip check) writes the world it read rather than that world plus one frame.
+fn finish_restore(mut commands: Commands, restoring: Res<Restoring>) {
+    if restoring.done {
+        commands.remove_resource::<Restoring>();
+    }
+}
+
+/// The run condition of every rule: a garden that is still being restored does not move.
+fn is_still(restoring: Option<Res<Restoring>>) -> bool {
+    restoring.is_none()
+}
+
+/// F5 and F9, in the window. The headless build has no `ButtonInput` at all (`MinimalPlugins`
+/// brings no input), which is why this system is only added there and the command line is what
+/// asks for a save without one.
+fn save_load_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    file: Res<SaveFile>,
+    mut now: ResMut<SaveNow>,
+    mut commands: Commands,
+) {
+    if keys.just_pressed(KeyCode::F5) {
+        now.0 = true;
+    }
+    if keys.just_pressed(KeyCode::F9) {
+        match read_save(&file.path) {
+            Ok(save) => commands.insert_resource(Loading { save }),
+            Err(e) => error!("{e}"),
+        }
     }
 }
 
@@ -2092,6 +2619,9 @@ fn stop_when_over(
     headless: Res<Headless>,
     sky: Res<Sky>,
     test: Option<Res<SelfTest>>,
+    restoring: Option<Res<Restoring>>,
+    file: Res<SaveFile>,
+    mut save: ResMut<SaveNow>,
     creatures: Query<(&Creature, &Hunger, &Velocity, &Transform, Option<&Mind>)>,
     plants: Query<&Plant>,
     everything: Query<Entity>,
@@ -2099,6 +2629,11 @@ fn stop_when_over(
 ) {
     let now = time.elapsed_secs();
     if now < headless.until {
+        return;
+    }
+    // a world that is still being read back is not a world to report on, and `--headless 0
+    // --load X --save Y` is exactly that run: it ends on the frame the last memory goes home
+    if restoring.is_some_and(|r| !r.done) {
         return;
     }
     for (creature, hunger, velocity, at, mind) in &creatures {
@@ -2224,6 +2759,18 @@ fn stop_when_over(
                 ),
             ),
         }
+        // --- G3: the save file ---------------------------------------------
+        match &test.bad_spawn {
+            Some(why) => ok(
+                why.contains("sight"),
+                format!("a spawn Hash with a gene missing names the gene ({why})"),
+            ),
+            None => ok(false, "a spawn Hash with a gene missing names the gene (nothing was refused)".into()),
+        }
+    }
+    // `--save PATH`: the last thing the run does, in `save_world`, which is ordered after this
+    if file.on_exit {
+        save.0 = true;
     }
     exit.write(AppExit::Success);
 }

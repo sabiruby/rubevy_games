@@ -17,6 +17,23 @@ rubevy.workspace = true
 # host toolchain in the picture; a game has one, so it asks for it. rubevy names the same source,
 # so there is one VM in the binary either way.
 sabiruby = { workspace = true, features = ["macros"] }
+# G3: the save file, and the `JSON` class the creatures write their memory with. The crate is
+# beside the VM in the same repository and names it by path, so pointing at the same git source
+# is what keeps one VM in the binary (`sabiruby` `docs/design/serde.md`). rubevy does not depend
+# on it: which `JSON` a game has, and whether it has one at all, is the game's decision.
+sabiruby-serde.workspace = true
+serde = { version = "1", features = ["derive"] }
+# the save file is JSON, and `serde_json::Value` is what a Ruby `@memory` becomes on the way to
+# it. `preserve_order` is already on through `sabiruby-serde`; naming it here too is what says
+# this crate depends on the order as well — a Hash that was written `meals, favorite` comes back
+# in that order, and the round-trip check compares the two files as text.
+#
+# `float_roundtrip` is what makes "save, load, save" give the same *text*. Without it serde_json's
+# parser is allowed to be a unit in the last place out (measured: `9.595357894897461` comes back
+# as `9.59535789489746`, one ULP below, while the writer's shortest form is exact), and a rabbit
+# that remembers where a tree is would come back standing a hair's breadth from where it was
+# written down. It costs parsing speed, which a save file read once has none of to spare.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 # The PC build: the Ruby compiler (C) is linked in, Bevy runs on threads and opens an X11 or
 # Wayland window.

@@ -2577,6 +2577,9 @@ dependencies = [
  "rubevy",
  "sabiruby",
  "sabiruby-compiler",
+ "sabiruby-serde",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -4379,6 +4382,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sabiruby-serde"
+version = "0.1.0"
+source = "git+https://github.com/sabiruby/sabiruby#9c8ebf2dabf61585d6099fed1e4efa0869f936fe"
+dependencies = [
+ "sabiruby",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4447,6 +4460,7 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

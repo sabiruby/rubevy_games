@@ -33,18 +33,23 @@ creature "Rabbit" do
   end
 
   reflex(:ate) do |_size|
-    @memory ||= {}
-    @memory[:meals] = (@memory[:meals] || 0) + 1
+    memory["meals"] = (memory["meals"] || 0) + 1
   end
 
   def run
-    @memory ||= {}
     # `Rubevy.find` walks every entity in the world, so it is a thing to do now and then rather
     # than every frame — once, here, is what it is for. The trees never move, so where they are
-    # is worth remembering; in G3 this Hash is what gets saved with the world.
-    trees = Rubevy.find(:Tree)
-    @memory[:trees] = trees.map { |t| place_of(t) }.compact
-    log "#{@memory[:trees].size} trees, and #{garden.count(:Plant).to_i} plants to start with"
+    # is worth remembering — and from G3 that memory is in the save file, so a rabbit that is
+    # loaded from one knows the garden's trees before it has looked at anything (the keys are
+    # Strings because that is what comes back out of JSON).
+    trees = memory["trees"]
+    if trees.nil?
+      trees = Rubevy.find(:Tree).map { |t| place_of(t) }.compact
+      memory["trees"] = trees
+      log "#{trees.size} trees, and #{garden.count(:Plant).to_i} plants to start with"
+    else
+      log "#{trees.size} trees, remembered: #{JSON.generate(trees.first)}"
+    end
 
     loop do
       if @asleep
@@ -64,7 +69,7 @@ creature "Rabbit" do
       spot = here
       if hunger < hungry_below
         plant = garden.nearest(:Plant)
-        wander(avoid: @memory[:trees], from: spot) if plant.nil? || head_to(plant, Creature::CRUISE * 1.6).nil?
+        wander(avoid: memory["trees"], from: spot) if plant.nil? || head_to(plant, Creature::CRUISE * 1.6).nil?
       else
         # Not hungry: go and see who else is about. `nearest(:Creature)` never answers with the
         # asker itself, so this is always somebody else — and `[:Creature]` says which sort. Both
@@ -73,9 +78,9 @@ creature "Rabbit" do
         kind = other && other[:Creature]
         if kind && kind[:species] == :Beetle
           left = head_to other, Creature::CRUISE * 1.4
-          wander(1.0, avoid: @memory[:trees], from: spot) if left.nil? || left < nosey_range
+          wander(1.0, avoid: memory["trees"], from: spot) if left.nil? || left < nosey_range
         else
-          wander avoid: @memory[:trees], from: spot
+          wander avoid: memory["trees"], from: spot
         end
       end
       sleep 0.25

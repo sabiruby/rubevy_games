@@ -12,6 +12,11 @@
 //!
 //! G0 uses `assets_dir` and `clock_seed`. The rest is here because G1 loads Ruby from `ruby/` the
 //! way sabibots does, and a file that is half a platform is worse than one that is whole.
+//!
+//! G3's save file needed nothing new here beyond a name. `read` and `write` already take a path
+//! and already mean "a file" on a PC and "a `localStorage` key" in a browser, and a garden written
+//! as JSON is a string like a script is a string — so `save_world` writes with the same two
+//! functions the editor saves a creature's file with, and the browser build of it is the PC build.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -24,6 +29,10 @@ mod imp {
 
     /// What the Save button says, since what it does differs.
     pub const SAVE_LABEL: &str = "Save to file (Ctrl+S)";
+
+    /// Where a saved garden goes (G3): a file in the directory the game was started from, which
+    /// is the workspace root when it is `cargo run`. `--save PATH` overrides it.
+    pub const SAVE_FILE: &str = "garden.save.json";
 
     /// Where the Ruby lives: next to the crate, from the workspace root or from the crate.
     pub fn ruby_dir() -> PathBuf {
@@ -71,6 +80,11 @@ mod imp {
     include!(concat!(env!("OUT_DIR"), "/ruby_files.rs"));
 
     pub const SAVE_LABEL: &str = "Save in browser (Ctrl+S)";
+
+    /// Where a saved garden goes (G3). There are no files here: `read` and `write` below turn a
+    /// path into a `localStorage` key, so this name is the key `garden:garden.save.json` and the
+    /// save survives the page being closed, in that browser and nowhere else.
+    pub const SAVE_FILE: &str = "garden.save.json";
 
     /// Keys of `localStorage` are this followed by the file's path.
     const STORE: &str = "garden:";
