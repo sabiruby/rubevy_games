@@ -23,6 +23,7 @@
 //!     GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90
 //!     cargo run -p garden -- --headless 30 --save garden.save.json   # and write it down
 //!     cargo run -p garden -- --load garden.save.json                 # and pick it up again
+//!     cargo run -p garden -- --shot n.png 12 --at midnight           # a picture of the night
 //!
 //! Mouse: drag to orbit, wheel to zoom. F5 saves the garden, F9 brings it back.
 
@@ -60,6 +61,29 @@ const DAY_LENGTH: f32 = 60.0;
 /// Where in that turn the world starts: a little after sunrise, so the first thing a run sees is
 /// daylight and the first `"night"` is something that arrives rather than something that was.
 const DAWN_OFFSET: f32 = 0.08;
+
+/// Midnight, on the world's clock, in the first turn of the sun: the phase where the sun is
+/// furthest under the ground is 0.75, and `phase = (now / DAY_LENGTH + DAWN_OFFSET).fract()`
+/// makes that `now = (0.75 - DAWN_OFFSET) * DAY_LENGTH`. `--at MIDNIGHT` is the darkest picture
+/// the garden has.
+const MIDNIGHT: f32 = (0.75 - DAWN_OFFSET) * DAY_LENGTH;
+
+/// **How dark the night is (G6).** The author played the browser build and could not see the
+/// creatures or the trees at night at all, so both numbers below are floors rather than the
+/// nothing they used to be — moonlight, not a power cut.
+///
+/// `MOON_LUX` is the `DirectionalLight` that stands in for the moon. It is what draws the *edges*:
+/// a creature has a lit side and a shadowed side, and the tree trunks have a direction. The real
+/// moon is about 0.1 lux and this is four thousand times that, which is honest — a night in a
+/// game has to be read, and a photograph of a real moonlit field needs a long exposure to look
+/// like this. What it must not be is the sun: the dimmest *day* the garden has is 1,200 lux at
+/// the horizon, and 400 keeps a clear gap under it.
+///
+/// `NIGHT_AMBIENT` is what fills the shadowed side, and it is the number that decides whether a
+/// beetle under a tree exists. The day's floor is 120 at the horizon; 55 is under half of that,
+/// so dusk still reads as the light going out.
+const MOON_LUX: f32 = 400.0;
+const NIGHT_AMBIENT: f32 = 55.0;
 
 /// Plants
 const PLANTS_AT_START: usize = 55;
@@ -784,6 +808,18 @@ fn main() {
             args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(6.0),
         )
     });
+    // `--at SECONDS`: **where the garden's clock stands when the picture is taken** — or, with no
+    // `--shot`, where it starts. G6 wanted a picture of midnight, and waiting forty seconds for
+    // one on lavapipe (which draws a shadowed PBR frame in about a second) is not a way to
+    // compare two sets of light numbers. It moves `Sky::shift`, which is G3's clock and nothing
+    // else: the plants have grown as long as the run is old and the creatures are as hungry as
+    // they have had time to get. Only the sun has moved. `--at MIDNIGHT` is the darkest one.
+    // `--at midnight` is the one hour anybody asks for by name, so it has one.
+    let at = args
+        .iter()
+        .position(|a| a == "--at")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| if s == "midnight" { Some(MIDNIGHT) } else { s.parse::<f32>().ok() });
     // `GARDEN_SELFTEST=1` on a PC, `?selftest` in the page's address (G5): a browser has no
     // environment, and the checks are what says from outside that the world is alive
     let selftest = platform::selftest_asked();
@@ -949,7 +985,13 @@ fn main() {
     app.insert_resource(Dice(platform::clock_seed()))
         .insert_resource(RubyDir(platform::ruby_dir()))
         .init_resource::<Brains>()
-        .init_resource::<Sky>()
+        // `--at` starts the sky ahead, and where a picture is asked for it counts back from the
+        // moment of the picture, so `--shot p 8 --at 40` is a garden eight seconds old whose sun
+        // is where it would be at forty
+        .insert_resource(Sky {
+            shift: at.map(|at| at - shot.as_ref().map(|(_, after)| *after).unwrap_or(0.0)).unwrap_or(0.0),
+            ..default()
+        })
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
         .init_resource::<Eaters>()
@@ -1592,11 +1634,11 @@ fn day_night(
     let height = up.y;
     let night = height <= 0.0;
 
-    // at night the light comes from where the sun is not: a moon, dim and blue, still casting
-    // the shadows that say the world is 3D
+    // at night the light comes from where the sun is not: a moon, blue and much weaker than the
+    // sun, still casting the shadows that say the world is 3D
     let from = if night { -up } else { up };
     let (color, illuminance) = if night {
-        (Color::srgb(0.55, 0.64, 1.0), 300.0)
+        (Color::srgb(0.62, 0.70, 1.0), MOON_LUX)
     } else {
         // low sun is orange, high sun is white
         let noon = height.clamp(0.0, 1.0);
@@ -1614,8 +1656,8 @@ fn day_night(
     // neither, and everything above it still runs
     if let Some(mut ambient) = ambient {
         if night {
-            ambient.color = Color::srgb(0.35, 0.45, 0.8);
-            ambient.brightness = 30.0;
+            ambient.color = Color::srgb(0.45, 0.54, 0.85);
+            ambient.brightness = NIGHT_AMBIENT;
         } else {
             ambient.color = Color::srgb(0.7, 0.8, 1.0);
             ambient.brightness = 120.0 + 260.0 * height.clamp(0.0, 1.0);
@@ -1623,7 +1665,7 @@ fn day_night(
     }
     if let Some(mut clear) = clear {
         clear.0 = if night {
-            Color::srgb(0.03, 0.04, 0.10)
+            Color::srgb(0.06, 0.08, 0.17)
         } else {
             let noon = height.clamp(0.0, 1.0);
             Color::srgb(0.35 + 0.15 * noon, 0.5 + 0.22 * noon, 0.7 + 0.22 * noon)
@@ -3355,4 +3397,24 @@ fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mu
     commands
         .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
         .observe(bevy::render::view::screenshot::save_to_disk(path));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The night's arithmetic (G6)
+// ---------------------------------------------------------------------------------------------
+
+/// `--at midnight` has to actually be midnight, or the picture the night's numbers were chosen
+/// from was of some other hour. There is no window in a test, so what is checked is the one line
+/// of arithmetic that turns a clock into a sun's height.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn midnight_is_the_darkest_moment() {
+        let phase = (MIDNIGHT / DAY_LENGTH + DAWN_OFFSET).fract();
+        assert!((phase - 0.75).abs() < 1e-5, "{phase}");
+        let up = (phase * std::f32::consts::TAU).sin();
+        assert!(up < -0.999, "{up}");
+    }
 }

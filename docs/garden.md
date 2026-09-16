@@ -30,6 +30,7 @@ cargo run -p garden -- --load g.json                    # and pick it up again
 GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 cargo run -p garden -- \
     --headless 20 --load g.json --save h.json           # F9's path, with no keyboard to press
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
+cargo run -p garden -- --shot n.png 12 --at midnight    # the same, with the sun where it is at midnight
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
 
@@ -977,6 +978,48 @@ place.
 
 That is what makes `"night"` legible on screen rather than a number in a log: the creatures stop
 where they stand when it arrives, and the picture says so.
+
+### How dark the night is, and why it changed (G6)
+
+The author played the browser build and could not see the garden at night at all — not dimly, at
+all. The numbers were an honest guess at what a night looks like and a wrong guess at what a night
+*on a screen* has to be, so they were raised until a picture of midnight was readable, and no
+further: the point of a night is still that it is one.
+
+| | before | after |
+|---|---|---|
+| the moon (`DirectionalLight.illuminance`) | 300 lux | **400 lux** (`MOON_LUX`) |
+| the ambient light (`GlobalAmbientLight.brightness`) | 30 | **55** (`NIGHT_AMBIENT`) |
+| the moon's colour | `srgb(0.55, 0.64, 1.00)` | `srgb(0.62, 0.70, 1.00)` |
+| the ambient colour | `srgb(0.35, 0.45, 0.80)` | `srgb(0.45, 0.54, 0.85)` |
+| the sky (`ClearColor`) | `srgb(0.03, 0.04, 0.10)` | `srgb(0.06, 0.08, 0.17)` |
+
+The two that matter are the first two, and they do different jobs. The moon is a directional light
+and it draws *edges*: a creature has a lit side and a shadowed side and the tree trunks have a
+direction, which is what stops the garden looking like a flat black card. The ambient is what
+fills the shadowed side, and it is the one that decides whether a beetle standing under a tree
+exists at all. Raising only the moon made the tops of things bright and the rest of them still
+missing; raising only the ambient made everything grey and flat. Both, and the day is still a day:
+the dimmest daylight the garden has is 1,200 lux at the horizon with an ambient of 120, so
+moonlight is a third of the worst daylight and the eye reads the difference immediately. Measured
+on the picture below against the same crop of `docs/garden.png`, the ground's mean luminance is
+**18 → 26 out of 255** at midnight, against **81** in the afternoon.
+
+![the garden at midnight](garden-night.png)
+
+`--at SECONDS` is what makes that picture cheap to take. It moves `Sky::shift` — G3's clock, the
+one a loaded garden uses to go on from the hour it was saved at — and nothing else, so the world
+is as old as the run is and only the sun has moved:
+
+```
+cargo run -p garden -- --shot docs/garden-night.png 12 --at midnight
+```
+
+With a `--shot` it counts back from the moment of the picture, so that reads as "a garden twelve
+seconds old, photographed at midnight"; with no `--shot` it is simply where the clock starts.
+`midnight` is spelled out because it is the one hour anybody asks for by name — it is
+`(0.75 - DAWN_OFFSET) × DAY_LENGTH`, and a test in `garden/src/main.rs` checks that the sun really
+is at its lowest there rather than trusting the arithmetic.
 
 ## Running without a window, and the ten checks
 
