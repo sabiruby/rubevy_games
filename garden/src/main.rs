@@ -90,6 +90,11 @@ const TOUCH_REACH: f32 = 1.3;
 /// creature in the world was as old as the world.
 const NEWBORN_GRACE: f32 = 2.0;
 
+/// How long a beetle has to have been left alone before a `"touched"` sent to it is one the sixth
+/// check can ask a question about: long enough for its reflex task to have finished anything that
+/// was already in its queue (a reflex holds the wheel for half a second over each message).
+const TOUCH_SETTLE: f32 = 1.5;
+
 /// Breeding (G2). Two creatures of one species that meet while this full are told to make a
 /// child — the rule is Rust's, the arithmetic of the child is Ruby's.
 ///
@@ -1678,22 +1683,25 @@ fn startle(
                 touching.push((*rabbit, beetle));
                 if !contacts.0.contains(&(*rabbit, beetle)) {
                     world.publish(Some(beetle), "touched", Answer::Entity(*rabbit));
-                    // and, for the selftest, which way it was going when it was told
-                    if let Some(test) = test.as_mut()
-                        && velocity.0.length() > 0.5
-                        && !by_a_wall(at)
-                        && creature.age > NEWBORN_GRACE
-                    {
-                        // and only when this beetle has been left alone for a while. A rabbit
-                        // that keeps walking into one publishes again every time the contact is
-                        // remade, the reflex takes half a second over each message, and the rest
-                        // wait in the queue — so "did it turn?" asked half a second after the
-                        // fourth message is really asking about the first. The clock is reset by
-                        // *every* touch, so what is measured is always a beetle that was not
-                        // already running from something.
+                    // and, for the selftest, which way it was going when it was told.
+                    //
+                    // **The clock is reset by every message, and the guards come after it.** A
+                    // rabbit that keeps walking into a beetle publishes again every time the
+                    // contact is remade; the reflex takes half a second over each one and the
+                    // rest wait in its queue, so "did it turn?" asked half a second after the
+                    // third message is really asking about the first. G1 wrote that down and
+                    // then reset the clock *inside* the three guards below — so a message sent
+                    // to a beetle that happened to be standing still, or in the corner, or a
+                    // second old did not count as having been sent at all, and the next message
+                    // looked like the first thing that had happened to it in a long while.
+                    // Measured over six ninety-second runs: **41 of 211 counted touches** had a
+                    // message in the 1.5 s before them that the clock had not seen, and that is
+                    // where the sixth check's remaining flakiness lived
+                    // (`docs/worklog/2026-09-17-garden-G4.md`).
+                    if let Some(test) = test.as_mut() {
                         let fresh = match test.last_touch.iter_mut().find(|(e, _)| *e == beetle) {
                             Some(seen) => {
-                                let fresh = now - seen.1 > 1.5;
+                                let fresh = now - seen.1 > TOUCH_SETTLE;
                                 seen.1 = now;
                                 fresh
                             }
@@ -1702,7 +1710,13 @@ fn startle(
                                 true
                             }
                         };
-                        if fresh {
+                        // and then: a beetle that was actually walking, in the open, old enough
+                        // to have subscribed to anything (`NEWBORN_GRACE`)
+                        if fresh
+                            && velocity.0.length() > 0.5
+                            && !by_a_wall(at)
+                            && creature.age > NEWBORN_GRACE
+                        {
                             test.touched.push((beetle, now, velocity.0));
                         }
                     }
