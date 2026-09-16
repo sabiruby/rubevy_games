@@ -172,14 +172,20 @@ fn creature_under(
 // The editor
 // ---------------------------------------------------------------------------------------------
 
-const BEETLE_COLOR: (u8, u8, u8) = (226, 176, 92);
-const RABBIT_COLOR: (u8, u8, u8) = (196, 204, 226);
-
+/// The colour a species' name is written in — in the HUD's list, on the editor's two tabs, and on
+/// the VM panel's heading.
+///
+/// **G8: it is the model's own colour now.** It used to be two colours picked to be legible on a
+/// panel and nothing else, amber and pale blue, and the models were two browns; the author, who
+/// could not tell a rabbit from a beetle on the grass, had nothing in the picture to check the
+/// list against. `crate::species_tint` is one number per species, `tint_species` washes the model
+/// in it and this writes the name in it, so the row that says `Beetle 405v0` is the colour of the
+/// thing that is standing in the grass. Which also means the two are legible for the same reason:
+/// a colour that reads against the field reads against a dark panel.
 pub fn species_color(species: Species) -> (u8, u8, u8) {
-    match species {
-        Species::Beetle => BEETLE_COLOR,
-        Species::Rabbit => RABBIT_COLOR,
-    }
+    let (r, g, b) = crate::species_tint(species);
+    let byte = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    (byte(r), byte(g), byte(b))
 }
 
 /// The editor follows the creature being looked at — or rather its **file**, which is what the
