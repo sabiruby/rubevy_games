@@ -198,8 +198,9 @@ module and puts about 7% back on the gzipped one (sabibots 9.88 → 10.59 MB gzi
 10.01 → 10.72 MB), which is what the wire actually carries — Pages serves gzip. The optimizer's
 output is smaller but less repetitive, and gzip lives on repetition. CI has `wasm-opt` and still
 runs it, because the raw size is what the browser must decode and keep, but **the case for it is
-not the download**, and this is the first time the two were measured side by side here. Whether
-to keep it is the author's call.
+not the download**, and this is the first time the two were measured side by side here. Kept
+(author's decision 2026-09-17): what the browser decodes and holds matters more here than the
+0.7 MB of transfer.
 
 **The garden is 1.2% bigger than Battle** (39.25 vs 38.77 MB raw), which is the whole of 3D:
 `bevy_pbr`, `bevy_gltf`, `bevy_animation` and the glTF loader against Battle's sprites. The plan
