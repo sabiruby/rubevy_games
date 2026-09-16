@@ -61,7 +61,7 @@ hand against volumes of its own.
 
 In a browser the same keys do the same things (the page takes F5 back from the browser, which
 would otherwise reload it), and the two buttons in the HUD are what a player who has not read this
-finds. `docs/web.md` has the rest.
+finds. `docs/web.md` has the rest. The window itself is described under **The window (G4)** below.
 
 ### The wheel had two steps in it, and the unit is why (G6)
 
@@ -102,6 +102,45 @@ A ratio is the whole point of the second one: ten per cent is the same felt step
 Thirty notches cross the range either way, in both builds, which is about ten flicks of a finger.
 The two functions are pure and have tests of their own in `garden/src/main.rs`, because the bug
 they fix is invisible in every environment a test runs in.
+
+### Panning
+
+The field is forty by thirty and the camera used to be nailed to the middle of it: a beetle in a
+corner was something you could turn *towards* and never go *to*. `Orbit` grew a fourth number —
+`focus`, the point on the ground the camera turns around and looks at — and `camera_at` places the
+eye relative to it instead of relative to the origin.
+
+Which button does which is the only decision in it. Left-drag turns, and right-drag or Shift and
+left-drag slide; the right button is there because it is the usual one, and Shift and left because
+a trackpad may not have a right button and a browser may want the right one for its own menu. The
+drag is turned by the camera's yaw before it is added (`ground_axes`), so sliding goes where the
+eye expects rather than where the world's X happens to be, and it is scaled by the distance, so it
+feels the same close in as far out. `Home` puts all four numbers back.
+
+### What the browser actually does, measured
+
+`GARDEN_SELFTEST=1` — or `?selftest` in the page's address — makes the camera write a line every
+time a wheel message arrives and a sampled line while it is being dragged. That is the only way to
+read a camera out of a wasm canvas from outside, and it is what these numbers come from; an
+ordinary run logs nothing. Driven in headless Chromium 153 (playwright, software WebGL) against
+`web/dist/garden/?selftest`, ten `mouse.wheel(0, -100)` one at a time:
+
+```
+wheel Pixel y=100 -> 1.000 notches, distance 42.00 -> 38.18
+wheel Pixel y=100 -> 1.000 notches, distance 38.18 -> 34.71
+wheel Pixel y=100 -> 1.000 notches, distance 34.71 -> 31.56
+… 28.69, 26.08, 23.71, 21.55, 19.59, 17.81 …
+wheel Pixel y=100 -> 1.000 notches, distance 17.81 -> 16.19
+distinct distances: 10 of 10
+```
+
+**Ten notches, ten steps**, each exactly a tenth of the one before, where the author found two —
+and the unit in the log is the evidence for the diagnosis rather than a guess about it: `Pixel`,
+100 per notch, which is exactly what `PIXELS_PER_NOTCH` says. Ten notches back out land on 42.00
+again to the last digit. A right-drag of 180 px right and 96 px down moves `focus` to
+`(-11.09, -5.91)`; holding `W` for 0.7 s moves it to `(-12.10, -15.72)`; `Home` puts it at
+`(0.00, 0.00)`. The page's own 21 window checks pass in the same run, with no page error. The
+driver is in `docs/worklog/2026-09-17-garden-G6.md`.
 
 ### The guide in the game, in two languages (G6)
 
@@ -166,47 +205,6 @@ given a path to one, pins `wght=400` with `fontTools.varLib.instancer` and subse
 running it is drawn as blank boxes**, because the character is not in the subset — which is the
 one way this arrangement can go wrong, and the reason the script exists rather than a note saying
 which font was used.
-
-### Panning
-
-The field is forty by thirty and the camera used to be nailed to the middle of it: a beetle in a
-corner was something you could turn *towards* and never go *to*. `Orbit` grew a fourth number —
-`focus`, the point on the ground the camera turns around and looks at — and `camera_at` places the
-eye relative to it instead of relative to the origin.
-
-Which button does which is the only decision in it. Left-drag turns, and right-drag or Shift and
-left-drag slide; the right button is there because it is the usual one, and Shift and left because
-a trackpad may not have a right button and a browser may want the right one for its own menu. The
-drag is turned by the camera's yaw before it is added (`ground_axes`), so sliding goes where the
-eye expects rather than where the world's X happens to be, and it is scaled by the distance, so it
-feels the same close in as far out. `Home` puts all four numbers back.
-
-### What the browser actually does, measured
-
-`GARDEN_SELFTEST=1` — or `?selftest` in the page's address — makes the camera write a line every
-time a wheel message arrives and a sampled line while it is being dragged. That is the only way to
-read a camera out of a wasm canvas from outside, and it is what these numbers come from; an
-ordinary run logs nothing. Driven in headless Chromium 153 (playwright, software WebGL) against
-`web/dist/garden/?selftest`, ten `mouse.wheel(0, -100)` one at a time:
-
-```
-wheel Pixel y=100 -> 1.000 notches, distance 42.00 -> 38.18
-wheel Pixel y=100 -> 1.000 notches, distance 38.18 -> 34.71
-wheel Pixel y=100 -> 1.000 notches, distance 34.71 -> 31.56
-… 28.69, 26.08, 23.71, 21.55, 19.59, 17.81 …
-wheel Pixel y=100 -> 1.000 notches, distance 17.81 -> 16.19
-distinct distances: 10 of 10
-```
-
-**Ten notches, ten steps**, each exactly a tenth of the one before, where the author found two —
-and the unit in the log is the evidence for the diagnosis rather than a guess about it: `Pixel`,
-100 per notch, which is exactly what `PIXELS_PER_NOTCH` says. Ten notches back out land on 42.00
-again to the last digit. A right-drag of 180 px right and 96 px down moves `focus` to
-`(-11.09, -5.91)`; holding `W` for 0.7 s moves it to `(-12.10, -15.72)`; `Home` puts it at
-`(0.00, 0.00)`. The page's own 21 window checks pass in the same run, with no page error. The
-driver is in `docs/worklog/2026-09-17-garden-G6.md`.
-
-The window is described under **The window (G4)** below.
 
 ## The components
 
