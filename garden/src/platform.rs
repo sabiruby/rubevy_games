@@ -75,6 +75,21 @@ mod imp {
         std::env::var("GARDEN_SELFTEST").is_ok()
     }
 
+    /// Whether the window's checks end the run when they are done. On a PC they do: the checks
+    /// are asked for on a command line and the shell wants its prompt back.
+    pub const CHECKS_EXIT_WHEN_DONE: bool = true;
+
+    /// `GARDEN_RELOAD_AT=SECONDS`, the checks' only way to press F9 without a keyboard.
+    ///
+    /// A headless run has no `ButtonInput` at all, so the one path a key drives — "read a file
+    /// into a garden that is already running" — had no check on it, and the one thing that went
+    /// wrong there (G5's finding 1) was found in a browser rather than here. This says when to
+    /// open the `--load` file, instead of opening it before the first frame. It is read only when
+    /// `GARDEN_SELFTEST` is set, so it is not a switch a player can trip.
+    pub fn reload_asked_at() -> Option<f32> {
+        std::env::var("GARDEN_RELOAD_AT").ok().and_then(|s| s.parse::<f32>().ok())
+    }
+
     /// Where the tenth check's file goes (G5). A temporary directory on a PC, because the file is
     /// about `--load` and not about where a file lives.
     pub fn another_version_file() -> String {
@@ -175,6 +190,21 @@ mod imp {
         web_sys::window()
             .and_then(|w| w.location().search().ok())
             .is_some_and(|q| q.contains("selftest"))
+    }
+
+    /// **A page has nothing to exit to**, and `AppExit` in a browser is not "the run ended", it is
+    /// "this canvas stops". winit's wasm event loop stops being pumped, every system stops running,
+    /// and the last frame drawn stays on the screen looking like a garden — so the page goes on
+    /// *looking* alive while no key, no click and no creature does anything ever again. That is
+    /// G5's second finding (`docs/web.md`, "the page stops answering the mouse and the keyboard"):
+    /// not egui holding the keyboard and not the DOM, but the checks ending the app under the
+    /// player's feet. So the checks do not exit here; they say they are done and the garden goes on.
+    pub const CHECKS_EXIT_WHEN_DONE: bool = false;
+
+    /// A page has no environment and no `--load`: the browser's checks press F9 for real
+    /// (`web/garden.html` sends the key), so there is nothing to defer here.
+    pub fn reload_asked_at() -> Option<f32> {
+        None
     }
 
     /// Where the tenth check's file goes (G5). There is no temporary directory here: it is a

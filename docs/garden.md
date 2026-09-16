@@ -27,6 +27,8 @@ GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the ten checks
 GARDEN_SELFTEST=1 cargo run -p garden                   # a window, and the editor's and the keys'
 cargo run -p garden -- --headless 30 --save g.json      # and write the garden down at the end
 cargo run -p garden -- --load g.json                    # and pick it up again
+GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 cargo run -p garden -- \
+    --headless 20 --load g.json --save h.json           # F9's path, with no keyboard to press
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
@@ -608,12 +610,50 @@ the nearest one to the text (measured in a four-line program against the same ve
 The writer was always exact; it is the reading side that rounds. The feature costs parsing speed,
 which a file read once has none to spare.
 
-F9 — a load into a garden that is *already running*, where everything alive is despawned first —
-takes the same `load_world` the command line does, and it was run once headlessly with a throwaway
-hook (not committed): seventy-three entities made way, the world came back at the hour it was saved
-at, the rabbits had their trees again, and nothing was logged above `INFO`. What has not been
-pressed is the keys themselves; this machine has no GPU driver and the window goes through the
-container in `docker/` (`docs/wsl-gpu.md`).
+### Loading into a garden that is already running
+
+F9 — everything alive despawned and a file's creatures built in its place — takes the same
+`load_world` the command line does, but it is not the same thing to the *creatures*: `--load`
+builds minds that have never run, F9 replaces minds that have. G5 found that only the second one
+lost what it read (`11 creatures never started; the garden is running anyway`, every creature back
+with an empty `@memory`), and it found it in a browser, because a headless run has no keyboard to
+press F9 with.
+
+It has one now. `GARDEN_RELOAD_AT=SECONDS`, read only when `GARDEN_SELFTEST` is set, holds the
+`--load` file back: the garden is built new, lives its own life, and the file goes in at `SECONDS`
+through F9's door (`ReloadAt`, `reload_while_running`). It puts a `Loading` in exactly as the key
+does, and nothing else about the path is different. Told to reload at the second the run ends, it
+writes the world it just read — `restore_memory` marks the load whole just before `stop_when_over`
+looks, so no frame of walking gets between the restore and the save:
+
+```
+$ ./target/release/garden --headless 30 --save a.json
+saved 12 creatures, 47 plants at 30.0 s to a.json (13057 bytes)
+$ GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 ./target/release/garden \
+      --headless 20 --load a.json --save b.json
+GARDEN_RELOAD_AT: loading a.json into the running garden
+loaded 12 creatures, 47 plants, 7 trees, 9 rocks at 30.0 s (69 entities made way)
+saved 12 creatures, 47 plants at 30.0 s to b.json (13057 bytes)
+$ diff a.json b.json && echo IDENTICAL
+IDENTICAL
+```
+
+Sixty-nine entities made way, every memory came home, and the two files are the same bytes — a
+garden that had been running for twenty seconds with minds of its own. No `creatures never started`
+line, no `WARN`, no `ERROR`.
+
+**And this is the same bug as the restart queue's.** The hook was built to find out whether the
+fault was the VM or `restore_memory`'s timing, so it was run against both VMs in the same
+container, and the interesting number is not pass or fail but *how long the restore took*: the
+line that says the file was loaded and the line that says it was written back are **1.48 s apart on
+sabiruby 0.5.0** and **6 ms apart on 0.5.1**. The old VM got there in the end, which is why a PC
+never saw the failure: `RESTORE_PATIENCE` is five seconds and 1.5 is well inside it. A browser is
+slower than this container, and the wait is what it spends the whole of — twelve creatures
+despawned at once is seventy-two reflex tasks ending with `nil`, and on 0.5.0 each of those cost
+the host a whole frame. Nothing in the game needed fixing.
+
+What has not been pressed is the key itself; this machine has no GPU driver and the window goes
+through the container in `docker/` (`docs/wsl-gpu.md`).
 
 ## The window (G4)
 
@@ -651,22 +691,35 @@ task, closes the queues it had subscribed to, and the reflex tasks parked on the
 old script made; the new script makes a new one. That is the honest behaviour — a brain that has
 been rewritten is not the brain that learnt those things — and it is the same in Battle.
 
-**They are handed over one at a time, and that is a limit of the VM.** A beetle is seven tasks (a
-brain and six reflexes) and six subscriptions; restarting it means terminating all seven and
-closing all six queues in one frame. Do that to nine beetles at once and everything is fine. Do it
-to **ten** and the VM's scheduler stops for good: `Vm::task_pending()` stays true, `task_run_limits`
-runs nothing, and *every* task in the VM freezes — the rabbits included, which nobody touched, and
-it never comes back. Measured in the window under lavapipe, three seconds after the Apply: nine
-restarts and the whole VM's instruction count has moved on by nine thousand; ten restarts and it
-has not moved at all. Three a frame does not help either, so it is not "how many in one frame" —
-it is how many *within a short while*, which reads like the old contexts not being let go of fast
-enough (`docs/worklog/2026-09-17-garden-G4.md`; it is a VM matter, not the game's, and is reported
-rather than worked around in the VM).
+**Every beetle is handed over in the frame Apply was pressed**, and for one release of the VM it
+could not be. A beetle is seven tasks (a brain and six reflexes) and six subscriptions; restarting
+it means terminating all seven and closing all six queues at once. G4 measured that nine beetles
+at a time were fine and **ten** stopped the VM's scheduler for good — `Vm::task_pending()` stayed
+true, `task_run_limits` ran nothing, and every task in the VM froze, the rabbits included, which
+nobody had touched. The game got round it with a queue that handed one creature over every 0.4 s
+(`RESTARTS_PER_FRAME`, `RESTART_GAP`), and reported the rest as a VM matter.
 
-So the game hands them over on a clock: one creature every 0.4 s (`RESTARTS_PER_FRAME`,
-`RESTART_GAP`). A garden of a dozen beetles takes about five seconds to come round to the new
-brain, one after another — which is visible, and honest about what it is. When the VM can take
-them all at once, the queue in `window.rs` is what goes.
+It was one, and the reading in this document was wrong: nothing was slow to be let go of. Ending a
+`ScriptTask` wakes each of the creature's reflex tasks with `Rubevy::Unsubscribed`, their empty
+`rescue` makes the block's value `nil`, and `Vm::task_run_limited` could not tell *that* `nil` from
+"the scheduler has nothing ready" — so it ended the host's whole frame. One frame per reflex task,
+six per beetle, sixty for ten of them: at 30 fps, two seconds of a VM that looks stopped. sabiruby
+0.5.1 tells the two apart (sabiruby `docs/worklog/2026-09-17-task-end-nil.md`), and with it the
+queue is gone. Measured again in the window under lavapipe, with the same instrument — the whole
+VM's instruction count 0.6 s after the Apply and again three seconds later:
+
+| beetles replaced at once | instructions 0.6 s after Apply | 3.6 s after | moved by |
+|---|---|---|---|
+| 1 of 13 | 242,913 | 248,619 | +5,706 |
+| 4 of 10 | 174,569 | 179,731 | +5,162 |
+| 9 of 11 | 112,371 | 118,692 | +6,321 |
+| 10 of 10 | 87,777 | 93,941 | +6,164 |
+| 12 of 12 | 91,039 | 98,871 | +7,832 |
+| all (11 of 11) | 96,086 | 103,681 | +7,595 |
+
+Ten is no longer a cliff, and there is no cliff anywhere else either. (The count differs per row
+because the garden breeds and starves while the check is getting to the Apply; the instruction
+total falls at the Apply itself because a restarted task counts from zero again.)
 
 Saving `garden/ruby/creatures/beetle.rb` from any other editor does what Save does, through
 `rubevy-arena`'s directory watcher; a species running an applied text is left alone until it is
@@ -758,8 +811,8 @@ vm:   #2 rabbit.rb:77           run              pc 137   spot=[18.5, 0.0, -3.9]
 
 `GARDEN_SELFTEST=1` with a window drives the editor the way a click would (by setting
 `Editor::action`) and presses the two keys, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
-for Battle. Save is left out on purpose, since it writes to the repository. Sixteen lines, all
-`ok` (through `docker`, lavapipe):
+for Battle. Save is left out on purpose, since it writes to the repository. Twenty-one lines, all
+`ok` (through `docker`, lavapipe — and all twenty-one in a browser too, at `garden/?selftest`):
 
 ```
 selftest: ok   P pauses: the scripts' budget is 0
@@ -785,6 +838,13 @@ selftest: ok   Revert shows the file again
 selftest: ok   nothing was written
 selftest: Rabbit 400v0 — 21 ask round trips, 83 component reads, 1.00 frames/decision
 ```
+
+**They end by asking the app to exit, and only where there is something to exit to.**
+`platform::CHECKS_EXIT_WHEN_DONE` is `true` on a PC — the checks were asked for on a command line
+and the shell wants its prompt back — and `false` in a browser, where `AppExit` does not end a run
+but stops the canvas: winit's wasm loop is no longer pumped, every system stops, and the last frame
+drawn stays on the screen looking like a garden that has quietly stopped taking keys. A page says
+`selftest: done — the garden keeps running` instead and goes on being a garden (`docs/web.md`).
 
 The keys are checked **before** the editor, and on purpose: the editor restarts scripts, and a
 check about the scheduler asked after that would be a check about the restart.
@@ -1088,14 +1148,17 @@ same Ruby, the same editor, and 315 KiB of models fetched beside the wasm. What 
 `localStorage` (under `garden:`, the game's own prefix, so the two games on one site cannot
 overwrite each other), Ruby is compiled by a second wasm module the page loads, and the checks are
 asked for with `?selftest` in the address rather than with an environment variable. `docs/web.md`
-is the whole of it, including what was driven in a headless browser and the two things that came
-out of doing so — the save's version number earning its keep, and a restart that leaves tasks
-created but never run.
+is the whole of it, including what was driven in a headless browser and the three things that came
+out of doing so — the save's version number earning its keep, a restart that left tasks created but
+never run (the VM's, fixed in sabiruby 0.5.1), and a page that stopped answering the keyboard once
+the checks had finished, because the checks ended the app and a page has nothing to exit to.
 
 ## What is not here yet
 
 Sound, and a creature file per *creature* rather than per species (the editor could do it; the
-game has no reason to want it yet), are not planned. The one thing G5 found and did not fix is in
-`docs/web.md`: after Apply or a load replaces every creature at once, their new tasks can sit
-`Created` without ever being run — G4 saw the same shape on a PC at ten creatures and worked
-around it by handing them over one at a time, and the VM's scheduler is where it belongs.
+game has no reason to want it yet), are not planned. The two things G5 found and did not fix are
+both fixed now: the tasks that sat `Created` after every creature was replaced at once were the
+VM's (sabiruby 0.5.1, and the game's workaround queue is gone with it), and the page that stopped
+answering the keyboard after `?selftest` was the checks writing `AppExit` in a place where there is
+nothing to exit to. What is left is the browser compiler's missing file name (`docs/web.md`), which
+belongs to sabiruby-playground.
