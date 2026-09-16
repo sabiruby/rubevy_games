@@ -28,6 +28,8 @@
 //! Mouse: drag to orbit, wheel to zoom. F5 saves the garden, F9 brings it back.
 
 mod genome;
+/// G6: the words of the `H` panel, and the only file to edit to change them.
+mod guide_text;
 mod platform;
 mod window;
 
@@ -38,7 +40,7 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
-use rubevy_arena::{EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
+use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
 use serde::{Deserialize, Serialize};
@@ -921,7 +923,18 @@ fn main() {
                 // Battle uses. They bring `bevy_egui` between them.
                 EditorPlugin,
                 VmInspectorPlugin,
+                // G6: the `H` panel, and with it the Japanese font every egui panel in the game
+                // now has as a fallback (`rubevy_arena::guide`)
+                GuidePlugin,
             ))
+            // G6. A picture is asked for one thing, and the panel sits over the middle of the
+            // window — which would be that thing. So a `--shot` run starts with it shut unless
+            // `--guide` says otherwise, and `--shot p 8 --guide` is how the guide's own picture
+            // (the one that says the Japanese is not tofu) is taken. A player gets it open.
+            .insert_resource(rubevy_arena::Guide {
+                open: shot.is_none() || args.iter().any(|a| a == "--guide"),
+                ..guide_text::guide()
+            })
             .init_resource::<Orbit>()
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()

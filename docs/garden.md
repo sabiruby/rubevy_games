@@ -103,6 +103,70 @@ Thirty notches cross the range either way, in both builds, which is about ten fl
 The two functions are pure and have tests of their own in `garden/src/main.rs`, because the bug
 they fix is invisible in every environment a test runs in.
 
+### The guide in the game, in two languages (G6)
+
+The author played the browser build knowing what every key did, and still wrote down "there is no
+explanation in the game". Until G6 the whole of it was one weak grey line at the foot of the HUD
+and the file you are reading, in another window. So: a panel, **open the first time the game
+starts**, `H` or `?` after that (`Esc` closes it), and a hint in the HUD in the colour the key
+names are, saying so.
+
+![the guide, over the garden](garden-guide.png)
+
+Four paragraphs and the key table, in English with the Japanese under it in a quieter blue. The
+paragraphs are not the key list in prose — they are what somebody who has just opened the page is
+actually looking at (grass, hunger, a day that turns over in a minute, creatures pairing off), and
+then the two things a player would never guess: that every mind is a Ruby script in a VM written
+in Rust that reads the ECS components by name, and that clicking a creature and pressing
+Ctrl+Enter hands the new mind to every creature of its species while the garden keeps running.
+
+The **frame** is `rubevy-arena`'s (`crates/rubevy-arena/src/guide.rs`): the window, the two keys,
+the two-language layout and the font. The **words** are each game's, and each game keeps all of
+them in one file and nothing else in it:
+
+| | |
+|---|---|
+| `garden/src/guide_text.rs` | the garden's words — the file to edit to change them |
+| `sabibots/src/guide_text.rs` | SabiRuby Battle's |
+| `crates/rubevy-arena/src/guide.rs` | the two strings both games show: the HUD's `H: help / 操作説明` and the line at the foot of the panel |
+
+`--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
+over the middle of the window; `cargo run -p garden -- --shot p.png 10 --guide` is how the picture
+above was taken, and looking at it is how "the Japanese is not tofu" was checked.
+
+### The font, and re-cutting it when the words change
+
+egui's default fonts are Ubuntu-Light and two Noto *symbol* faces: **no CJK at all**. Japanese in
+a label is the replacement box — tofu — and there is no system font to fall back on, because the
+browser build is a wasm module with no access to the machine's fonts and font discovery would be a
+megabyte of code and a different answer on every machine. So the font is in the binary:
+
+```rust
+pub const CJK: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Guide.subset.ttf");
+```
+
+Noto Sans JP (SIL Open Font License 1.1; `CREDITS.md`, with `OFL.txt` beside the file), which is
+9.6 MB as it comes — a variable font with the whole `wght` axis and every Japanese glyph. What is
+in the binary is **62,780 bytes**: pinned to one weight, and cut down to the 327 characters the
+guides actually use. It is added as a **fallback**, appended to both of egui's families rather
+than replacing them, so egui reaches it only for characters the defaults do not have and every
+Latin glyph in the editor and the panels is what it was.
+
+Cutting the font to the text means the two have to be cut **together**:
+
+```
+tools/subset-font.sh          # after editing any Japanese in the three files above
+cargo build --release -p garden -p sabibots
+web/build.sh all              # for the pages
+```
+
+The script reads the characters out of those three files itself, fetches Noto Sans JP if it is not
+given a path to one, pins `wght=400` with `fontTools.varLib.instancer` and subsets with
+`fontTools.subset` (fonttools 4.65 in a venv). **A Japanese word edited into a guide without
+running it is drawn as blank boxes**, because the character is not in the subset — which is the
+one way this arrangement can go wrong, and the reason the script exists rather than a note saying
+which font was used.
+
 ### Panning
 
 The field is forty by thirty and the camera used to be nailed to the middle of it: a beetle in a

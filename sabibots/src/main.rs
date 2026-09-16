@@ -14,13 +14,15 @@
 //!
 //! Save a robot file while it runs and that robot starts again with the new brain.
 
+/// G6: the words of the `H` panel, and the only file to edit to change them.
+mod guide_text;
 mod platform;
 
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptEnded, ScriptTask, ScriptWorld};
-use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, VmInspector, VmInspectorPlugin, Watch};
+use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, GuidePlugin, Hud, ScriptPanel, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::Value;
 
 const ROBOT_RADIUS: f32 = 1.6;
@@ -314,8 +316,18 @@ fn main() {
                 ArenaPlugin::default(),
                 EditorPlugin,
                 VmInspectorPlugin,
+                // G6: the `H` panel, and with it the Japanese font (`rubevy_arena::guide`)
+                GuidePlugin,
                 RubevyPlugin::default(),
             ))
+            // G6. A picture is asked for one thing, and the panel sits over the middle of the
+            // window — which would be that thing. So a `--shot` run starts with it shut unless
+            // `--guide` says otherwise, and `--shot p 8 --guide` is how the guide's own picture
+            // (the one that says the Japanese is not tofu) is taken. A player gets it open.
+            .insert_resource(rubevy_arena::Guide {
+                open: shot.is_none() || args.iter().any(|a| a == "--guide"),
+                ..guide_text::guide()
+            })
             .init_resource::<Watched>()
             .init_resource::<Hud>()
             .init_resource::<Paused>()
@@ -594,6 +606,13 @@ fn draw_scoreboard(
                     ui.end_row();
                 }
             });
+            ui.separator();
+            // G6: the one line that says the rest is explained inside the game
+            ui.label(
+                egui::RichText::new(rubevy_arena::Guide::HINT)
+                    .color(egui::Color32::from_rgb(255, 226, 150))
+                    .strong(),
+            );
         });
 }
 

@@ -648,6 +648,14 @@ pub fn draw_hud(
                 )
                 .weak(),
             );
+            // G6: the one line that says the rest of it is explained inside the game. It is drawn
+            // in the colour the keys are, not the weak grey the line above it is, because a hint
+            // nobody notices is the same as no hint — which is what the author's play found.
+            ui.label(
+                egui::RichText::new(rubevy_arena::Guide::HINT)
+                    .color(egui::Color32::from_rgb(255, 226, 150))
+                    .strong(),
+            );
         });
 }
 
