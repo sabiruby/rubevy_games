@@ -15,3 +15,8 @@ bevy_egui.workspace = true
 # watching the Ruby directory for edits: there is no directory to watch in a browser
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 notify = "8"
+
+# G6b: `navigator.language`, so the guide opens in the language the browser was asked for. The PC
+# build reads `LANG` out of the environment, which needs nothing (`src/settings.rs`).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Navigator"] }

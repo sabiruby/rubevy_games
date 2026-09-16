@@ -6,6 +6,9 @@
 //! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game.
 //! * [`Guide`] — the in-game explanation (G6), in English and Japanese, that `H` opens. The frame
 //!   and the Japanese font are here; the words are each game's.
+//! * [`Settings`] — the handful of `key=value` lines a game remembers between runs. Where they
+//!   are kept is the game's `platform.rs`, since only it knows whether that is a file or a
+//!   browser's local storage.
 //! * [`VmInspector`] — the frames, registers and heap of the selected script, read out of the VM.
 //! * [`Watch`] — the Ruby directory, watched: saving a file tells the game to start that script
 //!   again. Editing a robot's brain and seeing it change without restarting is the point.
@@ -22,11 +25,13 @@ pub mod editor;
 pub mod guide;
 pub mod hud;
 pub mod inspect;
+pub mod settings;
 pub use code::{CodePanel, CodePanelPlugin};
 pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin};
-pub use guide::{Guide, GuideKey, GuideNote, GuidePlugin};
+pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
 pub use inspect::{VmInspector, VmInspectorPlugin};
+pub use settings::Settings;
 
 /// Half the width of the square the camera shows, in world units.
 #[derive(Resource, Debug, Clone, Copy)]
