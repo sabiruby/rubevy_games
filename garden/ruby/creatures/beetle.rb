@@ -47,11 +47,22 @@ creature "Beetle" do
   # A meal has started, on a plant of this size. Published once per meal, not once per frame of
   # it — a beetle chews for a second or two, and sixty messages would be one event filling a
   # queue that holds sixty-four.
+  #
+  # This is also where a beetle's memory is written (G3). `memory` is a plain Hash that lives on
+  # this object; the game reads it out of the VM when the garden is saved and puts it back when
+  # the garden is loaded, so a beetle picked up an hour later still knows how many meals it has
+  # had and where the best grass it ever found was. The keys are Strings because JSON's are.
   reflex(:ate) do |size|
-    @memory ||= {}
-    @meals = (@meals || 0) + 1
-    @memory[:meals] = @meals
-    log "meal #{@meals}, a plant of #{(size * 10).round / 10.0}" if @meals % 5 == 1
+    meals = (memory["meals"] || 0) + 1
+    memory["meals"] = meals
+    # the best plant it has ever eaten, and where. `@dinner` is where `run` was walking to — the
+    # position it already read, so remembering it costs no round trip.
+    best = memory["favorite"]
+    if @dinner && (best.nil? || size > best["size"])
+      memory["favorite"] = { "at" => [@dinner[0], @dinner[2]], "size" => size }
+    end
+    # every fifth meal, out loud, as JSON — which is in the VM because the game put it there
+    remember_out_loud if meals % 5 == 1
   end
 
   # Two well-fed beetles have bumped into each other and the rules picked this one to work out
@@ -71,10 +82,10 @@ creature "Beetle" do
     spot = here
     answer = garden.spawn(species: name, genome: child.to_h, at: [spot[0] + 1.2, spot[2] + 1.2])
     if answer == true
-      @memory ||= {}
-      @memory[:children] = (@memory[:children] || 0) + 1
-      log "child #{@memory[:children]}: #{child.to_s}"
+      memory["children"] = (memory["children"] || 0) + 1
+      log "child #{memory["children"]}: #{child.to_s}"
     else
+      # G3: the game answers a Hash it cannot read with what was wrong with it, in serde's words
       log "no child: #{answer}"
     end
   end
@@ -82,7 +93,6 @@ creature "Beetle" do
   # --- the brain ------------------------------------------------------------
 
   def run
-    @memory ||= {}
     loop do
       if @asleep
         # `stop` again, and not only in the night reflex: the reflex fires while this loop is
@@ -102,9 +112,13 @@ creature "Beetle" do
         # The one question that is not a component: the rules know what is near, a script does
         # not. The radius is the creature's own `Sight`, which the game reads off the entity.
         plant = garden.nearest(:Plant)
-        # `head_to` answers nil where the plant was eaten in the frame between the question and
-        # the answer, which happens in a garden of ten mouths
-        wander if plant.nil? || head_to(plant).nil?
+        # where it is, read once and then walked to: `head_to` takes a place as happily as a
+        # thing, so this costs one round trip rather than two — and the place is what
+        # `reflex(:ate)` remembers if the meal turns out to be the best one yet
+        @dinner = place_of(plant)
+        # nil where the plant was eaten in the frame between the question and the answer, which
+        # happens in a garden of ten mouths
+        wander if @dinner.nil? || head_to(@dinner).nil?
       else
         wander
       end

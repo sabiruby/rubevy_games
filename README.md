@@ -8,7 +8,7 @@ so editing a file changes what happens on screen without a rebuild.
 | game | what it is | state |
 |---|---|---|
 | [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's brain is one Ruby file | playable v0.1 |
-| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, and breed by mixing a `Genome` that is a Rust struct and a Ruby class at once | the world, the minds and the genome (G0–G2); save/load through serde is next |
+| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | the world, the minds, the genome and the save file (G0–G3); the editor in the window is next |
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
@@ -18,8 +18,9 @@ the web. Or on a PC:
 ```
 cargo run -p sabibots                   # a window, 2D, 16:9
 cargo run -p sabibots -- --headless 15  # no window: 15 seconds, the result on stdout
-cargo run -p garden                     # the other one, 3D
+cargo run -p garden                     # the other one, 3D (F5 saves the garden, F9 brings it back)
 cargo run -p garden -- --headless 90    # no window: 90 seconds
+cargo run -p garden -- --headless 30 --save garden.save.json   # ... and write it down at the end
 web/build.sh && web/serve.sh            # the browser build, at http://localhost:8080/
 ```
 

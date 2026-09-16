@@ -29,6 +29,7 @@
 use bevy::prelude::*;
 use sabiruby::error::VmResult;
 use sabiruby::{FromRuby, RubyClass, Value, Vm, ruby_methods};
+use serde::{Deserialize, Serialize};
 
 use crate::Species;
 
@@ -39,8 +40,10 @@ use crate::Species;
 ///
 /// `Reflect` is what puts it in `me[:Creature][:genome]`; `RubyClass` is what makes it a class.
 /// They are independent — one is Bevy's reflection, the other is the VM's host store — and the
-/// point of this stage is that a type can be both without either knowing.
-#[derive(Clone, Copy, Debug, Reflect, RubyClass)]
+/// point of this stage is that a type can be both without either knowing. G3 adds a third, which
+/// is neither: `Serialize`/`Deserialize` is what puts the same three numbers in the save file and
+/// reads a script's Hash back as this struct (`CreatureSpec` below).
+#[derive(Clone, Copy, Debug, Reflect, RubyClass, Serialize, Deserialize)]
 #[ruby(name = "Genome")]
 pub struct Genome {
     pub speed: f32,
@@ -178,15 +181,35 @@ fn vm_rand(vm: &mut Vm) -> VmResult<f64> {
     f64::from_ruby(vm, rolled)
 }
 
-/// What a script asked the game to make (`garden.spawn(species:, genome:, at:)`), read out of the
-/// Ruby Hash in `answer_garden` and carried to the system that spawns it.
+/// What a script asked the game to make (`garden.spawn(species:, genome:, at:)`), **as serde
+/// reads it out of the Ruby Hash** (G3).
 ///
-/// It is read field by field with `Vm::hash_entries` and `FromRuby` rather than with
-/// `sabiruby-serde`'s `Serde<CreatureSpec>`, because **that is G3's subject**: the plan gives the
-/// serde crate a stage of its own, where the save file, `JSON` in the scripts and the typed
-/// argument arrive together and the error message for a Hash of the wrong shape is a thing to
-/// show. Pulling it in here would spend that stage's material on twenty lines of reading, and
-/// those twenty lines are exactly what the comparison in G3 needs to be measured against.
+/// This is the whole of the reading side. `sabiruby_serde::from_value::<CreatureSpec>(vm, hash)`
+/// walks the Hash the script passed and fills these three fields, with the field names as the
+/// keys — Symbols or Strings, either way round (sabiruby `docs/design/serde.md`: writing has one
+/// shape, reading takes both, which is what makes a struct fit a Hash a script wrote however it
+/// felt like) — and `Genome` and `Species` are read by their own derives, nested, without this
+/// type saying anything about them.
+///
+/// `deny_unknown_fields` is the game's decision rather than serde's default: a script that
+/// misspells a key would otherwise be told nothing and get a creature with a default in it. What
+/// it costs is that the message for a typo is serde's list of the fields there are, which is a
+/// better message than the one the hand-written reader had.
+///
+/// G2 read the same Hash by hand, key by key, with `Vm::hash_entries` and `FromRuby`, in 72 lines
+/// (`docs/garden.md`, "The spawn Hash, by hand and by serde"). The clamp below is what is left of
+/// them, because it is the only part that was never about reading.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreatureSpec {
+    pub species: Species,
+    pub genome: Genome,
+    /// where to put it, on the ground: `[x, z]`
+    pub at: [f32; 2],
+}
+
+/// What a script asked the game to make, once the game has had its say about it: the spec with
+/// the genome clamped, and the creature whose script asked.
 #[derive(Debug, Clone)]
 pub struct Birth {
     pub species: Species,
@@ -196,87 +219,17 @@ pub struct Birth {
     pub parent: Option<Entity>,
 }
 
-/// Reads `{species: :Beetle, genome: {speed:, sight:, appetite:}, at: [x, z]}` out of the VM.
-///
-/// Every field is required and anything missing is an error the caller reports — a script that
-/// asks for a creature and gets silence has no way to find out why, and this is the one question
-/// in the game whose argument has a shape.
-pub fn read_birth(vm: &mut Vm, value: Value) -> Result<(Species, Genome, Vec2), String> {
-    let mut species = None;
-    let mut genome = None;
-    let mut at = None;
-    let Some(entries) = vm.hash_entries(value) else {
-        return Err("spawn wants a Hash: species:, genome:, at:".into());
-    };
-    for (key, value) in entries {
-        let name = vm.as_string(key).map(|b| String::from_utf8_lossy(&b).into_owned());
-        match name.as_deref() {
-            Ok("species") => {
-                let text = vm.as_string(value).map_err(|_| "species: not a name".to_string())?;
-                species = match String::from_utf8_lossy(&text).as_ref() {
-                    "Beetle" => Some(Species::Beetle),
-                    "Rabbit" => Some(Species::Rabbit),
-                    other => return Err(format!("species: no such creature as {other:?}")),
-                };
-            }
-            Ok("genome") => genome = Some(read_genome(vm, value)?),
-            Ok("at") => {
-                let xz: Vec<f64> = Vec::<f64>::from_ruby(vm, value).map_err(|_| "at: not [x, z]".to_string())?;
-                if xz.len() != 2 {
-                    return Err(format!("at: wants [x, z], got {} numbers", xz.len()));
-                }
-                at = Some(Vec2::new(xz[0] as f32, xz[1] as f32));
-            }
-            Ok(other) => return Err(format!("spawn: unknown key {other:?}")),
-            Err(_) => return Err("spawn: a key that is not a name".into()),
-        }
+impl CreatureSpec {
+    /// A script may hand back anything, and the rules are the game's: a creature that asked for
+    /// ten times the speed of its species gets its species' limits. This is the one thing the
+    /// hand-written reader did that serde does not — deserializing is about shape, and a range is
+    /// a rule.
+    pub fn into_birth(self, parent: Option<Entity>) -> Birth {
+        let genome = Genome {
+            speed: self.genome.speed.clamp(0.2, 8.0),
+            sight: self.genome.sight.clamp(1.0, 24.0),
+            appetite: self.genome.appetite.clamp(0.2, 4.0),
+        };
+        Birth { species: self.species, genome, at: Vec2::new(self.at[0], self.at[1]), parent }
     }
-    match (species, genome, at) {
-        (Some(species), Some(genome), Some(at)) => Ok((species, genome, at)),
-        (s, g, a) => {
-            let mut missing = Vec::new();
-            if s.is_none() {
-                missing.push("species");
-            }
-            if g.is_none() {
-                missing.push("genome");
-            }
-            if a.is_none() {
-                missing.push("at");
-            }
-            Err(format!("spawn: no {}", missing.join(", no ")))
-        }
-    }
-}
-
-/// The child's genome, as the Hash `Genome#to_h` made. It is read back rather than passed as the
-/// object, because what the game does with it is put it in a component — and a component is
-/// written a system later, with no VM in sight, which is the same reason rubevy copies a Hash out
-/// of the VM for a component write instead of holding the Ruby value.
-fn read_genome(vm: &mut Vm, value: Value) -> Result<Genome, String> {
-    let mut genome = Genome { speed: 0.0, sight: 0.0, appetite: 0.0 };
-    let mut seen = 0;
-    let Some(entries) = vm.hash_entries(value) else {
-        return Err("genome: wants a Hash of speed:, sight:, appetite:".into());
-    };
-    for (key, value) in entries {
-        let Ok(name) = vm.as_string(key) else { return Err("genome: a key that is not a name".into()) };
-        let number = f64::from_ruby(vm, value).map_err(|_| "genome: a gene that is not a number".to_string())?;
-        match String::from_utf8_lossy(&name).as_ref() {
-            "speed" => genome.speed = number as f32,
-            "sight" => genome.sight = number as f32,
-            "appetite" => genome.appetite = number as f32,
-            other => return Err(format!("genome: unknown gene {other:?}")),
-        }
-        seen += 1;
-    }
-    if seen != 3 {
-        return Err(format!("genome: wants speed, sight and appetite; got {seen} of them"));
-    }
-    // a script may hand back anything, and the rules are the game's: a creature that asked for
-    // ten times the speed of its species gets its species' limits
-    genome.speed = genome.speed.clamp(0.2, 8.0);
-    genome.sight = genome.sight.clamp(1.0, 24.0);
-    genome.appetite = genome.appetite.clamp(0.2, 4.0);
-    Ok(genome)
 }

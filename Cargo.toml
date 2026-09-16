@@ -27,6 +27,11 @@ rubevy = { git = "https://github.com/sabiruby/rubevy" }
 # the same source as rubevy's, so there is one VM in the binary and one set of types
 sabiruby = { git = "https://github.com/sabiruby/sabiruby" }
 sabiruby-compiler = { git = "https://github.com/sabiruby/sabiruby", features = ["host"] }
+# G3's save file: the same source again, so the `Vm` this converts values for is the one the
+# scripts run in. `sabiruby-serde` is published on crates.io as well, but a crates.io copy would
+# bring its own `sabiruby` 0.5.0 beside rubevy's git one — two VMs in the binary, and a `Value`
+# from one is not a `Value` of the other.
+sabiruby-serde = { git = "https://github.com/sabiruby/sabiruby" }
 rubevy-arena = { path = "crates/rubevy-arena" }
 # the in-game editor (the code panel); 0.42 is the one built for Bevy 0.19
 bevy_egui = { version = "0.42", default-features = false, features = ["render", "default_fonts"] }

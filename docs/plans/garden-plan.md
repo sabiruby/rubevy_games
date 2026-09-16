@@ -24,7 +24,7 @@
 | G0a | 軽いフリーの 3D アセットに置き換え（下記「アセット」。G0 は基本形状で始めてよい） | 済み（`58d6940`。Kenney の Nature Kit + Cube Pets、7 ファイル 314 KiB） |
 | G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 済み（`ed54e59`） |
 | G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 済み（`223fc0d`） |
-| G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 未着手 |
+| G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 済み（`09e8a8c`） |
 | G4 | 窓: エディタ・VM パネル（`rubevy-arena`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 未着手 |
 | G5 | ブラウザ版（`web/` の仕組みを共有、Pages で公開） | 未着手（G4 の後。**著者の希望 2026-09-17: 任意ではなく必須**） |
 
@@ -260,6 +260,39 @@ impl Genome {
 * Ruby 側の `JSON`: `sabiruby_serde::install_json(&mut vm)` を rubevy のプラグインの初期化に挟む（rubevy に VM を触る入口が無ければ `RubevyPlugin` に `with_vm(FnOnce(&mut Vm))` を 1 本足す — rubevy 側の小さな追加、報告して止まる）。
   生き物は `@memory[:favorite] = plant.to_h` のように Hash を持ち、`log JSON.generate(@memory)` で見せる。
 * selftest: 保存 → 読み込みで、位置・`Hunger`・`Genome`・`@memory` が一致（`GardenSave` を 2 回作って `==`）。
+
+**実装で分かったこと（G3、`docs/worklog/2026-09-17-garden-G3.md`、成果は `docs/garden.md` の「Saving and loading (G3)」）**:
+
+* **`script_self` は使えない。** task が走るときの self は VM の `main` オブジェクトで、**全タスクで 1 つ**
+  （`sabiruby` `src/builtins/ext_task.rs:390`）。生き物のファイルのトップレベルの `@memory` は
+  別の生き物の `@memory` と同じ変数になる。prelude が `Creature` のサブクラスを `new` する形（G1 から）が
+  それを避けている理由そのもので、ホストからその**オブジェクトへ行く道は自分で敷く**必要があった:
+  `run_creature` に `Task.current.instance_variable_set(:@being, being)` の 1 行、Rust 側は `ivar_get` 2 回。
+  rubevy が entity を `@rubevy_entity` に置いているのと同じ手。
+* **rubevy には 1 行も足していない。** `install_json` は `ScriptWorld::vm` を触る `Startup` のシステムに 1 行
+  （G2 の `Genome::register` の隣）。計画書が保険で書いていた `with_vm` は要らなかった。
+* **戻すほうは 1 フレーム遅れる。** `@memory` を置く相手は `run_creature` が作るので、復元は
+  「タスクが最初に走ったフレームの終わり」になる。ウサギは `run` の 1 行目で記憶を読むので、
+  復元前の空の Hash を見て `Rubevy.find(:Tree)` で庭を歩き直していた（ログで確認）。prelude で
+  購読の後・`run` の前に `sleep 0.05` を 1 行入れて直した。
+* **読み込み中は世界を止めた。** 規則すべてに run condition を付け、世界の時計（`Sky::shift`）も釘付けにする。
+  おかげで判定が「保存 → 読み込み → 保存 → `diff`」になり、11338 バイトが 1 バイト違わない。
+  許容誤差つきの比較スクリプトは捨てた（比較が育つと何を確かめているか分からなくなる）。
+* **`serde_json` のパーサは既定で 1 ULP ずれる。** 最初の `diff` が 4 行だけ落ち、全部ウサギの覚えている
+  木の座標（ファイルの中で唯一 f32 に丸め直されない f64）。同版で 4 行のプログラムを書いて確かめた:
+  書くほうは常に正確、読むほうが `9.595357894897461` を `9.59535789489746` にする。`float_roundtrip` feature で解決。
+* **`@memory` の鍵は String。** `Options::symbol_keys` が効くのは struct のフィールド名と variant 名だけで、
+  map の鍵は String で出る（`serde/src/ser.rs`）。Symbol 鍵の記憶は保存 → 復元で別の Hash になる。
+* **`garden.spawn` は手書き 72 行 → serde 7 行**（`read_birth` 47 + `read_genome` 25 が `CreatureSpec` に）。
+  clamp（10 行）は残した — 形の話ではなく規則だから。エラーも良くなった:
+  ``missing field `sight` (TypeError)`` が**そのままスクリプトへの答え**になる（9 つ目の selftest）。
+* **`define_fn(|spec: Serde<CreatureSpec>|)` にはしなかった。** native は `&mut Vm` しか持たないので
+  個体数を数えられず、entity を作れず、`true` か理由かを返せない。結局システムにメモを残すことになり、
+  それは `Request` そのもの。`ask` のまま `RubevySet::Answer` に置き、`Serde` は引数を読む半分だけ使っている。
+* **`Memory` コンポーネントは空のまま。** 記憶の実体は VM の中の Hash で、コンポーネントに写すと同じものが
+  2 つになる。ECS にあるのは「この entity は記憶を持つ」という事実だけ。
+* 未実施: 窓の F5 / F9 は押していない（この機械に GPU ドライバが無い）。web の `localStorage` 分岐は
+  `cargo check --target wasm32-unknown-unknown` が通ることだけ（実際に動かすのは G5）。
 
 ## 窓（G4）
 
