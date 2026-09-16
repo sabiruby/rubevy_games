@@ -38,7 +38,15 @@ pub enum EditorAction {
 }
 
 /// What the panel shows and edits.
-#[derive(Resource, Default)]
+///
+/// The four fields at the bottom are what a second game needed. SabiRuby Battle's unit is a
+/// robot, which has a file of its own, so "apply to this one" and "apply to everything on this
+/// file" are two different things and `F5` is free to mean the first. The garden's unit is a
+/// *species* — every beetle runs `beetle.rb` — so there is only one of those two, and `F5`
+/// there already means "write the garden down". Rather than teach the editor about either game,
+/// it takes the two button labels (`None` hides the second button) and the key, and asks the
+/// game what to call the thing it is editing.
+#[derive(Resource)]
 pub struct Editor {
     /// The buttons along the top: what the editor can be switched to.
     pub choices: Vec<EditorChoice>,
@@ -77,6 +85,45 @@ pub struct Editor {
     /// The last thing that happened, for the panel.
     pub message: String,
     pub open: bool,
+
+    /// What the first button says. Its action is always [`EditorAction::Apply`].
+    pub apply_label: String,
+    /// What the second button says, and whether there is one: `None` draws no second button,
+    /// for a game where "all of them" and "this one" are the same set.
+    pub apply_all_label: Option<String>,
+    /// The key that applies, beside `Ctrl+Enter`. `None` where the game wants that key
+    /// (the garden's `F5` writes the world to a file).
+    pub apply_key: Option<KeyCode>,
+    /// What one of the things being edited is called, for the hover texts: `robot`, `creature`.
+    pub noun: String,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Editor {
+            choices: Vec::new(),
+            selected: None,
+            picked: None,
+            action: None,
+            key: None,
+            label: String::new(),
+            file: String::new(),
+            in_memory: false,
+            text: String::new(),
+            base: String::new(),
+            drafts: HashMap::new(),
+            current: None,
+            heat: Vec::new(),
+            elsewhere: None,
+            save_label: None,
+            message: String::new(),
+            open: false,
+            apply_label: "▶ Apply (F5)".into(),
+            apply_all_label: Some("Apply to all".into()),
+            apply_key: Some(KeyCode::F5),
+            noun: "robot".into(),
+        }
+    }
 }
 
 impl Editor {
@@ -161,7 +208,8 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
-    if keys.just_pressed(KeyCode::F5) || (ctrl && keys.just_pressed(KeyCode::Enter)) {
+    let apply_key = editor.apply_key.is_some_and(|k| keys.just_pressed(k));
+    if apply_key || (ctrl && keys.just_pressed(KeyCode::Enter)) {
         editor.action = Some(EditorAction::Apply);
     }
     if ctrl && keys.just_pressed(KeyCode::KeyS) {
@@ -182,8 +230,10 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
         .drafts()
         .filter_map(|id| choices.iter().find(|c| c.id == *id).map(|c| c.label.clone()))
         .collect();
-    let file = editor.file.clone();
     let save_label = editor.save_label.clone().unwrap_or_else(|| "Save to file (Ctrl+S)".into());
+    let apply_label = editor.apply_label.clone();
+    let apply_all_label = editor.apply_all_label.clone();
+    let noun = editor.noun.clone();
     let amber = egui::Color32::from_rgb(240, 190, 90);
 
     // egui 0.36 grows panels inside a Ui; a window takes the context, and a movable one suits an
@@ -228,13 +278,15 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
             });
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
-                if ui.button("▶ Apply (F5)").on_hover_text("run this in this robot only").clicked() {
+                if ui.add(egui::Button::new(&apply_label)).on_hover_text(format!("run this in the {noun} shown")).clicked() {
                     editor.action = Some(EditorAction::Apply);
                 }
-                if ui.button(format!("Apply to all {file}")).on_hover_text("run this in every robot with this brain").clicked() {
+                if let Some(label) = &apply_all_label
+                    && ui.button(label).on_hover_text(format!("run this in every {noun} with this brain")).clicked()
+                {
                     editor.action = Some(EditorAction::ApplyAll);
                 }
-                if ui.button(save_label).on_hover_text("keep it: robots on the file start with it from now on").clicked() {
+                if ui.button(save_label).on_hover_text(format!("keep it: {noun}s on the file start with it from now on")).clicked() {
                     editor.action = Some(EditorAction::Save);
                 }
                 if ui.button("Revert").on_hover_text("forget the edits, back to the file").clicked() {

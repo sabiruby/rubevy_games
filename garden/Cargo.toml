@@ -37,6 +37,12 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 # The PC build: the Ruby compiler (C) is linked in, Bevy runs on threads and opens an X11 or
 # Wayland window.
+# G4: the window's editor and VM panel. `rubevy-arena` is the crate the two games share; it
+# brings `bevy_egui` and, off the web, the directory watcher. The garden takes the editor and the
+# inspector out of it and leaves the 2D camera and the Bevy-UI HUD, which are sabibots' floor.
+rubevy-arena.workspace = true
+bevy_egui.workspace = true
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 sabiruby-compiler.workspace = true
 bevy = { workspace = true, features = ["multi_threaded", "x11"] }
