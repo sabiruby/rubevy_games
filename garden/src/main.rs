@@ -36,10 +36,14 @@ mod window;
 
 use std::path::{Path, PathBuf};
 
+use bevy::asset::AssetId;
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+// G8: the event the glTF loader triggers when a model's entities actually exist, which is the
+// only moment a loaded material can be replaced (`tint_species`).
+use bevy::world_serialization::WorldInstanceReady;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
 use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
@@ -186,6 +190,21 @@ const FOG_NEAR_MAX: f32 = 120.0;
 /// nothing can reach them: they are outside the wall `move_creatures` clamps to, and
 /// `garden.nearest(:Tree)` must go on meaning the seven trees that are in the garden.
 const EDGE_TREES: usize = 16;
+
+/// **The colour of a species (G8).** The author's other complaint was that a rabbit and a beetle
+/// are hard to tell apart, which they were: Kenney's Cube Pets share one palette and both animals
+/// come out of it brown-pink. These are one number each, used twice — the model is washed with it
+/// (`tint_species`) and the creature's name in the HUD is written in it (`window::species_color`)
+/// — so that the colour in the list and the colour on the grass cannot drift apart.
+pub const RABBIT_TINT: (f32, f32, f32) = (0.93, 0.90, 0.78);
+pub const BEETLE_TINT: (f32, f32, f32) = (0.14, 0.48, 0.56);
+
+pub fn species_tint(species: Species) -> (f32, f32, f32) {
+    match species {
+        Species::Beetle => BEETLE_TINT,
+        Species::Rabbit => RABBIT_TINT,
+    }
+}
 
 /// Plants
 const PLANTS_AT_START: usize = 55;
@@ -527,6 +546,12 @@ struct Horizon;
 #[derive(Component)]
 struct SkyShell;
 
+/// **G8.** "Whatever model hangs under me, wash it in this species' colour." It goes on the child
+/// that carries the `WorldAssetRoot` — which is the entity `WorldInstanceReady` names — and
+/// `tint_species` reads it when the model has finished arriving.
+#[derive(Component, Clone, Copy)]
+struct Tint(Species);
+
 // ---------------------------------------------------------------------------------------------
 // Resources
 // ---------------------------------------------------------------------------------------------
@@ -616,6 +641,19 @@ struct SkyDome {
     up: Vec<f32>,
     was: Option<(LinearRgba, LinearRgba)>,
 }
+
+/// **The tinted copies of a model's materials (G8).**
+///
+/// A `.glb` loads once and every rabbit in the garden is another instance of that one
+/// `WorldAsset`, so the `StandardMaterial` that arrives on a rabbit's mesh is **the asset the
+/// loader made, shared by every rabbit and owned by the loader**. Colouring it in place would
+/// work — every rabbit wants the same colour — but it would be writing into somebody else's
+/// asset, and the moment two things want two colours out of one file it is wrong. So the material
+/// is cloned, once, the first time a model of that species is ready, and every later instance is
+/// handed the same clone. The key is the *source* material as well as the species, because a
+/// model with two materials must end up with two clones and not one.
+#[derive(Resource, Default)]
+struct Tints(std::collections::HashMap<(usize, AssetId<StandardMaterial>), Handle<StandardMaterial>>);
 
 /// One animal's walk, idle and eat, as nodes of an `AnimationGraph`. The Kenney "Cube Pets"
 /// models carry eight clips each — `static`, `idle`, `walk`, `run`, `eat`, `dance` and two
@@ -1090,6 +1128,10 @@ fn main() {
             .init_resource::<window::Paused>()
             // open from the start, so a picture (`--shot`) has it without a key being pressed
             .insert_resource(VmInspector::following())
+            .init_resource::<Tints>()
+            // G8: the loaded model's materials, cloned and tinted per species the moment the
+            // loader has built the model's entities
+            .add_observer(tint_species)
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
             .add_systems(Update, (orbit_camera, dress_animations, animate_creatures))
             // G8: the fog, the sky's gradient and where the two of them stand. `after(day_night)`
@@ -1815,10 +1857,68 @@ fn spawn_creature(
             Species::Rabbit => (look.rabbit.clone(), 0.75),
         };
         entity.with_children(|body| {
-            body.spawn((WorldAssetRoot(model), Transform::from_scale(Vec3::splat(scale))));
+            // G8: `Tint` is what `tint_species` reads when the model has finished arriving. It is
+            // on the child rather than on the creature because the child is the entity a
+            // `WorldInstanceReady` names, and because a plant, a tree and a rock hang the same
+            // way and must not be touched.
+            body.spawn((
+                WorldAssetRoot(model),
+                Transform::from_scale(Vec3::splat(scale)),
+                Tint(species),
+            ));
         });
     }
     entity.id()
+}
+
+/// **Washing a model in its species' colour (G8).**
+///
+/// The author could not tell a rabbit from a beetle. The reason is in the pack: Kenney's Cube Pets
+/// index one 512 × 512 `colormap.png` which is a *palette* — flat squares of colour, no shading at
+/// all — and the two animals pick neighbouring browns out of it. A tint that multiplied the
+/// palette would give a dark brown and a darker brown, so the clone drops the texture and the
+/// colour is the material's own. What is lost is the eyes; what is gained is that the two animals
+/// are a cream one and a blue-green one from across the field, which is the thing that was asked
+/// for.
+///
+/// It runs on `WorldInstanceReady`, which is triggered on the entity that carries the
+/// `WorldAssetRoot` once the loader has actually built the model's entities — there is no earlier
+/// moment, because before it there are no meshes to re-dress. A model with no [`Tint`] (a tree, a
+/// rock, a tuft of grass) is left alone on the first line.
+fn tint_species(
+    ready: On<WorldInstanceReady>,
+    mut commands: Commands,
+    children: Query<&Children>,
+    tinted: Query<&Tint>,
+    worn: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut tints: ResMut<Tints>,
+) {
+    let Ok(tint) = tinted.get(ready.entity) else {
+        return;
+    };
+    let (r, g, b) = species_tint(tint.0);
+    for part in children.iter_descendants(ready.entity) {
+        let Ok(worn) = worn.get(part) else {
+            continue;
+        };
+        let key = (tint.0.index(), worn.id());
+        let copy = match tints.0.get(&key) {
+            Some(handle) => handle.clone(),
+            None => {
+                let Some(source) = materials.get(worn.id()) else {
+                    continue;
+                };
+                let mut copy = source.clone();
+                copy.base_color = Color::srgb(r, g, b);
+                copy.base_color_texture = None;
+                let handle = materials.add(copy);
+                tints.0.insert(key, handle.clone());
+                handle
+            }
+        };
+        commands.entity(part).insert(MeshMaterial3d(copy));
+    }
 }
 
 /// The mind: `ruby/prelude.rb` and one creature file, compiled together and hung on the entity as
