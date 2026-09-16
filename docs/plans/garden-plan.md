@@ -306,7 +306,10 @@ impl Genome {
 `build.sh` は `build.sh <game>` で `dist/<game>/` に書き、`build.sh all` で両方 + 入口。workflow は `all` を回す。
 URL は `https://sabiruby.github.io/rubevy_games/`（入口）、`…/sabibots/`、`…/garden/`。**今の `…/rubevy_games/` で Battle が開く URL は変わる**ので、
 入口ページに Battle へのリンクを一番上に置き、README・`docs/web.md`・book 側の参照（本体が直す）を更新する。
-アセット（G0a の `.glb`）は `dist/garden/assets/` に同梱し `fetch` で読む。`localStorage` のセーブは G3 で `platform.rs` に隠す。
+アセット（G0a の `.glb`）は `dist/garden/assets/` に同梱し `fetch` で読む。`localStorage` のセーブは G3 で `platform.rs` に隠してある。
+**セーブに版番号を付ける**（著者判断 2026-09-17）: `GardenSave` に `version: u32`（今は 1）を足し、読み込み時に版が違えば読まずに「保存の版 N はこの版の箱庭では読めません」と
+HUD/ログに出して新しい世界で始める（`localStorage` に古い保存が残るので必須）。headless の `--load` も同じ扱い。selftest に「版が違う保存は拒む」を 1 本。
+`Memory` コンポーネントは空のままでよい（著者判断: 記憶の実体は VM の Hash、ECS には「持つ」事実だけ）。
 wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記録。lavapipe の `--shot` とは別に、ブラウザで 1 分動かして selftest 相当（食べる・夜・餓死）が
 ログに出ることを確認（`web/serve.sh` + headless Chrome があれば自動、無ければ手で）。
 
