@@ -54,6 +54,31 @@ creature "Beetle" do
     log "meal #{@meals}, a plant of #{(size * 10).round / 10.0}" if @meals % 5 == 1
   end
 
+  # Two well-fed beetles have bumped into each other and the rules picked this one to work out
+  # the child. `partner` is the other beetle, as a `Rubevy::Entity`.
+  #
+  # **This is the whole of G2.** The rule — who may breed with whom, how often, and how many
+  # creatures the garden holds — is Rust, in `court`. What the child *is* is worked out here, by
+  # calling three methods on a Rust struct: `mix` averages two genomes, `mutate` nudges every gene
+  # by up to a tenth with the VM's own dice, and `to_h` turns the result into the Hash the game
+  # takes back. The partner's genome comes the other way, out of its `Creature` component as a
+  # plain Hash — so both views of `Genome` are used in one line each, three lines apart.
+  reflex(:mate) do |partner|
+    next if @asleep
+    mate = genome_of(partner)
+    next if mate.nil? # it starved between the rule speaking and this waking up
+    child = my_genome.mix(mate).mutate(0.1)
+    spot = here
+    answer = garden.spawn(species: name, genome: child.to_h, at: [spot[0] + 1.2, spot[2] + 1.2])
+    if answer == true
+      @memory ||= {}
+      @memory[:children] = (@memory[:children] || 0) + 1
+      log "child #{@memory[:children]}: #{child.to_s}"
+    else
+      log "no child: #{answer}"
+    end
+  end
+
   # --- the brain ------------------------------------------------------------
 
   def run

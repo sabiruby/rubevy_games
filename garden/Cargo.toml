@@ -9,6 +9,14 @@ description = "Garden — a small 3D world whose creatures read and write their 
 [dependencies]
 bevy.workspace = true
 rubevy.workspace = true
+# The VM itself, for G2's `Genome`: `#[derive(RubyClass)]` and `#[ruby_methods]` turn a Rust
+# struct into a Ruby class, and they arrive through the VM crate's `macros` feature rather than
+# through a second dependency on `sabiruby-macros` (sabiruby `docs/design/macros.md`, "How a host
+# depends on it" — serde's arrangement, one dependency and one `use`). The feature is off by
+# default because a proc macro is a compiler plugin and the VM is built for targets that have no
+# host toolchain in the picture; a game has one, so it asks for it. rubevy names the same source,
+# so there is one VM in the binary either way.
+sabiruby = { workspace = true, features = ["macros"] }
 
 # The PC build: the Ruby compiler (C) is linked in, Bevy runs on threads and opens an X11 or
 # Wayland window.

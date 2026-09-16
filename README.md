@@ -8,7 +8,7 @@ so editing a file changes what happens on screen without a rebuild.
 | game | what it is | state |
 |---|---|---|
 | [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's brain is one Ruby file | playable v0.1 |
-| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name | the world and the minds (G0–G1); a `Genome` from a Rust struct is next |
+| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, and breed by mixing a `Genome` that is a Rust struct and a Ruby class at once | the world, the minds and the genome (G0–G2); save/load through serde is next |
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
