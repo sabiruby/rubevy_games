@@ -13,18 +13,18 @@ creature "Rabbit" do
   # how close it wants to get to a beetle before it is satisfied
   def nosey_range = 1.2
 
-  reflex(:night) do |_at|
+  on(:night) do |_at|
     @asleep = true
     stop
   end
 
-  reflex(:day) do |_at|
+  on(:day) do |_at|
     @asleep = false
   end
 
   # Walked into a tree, a rock or another creature. `what` is the thing, as a `Rubevy::Entity`
   # — a rabbit backs off it and picks a new heading.
-  reflex(:bumped) do |what|
+  on(:bumped) do |what|
     next if @asleep || busy?
     take_wheel
     flee_from what, Creature::CRUISE, swerve: 1.0
@@ -32,7 +32,7 @@ creature "Rabbit" do
     drop_wheel
   end
 
-  reflex(:ate) do |_size|
+  on(:ate) do |_size|
     memory["meals"] = (memory["meals"] || 0) + 1
   end
 
@@ -53,7 +53,7 @@ creature "Rabbit" do
 
     loop do
       if @asleep
-        # `stop` again, and not only in the night reflex: the reflex fires while this loop is
+        # `stop` again, and not only in the night handler: the handler fires while this loop is
         # somewhere in the middle of a pass, so the pass that was already under way gets its
         # `act` in after it. One more `act 0, 0` here is what settles it.
         stop
@@ -61,7 +61,7 @@ creature "Rabbit" do
         next
       end
       if busy?
-        # a reflex has the wheel: thinking now would only cost round trips for an `act` that is
+        # a handler has the wheel: thinking now would only cost round trips for an `act` that is
         # going to be dropped
         sleep 0.1
         next

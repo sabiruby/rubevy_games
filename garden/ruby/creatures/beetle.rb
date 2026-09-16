@@ -9,22 +9,22 @@ creature "Beetle" do
   # Below this it stops wandering and goes looking for grass. 100 is full, 0 is dead.
   def hungry_below = 55.0
 
-  # --- the reflexes: one task each, waiting on a queue ----------------------
+  # --- the handlers: one task each, waiting on a queue ----------------------
 
   # The sun has gone. A beetle sleeps where it stands.
-  reflex(:night) do |_at|
+  on(:night) do |_at|
     @asleep = true
     stop
   end
 
-  reflex(:day) do |_at|
+  on(:day) do |_at|
     @asleep = false
   end
 
-  # A rabbit has walked over us. `by` is the rabbit, as a `Rubevy::Entity`: the reflex reads its
+  # A rabbit has walked over us. `by` is the rabbit, as a `Rubevy::Entity`: the handler reads its
   # position out of the ECS like anything else, and runs the other way. It keeps the wheel for
   # half a second, so that the brain's next pass does not quietly steer back.
-  reflex(:touched) do |by|
+  on(:touched) do |by|
     next if @asleep
     take_wheel
     # aside as well as away: a rabbit that is chasing comes from behind, and running straight
@@ -36,7 +36,7 @@ creature "Beetle" do
 
   # Walked into something solid — a tree, a rock, another creature. Turn off it rather than lean
   # on it, gently (this is not a fright) and briefly.
-  reflex(:bumped) do |what|
+  on(:bumped) do |what|
     next if @asleep || busy?
     take_wheel
     flee_from what, Creature::CRUISE, swerve: 1.0
@@ -52,7 +52,7 @@ creature "Beetle" do
   # this object; the game reads it out of the VM when the garden is saved and puts it back when
   # the garden is loaded, so a beetle picked up an hour later still knows how many meals it has
   # had and where the best grass it ever found was. The keys are Strings because JSON's are.
-  reflex(:ate) do |size|
+  on(:ate) do |size|
     meals = (memory["meals"] || 0) + 1
     memory["meals"] = meals
     # the best plant it has ever eaten, and where. `@dinner` is where `run` was walking to — the
@@ -74,7 +74,7 @@ creature "Beetle" do
   # by up to a tenth with the VM's own dice, and `to_h` turns the result into the Hash the game
   # takes back. The partner's genome comes the other way, out of its `Creature` component as a
   # plain Hash — so both views of `Genome` are used in one line each, three lines apart.
-  reflex(:mate) do |partner|
+  on(:mate) do |partner|
     next if @asleep
     mate = genome_of(partner)
     next if mate.nil? # it starved between the rule speaking and this waking up
@@ -95,7 +95,7 @@ creature "Beetle" do
   def run
     loop do
       if @asleep
-        # `stop` again, and not only in the night reflex: the reflex fires while this loop is
+        # `stop` again, and not only in the night handler: the handler fires while this loop is
         # somewhere in the middle of a pass, so the pass that was already under way gets its
         # `act` in after it. One more `act 0, 0` here is what settles it.
         stop
@@ -103,7 +103,7 @@ creature "Beetle" do
         next
       end
       if busy?
-        # a reflex has the wheel: thinking now would only cost round trips for an `act` that is
+        # a handler has the wheel: thinking now would only cost round trips for an `act` that is
         # going to be dropped
         sleep 0.1
         next
@@ -114,7 +114,7 @@ creature "Beetle" do
         plant = garden.nearest(:Plant)
         # where it is, read once and then walked to: `head_to` takes a place as happily as a
         # thing, so this costs one round trip rather than two — and the place is what
-        # `reflex(:ate)` remembers if the meal turns out to be the best one yet
+        # `on(:ate)` remembers if the meal turns out to be the best one yet
         @dinner = place_of(plant)
         # nil where the plant was eaten in the frame between the question and the answer, which
         # happens in a garden of ten mouths

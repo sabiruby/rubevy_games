@@ -100,18 +100,18 @@ struct Robot {
     heat: Vec<f32>,
     /// instructions per frame, smoothed the same way
     cpu: f32,
-    /// how many `reflex`es the brain registered (`Rubevy.ask("reflex", :ready, n)`)
-    reflexes: u32,
-    /// how many reflex blocks have run, and how many are inside their block right now — the
+    /// how many handlers the brain registered (`Rubevy.ask("handler", :ready, n)`)
+    handlers: u32,
+    /// how many handler blocks have run, and how many are inside their block right now — the
     /// mark next to the robot's name on the scoreboard
-    reflex_runs: u32,
-    reflex_running: u32,
-    /// how many of its reflex *tasks* have ended (`Rubevy.ask("reflex", :off)`). A reflex task
+    handler_runs: u32,
+    handler_running: u32,
+    /// how many of its handler *tasks* have ended (`Rubevy.ask("handler", :off)`). A handler task
     /// is parked on a subscription for ever unless something ends it; since rubevy `9104f7c`
     /// that something is the queue closing when the robot's `ScriptTask` goes, and this is what
     /// shows it happened rather than the task being left `WAITING`.
-    reflex_off: u32,
-    /// when it went down, so a check can wait a moment for its reflex tasks to notice
+    handler_off: u32,
+    /// when it went down, so a check can wait a moment for its handler tasks to notice
     downed_at: Option<f32>,
 }
 
@@ -130,9 +130,9 @@ fn gray_out_downed(
             continue;
         }
         // and its brain stops: taking the task away terminates it (Script too, or the plugin
-        // would start it again). Its reflex tasks are not the plugin's to terminate, but taking
+        // would start it again). Its handler tasks are not the plugin's to terminate, but taking
         // the `ScriptTask` away closes the subscriptions they are parked on, and each of them
-        // ends itself on `Rubevy::Unsubscribed` (`prelude.rb`, `start_reflexes`).
+        // ends itself on `Rubevy::Unsubscribed` (`prelude.rb`, `start_handlers`).
         robot.downed_at = Some(time.elapsed_secs());
         commands.entity(entity).remove::<(ScriptTask, rubevy::ScriptDone, Script)>();
         robot.cpu = 0.0;
@@ -384,8 +384,8 @@ fn main() {
                 .in_set(RubevySet::Answer),
         );
     if std::env::var("SABIBOTS_SELFTEST").is_ok() {
-        // the reflex check wants a fight, not a mouse, so it runs in both modes
-        app.init_resource::<ReflexTest>().add_systems(Update, reflex_selftest);
+        // the handler check wants a fight, not a mouse, so it runs in both modes
+        app.init_resource::<HandlerTest>().add_systems(Update, handler_selftest);
     }
     if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
         // before `inspect_keys`, so a key it presses is still `just_pressed` when that reads it
@@ -579,19 +579,19 @@ fn draw_scoreboard(
                     let brain = robot.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
                     let star = if robot.brain.is_some() { "*" } else { "" };
                     let marker = if watched.entity == Some(entity) { "> " } else { "  " };
-                    // a reflex running now is `!`, and the count stays afterwards so a
+                    // a handler running now is `!`, and the count stays afterwards so a
                     // screenshot shows it too (`--shot`)
-                    let reflex = match (robot.reflex_runs, robot.reflex_running > 0) {
+                    let handler = match (robot.handler_runs, robot.handler_running > 0) {
                         (0, false) => String::new(),
                         (n, true) => format!(" !{n}"),
                         (n, false) => format!(" x{n}"),
                     };
-                    let name = egui::RichText::new(format!("{marker}{} {brain}{star}{reflex}", robot.number)).color(team).strong();
+                    let name = egui::RichText::new(format!("{marker}{} {brain}{star}{handler}", robot.number)).color(team).strong();
                     // the name picks the robot, as its button in the editor does
-                    let hint = if robot.reflexes > 0 {
-                        format!("{} reflex(es); {} have run, {} running now", robot.reflexes, robot.reflex_runs, robot.reflex_running)
+                    let hint = if robot.handlers > 0 {
+                        format!("{} handler(s); {} have run, {} running now", robot.handlers, robot.handler_runs, robot.handler_running)
                     } else {
-                        "this brain has no reflex".to_string()
+                        "this brain has no handler".to_string()
                     };
                     if ui.add(egui::Label::new(name).sense(egui::Sense::click())).on_hover_text(hint).clicked() {
                         editor.picked = Some(entity.to_bits());
@@ -1029,7 +1029,7 @@ fn stop_when_over(
     time: Res<Time>,
     headless: Res<Headless>,
     hud: Res<Hud>,
-    test: Option<Res<ReflexTest>>,
+    test: Option<Res<HandlerTest>>,
     world: Res<ScriptWorld>,
     robots: Query<(&Robot, &ScriptPanel, &Transform, Option<&ScriptTask>)>,
     mut exit: MessageWriter<AppExit>,
@@ -1041,43 +1041,43 @@ fn stop_when_over(
     }
     for (robot, panel, t, _) in &robots {
         info!(
-            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}  {} reflexes  {}/{} reflex tasks ended",
+            "{:<8} hp {:>4}  at ({:>6.1}, {:>6.1})  {:>6} insn/frame  {}  {} handlers  {}/{} handler tasks ended",
             robot.name,
             robot.hp.max(0.0) as i32,
             t.translation.x,
             t.translation.y,
             panel.spent,
             panel.at,
-            robot.reflex_runs,
-            robot.reflex_off,
-            robot.reflexes
+            robot.handler_runs,
+            robot.handler_off,
+            robot.handlers
         );
     }
     if let Some(test) = test {
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
-        // a robot that went down took its reflex tasks with it. They are `Task.new` tasks, which
+        // a robot that went down took its handler tasks with it. They are `Task.new` tasks, which
         // nothing terminates; what ends them is the subscription closing when the game takes the
         // `ScriptTask` away (rubevy `9104f7c`). Before that they stayed `WAITING` for ever.
         let settled: Vec<&Robot> = robots
             .iter()
             .map(|(r, _, _, _)| r)
-            .filter(|r| r.reflexes > 0 && r.downed_at.is_some_and(|at| now - at > 0.5))
+            .filter(|r| r.handlers > 0 && r.downed_at.is_some_and(|at| now - at > 0.5))
             .collect();
-        let ended = settled.iter().filter(|r| r.reflex_off >= r.reflexes).count();
+        let ended = settled.iter().filter(|r| r.handler_off >= r.handlers).count();
         if settled.is_empty() {
             // a short match where nobody was destroyed does not exercise this; saying FAIL
             // there would be saying a check failed when it never ran
-            info!("selftest: --   no robot with a reflex was down long enough to check its tasks");
+            info!("selftest: --   no robot with a handler was down long enough to check its tasks");
         } else {
             ok(
                 ended == settled.len(),
-                format!("the reflex tasks of every robot that went down ended ({ended}/{})", settled.len()),
+                format!("the handler tasks of every robot that went down ended ({ended}/{})", settled.len()),
             );
         }
-        ok(test.checked > 0, format!("{} hits on a robot with a reflex were checked", test.checked));
+        ok(test.checked > 0, format!("{} hits on a robot with a handler were checked", test.checked));
         ok(
             test.checked > 0 && test.ran == test.checked,
-            format!("a reflex ran within 0.3 s of the hit ({}/{})", test.ran, test.checked),
+            format!("a handler ran within 0.3 s of the hit ({}/{})", test.ran, test.checked),
         );
         ok(
             test.checked > 0 && test.turned == test.checked,
@@ -1098,14 +1098,14 @@ fn stop_when_over(
     exit.write(AppExit::Success);
 }
 
-/// `SABIBOTS_SELFTEST=1`: the check the reflex is for — a hit is noted with the way the robot was
-/// facing, and 0.3 s later it must have run a reflex and turned. It runs headless as well as in a
-/// window, since a reflex needs a fight rather than a mouse:
+/// `SABIBOTS_SELFTEST=1`: the check the handler is for — a hit is noted with the way the robot was
+/// facing, and 0.3 s later it must have run a handler and turned. It runs headless as well as in a
+/// window, since a handler needs a fight rather than a mouse:
 ///
 ///     SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25
 #[derive(Resource, Default)]
-struct ReflexTest {
-    /// one per hit taken by a robot with a reflex
+struct HandlerTest {
+    /// one per hit taken by a robot with a handler
     watching: Vec<WatchedHit>,
     checked: u32,
     ran: u32,
@@ -1113,7 +1113,7 @@ struct ReflexTest {
 }
 
 /// A hit being watched: the robot, when it was hit, which way it faced then, the number of
-/// reflexes it had run by then, and the furthest it has turned from that heading since.
+/// handlers it had run by then, and the furthest it has turned from that heading since.
 ///
 /// The furthest rather than where it ends up: a robot hit twice swerves one way and then the
 /// other, and its heading 0.3 s later can be the one it started with. What the check is about is
@@ -1138,9 +1138,9 @@ fn angle_between(a: f32, b: f32) -> f32 {
     if d > PI { d - TAU } else { d }
 }
 
-fn reflex_selftest(
+fn handler_selftest(
     time: Res<Time>,
-    mut test: ResMut<ReflexTest>,
+    mut test: ResMut<HandlerTest>,
     robots: Query<&Robot>,
     tasks: Query<&ScriptTask>,
 ) {
@@ -1178,7 +1178,7 @@ fn reflex_selftest(
             info!("selftest: --   {}'s brain was replaced within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
             continue;
         }
-        let ran = robot.reflex_runs > watch.runs;
+        let ran = robot.handler_runs > watch.runs;
         // a quarter of the full turning rate over the 0.3 s: the swerve, not the brain's steering
         let turned = watch.peak > 0.2;
         test.checked += 1;
@@ -1186,7 +1186,7 @@ fn reflex_selftest(
         test.turned += u32::from(turned);
         let (at, name, peak) = (watch.at, &robot.name, watch.peak);
         info!(
-            "selftest: {} {name} ran a reflex within 0.3 s of the hit at {at:.2} s",
+            "selftest: {} {name} ran a handler within 0.3 s of the hit at {at:.2} s",
             if ran { "ok  " } else { "FAIL" }
         );
         info!(
@@ -1363,10 +1363,10 @@ fn spawn_robot(
                 source,
                 heat: Vec::new(),
                 cpu: 0.0,
-                reflexes: 0,
-                reflex_runs: 0,
-                reflex_running: 0,
-                reflex_off: 0,
+                handlers: 0,
+                handler_runs: 0,
+                handler_running: 0,
+                handler_off: 0,
                 downed_at: None,
             },
             Script::new(handle).with_name(&name).with_priority(100),
@@ -1779,20 +1779,20 @@ fn answer_requests(
                     Answer::List(vec![if fired { 1.0 } else { 0.0 }, robot.energy as f64, robot.cooldown as f64])
                 }
             }
-            // `reflex(:hit) { … }` telling the game what its tasks are doing, so the scoreboard
+            // `on(:hit) { … }` telling the game what its tasks are doing, so the scoreboard
             // can mark it. The prelude asks and does not wait for the answer: a question nobody
-            // pops is a command, and a reflex that parked for a frame here would not be one
-            "reflex" => {
+            // pops is a command, and a handler that parked for a frame here would not be one
+            "handler" => {
                 match request.text(0).unwrap_or("") {
-                    "ready" => robot.reflexes = request.num_or(1, 0.0).max(0.0) as u32,
+                    "ready" => robot.handlers = request.num_or(1, 0.0).max(0.0) as u32,
                     "begin" => {
-                        robot.reflex_running += 1;
-                        robot.reflex_runs += 1;
+                        robot.handler_running += 1;
+                        robot.handler_runs += 1;
                     }
-                    "end" => robot.reflex_running = robot.reflex_running.saturating_sub(1),
-                    // the reflex task itself is over: its subscription was closed
-                    "off" => robot.reflex_off += 1,
-                    other => warn!("unknown reflex state {other:?}"),
+                    "end" => robot.handler_running = robot.handler_running.saturating_sub(1),
+                    // the handler task itself is over: its subscription was closed
+                    "off" => robot.handler_off += 1,
+                    other => warn!("unknown handler state {other:?}"),
                 }
                 Answer::Nil
             }
@@ -1905,7 +1905,7 @@ fn move_bullets(
     mut commands: Commands,
     mut events: ResMut<Events>,
     mut scripts: ResMut<ScriptWorld>,
-    mut test: Option<ResMut<ReflexTest>>,
+    mut test: Option<ResMut<HandlerTest>>,
     server: Res<AssetServer>,
     arena: Res<ArenaSize>,
     mut bullets: Query<(Entity, &mut Bullet, &mut Transform)>,
@@ -1960,17 +1960,17 @@ fn move_bullets(
                     let by = vm.str_new(by.as_bytes());
                     vm.ary_new(vec![by, Value::Float(damage)])
                 });
-                // The reflex check watches the hits taken by a robot that has a reflex, is still
+                // The handler check watches the hits taken by a robot that has a handler, is still
                 // standing (a wreck cannot turn, so a fatal hit proves nothing) and is not
-                // already in the middle of one: the reflexes of an event share one task, so a
-                // robot hit again mid-swerve gets its second reflex when the first has finished.
+                // already in the middle of one: the handlers of an event share one task, so a
+                // robot hit again mid-swerve gets its second handler when the first has finished.
                 if let Some(test) = test.as_mut() {
-                    if robot.reflexes > 0 && robot.hp > 0.0 && robot.reflex_running == 0 {
+                    if robot.handlers > 0 && robot.hp > 0.0 && robot.handler_running == 0 {
                         test.watching.push(WatchedHit {
                             robot: target,
                             at: now,
                             heading: robot.heading,
-                            runs: robot.reflex_runs,
+                            runs: robot.handler_runs,
                             peak: 0.0,
                             task: tasks.get(target).ok().map(|t| t.task()),
                         });
@@ -2050,9 +2050,9 @@ fn reload_changed(
         if let Ok((_, mut r)) = robots.get_mut(entity) {
             r.source = source;
             r.heat.clear();
-            // the new brain announces its own reflexes; the old ones are gone with its task
-            r.reflexes = 0;
-            r.reflex_running = 0;
+            // the new brain announces its own handlers; the old ones are gone with its task
+            r.handlers = 0;
+            r.handler_running = 0;
         }
     }
 }

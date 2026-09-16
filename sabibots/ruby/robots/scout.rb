@@ -5,15 +5,15 @@ robot "Scout" do
   # runs in a task of its own the moment the game says so: throw the wheel over and hold it for a
   # third of a second, so the shot that follows the first one misses.
   #
-  # One `act` is enough to throw it. `act` is last-writer-wins and the reflex task runs at a
-  # *lower* priority than the brain, so within a frame the reflex asks last and the game answers
+  # One `act` is enough to throw it. `act` is last-writer-wins and the handler task runs at a
+  # *lower* priority than the brain, so within a frame the handler asks last and the game answers
   # it last (docs/sabiruby-battle.md). It used to have to say it again every 0.05 s to win the
   # wheel back from a brain that was ahead of it in the frame.
   #
   # `@swerve` is how the two tasks agree who is steering. They are the same object, so an
   # instance variable is all it takes — the brain leaves the controls alone while it is set, so
   # that the decision it already had in flight when the hit landed does not undo the swerve.
-  reflex(:hit) do |by, damage|
+  on(:hit) do |by, damage|
     begin
       @swerve = rand < 0.5 ? 1.0 : -1.0
       act throttle: 1.0, turn: @swerve
@@ -26,7 +26,7 @@ robot "Scout" do
   def run
     @side = rand < 0.5 ? 1 : -1
     loop do
-      # while a reflex has the wheel the brain keeps its hands off it
+      # while a handler has the wheel the brain keeps its hands off it
       if @swerve
         sleep 0.05
         next
@@ -50,7 +50,7 @@ robot "Scout" do
 
       # The agreement is checked again *here*, where the controls are actually touched. A hit can
       # land while the brain is asking its questions, and this decision was made before the
-      # reflex took the wheel: acting on it now would undo the swerve a few frames after it
+      # handler took the wheel: acting on it now would undo the swerve a few frames after it
       # started. Checking only at the top of the loop is a frame too early.
       next sleep(0.05) if @swerve
 

@@ -298,7 +298,7 @@ pub fn do_editor_actions(
 /// this frame.
 ///
 /// Dropping `ScriptTask` is what stops the old script: rubevy terminates the task, closes the
-/// queues it had subscribed to and ends the reflex tasks waiting on them (`stop_removed_task`).
+/// queues it had subscribed to and ends the handler tasks waiting on them (`stop_removed_task`).
 /// The new `Script` becomes a task on the next frame and subscribes again. **What does not come
 /// back is what the creature remembered**: `@memory` is a Hash on the object the old script made,
 /// and the new script makes a new one. That is the same in sabibots and it is the honest
@@ -309,7 +309,7 @@ pub fn do_editor_actions(
 /// ten of them at once stopped the VM's scheduler for good: `Vm::task_pending()` stayed true,
 /// `task_run_limits` ran nothing, and every task in the VM froze, the rabbits included
 /// (`docs/worklog/2026-09-17-garden-G4.md` §5a). The cause was not the contexts being slow to go,
-/// as it looked from here: ending a `ScriptTask` wakes each of the creature's six reflex tasks
+/// as it looked from here: ending a `ScriptTask` wakes each of the creature's six handler tasks
 /// with `Rubevy::Unsubscribed`, their empty `rescue` makes the block's value `nil`, and
 /// `Vm::task_run_limited` read that `nil` as "nothing left to run" and ended the host's whole
 /// frame — one frame per task, so sixty frames for ten beetles

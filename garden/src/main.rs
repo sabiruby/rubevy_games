@@ -152,18 +152,18 @@ const FOOD_VALUE: f32 = 60.0;
 const REACH: f32 = 1.1;
 const TOUCH_REACH: f32 = 1.3;
 
-/// How long a creature has been alive before the selftest expects its reflexes to answer for it.
+/// How long a creature has been alive before the selftest expects its handlers to answer for it.
 /// A newborn (G2) is spawned with a `Script`, which rubevy turns into a task on a later frame,
 /// and the task's first act is to subscribe to its five or six events — so for the first moments
 /// of a life there is nobody listening, and an event published then is dropped. It is not a
 /// *rule*: a creature that hears nothing simply carries on wandering. It is only that "did the
-/// reflex turn it?" cannot be asked of a creature that had no reflexes yet, and before G2 every
+/// handler turn it?" cannot be asked of a creature that had no handlers yet, and before G2 every
 /// creature in the world was as old as the world.
 const NEWBORN_GRACE: f32 = 2.0;
 
 /// How long a beetle has to have been left alone before a `"touched"` sent to it is one the sixth
-/// check can ask a question about: long enough for its reflex task to have finished anything that
-/// was already in its queue (a reflex holds the wheel for half a second over each message).
+/// check can ask a question about: long enough for its handler task to have finished anything that
+/// was already in its queue (a handler holds the wheel for half a second over each message).
 const TOUCH_SETTLE: f32 = 1.5;
 
 /// Breeding (G2). Two creatures of one species that meet while this full are told to make a
@@ -185,7 +185,7 @@ const MATE_COST: f32 = 30.0;
 /// may never have subscribed to.
 const MATE_COOLDOWN: f32 = 20.0;
 /// how often the rule may tell the same creature about a partner. A creature whose script does
-/// not listen (the rabbit has no `reflex(:mate)`) is told again and again and nothing whatever
+/// not listen (the rabbit has no `on(:mate)`) is told again and again and nothing whatever
 /// happens — that is what `publish` to nobody costs — and one whose script does listen answers
 /// within a frame or two. This is only what keeps one meeting from becoming sixty messages.
 const COURT_RETRY: f32 = 2.0;
@@ -591,7 +591,7 @@ impl Brains {
 
 /// Which creatures took a bite last frame, so that `"ate"` is published once per meal rather
 /// than sixty times a second — the same decision `"bumped"` and `"touched"` made in G0, and for
-/// the same reason: a reflex is for an event, and the queue holds 64.
+/// the same reason: a handler is for an event, and the queue holds 64.
 #[derive(Resource, Default)]
 struct Eaters(Vec<Entity>);
 
@@ -815,7 +815,7 @@ struct SelfTest {
     /// beetles that were touched by a rabbit while walking: when, and which way they were going
     touched: Vec<(Entity, f32, Vec2)>,
     /// when each beetle was last put on that list, so that a beetle a rabbit keeps walking into
-    /// is looked at once rather than five times: the reflex takes half a second to run and the
+    /// is looked at once rather than five times: the handler takes half a second to run and the
     /// second message waits in the queue behind the first, so the answer to "did it turn?" for
     /// touch four is about touch one
     last_touch: Vec<(Entity, f32)>,
@@ -2038,7 +2038,7 @@ fn separate(
     // `"bumped"` is published when a contact begins, not on every frame of it: a creature leaning
     // on a tree is pushed a hundred times in the second and a half its heading lasts, and a
     // hundred messages would only fill the queue (rubevy keeps 64 and drops the oldest) and fire
-    // G1's `reflex(:bumped)` over and over for one event. The plan says "the frame it is pushed";
+    // G1's `on(:bumped)` over and over for one event. The plan says "the frame it is pushed";
     // this is the first of them.
     let mut now: Vec<(u64, u64)> = Vec::with_capacity(touching.len());
     for (a, b) in &touching {
@@ -2133,7 +2133,7 @@ fn get_hungry(time: Res<Time>, mut creatures: Query<(&mut Creature, &mut Hunger)
 /// them, with what that first mouthful was worth. The plan says "publish `ate`", and G0 did it
 /// per frame while nothing was listening; a meal lasts a second or two, so a listening script
 /// would have had a hundred messages for one event — which is the queue (64, oldest dropped)
-/// filled by one creature having lunch, and a `reflex(:ate)` woken sixty times a second to be
+/// filled by one creature having lunch, and an `on(:ate)` woken sixty times a second to be
 /// told the same thing. It is the decision `"bumped"` and `"touched"` already made in G0.
 fn eat(
     time: Res<Time>,
@@ -2191,7 +2191,7 @@ fn eat(
     eaters.0 = eating_now;
 }
 
-/// A rabbit walking into a beetle is news to the beetle — the material for G1's `reflex(:touched)`
+/// A rabbit walking into a beetle is news to the beetle — the material for G1's `on(:touched)`
 /// — and it is published once per contact, not once per frame.
 fn startle(
     time: Res<Time>,
@@ -2221,7 +2221,7 @@ fn startle(
                     //
                     // **The clock is reset by every message, and the guards come after it.** A
                     // rabbit that keeps walking into a beetle publishes again every time the
-                    // contact is remade; the reflex takes half a second over each one and the
+                    // contact is remade; the handler takes half a second over each one and the
                     // rest wait in its queue, so "did it turn?" asked half a second after the
                     // third message is really asking about the first. G1 wrote that down and
                     // then reset the clock *inside* the three guards below — so a message sent
@@ -2273,7 +2273,7 @@ fn startle(
 /// three methods on a Rust struct:
 ///
 /// ```ruby
-/// reflex(:mate) do |partner|
+/// on(:mate) do |partner|
 ///   child = my_genome.mix(genome_of(partner)).mutate(0.1)
 ///   garden.spawn(species: species.to_s, genome: child.to_h, at: [...])
 /// end
@@ -2479,7 +2479,7 @@ fn install_host_api(mut world: ResMut<ScriptWorld>) {
 }
 
 /// `garden.nearest(:Plant)` and `garden.count(:Plant)` — the whole of this game's `ask` surface.
-/// SabiRuby Battle answers six kinds (`status`, `radar`, `incoming`, `act`, `seed`, `reflex`);
+/// SabiRuby Battle answers six kinds (`status`, `radar`, `incoming`, `act`, `seed`, `handler`);
 /// the garden answers two, because everything else a creature wants to know is a component it
 /// can read for itself.
 ///
@@ -3328,7 +3328,7 @@ fn watch_turning(
         let Ok((now_going, place)) = creatures.get(beetle) else { continue }; // starved meanwhile
         // and not against a wall: `move_creatures` zeroes the component of `Velocity` that would
         // take a creature through one, so a beetle in the corner reads as going due west both
-        // before the reflex and after it however it turned. The reflex is not what failed there,
+        // before the handler and after it however it turned. The handler is not what failed there,
         // and a check that says it did would be a check about the walls.
         if by_a_wall(place) {
             continue;
@@ -3354,7 +3354,7 @@ fn by_a_wall(at: &Transform) -> bool {
 }
 
 /// **Creatures sleep at night.** One second after the game published `"night"`, nothing with a
-/// script should still be moving: both species have `reflex(:night) { @asleep = true; stop }`,
+/// script should still be moving: both species have `on(:night) { @asleep = true; stop }`,
 /// and their run loops keep it that way. The fasting beetle has no script and is standing still
 /// anyway, so it proves nothing and is not counted — `Mind` is the mark of a creature that has
 /// a brain to fall asleep with.
