@@ -42,7 +42,7 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
 40×30 マスの草地。エンティティと**コンポーネント**（すべて `#[derive(Component, Reflect)] #[reflect(Component)]` + `app.register_type::<T>()`。
 これが Ruby から名前で見える条件で、ここ以外に接着コードは書かない）:
 
-* `Plant { size: f32 }` — 毎秒わずかに育ち、食べられると減る。空きマスに確率で芽が出る。
+* `Plant { size: f32 }` — 草。毎秒わずかに育ち、食べられると減る。空きマスに確率で芽が出る。`Tree`（数本、固定、`Collider` 付き）と `Rock` は障害物。
 * `Creature { species: Species, age: f32 }`、`Hunger(f32)`（0 で餓死）、`Velocity(Vec2)`（Rust が `Transform` に積分、壁で止める）、`Sight(f32)`（見える半径）、
   `Memory`（G3 まで空）。`Species` は `enum { Beetle, Rabbit }`（enum も Reflect なら Ruby にはシンボルで見える —
   rubevy `src/reflect.rs` の変換に従う）。
@@ -50,7 +50,13 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
   `ScriptWorld::publish(Some(creature), "ate", …)` と `publish(Some(plant_owner?), …)` は無し — 草は script を持たない）、
   餓死（`ScriptTask` の除去 → 購読解除まで rubevy がやる）、昼夜（60 秒周期。夜になった瞬間に `publish(None, "night", …)`、朝に `"day"`）。
   Rabbit が Beetle に触れると Beetle は `"touched"` を受ける（逃げる反射の材料）。
-* `--headless N` と `SABIBOTS_SELFTEST` に当たる `GARDEN_SELFTEST`: 「10 秒以内に誰かが食べる」「60 秒で夜が来る」「餓死したエンティティが消える」。
+* **当たり判定**（著者の希望 2026-09-17）: 生き物どうし、生き物と木・岩は**すり抜けない**。物理エンジン（avian/rapier）は入れず（wasm と依存の重さ、
+  規則が見えなくなる）、XZ 平面の円で書く: `Collider { radius: f32 }`（`Reflect`、Ruby からも `e[:Collider]` で読める）を生き物・木・岩に付け、
+  移動の後に「重なった 2 円を半径の和まで押し戻す」（生き物どうしは半分ずつ、木・岩は動かない）。40×30 マスで数十体なので、マスの格子（`HashMap<(i32,i32), Vec<Entity>>`）で
+  近傍だけ調べれば十分。草（`Plant`）は**食べる対象なので通り抜けられる**（接触＝食事）。木は食べられない障害物で、`Tree`（`Plant` とは別のコンポーネント）。
+  押し戻されたフレームに `publish(Some(creature), "bumped", …)`（相手のエンティティ）を出し、G1 で `reflex(:bumped)` が向きを変える材料にする。
+  selftest: 「90 秒間、生き物どうし・生き物と木の中心距離が半径の和の 90% を下回るフレームが無い」。
+* `--headless N` と `SABIBOTS_SELFTEST` に当たる `GARDEN_SELFTEST`: 「10 秒以内に誰かが食べる」「60 秒で夜が来る」「餓死したエンティティが消える」「すり抜けが無い」。
 
 ## アセット（G0a）
 
