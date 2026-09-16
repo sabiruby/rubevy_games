@@ -548,6 +548,8 @@ pub fn hud_rows(creatures: &Query<(Entity, &Creature, &Hunger, &Mind)>) -> Vec<H
 pub fn draw_hud(
     mut contexts: EguiContexts,
     clock: Res<VmClock>,
+    note: Res<crate::SaveNote>,
+    mut asked: ResMut<crate::Asked>,
     sky: Res<Sky>,
     world: Res<ScriptWorld>,
     plants: Query<&Plant>,
@@ -660,6 +662,31 @@ pub fn draw_hud(
                 });
             });
             ui.separator();
+            // The garden's own save, as two buttons (G5). The keys do the same thing, and on a PC
+            // they are what a player uses; the buttons are for the browser, where F5 is the
+            // browser's Reload until the page takes it back, and where nobody has been told which
+            // key saves. They set a flag rather than saving here: see `crate::Asked`.
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button("Save the garden (F5)")
+                    .on_hover_text(platform::SAVE_WHERE)
+                    .clicked()
+                {
+                    asked.save = true;
+                }
+                if ui.button("Load it back (F9)").on_hover_text(platform::SAVE_WHERE).clicked() {
+                    asked.load = true;
+                }
+                if !note.text.is_empty() {
+                    let text = egui::RichText::new(format!("{} · at {:.0} s", note.text, note.at))
+                        .monospace();
+                    ui.label(if note.bad {
+                        text.color(amber).strong()
+                    } else {
+                        text.color(egui::Color32::from_gray(170))
+                    });
+                }
+            });
             ui.label(
                 egui::RichText::new(
                     "Tab next · F1 editor · F2 VM · P pause · F5 save · F9 load · drag to turn, wheel to zoom",
