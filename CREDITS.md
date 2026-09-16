@@ -63,7 +63,7 @@ above has a single CJK character in it:
 
 | file | what it is |
 |---|---|
-| `crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf` | 66,796 bytes: Noto Sans JP pinned to `wght=400` and subset to the 337 characters the guides use (G6b re-cut it) |
+| `crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf` | 65,904 bytes: Noto Sans JP pinned to `wght=400` and subset to the 334 characters the guides use (G7 re-cut it) |
 | `crates/rubevy-arena/assets/fonts/OFL.txt` | its licence |
 
 The source font is 9,589,900 bytes; what is in each binary is 0.65% of that. `tools/subset-font.sh`

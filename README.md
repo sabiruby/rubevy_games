@@ -1,14 +1,14 @@
 # rubevy_games
 
-Games whose brains are Ruby. They run on [rubevy](https://github.com/sabiruby/rubevy) — the
+Games whose behaviours are Ruby. They run on [rubevy](https://github.com/sabiruby/rubevy) — the
 [SabiRuby](https://github.com/sabiruby/sabiruby) VM (mruby 4.1 bytecode, written in Rust) inside
 [Bevy](https://bevyengine.org) — and the Ruby in them is read from `.rb` files as the game runs,
 so editing a file changes what happens on screen without a rebuild.
 
 | game | what it is | state |
 |---|---|---|
-| [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's brain is one Ruby file | playable v0.1 |
-| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | playable v0.1: the world, the minds, the genome, the save file, the window and the browser build (G0–G5) |
+| [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's behaviour is one Ruby file | playable v0.1 |
+| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | playable v0.1: the world, the behaviours, the genome, the save file, the window and the browser build (G0–G5) |
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
@@ -34,11 +34,11 @@ web/build.sh garden                     # just one, at http://localhost:8080/gar
 
 The PC build and the browser build are the same code; which one you get is chosen by the target
 (`sabibots/src/platform.rs` and `garden/src/platform.rs`, and [`docs/web.md`](docs/web.md) for how
-the browser one is put together). In the browser, **Save** keeps the brain — or the whole garden —
+the browser one is put together). In the browser, **Save** keeps the behaviour — or the whole garden —
 in the browser's local storage instead of a file, and there is no file to edit from outside.
 
 Then change how a robot fights in the editor on the right of the game window: **Apply** (F5)
-runs the edited brain in that robot straight away, in memory, without touching the file; **Save
+runs the edited behaviour in that robot straight away, in memory, without touching the file; **Save
 to file** (Ctrl+S) keeps it. Editing `sabibots/ruby/robots/scout.rb` in any other editor works
 too — saving it restarts the robots on that file. The buttons along the top of the editor pick
 the robot. `sabibots/ruby/matches/training.rb` is the
@@ -48,7 +48,7 @@ match itself — who is on the field, when the walls close in, what ends it — 
 
 Three things the VM gives a game, which is what these are built to show:
 
-* **A script cannot hang the game.** Each brain is a task with a timeslice counted in
+* **A script cannot hang the game.** Each behaviour is a task with a timeslice counted in
   instructions, so `loop { }` in someone's robot costs it its turn, not your frame rate.
 * **Waiting is free.** `sleep 0.05`, or asking the game something (`radar`) parks the task until
   there is an answer. Nothing polls, nothing spins, and the code stays sequential.

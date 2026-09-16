@@ -287,7 +287,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>) {
                 let mut follow = panel.follow;
                 if ui
                     .checkbox(&mut follow, "follow the robot's own frame")
-                    .on_hover_text("a brain waiting for a scan stands three frames deep in the DSL; this keeps the panel on the line of its own file")
+                    .on_hover_text("a behaviour waiting for a scan stands three frames deep in the DSL; this keeps the panel on the line of its own file")
                     .changed()
                 {
                     panel.follow = follow;

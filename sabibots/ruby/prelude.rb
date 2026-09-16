@@ -94,49 +94,49 @@ class Robot
 
   def name = self.class.robot_name
 
-  # === reflexes =============================================================
+  # === handlers =============================================================
   #
-  # `reflex(:hit) { |by, damage| … }` in a robot's class body registers a block that runs in a
+  # `on(:hit) { |by, damage| … }` in a robot's class body registers a block that runs in a
   # task of its own, the moment the game says the event happened — not on the brain's next pass.
-  # `run_robot` starts one task per reflex before `run`.
+  # `run_robot` starts one task per handler before `run`.
   #
-  # The controls are last-writer-wins: the brain and a reflex both call `act`, and whichever
-  # question the game answers last in a frame is what the tank does. That is why a reflex runs at
+  # The controls are last-writer-wins: the brain and a handler both call `act`, and whichever
+  # question the game answers last in a frame is what the tank does. That is why a handler runs at
   # a *lower* priority than the brain — it is looked at last in the frame, so its `act` is the one
-  # that sticks. A reflex that wants the wheel for longer than one frame still has to say so and
+  # that sticks. A handler that wants the wheel for longer than one frame still has to say so and
   # the brain has to leave it alone: the scout does it with an instance variable, which is shared
   # because both tasks are the same object's.
-  # How many reflexes one robot may have. There is a limit because of how a reflex is called:
-  # see `run_reflex`.
-  REFLEX_SLOTS = 4
+  # How many handlers one robot may have. There is a limit because of how a handler is called:
+  # see `run_handler`.
+  ON_SLOTS = 4
 
-  def self.reflexes
-    @reflexes ||= []
+  def self.handlers
+    @handlers ||= []
   end
 
-  def self.reflex(event, &block)
-    raise "reflex needs a block" if block.nil?
-    slot = reflexes.size
-    raise "a robot may have #{REFLEX_SLOTS} reflexes at most" if slot >= REFLEX_SLOTS
+  def self.on(event, &block)
+    raise "on needs a block" if block.nil?
+    slot = handlers.size
+    raise "a robot may have #{ON_SLOTS} handlers at most" if slot >= ON_SLOTS
     # the block becomes an ordinary method of this robot's class, which is what lets it wait
-    define_method("__reflex_#{slot}", &block)
-    reflexes << [event.to_sym, slot]
+    define_method("__handler_#{slot}", &block)
+    handlers << [event.to_sym, slot]
     block
   end
 
-  # Runs reflex `slot` with the arguments the game published.
+  # Runs handler `slot` with the arguments the game published.
   #
   # The `case` is not decoration. `instance_exec`, `send` and `Method#call` all run the block in
   # a nested run loop of the VM, and a task cannot be parked across one: the first `act` inside
   # such a block dies with "blocking pop cannot be called from within a C function boundary".
   # An ordinary call written out in Ruby is a frame in this task, which can wait — so the name
   # has to be there in the source, and that is what fixes the number of slots.
-  def run_reflex(slot, args)
+  def run_handler(slot, args)
     case slot
-    when 0 then __reflex_0(*args)
-    when 1 then __reflex_1(*args)
-    when 2 then __reflex_2(*args)
-    when 3 then __reflex_3(*args)
+    when 0 then __handler_0(*args)
+    when 1 then __handler_1(*args)
+    when 2 then __handler_2(*args)
+    when 3 then __handler_3(*args)
     end
   end
 
@@ -225,64 +225,64 @@ def run_robot
   # a robot's `rand` is rolled from the match's dice, so a match with a seed repeats its luck
   srand(Rubevy.ask("seed").pop.to_i)
   bot = klass.new
-  start_reflexes(bot, klass, tasks)
+  start_handlers(bot, klass, tasks)
   bot.log "online"
   bot.run
 rescue => e
   Rubevy.log "#{klass ? klass.robot_name : '?'}: #{e.class}: #{e.message}"
   raise
 ensure
-  # the reflexes are tasks of their own: nothing else stops them when the brain ends. (A task
+  # the handlers are tasks of their own: nothing else stops them when the brain ends. (A task
   # the game terminates from outside does not run this — see docs/sabiruby-battle.md.)
   tasks.each { |t| t.terminate }
 end
 
-# One task per `reflex`, started before the brain.
+# One task per `on`, started before the brain.
 #
 # The subscription has to be taken *here*, in the script's own task: `Rubevy.subscribe` belongs to
 # the entity whose task asks, and the queue it answers is an ordinary object, so it is simply
 # handed to the block that reads it.
 #
 # Nothing else is copied onto the new task any more. rubevy's `Task.new` gives a child the entity
-# of the task that made it (its `docs/host-api.md`, *Events*), so a reflex can `act` — and the
+# of the task that made it (its `docs/host-api.md`, *Events*), so a handler can `act` — and the
 # game closes the subscription when the robot's `ScriptTask` goes, which is what ends this task.
-def start_reflexes(bot, klass, tasks)
+def start_handlers(bot, klass, tasks)
   here = Task.current
-  # A smaller number is a higher priority, and a reflex is deliberately the *lower* of the two:
+  # A smaller number is a higher priority, and a handler is deliberately the *lower* of the two:
   # it is looked at after the brain in a frame, so its `act` is the one the game answers last —
-  # and `act` is last-writer-wins. Being quick off the mark is what starts the reflex; being
+  # and `act` is last-writer-wins. Being quick off the mark is what starts the handler; being
   # last in the frame is what makes it stick (docs/sabiruby-battle.md, *Two tasks, one tank*).
   priority = here.priority + 20
   priority = 255 if priority > 255
-  klass.reflexes.each do |event, slot|
+  klass.handlers.each do |event, slot|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "#{klass.robot_name}-#{event}", priority: priority) do
       begin
         loop do
           args = queue.pop                     # parked here, costing nothing, until it happens
-          Rubevy.log "#{bot.name}: reflex #{event} #{args.inspect}"
+          Rubevy.log "#{bot.name}: handler #{event} #{args.inspect}"
           # the HUD's mark. A question nobody waits for is a command: `Rubevy.ask` answers the
-          # queue to wait on, and a reflex that never pops it is not parked for a frame
-          Rubevy.ask("reflex", :begin)
+          # queue to wait on, and a handler that never pops it is not parked for a frame
+          Rubevy.ask("handler", :begin)
           begin
-            bot.run_reflex(slot, args)
+            bot.run_handler(slot, args)
           rescue => e
-            Rubevy.log "#{bot.name}: reflex #{event}: #{e.class}: #{e.message}"
+            Rubevy.log "#{bot.name}: handler #{event}: #{e.class}: #{e.message}"
           ensure
-            Rubevy.ask("reflex", :end)
+            Rubevy.ask("handler", :end)
           end
         end
       rescue Rubevy::Unsubscribed
         # the robot is gone (destroyed, or its file saved): the game let the subscription go and
         # closed the queue, so the `pop` above raised instead of parking for ever. This is the
-        # ordinary end of a reflex task, and it is the only one that unwinds — a task the VM
+        # ordinary end of a handler task, and it is the only one that unwinds — a task the VM
         # terminates from outside does not.
-        Rubevy.log "#{bot.name}: reflex #{event} off"
-        Rubevy.ask("reflex", :off)             # told, not asked: nothing waits for the answer
+        Rubevy.log "#{bot.name}: handler #{event} off"
+        Rubevy.ask("handler", :off)             # told, not asked: nothing waits for the answer
       end
     end
     tasks << task
   end
-  Rubevy.ask("reflex", :ready, klass.reflexes.size)
+  Rubevy.ask("handler", :ready, klass.handlers.size)
   tasks
 end

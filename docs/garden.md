@@ -1,7 +1,7 @@
 # Garden
 
 The second sample in this repository, and the opposite of SabiRuby Battle. In Battle the rules are
-Rust and a robot's brain talks to them through one string channel (`Rubevy.ask`); the ECS is never
+Rust and a robot's behaviour talks to them through one string channel (`Rubevy.ask`); the ECS is never
 mentioned on the Ruby side. Here **the Ruby reads and writes the ECS components themselves, by
 name** — `me[:Hunger]`, `plant[:Transform][:translation]`, `me[:Velocity] = [[vx, vz]]` — and the
 game writes no glue for any of it.
@@ -13,7 +13,7 @@ below.
 ![the garden at 22 seconds: evening, long shadows over a green field, Kenney tufts and bushes of grass, five trees, scattered rocks, and rabbits and beetles walking about](garden.png)
 
 **This file describes stages G0 to G5** (`docs/plans/garden-plan.md`): the
-world, the models in it, the two kinds of mind — a Ruby task per creature and a task per reflex —
+world, the models in it, the two kinds of behaviour — a Ruby task per creature and a task per handler —
 the `Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to
 breed, the save file, which is the world and every creature's own memory as JSON, the window —
 a creature's file rewritten while the garden runs, the VM looked into while it is paused, and a
@@ -157,10 +157,10 @@ names are, saying so.
 Five paragraphs and the key table. The paragraphs are not the key list in prose — they are what
 somebody who has just opened the page is actually looking at (grass, hunger, a day that turns over
 in a minute, creatures pairing off), and then the three things a player would never guess: that
-every mind is a Ruby script in a VM written in Rust that reads the ECS components by name, that a
-creature also runs **reflexes** — a block that waits for one thing to happen to it and runs in a
+every behaviour is a Ruby script in a VM written in Rust that reads the ECS components by name, that a
+creature also runs **handlers** — a block that waits for one thing to happen to it and runs in a
 task of its own the moment it does, while the main loop goes on thinking — and that clicking a
-creature and pressing Ctrl+Enter hands the new mind to every creature of its species while the
+creature and pressing Ctrl+Enter hands the new behaviour to every creature of its species while the
 garden keeps running.
 
 **One language at a time** (G6b). G6 put the English and the Japanese one under the other all the
@@ -207,11 +207,14 @@ pub const CJK: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Guide.subset.t
 
 Noto Sans JP (SIL Open Font License 1.1; `CREDITS.md`, with `OFL.txt` beside the file), which is
 9.6 MB as it comes — a variable font with the whole `wght` axis and every Japanese glyph. What is
-in the binary is **66,796 bytes**: pinned to one weight, and cut down to the 337 characters the
+in the binary is **65,904 bytes**: pinned to one weight, and cut down to the 334 characters the
 guides actually use (G6 was 62,780 bytes and 327 characters; G6b's paragraph about
-reflexes and the `日本語` button between them brought fourteen new ones —
+handlers and the `日本語` button between them brought fourteen new ones —
 `ブ勝受始専届後瞬繰自語身返預` — and dropped one, the `·` that only the old bilingual footer
-used; the script found all of that by itself by reading the three files again). It is added as a **fallback**, appended to both of egui's families rather
+used; G7 renamed 「頭脳」to 「行動アルゴリズム」 and 「反射」to 「イベントの処理」, which
+brought `ゴベ処理` and took `う反専応考脳頭` away — 337 characters down to 334, and the file
+smaller for the first time; the script found all of that by itself by reading the three files
+again). It is added as a **fallback**, appended to both of egui's families rather
 than replacing them, so egui reaches it only for characters the defaults do not have and every
 Latin glyph in the editor and the panels is what it was.
 
@@ -293,9 +296,9 @@ and one system runs at `Startup` and never again: `install_genome`, which is
 
 `starve` despawns the entity, and that is all it does about the script that was on it: removing an
 entity removes its `ScriptTask`, and rubevy's `on_remove` hook terminates the task in the VM and
-closes the queues anything of its was parked on, which raises `Rubevy::Unsubscribed` in a reflex
+closes the queues anything of its was parked on, which raises `Rubevy::Unsubscribed` in a handler
 task instead of leaving it standing for ever (rubevy `docs/host-api.md`, "Events"). A creature
-that starves therefore takes its brain and its four or five reflex tasks with it, and nothing in
+that starves therefore takes its behaviour and its four or five handler tasks with it, and nothing in
 this file says a word about that.
 
 `publish` to a name nobody has subscribed to does nothing at all, which is why the game may
@@ -321,13 +324,13 @@ runs after the move:
 Grass has no collider on purpose: walking into grass is eating it.
 
 **`"bumped"`** is published to a creature when a contact *begins*, with the other thing as a
-`Rubevy::Entity`, and it is the material for G1's `reflex(:bumped) { turn away }`. The plan says
+`Rubevy::Entity`, and it is the material for G1's `on(:bumped) { turn away }`. The plan says
 "on the frame it is pushed"; a creature leaning on a tree is pushed on every frame of the second
 and a half its heading lasts, and a hundred messages for one event would only fill the queue
-(rubevy keeps 64 and drops the oldest) and fire the reflex over and over. So it is the first of
+(rubevy keeps 64 and drops the oldest) and fire the handler over and over. So it is the first of
 those frames, the way `"touched"` is.
 
-## The minds
+## The behaviours
 
 G0 had a `wander` system in Rust that gave each creature a new heading every second, so that the
 garden was not a still life. **G1 deleted it, and that is the only Rust it deleted**: every other
@@ -338,7 +341,7 @@ me[:Velocity] = [[vx, vz]]
 ```
 
 in a Ruby task. A creature with no script simply stands where it is — which is how the selftest
-arranges a starvation, and what a brainless creature looked like in G0 too.
+arranges a starvation, and what a creature with no behaviour looked like in G0 too.
 
 Each creature is `ruby/prelude.rb` (the DSL) followed by `ruby/creatures/beetle.rb` or
 `rabbit.rb`, compiled together as one program and hung on the entity as a `Script`, the way
@@ -348,18 +351,18 @@ sabibots does it. The whole of a creature's file:
 creature "Beetle" do
   def hungry_below = 55.0
 
-  reflex(:night)  { |_at| @asleep = true; stop }
-  reflex(:day)    { |_at| @asleep = false }
-  reflex(:touched) do |by|                 # a rabbit walked over us; `by` is the rabbit
+  on(:night)  { |_at| @asleep = true; stop }
+  on(:day)    { |_at| @asleep = false }
+  on(:touched) do |by|                 # a rabbit walked over us; `by` is the rabbit
     next if @asleep
     take_wheel
     flee_from by, swerve: 1.0
     sleep 0.5
     drop_wheel
   end
-  reflex(:bumped) { |what| … }             # a tree, a rock, another creature
-  reflex(:ate)    { |size| … }             # a meal has started, on a plant this big
-  reflex(:mate) do |partner|               # G2: we are both full, and standing together
+  on(:bumped) { |what| … }             # a tree, a rock, another creature
+  on(:ate)    { |size| … }             # a meal has started, on a plant this big
+  on(:mate) do |partner|               # G2: we are both full, and standing together
     child = my_genome.mix(genome_of(partner)).mutate(0.1)
     garden.spawn(species: name, genome: child.to_h, at: [here[0] + 1.2, here[2] + 1.2])
   end
@@ -386,21 +389,21 @@ registry, and the game never sees the question. Each costs one frame: the task i
 other creatures keep running, which is why a pass reads three or four things and then sleeps
 rather than reading the same thing sixty times a second.
 
-**The reflexes are tasks of their own.** `reflex(:touched) { … }` becomes an ordinary method
+**The handlers are tasks of their own.** `on(:touched) { … }` becomes an ordinary method
 (`define_method`) and a `Task.new` that waits on `Rubevy.subscribe(:touched)`; `run_creature`
-starts one per reflex before the brain. The block has to become a *named method* rather than
+starts one per handler before the behaviour. The block has to become a *named method* rather than
 being run with `instance_exec`, because `instance_exec`, `send` and `Method#call` all go through a
 nested run loop of the VM and a task cannot be parked across one — the first `act` inside such a
 block dies with "blocking pop cannot be called from within a C function boundary"
 (`docs/worklog/2026-09-16-reflex.md`). That is also why there is a fixed number of slots: G1 had
-five and the beetle used all five, so G2 made it six, which is one `when` in `run_reflex` and one
-`__reflex_5`.
+five and the beetle used all five, so G2 made it six, which is one `when` in `run_handler` and one
+`__handler_5`.
 
 **The wheel.** Both tasks are the same object's, so they share instance variables — and they share
-the body, which is the problem. A component write is last-writer-wins, a reflex acts in a frame or
-two, and the brain takes four or five (read hunger, ask for the nearest plant, read *its*
-transform, act). A reflex that fires in the middle of one of the brain's passes is therefore
-undone by the `act` at the end of it, which looks exactly like a reflex that never fired. So
+the body, which is the problem. A component write is last-writer-wins, a handler acts in a frame or
+two, and the behaviour takes four or five (read hunger, ask for the nearest plant, read *its*
+transform, act). A handler that fires in the middle of one of the behaviour's passes is therefore
+undone by the `act` at the end of it, which looks exactly like a handler that never fired. So
 `act` has a holder:
 
 ```ruby
@@ -410,8 +413,8 @@ def act(vx, vz)
 end
 ```
 
-The holder is a `Task`, not a flag, so the reflex's own `act` still goes through. `take_wheel` /
-`drop_wheel` are what a reflex says, and `busy?` is what the brain reads so that it stops thinking
+The holder is a `Task`, not a flag, so the handler's own `act` still goes through. `take_wheel` /
+`drop_wheel` are what a handler says, and `busy?` is what the behaviour reads so that it stops thinking
 rather than thinks and is ignored. SabiRuby Battle has the same problem and leaves it to each
 robot; this is the same idea with the bookkeeping moved into the prelude.
 
@@ -534,7 +537,7 @@ include `Genome#to_s` and the `Random.rand` helper, which the hand version also 
 ### Breeding: the rule is Rust, the child is Ruby
 
 ```ruby
-reflex(:mate) do |partner|
+on(:mate) do |partner|
   mate = genome_of(partner)                                  # its Creature component, as a Hash
   child = my_genome.mix(mate).mutate(0.1)                    # three Rust methods, called
   garden.spawn(species: name, genome: child.to_h, at: [x, z])
@@ -555,7 +558,7 @@ Then Rust again: `garden.spawn` is answered in `RubevySet::Answer`, which reads 
 a `Birth` to `hatch`, which makes the creature, gives it a script, and charges both parents
 `MATE_COST` from their meter and a twenty-second cooldown. The cost is charged when the **child
 arrives**, not when the rule speaks, because whether a creature does anything at all with
-`"mate"` is its script's business — the rabbit has no `reflex(:mate)`, hears the message, and
+`"mate"` is its script's business — the rabbit has no `on(:mate)`, hears the message, and
 nothing happens.
 
 The population holds itself down without a rule about population: a parent is left under the
@@ -656,7 +659,7 @@ restore happens *at the end of that frame*, and a `run` that reads `memory` on i
 would read an empty Hash and have its work replaced a moment later. The prelude therefore sleeps
 once (`sleep 0.05`) between taking the subscriptions and the first thought; before that line was
 there, a loaded rabbit walked the whole garden with `Rubevy.find(:Tree)` to learn what it already
-remembered. And while a loaded garden's minds are starting, **the world does not move**: the rules
+remembered. And while a loaded garden's behaviours are starting, **the world does not move**: the rules
 have a run condition, and the world's clock (`Sky::shift`) is held, so the garden that is read back
 is the garden that was written down rather than that garden plus two frames of walking.
 
@@ -750,7 +753,7 @@ the one that was saved.
 A rock's squash and whether a plant is a bush or a tuft are the model's business and are rolled
 again on the way in. A breeding cooldown, who bumped into whom last frame, which rabbit is standing
 on which beetle are bookkeeping about a *run*, not about a world. `Velocity` is not saved either: a
-creature that is picked up again stands still until its brain says otherwise. `Memory` stayed the
+creature that is picked up again stands still until its behaviour says otherwise. `Memory` stayed the
 empty marker component it has been since G0 — what a creature remembers lives in the VM, and a
 component would be a second copy of it with nobody to keep it in step.
 
@@ -784,7 +787,7 @@ which a file read once has none to spare.
 
 F9 — everything alive despawned and a file's creatures built in its place — takes the same
 `load_world` the command line does, but it is not the same thing to the *creatures*: `--load`
-builds minds that have never run, F9 replaces minds that have. G5 found that only the second one
+builds behaviours that have never run, F9 replaces behaviours that have. G5 found that only the second one
 lost what it read (`11 creatures never started; the garden is running anyway`, every creature back
 with an empty `@memory`), and it found it in a browser, because a headless run has no keyboard to
 press F9 with.
@@ -809,7 +812,7 @@ IDENTICAL
 ```
 
 Sixty-nine entities made way, every memory came home, and the two files are the same bytes — a
-garden that had been running for twenty seconds with minds of its own. No `creatures never started`
+garden that had been running for twenty seconds with behaviours of its own. No `creatures never started`
 line, no `WARN`, no `ERROR`.
 
 **And this is the same bug as the restart queue's.** The hook was built to find out whether the
@@ -819,7 +822,7 @@ line that says the file was loaded and the line that says it was written back ar
 sabiruby 0.5.0** and **6 ms apart on 0.5.1**. The old VM got there in the end, which is why a PC
 never saw the failure: `RESTORE_PATIENCE` is five seconds and 1.5 is well inside it. A browser is
 slower than this container, and the wait is what it spends the whole of — twelve creatures
-despawned at once is seventy-two reflex tasks ending with `nil`, and on 0.5.0 each of those cost
+despawned at once is seventy-two handler tasks ending with `nil`, and on 0.5.0 each of those cost
 the host a whole frame. Nothing in the game needed fixing.
 
 What has not been pressed is the key itself; this machine has no GPU driver and the window goes
@@ -837,14 +840,14 @@ is, and what the HUD says. That half is one file, `garden/src/window.rs`.
 ### The editor: the unit is the species, not the creature
 
 Click a creature (or `Tab`) and the editor on the right shows **the file that creature runs**,
-with a band behind the line its brain is standing on and the rest of the listing shaded by where
+with a band behind the line its behaviour is standing on and the rest of the listing shaded by where
 it keeps coming back to. There are two files in the whole game and two buttons along the top:
 `beetle.rb` and `rabbit.rb`.
 
 | button | key | what it does |
 |---|---|---|
 | **▶ Apply to every Beetle** | Ctrl+Enter | compiles the text and restarts **every beetle** on it, in memory; the file is untouched |
-| **Save to file** | Ctrl+S | writes the text to `beetle.rb`; the creatures go back to being file-brained |
+| **Save to file** | Ctrl+S | writes the text to `beetle.rb`; the creatures go back to running their file |
 | **Revert** | | forgets the edits and puts the species back on its file |
 
 That is one Apply where Battle has two, and the reason is the whole difference between the two
@@ -856,13 +859,13 @@ it, and **a beetle born half a minute later is born running it** (`Brains`, read
 A species running a text that is not its file's is marked `*` on its button and in the HUD.
 
 Restarting is `ScriptTask` off and a new `Script` on, as in Battle: rubevy terminates the old
-task, closes the queues it had subscribed to, and the reflex tasks parked on them unwind and end.
+task, closes the queues it had subscribed to, and the handler tasks parked on them unwind and end.
 **What does not come back is what the creature remembered.** `@memory` is a Hash on the object the
-old script made; the new script makes a new one. That is the honest behaviour — a brain that has
-been rewritten is not the brain that learnt those things — and it is the same in Battle.
+old script made; the new script makes a new one. That is the honest behaviour — a behaviour that has
+been rewritten is not the behaviour that learnt those things — and it is the same in Battle.
 
 **Every beetle is handed over in the frame Apply was pressed**, and for one release of the VM it
-could not be. A beetle is seven tasks (a brain and six reflexes) and six subscriptions; restarting
+could not be. A beetle is seven tasks (a behaviour and six handlers) and six subscriptions; restarting
 it means terminating all seven and closing all six queues at once. G4 measured that nine beetles
 at a time were fine and **ten** stopped the VM's scheduler for good — `Vm::task_pending()` stayed
 true, `task_run_limits` ran nothing, and every task in the VM froze, the rabbits included, which
@@ -870,9 +873,9 @@ nobody had touched. The game got round it with a queue that handed one creature 
 (`RESTARTS_PER_FRAME`, `RESTART_GAP`), and reported the rest as a VM matter.
 
 It was one, and the reading in this document was wrong: nothing was slow to be let go of. Ending a
-`ScriptTask` wakes each of the creature's reflex tasks with `Rubevy::Unsubscribed`, their empty
+`ScriptTask` wakes each of the creature's handler tasks with `Rubevy::Unsubscribed`, their empty
 `rescue` makes the block's value `nil`, and `Vm::task_run_limited` could not tell *that* `nil` from
-"the scheduler has nothing ready" — so it ended the host's whole frame. One frame per reflex task,
+"the scheduler has nothing ready" — so it ended the host's whole frame. One frame per handler task,
 six per beetle, sixty for ten of them: at 30 fps, two seconds of a VM that looks stopped. sabiruby
 0.5.1 tells the two apart (sabiruby `docs/worklog/2026-09-17-task-end-nil.md`), and with it the
 queue is gone. Measured again in the window under lavapipe, with the same instrument — the whole
@@ -904,11 +907,11 @@ it is `None` here), and what one of the things being edited is called, for the h
 
 ### The VM panel (F2)
 
-The same `VmInspector` Battle has, about the selected creature's *brain* task: the frames it is
+The same `VmInspector` Battle has, about the selected creature's *behaviour* task: the frames it is
 standing in with the author's own line numbers, the registers of one of them named from the debug
 info, the heap and the collector's counters, and how many contexts the VM holds. A garden of
-fifteen creatures is about a hundred contexts — one per brain, one per reflex, and the six
-reflexes of a beetle are six of them — which is what a creature with a reflex per event costs, and
+fifteen creatures is about a hundred contexts — one per behaviour, one per handler, and the six
+handlers of a beetle are six of them — which is what a creature with a handler per event costs, and
 it is readable at a glance for the first time here.
 
 A creature parked on `garden.nearest` stands in `Task::Queue#pop`, then `Rubevy::Proxy#method_missing`
@@ -1023,7 +1026,7 @@ check about the scheduler asked after that would be a check about the restart.
 
 | | SabiRuby Battle | the Garden |
 |---|---|---|
-| `ask` kinds a robot / creature uses | **6** — `status`, `radar`, `incoming`, `act`, `seed`, `reflex` | **4** — `garden.nearest`, `garden.count` (G1), `genome`, `garden.spawn` (G2). G3 added none: the save file goes *round* the scripts, not through them |
+| `ask` kinds a robot / creature uses | **6** — `status`, `radar`, `incoming`, `act`, `seed`, `handler` | **4** — `garden.nearest`, `garden.count` (G1), `genome`, `garden.spawn` (G2). G3 added none: the save file goes *round* the scripts, not through them |
 | Rust glue per component made visible to Ruby | — (the ECS is never mentioned) | **0 lines** — the `register_type::<T>()` line, and nothing else |
 | Rust for one type made into a Ruby class | — (none) | **61 lines** with the macros, **113** by hand |
 | the scripts a player writes | `robots/scout.rb` 62 lines (43 without comments and blanks), `robots/hunter.rb` 22 (18) | `creatures/beetle.rb` 128 (68), `creatures/rabbit.rb` 89 (57) |
@@ -1043,12 +1046,12 @@ reads `me[:Hunger]`.
 
 Two things, and the plan says two:
 
-* a position is `[x, y, z]` rather than `[x, y]`. Creatures are on the y = 0 plane, so a brain
+* a position is `[x, y, z]` rather than `[x, y]`. Creatures are on the y = 0 plane, so a behaviour
   uses elements 0 and 2 of `e[:Transform][:translation]`.
 * `act(vx, vz)` — `Velocity` is a `Vec2` whose `x` is world X and whose `y` is world Z.
 
 Nothing else. `Transform.rotation` is decided by the rules from the direction of travel, so no
-brain has to touch it, and `Transform.scale` carrying a plant's size would have been true in 2D as
+behaviour has to touch it, and `Transform.scale` carrying a plant's size would have been true in 2D as
 well.
 
 What did cost a line, and is worth knowing before writing a creature, is the **shape** a
@@ -1251,7 +1254,7 @@ standing on. `GARDEN_SELFTEST=1` adds the checks the plan asks for, printed as `
 4. **nothing walked through anything** — over every frame of the run, no two colliders' centres
    came closer than 90% of the sum of their radii, where at least one of the two is a creature.
 
-and three are about the minds (G1), which means they fail if the Ruby does not run, does not read
+and three are about the behaviours (G1), which means they fail if the Ruby does not run, does not read
 its components, does not get its answers, or does not hear an event:
 
 5. **a hungry creature with a plant in sight reaches it.** A beetle is put in a far corner with
@@ -1269,7 +1272,7 @@ its components, does not get its answers, or does not hear an event:
    frame, and that task's first act is to subscribe — so for the first moments of a life there is
    nobody listening and an event published then is dropped), and a beetle that has been **sent any
    `"touched"` at all in the last 1.5 s**: a rabbit that keeps walking into one publishes every
-   time the contact is remade, the reflex takes half a second over each message and the rest wait
+   time the contact is remade, the handler takes half a second over each message and the rest wait
    in its queue, so half a second after the third message the answer is really about the first.
 
    **This check was the flaky one, from G1 until G4, and it had two causes — both real.** It was
@@ -1278,8 +1281,8 @@ its components, does not get its answers, or does not hear an event:
    check.
 
    * `@course`, the heading a creature believes it is on, was written by `wander` and `head_to`
-     *before* they called `act` — and `act` does nothing while a reflex holds the wheel. So a
-     brain that thought about walking somewhere while a reflex was running left `@course` pointing
+     *before* they called `act` — and `act` does nothing while a handler holds the wheel. So a
+     behaviour that thought about walking somewhere while a handler was running left `@course` pointing
      along a heading the creature never took, and `flee_from` picks **which side to swerve to**
      from `@course`. The wrong side turns a 57° escape into a 39° one, which is under the
      threshold. `act` is now the only thing that sets `@course`, and it sets it only when the
@@ -1342,7 +1345,7 @@ and two are about the save file (G3 and G5):
 
 ```
 $ GARDEN_SELFTEST=1 ./target/release/garden --headless 90
-selftest: a beetle with no brain and nothing to eat stands at (-17.0, -12.0)
+selftest: a beetle with no behaviour and nothing to eat stands at (-17.0, -12.0)
 selftest: a hungry beetle at (17.0, 12.0) with one plant 5.0 away
 selftest: two hungry beetles 9.0 apart, with four plants between them at (-14.0, 9.0)
 selftest: a tester script will ask for a creature with a gene missing
@@ -1384,11 +1387,11 @@ the pre-existing flake described above (the same binary from `main`, with none o
 fails once in four). The G3 check has not failed: all four runs were told the same sentence,
 naming the gene that was not there.
 
-The starvation needs a creature that certainly starves, and a creature with a brain in a garden of
+The starvation needs a creature that certainly starves, and a creature with a behaviour in a garden of
 fifty-five plants usually does not. So `GARDEN_SELFTEST=1` puts one beetle in the far corner with
 3 points of hunger left **and no script at all**: it never moves, nothing grows within 6 units of
 it, and it is dead in about two seconds. Nothing else about the world changes, and the beetle
-itself is an ordinary beetle — what it lacks is a brain. (In G0 the same beetle was the one
+itself is an ordinary beetle — what it lacks is a behaviour. (In G0 the same beetle was the one
 without the `Wander` component, which was the same thing said in Rust.)
 
 **The last two columns of a creature's line are the VM's.** `insn/frame` is the script's whole

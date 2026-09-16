@@ -96,20 +96,20 @@ class Creature
   #
   # The write is deferred like every component write — it lands after this frame's scripts have
   # run — so two tasks of the same creature that both call `act` are last-writer-wins. **That is
-  # why there is a wheel.** A reflex acts in a frame or two; the brain takes four or five, because
+  # why there is a wheel.** A handler acts in a frame or two; the brain takes four or five, because
   # it reads `me[:Hunger]`, asks `garden.nearest`, reads that plant's `[:Transform]` and only then
-  # acts. A reflex that fires in the middle of one of the brain's passes is therefore undone by
-  # the `act` at the end of it, a moment later — which looks exactly like a reflex that did not
-  # fire. So a reflex takes the wheel, and `act` from anybody else does nothing while it has it.
+  # acts. A handler that fires in the middle of one of the brain's passes is therefore undone by
+  # the `act` at the end of it, a moment later — which looks exactly like a handler that did not
+  # fire. So a handler takes the wheel, and `act` from anybody else does nothing while it has it.
   #
-  # The holder is a `Task`, not a flag, so the reflex's own `act` still goes through and the test
+  # The holder is a `Task`, not a flag, so the handler's own `act` still goes through and the test
   # is "is this the task that took it" rather than "is anybody busy".
   #
-  # It is also **the one place `@course` is set**. `@course` is "where I am going", and a reflex
+  # It is also **the one place `@course` is set**. `@course` is "where I am going", and a handler
   # picks the side it swerves to from it (`flee_from` below), so a `@course` that says something
-  # the creature is not doing is a reflex that turns the wrong way. Writing it here — and only
+  # the creature is not doing is a handler that turns the wrong way. Writing it here — and only
   # where the velocity actually went out — is what keeps it true: a `wander` whose `act` was
-  # dropped because a reflex has the wheel now changes nothing, where before it left `@course`
+  # dropped because a handler has the wheel now changes nothing, where before it left `@course`
   # pointing along a heading nobody ever took.
   def act(vx, vz)
     return if @wheel && @wheel != Task.current
@@ -120,7 +120,7 @@ class Creature
     nil
   end
 
-  # A reflex that wants the wheel for a while says so, and gives it back.
+  # A handler that wants the wheel for a while says so, and gives it back.
   def take_wheel
     @wheel = Task.current
   end
@@ -276,12 +276,12 @@ class Creature
     span
   end
 
-  # Straight away from something — what a reflex does with what it was handed.
+  # Straight away from something — what a handler does with what it was handed.
   #
   # `swerve` turns the escape aside by that many radians, **on the side that takes it further
   # from the course it was already on**. A rabbit that is chasing a beetle catches it from
   # behind, and "straight away from a thing behind you" is "carry on": without the swerve the
-  # reflex fires, writes a velocity, and the beetle walks on exactly as it was. With it, the
+  # handler fires, writes a velocity, and the beetle walks on exactly as it was. With it, the
   # heading always changes by at least `swerve` — which is what a startled beetle looks like,
   # and what makes "it turned" a thing that can be checked.
   #
@@ -327,11 +327,11 @@ class Creature
     course
   end
 
-  # === reflexes =============================================================
+  # === handlers =============================================================
   #
-  # `reflex(:touched) { |by| … }` in a creature's body registers a block that runs in a task of
+  # `on(:touched) { |by| … }` in a creature's body registers a block that runs in a task of
   # its own, the moment the game publishes the event — not on the next pass of `run`.
-  # `run_creature` starts one task per reflex before `run`.
+  # `run_creature` starts one task per handler before `run`.
   #
   # It is the same shape SabiRuby Battle uses, and for the same reason: `instance_exec`, `send`
   # and `Method#call` all run the block in a nested run loop of the VM, and a task cannot be
@@ -339,38 +339,38 @@ class Creature
   # called from within a C function boundary". An ordinary call written out in Ruby is a frame
   # in this task, which can wait. So the names have to be in the source, and that is what fixes
   # the number of slots (rubevy_games `docs/worklog/2026-09-16-reflex.md`).
-  REFLEX_SLOTS = 6
+  ON_SLOTS = 6
 
-  def self.reflexes
-    @reflexes ||= []
+  def self.handlers
+    @handlers ||= []
   end
 
-  def self.reflex(event, &block)
-    raise "reflex needs a block" if block.nil?
-    slot = reflexes.size
-    raise "a creature may have #{REFLEX_SLOTS} reflexes at most" if slot >= REFLEX_SLOTS
-    define_method("__reflex_#{slot}", &block)
-    reflexes << [event.to_sym, slot]
+  def self.on(event, &block)
+    raise "on needs a block" if block.nil?
+    slot = handlers.size
+    raise "a creature may have #{ON_SLOTS} handlers at most" if slot >= ON_SLOTS
+    define_method("__handler_#{slot}", &block)
+    handlers << [event.to_sym, slot]
     block
   end
 
   # A payload the game published: `Answer::Num` and `Answer::Entity` arrive as one value,
-  # `Answer::List` as an Array, and a reflex block writes the parameters it wants either way.
-  def run_reflex(slot, payload)
+  # `Answer::List` as an Array, and a handler block writes the parameters it wants either way.
+  def run_handler(slot, payload)
     args = payload.is_a?(Array) ? payload : [payload]
     case slot
-    when 0 then __reflex_0(*args)
-    when 1 then __reflex_1(*args)
-    when 2 then __reflex_2(*args)
-    when 3 then __reflex_3(*args)
-    when 4 then __reflex_4(*args)
-    when 5 then __reflex_5(*args)
+    when 0 then __handler_0(*args)
+    when 1 then __handler_1(*args)
+    when 2 then __handler_2(*args)
+    when 3 then __handler_3(*args)
+    when 4 then __handler_4(*args)
+    when 5 then __handler_5(*args)
     end
   end
 
-  # Both tasks are this same object's, so an instance variable is how the brain and a reflex
-  # agree about anything. `@asleep` is set by the night reflex and read by `run`; `busy?` is a
-  # reflex saying "leave me alone for a moment", and the brain uses it to stop thinking rather
+  # Both tasks are this same object's, so an instance variable is how the brain and a handler
+  # agree about anything. `@asleep` is set by the night handler and read by `run`; `busy?` is a
+  # handler saying "leave me alone for a moment", and the brain uses it to stop thinking rather
   # than to think and be ignored.
   def asleep?
     @asleep
@@ -408,7 +408,7 @@ def run_creature
   # Each creature rolls its own luck, from the bits of its own entity — no question asked, and
   # two beetles spawned in the same frame do not walk in step.
   srand(being.me.to_i)
-  start_reflexes(being, klass, tasks)
+  start_handlers(being, klass, tasks)
   # One breath before the first thought (G3).
   #
   # A creature that comes out of a save file is handed its `@memory` by the game, and the game
@@ -425,37 +425,37 @@ rescue => e
   Rubevy.log "#{klass ? klass.creature_name : '?'}: #{e.class}: #{e.message}"
   raise
 ensure
-  # the reflexes are tasks of their own: nothing else stops them when the brain ends
+  # the handlers are tasks of their own: nothing else stops them when the brain ends
   tasks.each { |t| t.terminate }
 end
 
-# One task per `reflex`, started before the brain.
+# One task per `on`, started before the brain.
 #
 # The subscription is taken here, in the script's own task, because `Rubevy.subscribe` belongs to
 # the entity whose task asks; the queue it answers is an ordinary object and is simply handed to
 # the block that reads it. A `Task.new` task carries the entity of the task that made it, so a
-# reflex may `act` for the creature (rubevy `docs/host-api.md`, "Events").
-def start_reflexes(being, klass, tasks)
+# handler may `act` for the creature (rubevy `docs/host-api.md`, "Events").
+def start_handlers(being, klass, tasks)
   here = Task.current
-  # a smaller number is a higher priority: a reflex is looked at before the brain
+  # a smaller number is a higher priority: a handler is looked at before the brain
   priority = here.priority - 20
   priority = 0 if priority < 0
-  klass.reflexes.each do |event, slot|
+  klass.handlers.each do |event, slot|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "#{klass.creature_name}-#{event}", priority: priority) do
       begin
         loop do
           args = queue.pop # parked here, costing nothing, until it happens
           begin
-            being.run_reflex(slot, args)
+            being.run_handler(slot, args)
           rescue => e
-            Rubevy.log "#{being.name}: reflex #{event}: #{e.class}: #{e.message}"
+            Rubevy.log "#{being.name}: handler #{event}: #{e.class}: #{e.message}"
           end
         end
       rescue Rubevy::Unsubscribed
         # the creature is gone — starved, or its file saved. The game let the subscription go
         # and closed the queue, so the `pop` raised instead of parking for ever. This is the
-        # ordinary end of a reflex task.
+        # ordinary end of a handler task.
       end
     end
     tasks << task

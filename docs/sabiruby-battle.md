@@ -1,11 +1,11 @@
 # SabiRuby Battle (`sabibots`)
 
-Two robots in a square arena. Each robot's brain is one `.rb` file, running as a task in the one
+Two robots in a square arena. Each robot's behaviour is one `.rb` file, running as a task in the one
 VM the game keeps, and every move it makes goes through a question the game answers.
 
 ## Two kinds of script
 
-A **robot** is one file with a brain in it. A **match** is one file that runs the whole game: it
+A **robot** is one file with a behaviour in it. A **match** is one file that runs the whole game: it
 puts the robots on the field, watches what happens to them, and decides when it is over. Both are
 tasks in the same VM, written in the same way — ask the game something, wait for the answer — and
 the game does only what it is told.
@@ -37,7 +37,7 @@ with the C mruby, is written up (in Japanese) in rubevy's
 [`docs/rust-bridge.ja.md`](https://github.com/sabiruby/rubevy/blob/main/docs/rust-bridge.ja.md).
 
 The game owns the world; Ruby owns the decisions. What a robot gets is deliberately raw — a tank's
-controls and noisy readings — so there is room to write a brain that is better than another one.
+controls and noisy readings — so there is room to write a behaviour that is better than another one.
 
 | Ruby asks | the game answers | what it does |
 |---|---|---|
@@ -52,7 +52,7 @@ And what only the match asks for:
 | the match asks | the game answers |
 |---|---|
 | `ask("rules", noise, seed)` | how noisy radars and guns are; the dice (`-1`: the clock) |
-| `ask("spawn", file, team, x, y)` | the new robot's id; it comes with its own brain |
+| `ask("spawn", file, team, x, y)` | the new robot's id; it comes with its own behaviour |
 | `ask("board")` | `[[id, team, hp, x, y], …]` |
 | `ask("events")` | `[[kind, id, other], …]` since the last call — `0` is "down" |
 | `ask("clock")` | seconds since the match started |
@@ -95,7 +95,7 @@ from 11–17 a run to 15–27. The robots were not retuned for it — they are t
 difference is entirely in how often each of them gets to decide.
 
 Either way the cost is per *question*, which is why `act` sets all four controls at once and
-`radar` brings the robot's own status back with it: a brain that asked one question per control
+`radar` brings the robot's own status back with it: a behaviour that asked one question per control
 would react several frames late. `Rubevy.ask` also allows an answer that comes frames later (a
 path request, an asset load), and the robot simply waits.
 
@@ -156,13 +156,13 @@ the rows are their sums:
   `robot.act` is a word that says "ask and wait", written to look like neither.
 
 So the robots stay as they are. The bridge's other half is not unused — a robot *is* an entity, and
-the VM panel and the reflexes both go through it — but for a brain's own decisions, one question
+the VM panel and the handlers both go through it — but for a behaviour's own decisions, one question
 that brings a table back beats nine that each bring one field.
 
 ## A tank, not a cursor
 
 The first version had `thrust(dx, dy)` (move in any direction, at once) and `fire(dx, dy)` (shoot
-in any direction, at once) and `scan` (the nearest enemy, exactly). Every brain written with them
+in any direction, at once) and `scan` (the nearest enemy, exactly). Every behaviour written with them
 came out the same, because there was nothing to be good at: pointing at the enemy was already the
 best aim, and moving sideways was already the best dodge.
 
@@ -223,7 +223,7 @@ None of the helpers asks the game anything except through `radar`: they compute 
 robot's `act` sends them all at once.
 
 `robot "Name" do … end` is `Class.new(Robot)` with the block `class_eval`'d into it. So a robot
-file is a class body: `def run` is the brain, other `def`s are its own helpers, and instance
+file is a class body: `def run` is the behaviour, other `def`s are its own helpers, and instance
 variables are the robot's memory between frames.
 
 The two robots that come with the game:
@@ -234,16 +234,16 @@ The two robots that come with the game:
   shots (0.9) when its turret is on the lead angle; with nothing on the radar it wanders with its
   turret sweeping.
 
-## Reflexes
+## Handlers (`on`)
 
-A brain is one loop, so a robot sleeping between decisions would notice a hit only on its next
-pass, up to 0.05 s later. `reflex(:hit) { … }` is a block that runs in **a task of its own** the
+A behaviour is one loop, so a robot sleeping between decisions would notice a hit only on its next
+pass, up to 0.05 s later. `on(:hit) { … }` is a block that runs in **a task of its own** the
 moment the game says it happened — the first place a single robot uses more than one of
 mruby-task's tasks.
 
 ```ruby
 robot "Scout" do
-  reflex(:hit) do |by, damage|      # `by` is the attacker's name, `damage` a number
+  on(:hit) do |by, damage|      # `by` is the attacker's name, `damage` a number
     @swerve = rand < 0.5 ? 1.0 : -1.0
     act throttle: 1.0, turn: @swerve
     sleep 0.3
@@ -252,7 +252,7 @@ robot "Scout" do
 
   def run
     loop do
-      next sleep(0.05) if @swerve    # the reflex has the wheel
+      next sleep(0.05) if @swerve    # the handler has the wheel
       …
     end
   end
@@ -261,7 +261,7 @@ end
 
 | what | who says it |
 |---|---|
-| `reflex(event) { \|*args\| … }` in the class body | registers it; up to `Robot::REFLEX_SLOTS` (4) per robot |
+| `on(event) { \|*args\| … }` in the class body | registers it; up to `Robot::ON_SLOTS` (4) per robot |
 | `ScriptWorld::publish(Some(entity), "hit", …)` in `move_bullets` | the game, on every hit that lands |
 | the payload | `[by, damage]` — `by` is the attacker's name as the scoreboard writes it (`2 red/hunter`), `damage` the hit points taken |
 
@@ -277,12 +277,12 @@ everything that needs one.
   the game pushes onto, and it belongs to the entity whose task asked. A task made with
   `Task.new` carries no entity, so rubevy refuses to subscribe for it — the queue is taken here
   and handed to the block that reads it.
-* **The new task carries the robot's entity by itself.** A reflex has to be able to `act`, and
+* **The new task carries the robot's entity by itself.** A handler has to be able to `act`, and
   `act` from a task with no entity is a question from nobody that the game answers `nil`. The
   prelude used to copy the `@rubevy_entity` the scheduler puts on the robot's own task; since
   rubevy `9104f7c` a task made with `Task.new` inherits it from the task that made it (rubevy's
   `docs/host-api.md`, *Events*), so there is nothing here to copy.
-* **Its priority is the brain's plus 20** — a *lower* priority, since a smaller number is looked
+* **Its priority is the behaviour's plus 20** — a *lower* priority, since a smaller number is looked
   at first. That is on purpose, and the next section is why.
 
 ### Two tasks, one tank: last writer wins
@@ -291,29 +291,29 @@ Both tasks call `act` on the same robot, and `act` simply sets the controls: **w
 the game answers last in a frame is what the tank does.** There is no locking and no arbitration,
 so the rule that matters is which of the two asks last:
 
-* **A reflex is the lower priority, so it runs last in a frame** — its `act` reaches the game
-  after the brain's, and the tank obeys the reflex. Being quick off the mark is what *starts* a
-  reflex the same frame the hit lands; being last in the frame is what makes it stick.
+* **A handler is the lower priority, so it runs last in a frame** — its `act` reaches the game
+  after the behaviour's, and the tank obeys the handler. Being quick off the mark is what *starts* a
+  handler the same frame the hit lands; being last in the frame is what makes it stick.
 * It was the other way round at first (the plan asked for a higher priority, thinking "sooner" was
-  "stronger"), and with last-writer-wins a reflex that runs first always loses the tie. The scout
+  "stronger"), and with last-writer-wins a handler that runs first always loses the tie. The scout
   coped by saying `act` again every 0.05 s for the whole swerve — a workaround that is gone now
   that the order is right: one `act` and a `sleep 0.3`.
-* **The priority fixes the frame, not the decision already in flight.** The brain usually has a
+* **The priority fixes the frame, not the decision already in flight.** The behaviour usually has a
   question out when the hit lands: it looked at `@swerve`, saw nothing, and asked for its radar.
   The `act` it makes when that answer comes back is a decision taken *before* the swerve, and it
-  arrives three frames later — after the reflex has thrown the wheel.
+  arrives three frames later — after the handler has thrown the wheel.
 
 So the two tasks keep an agreement, and `@swerve` in `scout.rb` is it: an ordinary instance
-variable, shared because both tasks are the same object's. The brain reads it **twice** — once at
+variable, shared because both tasks are the same object's. The behaviour reads it **twice** — once at
 the top of its loop, so it does not waste questions, and once **immediately before it calls
 `act`**, which is the reading that matters. The controls are what the agreement is about, so it
-is checked where the controls are touched. A reflex that only sets a flag, logs, or fires once
+is checked where the controls are touched. A handler that only sets a flag, logs, or fires once
 needs none of this.
 
 Measured with the selftest's own check (`the heading changed within 0.3 s of the hit`, 20 s
 headless runs):
 
-| the reflex | the brain's guard | a question costs | runs passed |
+| the handler | the behaviour's guard | a question costs | runs passed |
 |---|---|---|---|
 | one `act`, lower priority | before `act` | 1 frame | **10 of 10** (every swerve 0.74 rad) |
 | one `act`, lower priority | top of the loop only | 1 frame | 2 of 5 |
@@ -323,39 +323,39 @@ headless runs):
 
 The bottom row is how it was written first. The row above it is why the priority was turned
 round. The two middle rows are the same robot before and after questions got a frame cheaper, and
-they are the reason for the second reading of `@swerve`: the brain's stale `act` used to arrive
+they are the reason for the second reading of `@swerve`: the behaviour's stale `act` used to arrive
 about 100 ms after the hit and now arrives about 50 ms after it, which is not long enough a swerve
-to pass. A failed run is always that shape — the reflex ran, and the hull turned 0.09–0.18 rad
+to pass. A failed run is always that shape — the handler ran, and the hull turned 0.09–0.18 rad
 where the check wants 0.2.
 
 With both guards there is no margin to worry about: over three more runs, all 57 swerves turned
 **0.74 rad**, which is exactly as far as the tank can turn in 0.3 s. Nothing takes the wheel back
-at all any more, and the spread of 0.25–0.78 rad the other rows show is the brain and the reflex
+at all any more, and the spread of 0.25–0.78 rad the other rows show is the behaviour and the handler
 taking it from each other.
 
-The reflexes of one robot share one task, on purpose: a robot hit again while its reflex is still
-running gets the second reflex when the first has finished, rather than two swerves fighting.
+The handlers of one robot share one task, on purpose: a robot hit again while its handler is still
+running gets the second handler when the first has finished, rather than two swerves fighting.
 
 ### Where it shows
 
-* **The scoreboard**, next to the robot's brain: `1 scout !2` while a reflex is running,
+* **The scoreboard**, next to the robot's behaviour: `1 scout !2` while a handler is running,
   `1 scout x2` between them — the number is how many have run, so a screenshot (`--shot`) shows
-  it too. The prelude tells the game with `Rubevy.ask("reflex", :begin)` / `:end`, and never pops
+  it too. The prelude tells the game with `Rubevy.ask("handler", :begin)` / `:end`, and never pops
   the answer: **a question nobody waits for is a command**, which is what keeps the mark from
-  costing the reflex a frame.
-* **The log**, one line per reflex: `Scout: reflex hit ["2 red/hunter", 14.8]`. `--headless` shows
+  costing the handler a frame.
+* **The log**, one line per handler: `Scout: handler hit ["2 red/hunter", 14.8]`. `--headless` shows
   them, which is how this is checked where there is no window.
 
 ### What stops one
 
 Two different endings, and only one of them is the robot's own.
 
-`run_robot` terminates its reflex tasks in an `ensure`, which covers the brain ending by itself or
+`run_robot` terminates its handler tasks in an `ensure`, which covers the behaviour ending by itself or
 raising. It does **not** cover the usual case: when a robot goes down, or its file is saved, the
-game takes its `ScriptTask` away and the VM terminates the brain's task outright — and a task
+game takes its `ScriptTask` away and the VM terminates the behaviour's task outright — and a task
 terminated from outside does not unwind, so that `ensure` never runs.
 
-What ends a reflex task then is **the subscription closing**. rubevy closes the queue when it lets
+What ends a handler task then is **the subscription closing**. rubevy closes the queue when it lets
 a subscription go, and a `pop` waiting on a closed subscription raises `Rubevy::Unsubscribed`
 (rubevy `9104f7c`); the task unwinds through its own `rescue` and is gone:
 
@@ -363,29 +363,29 @@ a subscription go, and a `pop` waiting on a closed subscription raises `Rubevy::
 begin
   loop { args = queue.pop; … }
 rescue Rubevy::Unsubscribed        # the robot is gone; end here rather than park for ever
-  Rubevy.log "#{bot.name}: reflex #{event} off"
-  Rubevy.ask("reflex", :off)
+  Rubevy.log "#{bot.name}: handler #{event} off"
+  Rubevy.ask("handler", :off)
 end
 ```
 
-Before that, a reflex task was left parked on a queue nobody would publish to again — measured
+Before that, a handler task was left parked on a queue nobody would publish to again — measured
 with a probe task listing `Task.list` through a match: after `3 blue/scout` went `DORMANT` its
 `Scout-hit` task was still there, `WAITING`, costing a context and a task object per robot per
 life. The check that it no longer is runs in the selftest: every robot that has been down for
-more than half a second must have had as many reflex tasks end as it registered reflexes
-(`--headless` prints `1/1 reflex tasks ended` per robot, and `reflex hit off` in the log).
+more than half a second must have had as many handler tasks end as it registered handlers
+(`--headless` prints `1/1 handler tasks ended` per robot, and `handler hit off` in the log).
 
 ### What it cost to get right
 
 `instance_exec`, `send` and `Method#call` all run the block in a **nested run loop** of the VM, and
 a task cannot be parked across one: the first `act` inside a block called that way dies with
-`blocking pop cannot be called from within a C function boundary`. So `reflex` turns the block
-into an ordinary method of the robot's class (`define_method`), and `run_reflex` calls it by a
+`blocking pop cannot be called from within a C function boundary`. So `on` turns the block
+into an ordinary method of the robot's class (`define_method`), and `run_handler` calls it by a
 name written out in the source — which is why there is a fixed number of slots
-(`Robot::REFLEX_SLOTS`, 4).
+(`Robot::ON_SLOTS`, 4).
 
 That limit is about the nested run loop and nothing else. The two other things this cost — a
-child task with no entity, and a reflex task nobody ended — were rubevy's to fix and rubevy has
+child task with no entity, and a handler task nobody ended — were rubevy's to fix and rubevy has
 fixed them; the slots stay, because a `case` over names written in the source is still the only
 way to call a block and be able to park inside it.
 
@@ -399,10 +399,10 @@ single file easy.
 
 `rubevy-arena`'s `Watch` watches `ruby/` with `notify`. On a write the game recompiles that robot
 (prelude + file) and gives the entity a new `Script`, dropping the old `ScriptTask`: the robot
-starts over with the new brain, the world is untouched, and the other robot never notices. Saving
+starts over with the new behaviour, the world is untouched, and the other robot never notices. Saving
 `prelude.rb` reloads every robot.
 
-A compile error is reported in the HUD line and the log, and the robot keeps its old brain.
+A compile error is reported in the HUD line and the log, and the robot keeps its old behaviour.
 
 ## Fairness, and why a bad robot cannot ruin the match
 
@@ -414,7 +414,7 @@ and the match carries on. Neither can stop the frame.
 The instruction count has one blind spot: a block that a native is waiting for cannot be switched
 out. `Array.new(1) { loop { } }` in a robot's `run` used to freeze the whole game. Since
 2026-09-14 each frame also runs under time limits on a clock (rubevy's `frame_time`, 8 ms, and
-`overrun`, 50 ms): past the second, such a robot gets `Task::Overrun`, its brain ends ("script
+`overrun`, 50 ms): past the second, such a robot gets `Task::Overrun`, its behaviour ends ("script
 failed: #<Task::Overrun …>" in the HUD), and the other robots fight on. Checked headless with that
 line put into `hunter.rb`, and the browser build still passes its checks with the clock (Bevy's
 `Instant`) in place. The slices themselves are still counted in instructions, so a robot thinks
@@ -426,7 +426,7 @@ The panel at the top left has one row per robot, in words and bars:
 
 | column | what it is |
 |---|---|
-| robot | its number and brain (`1 scout`, `*` if it runs an applied brain, `!n` while a reflex is running and `xn` between them), in its team's colour; click it to show it in the editor |
+| robot | its number and behaviour (`1 scout`, `*` if it runs an applied behaviour, `!n` while a handler is running and `xn` between them), in its team's colour; click it to show it in the editor |
 | health | a bar, green, yellow below half, red below a quarter; `down` when it is out |
 | energy | a bar out of 100: driving and firing spend it, time brings it back |
 | thinking | the instructions its Ruby runs per frame, averaged over about a second; a timeslice's worth (3,000) fills the bar |
@@ -434,7 +434,7 @@ The panel at the top left has one row per robot, in words and bars:
 Each robot also has a small health bar over it, under its name.
 
 The first version showed `prelude.rb:15` and a per-frame instruction count. Both were true and
-neither was readable: a brain passes through a dozen lines a frame and sleeps most frames, so the
+neither was readable: a behaviour passes through a dozen lines a frame and sleeps most frames, so the
 "current line" jumps and the count flickers between 0 and a hundred. A `mostly doing` column (the
 line it had spent the most time on lately) replaced it and went the same way — two lines that
 take about the same time trade places many times a second — and so did the editor's
@@ -461,7 +461,7 @@ does not cover; hide the editor (`F1`) and the arena comes back to the middle.
 
 The right-hand window is an editor (egui, through `bevy_egui` 0.42 — the release built for Bevy
 0.19). It shows the watched robot's own file and puts a band behind **the line of that file its
-brain is standing on**:
+behaviour is standing on**:
 
 ```
 1 red/scout  scout.rb
@@ -475,16 +475,16 @@ game, a browser) gets the same editor. Four buttons decide what happens to the t
 | button | key | what it does |
 |---|---|---|
 | **Apply** | F5 / Ctrl+Enter | compiles the text and restarts **this robot only** with it; the file is untouched |
-| **Apply to all *file*** | | the same, for every robot whose brain is that file |
+| **Apply to all *file*** | | the same, for every robot whose behaviour is that file |
 | **Save to file** | Ctrl+S | writes the text to the file; robots on the file pick it up |
 | **Revert** | | forgets the edits and puts this robot back on its file |
 
-A robot running an applied brain is marked `*` — `3 scout*` on its button and over its head, and
+A robot running an applied behaviour is marked `*` — `3 scout*` on its button and over its head, and
 `scout.rb*` in the editor's title. The file watcher leaves such robots alone: an edit made in
 another editor reaches the robots on the file, not the one you are experimenting with. A text that
-does not compile is not applied; the editor says why and the robot keeps the brain it has.
+does not compile is not applied; the editor says why and the robot keeps the behaviour it has.
 
-Closing the game forgets applied brains that were not saved. Edits typed and not applied are kept
+Closing the game forgets applied behaviours that were not saved. Edits typed and not applied are kept
 per robot while the game runs, and the editor lists the robots that have some.
 
 The editor itself does no file I/O (`EditorAction` is what it hands the game), so the rules above
@@ -495,7 +495,7 @@ outcome: Apply reaches only the shown robot and writes nothing, Apply to all rea
 the same file and no others, Revert puts the shown robot back on its file. Save is left out of it
 on purpose, since it writes to the repository.
 
-Along the top of the editor is a button per robot (`1 scout`, `2 hunter`, … in team colours, faded when the robot is down); click one to show its brain. `1`–`8` do the same from the keyboard, `Tab` moves on, `F1` hides the editor. Switching to another file keeps what was typed into the one being left: unsaved edits are held per file and come back when you return to it, and the editor lists which files have them. Keys typed into the editor stay the
+Along the top of the editor is a button per robot (`1 scout`, `2 hunter`, … in team colours, faded when the robot is down); click one to show its behaviour. `1`–`8` do the same from the keyboard, `Tab` moves on, `F1` hides the editor. Switching to another file keeps what was typed into the one being left: unsaved edits are held per file and come back when you return to it, and the editor lists which files have them. Keys typed into the editor stay the
 editor's: a `2` in the code does not switch robots (`EguiWantsInput`).
 
 The line that is shaded is the innermost frame **in the robot's own file**, which is not the
@@ -518,7 +518,7 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
 
 ![the VM panel](vm-inspector.png)
 
-* **The frames the brain is standing in, innermost first.** A robot waiting for a scan is four
+* **The frames the behaviour is standing in, innermost first.** A robot waiting for a scan is four
   frames deep — `Task::Queue#pop`, `Rubevy.ask`'s wrapper, `radar` in the DSL, then its own
   `scout.rb:36` — and seeing that stack is seeing why waiting costs nothing: it is an ordinary
   Ruby call chain in a context of its own, parked, not a callback that lost its place.
@@ -532,13 +532,13 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
   collection and the threshold that will start the next, how many collections there have been,
   and what survived the last. Watching that climb and drop while a robot fights is what a
   garbage collector is.
-* **How many contexts the VM holds, and how many are still live.** One per task: four brains,
-  their reflexes, the match. When a robot goes down its two contexts stop and the count falls —
-  which is how the reflex-task leak in *What stops one* was seen to be gone.
+* **How many contexts the VM holds, and how many are still live.** One per task: four behaviours,
+  their handlers, the match. When a robot goes down its two contexts stop and the count falls —
+  which is how the handler-task leak in *What stops one* was seen to be gone.
 
 **`P` pauses the scripts** by giving the scheduler a budget of 0 instructions for the frame: the
 VM runs nothing, so the numbers stand still while they are read. The game keeps drawing and the
-tanks keep rolling on the controls their brains last set — it is the Ruby that is stopped, not the
+tanks keep rolling on the controls their behaviours last set — it is the Ruby that is stopped, not the
 match.
 
 The scheduler's clock stops with it. It did not at first, and a pause used to end with every
@@ -570,18 +570,18 @@ and the match script is started again, so it reads `training.rb` afresh and spaw
 it did the first time.
 
 Despawning is also what stops the old scripts: rubevy terminates a task when its entity goes (or
-its `ScriptTask` is removed). Until that was added a reload left the old brain running beside
+its `ScriptTask` is removed). Until that was added a reload left the old behaviour running beside
 the new one, asking for the same body — invisible, since nothing showed it any more. A question
 asked just before a restart is answered with `nil` and nobody is waiting for it.
 
-A brain applied in the editor and not saved comes back with the robot's number: number 3 is still
+A behaviour applied in the editor and not saved comes back with the robot's number: number 3 is still
 the third robot the match spawns. Edits typed and not applied are dropped.
 
 A robot that goes down has its task stopped the same way, so a wreck no longer spends
 instructions on a body that cannot move.
 
 `SABIBOTS_SELFTEST=1` ends by pressing Restart and checking that there are four robots again (not
-eight), all at full health, that an applied brain came back and a reverted one did not, and that
+eight), all at full health, that an applied behaviour came back and a reverted one did not, and that
 the wall ends on its corners.
 
 ## Blasts, and the view following the arena
@@ -605,9 +605,9 @@ a hint in the scoreboard saying so:
 ![the same, in Japanese](battle-guide-ja.png)
 
 Four paragraphs and the key table: what the fight is (two teams, health, energy that moving and
-firing spend), that every brain is a Ruby script in a VM written in Rust and that the rules are
-all on the Rust side, what a reflex is, and that picking a robot and pressing Ctrl+Enter hands it
-a new brain in the middle of the fight.
+firing spend), that every behaviour is a Ruby script in a VM written in Rust and that the rules are
+all on the Rust side, what a handler is, and that picking a robot and pressing Ctrl+Enter hands it
+a new behaviour in the middle of the fight.
 
 **One language at a time** (G6b). G6 drew the English and the Japanese together, one under the
 other, and half of a panel that is not for you is half a panel. The two buttons at the top —
@@ -630,7 +630,7 @@ character is drawn as a blank box. The licence is in `CREDITS.md`.
 
 `--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
 over the middle of the window; the two pictures above are
-`--shot docs/battle-guide.png 8 --guide --lang en` and the same with `--lang ja`.
+`--shot docs/battle-guide.png 6 --guide --lang en` and the same with `--lang ja`.
 
 ## Seeing it where there is no window
 
@@ -653,9 +653,9 @@ game points `AssetPlugin` at its own `assets/` directory.
 ## What it does not do yet
 
 * **Sound.**
-* **Reflexes for anything but a hit.** `reflex` takes any event name, but `"hit"` is the only one
+* **Handlers for anything but a hit.** `on` takes any event name, but `"hit"` is the only one
   the game publishes today.
-* **Keeping edits that were typed and not applied across a restart.** Applied brains are kept.
+* **Keeping edits that were typed and not applied across a restart.** Applied behaviours are kept.
 
 ## Running
 
@@ -666,33 +666,33 @@ cargo run -p sabibots -- --shot p.png 6 --guide   # a picture with the H panel o
 cargo run -p sabibots -- --shot p.png 6 --guide --lang ja   # …in Japanese
 web/build.sh && web/serve.sh             # in a browser (docs/web.md)
 
-SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the reflex check
+SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the handler check
 SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the editor's
 ```
 
 `SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
 `P`: pressing it must give the scripts a budget of 0 and stop them running, nothing that was
 sleeping may wake on the frame the budget comes back (the pause lasts half a second, ten times a
-brain's `sleep 0.05`), and pressing `P` again must start them.
+behaviour's `sleep 0.05`), and pressing `P` again must start them.
 
-The reflex check needs a fight rather than a mouse, so it runs headless as well: every hit taken
-by a robot that has a reflex, is still standing and is not already in the middle of one is noted
-with the way it was facing, and 0.3 s later it must have run a reflex and turned by more than
+The handler check needs a fight rather than a mouse, so it runs headless as well: every hit taken
+by a robot that has a handler, is still standing and is not already in the middle of one is noted
+with the way it was facing, and 0.3 s later it must have run a handler and turned by more than
 0.2 rad at some point in between. Two kinds of hit are not counted at all, and say so with a `--`
 line rather than passing or failing quietly:
 
 * **a robot destroyed inside those 0.3 s** — the game takes its task away and zeroes its
   controls, so it is not a robot that failed to swerve;
-* **a robot whose brain was replaced inside those 0.3 s** (the editor's Apply, a saved file). The
+* **a robot whose behaviour was replaced inside those 0.3 s** (the editor's Apply, a saved file). The
   old task is terminated and the new one subscribes afresh, so a `hit` published in between
   reaches nobody and a swerve already under way is cut off with it. What the check watches is the
-  task the robot's brain is running: a different one is a different brain.
+  task the robot's behaviour is running: a different one is a different behaviour.
 
 At the end, every robot that has been down for more than half a second must have had as many
-reflex tasks end as it registered reflexes.
+handler tasks end as it registered handlers.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
-the end, then the VM panel's own numbers as text — the frames each brain is standing in with the
+the end, then the VM panel's own numbers as text — the frames each behaviour is standing in with the
 locals of the innermost few, the heap, and how many contexts are live. It is how the game is
 checked where there is no GPU.
 
@@ -701,5 +701,5 @@ checked where there is no GPU.
 | `1`–`8`, `Tab` | which robot the editor and the VM panel are about |
 | `F1` / `F2` | the editor / the VM panel |
 | `P` | pause the scripts (budget 0) |
-| `F5`, `Ctrl+Enter` / `Ctrl+S` | apply the edited brain / save it to its file |
+| `F5`, `Ctrl+Enter` / `Ctrl+S` | apply the edited behaviour / save it to its file |
 | `R` | start the match over |

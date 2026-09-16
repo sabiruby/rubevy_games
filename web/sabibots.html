@@ -21,7 +21,7 @@
 <script type="module">
 // Two modules: the game (Bevy + the SabiRuby VM, wasm32-unknown-unknown) and the Ruby compiler
 // (the reference mruby compiler in C, the SabiRuby playground's wasm32-wasip1 module). The game
-// calls window.sabibotsCompile(source) whenever it needs a robot's brain as bytecode.
+// calls window.sabibotsCompile(source) whenever it needs a robot's behaviour as bytecode.
 import { Sabi, OK } from "./compiler/sabi.js";
 
 const status = document.getElementById("status");
