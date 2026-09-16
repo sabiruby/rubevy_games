@@ -2809,7 +2809,6 @@ fn is_still(restoring: Option<Res<Restoring>>) -> bool {
 /// to hang a garden on, and because nobody opening a link knows that F5 is Save.
 fn save_load_keys(
     keys: Res<ButtonInput<KeyCode>>,
-    typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
     time: Res<Time>,
     sky: Res<Sky>,
     file: Res<SaveFile>,
@@ -2818,11 +2817,16 @@ fn save_load_keys(
     mut note: ResMut<SaveNote>,
     mut commands: Commands,
 ) {
-    // a garden typed into the editor is not a garden saved: F5 and F9 while the caret is in the
-    // text box belong to the text box
-    let typing = typing.is_some_and(|t| t.wants_keyboard_input());
-    let save = asked.save || (!typing && keys.just_pressed(KeyCode::F5));
-    let load = asked.load || (!typing && keys.just_pressed(KeyCode::F9));
+    // These two are **not** behind `EguiWantsInput::wants_keyboard_input()`, and `inspect_keys`'
+    // two are — the difference is what the key is. `P` is a letter, and a letter pressed while the
+    // caret is in the editor belongs to the editor. F5 and F9 are keys egui never wants, and
+    // guarding them was measured to be worse than useless: once the editor's text box has taken
+    // keyboard focus it does not give it up when the pointer clicks the garden, so a guarded F5
+    // is a save key that stops working for the rest of the session after the first edit (seen in
+    // a browser: after the window checks had typed into the editor, neither F5 nor P did anything
+    // again). The buttons are the other half of the same answer.
+    let save = asked.save || keys.just_pressed(KeyCode::F5);
+    let load = asked.load || keys.just_pressed(KeyCode::F9);
     asked.save = false;
     asked.load = false;
     if save {
