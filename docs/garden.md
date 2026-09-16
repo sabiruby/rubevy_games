@@ -1124,33 +1124,81 @@ place.
 That is what makes `"night"` legible on screen rather than a number in a log: the creatures stop
 where they stand when it arrives, and the picture says so.
 
-### How dark the night is, and why it changed (G6)
+### How dark the night is, and why it changed twice (G6, G6b)
 
 The author played the browser build and could not see the garden at night at all — not dimly, at
 all. The numbers were an honest guess at what a night looks like and a wrong guess at what a night
 *on a screen* has to be, so they were raised until a picture of midnight was readable, and no
-further: the point of a night is still that it is one.
+further: the point of a night is still that it is one. Then the author played **that** and said it
+was still too dark, and named a number to aim at — a mean luminance of 40 to 50 out of 255 for the
+ground at midnight, against the 81 an afternoon reads.
 
-| | before | after |
+| | G0 | G6 | G6b |
+|---|---|---|---|
+| the moon (`DirectionalLight.illuminance`) | 300 lux | 400 lux | **950 lux** (`MOON_LUX`) |
+| the ambient light (`GlobalAmbientLight.brightness`) | 30 | 55 | **190** (`NIGHT_AMBIENT`) |
+| the moon's colour | `srgb(0.55, 0.64, 1.00)` | `srgb(0.62, 0.70, 1.00)` | unchanged |
+| the ambient colour | `srgb(0.35, 0.45, 0.80)` | `srgb(0.45, 0.54, 0.85)` | unchanged |
+| the sky (`ClearColor`) | `srgb(0.03, 0.04, 0.10)` | `srgb(0.06, 0.08, 0.17)` | **`srgb(0.14, 0.18, 0.36)`** (`NIGHT_SKY`) |
+| **the ground's mean luminance at midnight** | 18 | 26 | **44** |
+
+The moon is a directional light and it draws *edges*: a creature has a lit side and a shadowed
+side and the tree trunks have a direction, which is what stops the garden looking like a flat
+black card. The ambient is what fills the shadowed side, and it is the one that decides whether a
+beetle standing under a tree exists at all. Raising only the moon makes the tops of things bright
+and the rest of them still missing; raising only the ambient makes everything grey and flat.
+
+What G6b measured, which G6 had not, is **how much each of the three is worth to that number**.
+Multiplying all three by 2 took 25.6 to 39.2; raising the ambient alone from 110 to 190 on top of
+that took it to 41.1 — 80 points of ambient light bought 1.9 of luminance, and the moon bought
+about 3 per 100 lux. The mean is the moon's to move. The ambient is in the final numbers for what
+it does to the *creatures*, which are small, round and mostly in their own shadow, and not for
+what it does to the measurement.
+
+The moon is now close to the dimmest *daylight* the garden has (1,200 lux at the horizon), which
+G6 kept a wide gap under on purpose — and measuring either side of sunset says that gap is not
+what the difference between day and night is made of. **The moon points at `-up`**: at sunset it
+lies along the horizon and lights nothing, and only by midnight is it overhead. So the night has a
+curve of its own, and 950 lux is the number at the top of it:
+
+| the clock | | the ground |
 |---|---|---|
-| the moon (`DirectionalLight.illuminance`) | 300 lux | **400 lux** (`MOON_LUX`) |
-| the ambient light (`GlobalAmbientLight.brightness`) | 30 | **55** (`NIGHT_AMBIENT`) |
-| the moon's colour | `srgb(0.55, 0.64, 1.00)` | `srgb(0.62, 0.70, 1.00)` |
-| the ambient colour | `srgb(0.35, 0.45, 0.80)` | `srgb(0.45, 0.54, 0.85)` |
-| the sky (`ClearColor`) | `srgb(0.03, 0.04, 0.10)` | `srgb(0.06, 0.08, 0.17)` |
-
-The two that matter are the first two, and they do different jobs. The moon is a directional light
-and it draws *edges*: a creature has a lit side and a shadowed side and the tree trunks have a
-direction, which is what stops the garden looking like a flat black card. The ambient is what
-fills the shadowed side, and it is the one that decides whether a beetle standing under a tree
-exists at all. Raising only the moon made the tops of things bright and the rest of them still
-missing; raising only the ambient made everything grey and flat. Both, and the day is still a day:
-the dimmest daylight the garden has is 1,200 lux at the horizon with an ambient of 120, so
-moonlight is a third of the worst daylight and the eye reads the difference immediately. Measured
-on the picture below against the same crop of `docs/garden.png`, the ground's mean luminance is
-**18 → 26 out of 255** at midnight, against **81** in the afternoon.
+| `--at 22` | afternoon, the sun a third of the way up | 80 |
+| `--at 24.6` | dusk, the sun on the horizon | 39 |
+| `--at 26.4` | just after sunset, the moon on the horizon | 24 |
+| `--at midnight` | the moon overhead | **44** |
 
 ![the garden at midnight](garden-night.png)
+
+#### The dial, which is a question for the author
+
+Twice now a brightness chosen here has been wrong on the machine it is actually looked at, and the
+reason is not that the numbers were badly chosen: **a brightness is not a fact about the code, it
+is a fact about a monitor in a room**, and we cannot see the author's. So the Garden panel has a
+`night` slider, 0.50 to 2.00, which multiplies all three of the numbers above together:
+
+```
+night = 1.00   the game as built            night = 2.00   twice everything
+```
+
+One dial and not three, because the question being asked is "how bright does the night have to be
+on your screen" and three dials would be handing a design decision to somebody who asked a
+question. The number it is left at is **written to the log** (`setting: night = 1.30 …`, which in
+a browser is the console) and **remembered** — `garden.settings.txt` beside the save on a PC, a
+`localStorage` key in a browser — so the answer can be read off and reported, and then baked into
+`MOON_LUX` and the two beside it so the dial goes back to 1.00 for everybody.
+
+The file is `key=value` lines and nothing else, and deleting it puts everything back:
+
+```
+# garden: what the panel remembers. Delete a line to go back to the default.
+night=1.30
+lang=ja
+```
+
+It is also what made the three numbers above cheap to find: a shot taken with `night=1.50` in that
+file needs no rebuild, so the search for the multiplier that lands in 40–50 was four pictures and
+no compiler.
 
 `--at SECONDS` is what makes that picture cheap to take. It moves `Sky::shift` — G3's clock, the
 one a loaded garden uses to go on from the hour it was saved at — and nothing else, so the world

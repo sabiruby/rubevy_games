@@ -38,6 +38,13 @@ mod imp {
     /// mean two different things, and this is the sentence that says which.
     pub const SAVE_WHERE: &str = "the whole garden, as JSON, in garden.save.json beside the game";
 
+    /// **Where the panel's choices are kept (G6b)**: a small text file beside the save, in the
+    /// directory the game was started from. It holds the guide's language and the night's dial —
+    /// two lines of `key=value` — and it is written only when one of them is changed with the
+    /// mouse. Deleting it puts everything back to its default, which is what a file the player
+    /// can see is for.
+    pub const SETTINGS_FILE: &str = "garden.settings.txt";
+
     /// Where the Ruby lives: next to the crate, from the workspace root or from the crate.
     pub fn ruby_dir() -> PathBuf {
         let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("ruby");
@@ -125,6 +132,12 @@ mod imp {
 
     pub const SAVE_WHERE: &str =
         "the whole garden, as JSON, in this browser's local storage (key garden:garden.save.json)";
+
+    /// Where the panel's choices are kept (G6b). There are no files here either: `read` and
+    /// `write` below make this the `localStorage` key `garden:garden.settings.txt`, beside the
+    /// save's own, so the language the player clicked and the night they dialled in survive the
+    /// page being closed — in that browser and nowhere else.
+    pub const SETTINGS_FILE: &str = "garden.settings.txt";
 
     /// Keys of `localStorage` are this followed by the file's path.
     const STORE: &str = "garden:";

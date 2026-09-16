@@ -505,6 +505,8 @@ pub fn draw_hud(
     creatures: Query<(Entity, &Creature, &Hunger, &Mind)>,
     mut watched: ResMut<Watched>,
     mut editor: ResMut<Editor>,
+    mut dial: ResMut<crate::NightDial>,
+    mut settings: Option<ResMut<rubevy_arena::Settings>>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let rows = hud_rows(&creatures);
@@ -545,6 +547,7 @@ pub fn draw_hud(
                     ui.label(egui::RichText::new("paused (P)").color(amber).strong());
                 }
             });
+            night_dial(ui, &mut dial, &mut settings);
             // The garden's own save, as two buttons (G5), **above** the list of creatures rather
             // than below it. The first version had them at the foot, beside the key hint, where
             // they read better — and in a browser at 1280×800 with fourteen creatures they were
@@ -657,6 +660,45 @@ pub fn draw_hud(
                     .strong(),
             );
         });
+}
+
+/// **The night dial (G6b).** One slider, multiplying the moon, the ambient light and the sky
+/// together (`crate::NightDial`).
+///
+/// It is in this panel rather than in the guide because it is not an explanation, and it is a
+/// slider rather than a key because the question it asks — *how bright does the night have to be
+/// on your screen?* — is answered by moving something and looking, not by pressing a key three
+/// times and counting. The number is shown to two decimal places for the same reason it is
+/// written to the log and remembered: it is meant to be **read off and reported**, and then baked
+/// into `MOON_LUX` and the two beside it so that the dial goes back to being 1.0 for everybody.
+///
+/// It writes to the store when the drag *stops*, not while it moves. The garden brightens under
+/// the pointer as it is dragged — that is the whole point of a slider — but a `localStorage`
+/// write and a line of log on every one of sixty frames a second would be neither.
+fn night_dial(
+    ui: &mut egui::Ui,
+    dial: &mut crate::NightDial,
+    settings: &mut Option<bevy::prelude::ResMut<rubevy_arena::Settings>>,
+) {
+    let mut value = dial.0;
+    let slider = ui
+        .add(
+            egui::Slider::new(&mut value, crate::NIGHT_DIAL_MIN..=crate::NIGHT_DIAL_MAX)
+                .fixed_decimals(2)
+                .text("night"),
+        )
+        .on_hover_text(
+            "how bright the night is: the moonlight, the light that fills the shadows and the sky, all multiplied by this. 1.00 is what the game is built with — turn it until the night reads on your screen, and the number in the log is the one to tell us",
+        );
+    if slider.changed() {
+        dial.0 = value;
+    }
+    // the click and the arrow keys change it without a drag; the drag reports itself when it ends
+    if slider.drag_stopped() || (slider.changed() && !slider.dragged()) {
+        if let Some(settings) = settings.as_mut() {
+            settings.set("night", format!("{:.2}", dial.0));
+        }
+    }
 }
 
 /// 0 is dead, 100 is stuffed. Green while it is comfortable, amber under the line a beetle's own

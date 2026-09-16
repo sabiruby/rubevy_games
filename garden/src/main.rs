@@ -70,22 +70,64 @@ const DAWN_OFFSET: f32 = 0.08;
 /// the garden has.
 const MIDNIGHT: f32 = (0.75 - DAWN_OFFSET) * DAY_LENGTH;
 
-/// **How dark the night is (G6).** The author played the browser build and could not see the
-/// creatures or the trees at night at all, so both numbers below are floors rather than the
-/// nothing they used to be — moonlight, not a power cut.
+/// **How dark the night is (G6, and again in G6b).** The author played the browser build and
+/// could not see the creatures or the trees at night at all; G6 raised these to 400 and 55 and
+/// the author played it again and said it was *still* too dark. These are the third set, chosen
+/// against a number this time: the mean luminance of the ground at midnight, measured off a
+/// `--shot --at midnight` in the strip the panels do not cover, is **44 of 255** where G6's was
+/// 26 and an afternoon is 81.
 ///
 /// `MOON_LUX` is the `DirectionalLight` that stands in for the moon. It is what draws the *edges*:
 /// a creature has a lit side and a shadowed side, and the tree trunks have a direction. The real
-/// moon is about 0.1 lux and this is four thousand times that, which is honest — a night in a
-/// game has to be read, and a photograph of a real moonlit field needs a long exposure to look
-/// like this. What it must not be is the sun: the dimmest *day* the garden has is 1,200 lux at
-/// the horizon, and 400 keeps a clear gap under it.
+/// moon is about 0.1 lux and this is ten thousand times that, which is honest — a night in a game
+/// has to be read, and a photograph of a real moonlit field needs a long exposure to look like
+/// this.
+///
+/// It is close to the *day's* floor now (1,200 lux, the sun on the horizon), which G6 kept a wide
+/// gap under, and measuring either side of sunset says that gap is not what the difference was
+/// made of: dusk reads 39 and the first minute of night reads 24, because **the moon is aimed at
+/// `-up`** — at sunset it lies along the horizon and lights nothing, and only by midnight is it
+/// overhead. The night has a curve of its own, dark at both ends, and the number chosen here is
+/// the number at the top of it.
 ///
 /// `NIGHT_AMBIENT` is what fills the shadowed side, and it is the number that decides whether a
-/// beetle under a tree exists. The day's floor is 120 at the horizon; 55 is under half of that,
-/// so dusk still reads as the light going out.
-const MOON_LUX: f32 = 400.0;
-const NIGHT_AMBIENT: f32 = 55.0;
+/// beetle under a tree exists. It is the weakest of the three by far in what it does to the
+/// measurement — 110 to 190 moved the mean by 1.9 — and it is in the picture for what it does to
+/// the *creatures*, which are small, round and mostly in their own shadow.
+///
+/// All three are multiplied by [`NightDial`], which is the author's own slider.
+const MOON_LUX: f32 = 950.0;
+const NIGHT_AMBIENT: f32 = 190.0;
+/// The colour of the sky at night. It is not what the ground is lit by, but it is most of what a
+/// picture of a dark garden *is*, and the blue is where the night's colour comes from.
+const NIGHT_SKY: [f32; 3] = [0.14, 0.18, 0.36];
+
+/// **The dial (G6b): everything above, multiplied.**
+///
+/// The author played the browser build again and the night was still too dark — which is the
+/// second time a number chosen here has been wrong on the machine it is actually looked at, and
+/// the reason is not that the numbers were badly chosen but that *we cannot see the author's
+/// screen*. A brightness is not a fact about the code; it is a fact about a monitor in a room. So
+/// the slider in the Garden panel multiplies all three night quantities together — moonlight,
+/// ambient and sky — and the number it is left at is written to the log and remembered
+/// (`rubevy_arena::Settings`), so that the author can turn it until the night reads and tell us
+/// one number to bake in here. Multiplying all three by one number is what makes that possible:
+/// two dials would be a design decision handed to somebody who asked a question.
+///
+/// It is not in the headless build. There is nothing to light there.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct NightDial(pub f32);
+
+impl Default for NightDial {
+    fn default() -> Self {
+        NightDial(1.0)
+    }
+}
+
+/// How far the dial goes. Half the night is still a night; twice it is the author saying the
+/// screen is darker than ours, and past that the moon is the sun.
+pub const NIGHT_DIAL_MIN: f32 = 0.5;
+pub const NIGHT_DIAL_MAX: f32 = 2.0;
 
 /// Plants
 const PLANTS_AT_START: usize = 55;
@@ -901,6 +943,22 @@ fn main() {
             .add_systems(Update, stop_when_over.after(restore_memory).before(save_world));
         }
         None => {
+            // G6b. What the player chose last time — for now, how bright they want the night.
+            // It is read here rather than in a system because the dial is wanted *before the
+            // first frame*: a `--shot` of the night would otherwise be taken at the brightness
+            // the game was built with rather than the one that was chosen. On a PC this is a
+            // file beside the save; in a browser it is a key in the same local storage the save
+            // uses (`platform.rs`).
+            let settings = rubevy_arena::Settings::load(
+                platform::SETTINGS_FILE,
+                "garden: what the panel remembers. Delete a line to go back to the default.",
+                platform::read,
+                platform::write,
+            );
+            let night = settings
+                .number("night")
+                .map(|n| n.clamp(NIGHT_DIAL_MIN, NIGHT_DIAL_MAX))
+                .unwrap_or(1.0);
             app.add_plugins((
                 DefaultPlugins
                     .set(AssetPlugin {
@@ -935,6 +993,8 @@ fn main() {
                 open: shot.is_none() || args.iter().any(|a| a == "--guide"),
                 ..guide_text::guide()
             })
+            .insert_resource(NightDial(night))
+            .insert_resource(settings)
             .init_resource::<Orbit>()
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
@@ -1778,7 +1838,11 @@ fn day_night(
     mut sun: Query<(&mut Transform, &mut DirectionalLight), With<Sun>>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
     clear: Option<ResMut<ClearColor>>,
+    // G6b. `Option` for the same reason the two above it are: the headless run has no light to
+    // turn up and no panel to turn it up with
+    dial: Option<Res<NightDial>>,
 ) {
+    let dial = dial.map(|d| d.0).unwrap_or(1.0);
     // the world's clock, not the process's: a garden read back from a file goes on from the hour
     // it was saved at (`Sky::shift`), and in a run that loaded nothing the two are the same number
     let now = world_now(&time, &sky);
@@ -1793,7 +1857,7 @@ fn day_night(
     // sun, still casting the shadows that say the world is 3D
     let from = if night { -up } else { up };
     let (color, illuminance) = if night {
-        (Color::srgb(0.62, 0.70, 1.0), MOON_LUX)
+        (Color::srgb(0.62, 0.70, 1.0), MOON_LUX * dial)
     } else {
         // low sun is orange, high sun is white
         let noon = height.clamp(0.0, 1.0);
@@ -1812,7 +1876,7 @@ fn day_night(
     if let Some(mut ambient) = ambient {
         if night {
             ambient.color = Color::srgb(0.45, 0.54, 0.85);
-            ambient.brightness = NIGHT_AMBIENT;
+            ambient.brightness = NIGHT_AMBIENT * dial;
         } else {
             ambient.color = Color::srgb(0.7, 0.8, 1.0);
             ambient.brightness = 120.0 + 260.0 * height.clamp(0.0, 1.0);
@@ -1820,7 +1884,10 @@ fn day_night(
     }
     if let Some(mut clear) = clear {
         clear.0 = if night {
-            Color::srgb(0.06, 0.08, 0.17)
+            // the same blue, turned up with the rest of it: a sky that stayed put while the
+            // ground brightened would read as fog rather than as a lighter night
+            let [r, g, b] = NIGHT_SKY;
+            Color::srgb((r * dial).min(1.0), (g * dial).min(1.0), (b * dial).min(1.0))
         } else {
             let noon = height.clamp(0.0, 1.0);
             Color::srgb(0.35 + 0.15 * noon, 0.5 + 0.22 * noon, 0.7 + 0.22 * noon)
