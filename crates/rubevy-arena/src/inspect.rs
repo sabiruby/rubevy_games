@@ -7,17 +7,15 @@
 //! named from the LVAR section, which is why the panel can say `target` rather than `R3` — the
 //! game compiles its scripts with debug info for exactly this reason.
 //!
-//! **One thing is missing from the VM and is worked around here.** `Vm::snapshot` describes every
-//! context of the VM and the `Vm::task_*` entry points answer about one task, and nothing joins
-//! the two: given a `ScriptTask`, a host cannot say which of the contexts is its. See
-//! [`task_context`].
+//! Which of the VM's contexts a task stands in is `Vm::task_context(task)`, in sabiruby 0.5.0.
+//! Until it was there the panel read the index out of the way the VM renders a task
+//! (`#<Task 12 ctx=3>`), which is a debugging format and not an API; that parser is gone.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use rubevy::ScriptWorld;
 use sabiruby::inspect::HeapView;
 use sabiruby::value::ObjId;
-use sabiruby::{Value, Vm};
 
 /// How many of the innermost frames of a context carry their registers. A brain waiting for the
 /// game stands about three frames deep in the DSL, so six reaches its own code as well.
@@ -102,7 +100,7 @@ impl VmInspector {
             .count();
         self.instructions = vm.task_instructions(task);
 
-        let Some(ctx) = task_context(vm, task) else {
+        let Some(ctx) = vm.task_context(task) else {
             self.frames.clear();
             self.status.clear();
             self.note = "this script has no context: it has run to its end".into();
@@ -223,25 +221,6 @@ impl VmInspector {
         }
         out
     }
-}
-
-/// Which of the VM's contexts a task stands in.
-///
-/// **There is no entry point for this.** `Vm::snapshot` describes every context; `Vm::task_frames`,
-/// `Vm::task_location` and `Vm::task_instructions` answer about a task; nothing joins the two. The
-/// index is in the VM (`ObjKind::Task { ctx, .. }`) and it does leave the crate — but only as
-/// text, because `Vm::render` prints a task as `#<Task 12 ctx=3>`. That is a debugging format and
-/// not an API, so this reads it and gives up quietly if it ever changes: no context, no frames,
-/// and the panel says so.
-///
-/// What the VM should have instead is `Vm::task_snapshot(task, regs_frames) -> Option<TaskSnapshot>`
-/// (or, smaller, `Vm::task_context(task) -> Option<usize>`); see this repository's
-/// `docs/worklog/2026-09-16-showpieces-d2-d3.md`.
-pub fn task_context(vm: &Vm, task: ObjId) -> Option<usize> {
-    let text = vm.render(Value::Obj(task), 0).text;
-    let at = text.find("ctx=")? + "ctx=".len();
-    let digits: String = text[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
 }
 
 pub struct VmInspectorPlugin;

@@ -75,12 +75,24 @@ loop do
 end
 ```
 
-**A question costs two frames**, measured (`docs/worklog/2026-09-16-showpieces-d2-d3.md`): the
+**A question costs one frame**, measured (`docs/worklog/2026-09-17-battle-followups.md`): the
 task asks and parks, the request reaches the game with that frame's commands, `answer_requests`
-answers it — and the scheduler only reaches the task again on the frame after that, because
-`answer_requests` is an ordinary system of this game and nothing orders it before rubevy's
-`tick_scripts`. Answering in `PreUpdate` instead makes it one frame; that is a change to the
-game's schedule and is the author's to make, so it has not been made.
+answers it in the same frame, and the scheduler wakes the task on the next one.
+
+It cost *two* until 2026-09-17, and the fix was one line. `answer_requests` is an ordinary system
+of this game, and nothing said where in the frame it ran; dropped between rubevy's `tick_scripts`
+and `drain_commands` it could not see a question until the frame after it was asked. rubevy now
+publishes the three `SystemSet`s it builds its own frame out of, and the game's chain of thirteen
+systems says `.in_set(RubevySet::Answer)` — the set that runs after the scripts have been ticked
+and their questions collected. Measured with a robot that does nothing but count frames, the same
+one as the study below: 2.0 frames a question before, 1.0 after.
+
+**The match got busier**, and this is worth knowing before anyone reads a robot's numbers as its
+own doing. A scout's decision is three questions, so its loop went from about 150 ms round
+(6 frames of questions plus its `sleep 0.05`) to about 100 ms: every robot aims and fires half
+again as often. Counting the hits the selftest watches over five 20-second headless runs, it went
+from 11–17 a run to 15–27. The robots were not retuned for it — they are the same files — and the
+difference is entirely in how often each of them gets to decide.
 
 Either way the cost is per *question*, which is why `act` sets all four controls at once and
 `radar` brings the robot's own status back with it: a brain that asked one question per control
@@ -96,39 +108,41 @@ that way. They were measured against each other with a robot that does nothing b
 scout, with three other robots on the field:
 
 ```ruby
-# as it is: three questions, six frames
-target = nearest_enemy(45)                                   # ask("radar", 45)  — 2 frames
-threat = incoming(18).find { |shot| on_collision?(shot) }    # ask("incoming",18) — 2 frames
-act throttle: 1.0, turn: steer_to(heading), aim: angle, fire: 0.3   # ask("act") — 2 frames
+# as it is: three questions, three frames
+target = nearest_enemy(45)                                   # ask("radar", 45)  — 1 frame
+threat = incoming(18).find { |shot| on_collision?(shot) }    # ask("incoming",18) — 1 frame
+act throttle: 1.0, turn: steer_to(heading), aim: angle, fire: 0.3   # ask("act") — 1 frame
 ```
 
 ```ruby
-# over the ECS bridge: nine reads and a question — eleven frames — and it knows less
+# over the ECS bridge: nine reads and a question — ten frames — and it knows less
 me    = Rubevy.entity
 here  = me[:Transform]                     # 1 frame — where I am, which way I point
 mine  = me[:Robot]                         # 1 frame — hp, energy, cooldown: a component
 foes  = Rubevy.find(:Robot)                # 1 frame — every robot in the world, near or far
 seen  = foes.map { |f| [f[:Transform], f[:Robot]] }   # 2 reads each: 6 frames
 robot = Rubevy::Proxy.new("robot")
-robot.act(1.0, turn, angle, 0.3)           # 2 frames — a proxy call *is* `Rubevy.ask`
+robot.act(1.0, turn, angle, 0.3)           # 1 frame — a proxy call *is* `Rubevy.ask`
 ```
 
-One decision of the scout, three other robots on the field, measured:
+One decision of the scout, three other robots on the field. The per-question costs are measured;
+the rows are their sums:
 
 | | questions per decision | frames |
 |---|---|---|
-| `ask("radar")` / `incoming` / `act` (today) | 3 | 6 |
-| `Entity#[]` + `Proxy`, positions only | 5 | 6 |
-| `Entity#[]` + `Proxy`, everything the scout uses | 10 | 11 |
+| `ask("radar")` / `incoming` / `act` (today) | 3 | 3 |
+| `Entity#[]` + `Proxy`, positions only | 5 | 5 |
+| `Entity#[]` + `Proxy`, everything the scout uses | 10 | 10 |
 
 * **A component read is a round trip, and there is one per component per entity.** A question can
   carry a whole table back (`radar` answers every contact with its position, velocity, heading,
   distance and bearing in one `Answer::Rows`); `e[:Transform]` answers one component of one
   entity. What the boundary costs is questions, and the component form asks one per fact.
-* **A component read is quicker than a question, though** — one frame against two — because
-  rubevy answers the four kinds it reserves itself (`component.get`, `component.has`,
-  `components`, `entities.with`) in a system that runs *before* `tick_scripts`. That is where the
-  `PreUpdate` note above comes from: the difference is the ordering, not the mechanism.
+* **A component read is no quicker than a question any more** — both are one frame. It used to
+  be one against two, because rubevy answers the four kinds it reserves itself
+  (`component.get`, `component.has`, `components`, `entities.with`) in a system of its own and
+  the game's answers were arriving a frame late. The difference was never the mechanism, only
+  where in the frame the answering ran; both now run in `RubevySet::Answer`.
 * **`Rubevy.find` walks the world.** In this game it answers 345 entities (every crate of the
   wall, every shot, every nameplate) unless the game registers a component that means "a robot" —
   and `radar` already answers "the robots within 45 units, as this robot can see them".
@@ -137,7 +151,7 @@ One decision of the scout, three other robots on the field, measured:
   reading is what a robot can know. `Contact#distance` and `#bearing` are computed on the game's
   side for the same reason.
 * **`Rubevy::Proxy` is `Rubevy.ask` with a method name on it** — `proxy.act(…)` is
-  `Rubevy.ask("robot.act", …).pop`, measured at the same two frames. It reads well, and it hides
+  `Rubevy.ask("robot.act", …).pop`, measured at the same one frame. It reads well, and it hides
   the one thing a robot's author must see: which calls wait. `act` is a word that says "do this";
   `robot.act` is a word that says "ask and wait", written to look like neither.
 
@@ -231,7 +245,8 @@ mruby-task's tasks.
 robot "Scout" do
   reflex(:hit) do |by, damage|      # `by` is the attacker's name, `damage` a number
     @swerve = rand < 0.5 ? 1.0 : -1.0
-    6.times { act throttle: 1.0, turn: @swerve; sleep 0.05 }
+    act throttle: 1.0, turn: @swerve
+    sleep 0.3
     @swerve = nil
   end
 
@@ -267,26 +282,56 @@ everything that needs one.
   prelude used to copy the `@rubevy_entity` the scheduler puts on the robot's own task; since
   rubevy `9104f7c` a task made with `Task.new` inherits it from the task that made it (rubevy's
   `docs/host-api.md`, *Events*), so there is nothing here to copy.
-* **Its priority is the brain's less 20** — a smaller number is looked at first, so a reflex that
-  is ready runs before the brain does in that frame.
+* **Its priority is the brain's plus 20** — a *lower* priority, since a smaller number is looked
+  at first. That is on purpose, and the next section is why.
 
 ### Two tasks, one tank: last writer wins
 
 Both tasks call `act` on the same robot, and `act` simply sets the controls: **whichever question
 the game answers last in a frame is what the tank does.** There is no locking and no arbitration,
-and there is a wrinkle worth knowing:
+so the rule that matters is which of the two asks last:
 
-* A reflex is the *higher* priority, so it runs *first* in a frame — and therefore its `act`
-  reaches the game *before* the brain's. Being quicker off the mark makes a reflex lose the tie,
-  not win it.
-* Worse, the brain usually has a question in flight when the hit lands (it looked, then asked for
-  its radar), and the `act` it makes when that answer comes back would undo the swerve a few
-  frames later.
+* **A reflex is the lower priority, so it runs last in a frame** — its `act` reaches the game
+  after the brain's, and the tank obeys the reflex. Being quick off the mark is what *starts* a
+  reflex the same frame the hit lands; being last in the frame is what makes it stick.
+* It was the other way round at first (the plan asked for a higher priority, thinking "sooner" was
+  "stronger"), and with last-writer-wins a reflex that runs first always loses the tie. The scout
+  coped by saying `act` again every 0.05 s for the whole swerve — a workaround that is gone now
+  that the order is right: one `act` and a `sleep 0.3`.
+* **The priority fixes the frame, not the decision already in flight.** The brain usually has a
+  question out when the hit lands: it looked at `@swerve`, saw nothing, and asked for its radar.
+  The `act` it makes when that answer comes back is a decision taken *before* the swerve, and it
+  arrives three frames later — after the reflex has thrown the wheel.
 
-So a reflex that wants the wheel for a while says so again while it holds it, and the brain leaves
-the controls alone — `@swerve` in `scout.rb` is that agreement, and it is an ordinary instance
-variable because both tasks are the same object's. A reflex that only sets a flag, logs, or fires
-once needs none of this.
+So the two tasks keep an agreement, and `@swerve` in `scout.rb` is it: an ordinary instance
+variable, shared because both tasks are the same object's. The brain reads it **twice** — once at
+the top of its loop, so it does not waste questions, and once **immediately before it calls
+`act`**, which is the reading that matters. The controls are what the agreement is about, so it
+is checked where the controls are touched. A reflex that only sets a flag, logs, or fires once
+needs none of this.
+
+Measured with the selftest's own check (`the heading changed within 0.3 s of the hit`, 20 s
+headless runs):
+
+| the reflex | the brain's guard | a question costs | runs passed |
+|---|---|---|---|
+| one `act`, lower priority | before `act` | 1 frame | **10 of 10** (every swerve 0.74 rad) |
+| one `act`, lower priority | top of the loop only | 1 frame | 2 of 5 |
+| one `act`, lower priority | top of the loop only | 2 frames | 5 of 5 |
+| one `act`, *higher* priority | top of the loop only | 2 frames | 1 of 3 |
+| `act` again every 0.05 s, higher priority | top of the loop only | 2 frames | 3 of 3, swerves as small as 0.25 rad |
+
+The bottom row is how it was written first. The row above it is why the priority was turned
+round. The two middle rows are the same robot before and after questions got a frame cheaper, and
+they are the reason for the second reading of `@swerve`: the brain's stale `act` used to arrive
+about 100 ms after the hit and now arrives about 50 ms after it, which is not long enough a swerve
+to pass. A failed run is always that shape — the reflex ran, and the hull turned 0.09–0.18 rad
+where the check wants 0.2.
+
+With both guards there is no margin to worry about: over three more runs, all 57 swerves turned
+**0.74 rad**, which is exactly as far as the tank can turn in 0.3 s. Nothing takes the wheel back
+at all any more, and the spread of 0.25–0.78 rad the other rows show is the brain and the reflex
+taking it from each other.
 
 The reflexes of one robot share one task, on purpose: a robot hit again while its reflex is still
 running gets the second reflex when the first has finished, rather than two swerves fighting.
@@ -494,18 +539,27 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
 **`P` pauses the scripts** by giving the scheduler a budget of 0 instructions for the frame: the
 VM runs nothing, so the numbers stand still while they are read. The game keeps drawing and the
 tanks keep rolling on the controls their brains last set — it is the Ruby that is stopped, not the
-match. The scheduler's clock is not stopped, so every robot that was sleeping is due the moment it
-starts again.
+match.
+
+The scheduler's clock stops with it. It did not at first, and a pause used to end with every
+`sleep` in the VM coming due at once, because the frames the pause lasted were still counted
+against them; rubevy `fa37eaa` made a budget of 0 skip the tick as well, so a robot half way
+through a `sleep 0.05` is still half way through it when the budget comes back. There is nothing
+for the game to call: setting the budget to 0 is the whole of it. The selftest measures it —
+`nothing that was sleeping woke on the resume frame` — as the ticks the earliest sleeper still has
+to wait (`Vm::task_next_wakeup_ticks`), which must be the same number after half a second paused
+as it was when the pause began.
 
 Nothing in the panel runs Ruby: sabiruby renders a value in Rust (`Vm::render`), so looking at a
 robot cannot move it, allocate, or raise. The cost is that an object with an `inspect` of its own
 shows the default form.
 
-It reads `Vm::snapshot` and `Vm::task_frames`. Joining the two — *which* of the VM's contexts is
-this task's — has no entry point in the VM yet, and `rubevy-arena`'s `inspect.rs` gets it out of
-the way the VM renders a task (`#<Task 12 ctx=3>`) until sabiruby has a `task_context` or a
-`task_snapshot`. The panel lives in `rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the
-other games get it too.
+It reads `Vm::snapshot`, `Vm::task_frames` and `Vm::task_context`. The last of those is what
+joins the other two — *which* of the VM's contexts this task stands in — and it did not exist when
+the panel was built: `rubevy-arena`'s `inspect.rs` read the index out of the way the VM renders a
+task (`#<Task 12 ctx=3>`), which is a debugging format and not an API, and gave up quietly if it
+ever changed. sabiruby 0.5.0 answers it properly and the parser is gone. The panel lives in
+`rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the other games get it too.
 
 ## Starting again
 
@@ -577,14 +631,25 @@ SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the edi
 ```
 
 `SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
-`P`: pressing it must give the scripts a budget of 0 and stop them running, and pressing it again
-must start them. The reflex check needs a fight rather than a mouse, so it runs headless as well:
-every hit taken by a robot that has a reflex, is still standing and is not already in the middle of
-one is noted with the way it was facing, and 0.3 s later it must have run a reflex and turned by
-more than 0.2 rad at some point in between. A robot destroyed inside those 0.3 s is not counted at
-all — the game takes its task away and zeroes its controls, so it is not a robot that failed to
-swerve. At the end, every robot that has been down for more than half a second must have had as
-many reflex tasks end as it registered reflexes.
+`P`: pressing it must give the scripts a budget of 0 and stop them running, nothing that was
+sleeping may wake on the frame the budget comes back (the pause lasts half a second, ten times a
+brain's `sleep 0.05`), and pressing `P` again must start them.
+
+The reflex check needs a fight rather than a mouse, so it runs headless as well: every hit taken
+by a robot that has a reflex, is still standing and is not already in the middle of one is noted
+with the way it was facing, and 0.3 s later it must have run a reflex and turned by more than
+0.2 rad at some point in between. Two kinds of hit are not counted at all, and say so with a `--`
+line rather than passing or failing quietly:
+
+* **a robot destroyed inside those 0.3 s** — the game takes its task away and zeroes its
+  controls, so it is not a robot that failed to swerve;
+* **a robot whose brain was replaced inside those 0.3 s** (the editor's Apply, a saved file). The
+  old task is terminated and the new one subscribes afresh, so a `hit` published in between
+  reaches nobody and a swerve already under way is cut off with it. What the check watches is the
+  task the robot's brain is running: a different one is a different brain.
+
+At the end, every robot that has been down for more than half a second must have had as many
+reflex tasks end as it registered reflexes.
 
 The headless mode runs the same systems as the window and prints each robot's hp and position at
 the end, then the VM panel's own numbers as text — the frames each brain is standing in with the

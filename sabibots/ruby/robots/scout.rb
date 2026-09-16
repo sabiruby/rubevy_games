@@ -5,20 +5,19 @@ robot "Scout" do
   # runs in a task of its own the moment the game says so: throw the wheel over and hold it for a
   # third of a second, so the shot that follows the first one misses.
   #
+  # One `act` is enough to throw it. `act` is last-writer-wins and the reflex task runs at a
+  # *lower* priority than the brain, so within a frame the reflex asks last and the game answers
+  # it last (docs/sabiruby-battle.md). It used to have to say it again every 0.05 s to win the
+  # wheel back from a brain that was ahead of it in the frame.
+  #
   # `@swerve` is how the two tasks agree who is steering. They are the same object, so an
-  # instance variable is all it takes — and it is needed, because `act` is last-writer-wins and
-  # two tasks steering at once would only fight (docs/sabiruby-battle.md).
+  # instance variable is all it takes — the brain leaves the controls alone while it is set, so
+  # that the decision it already had in flight when the hit landed does not undo the swerve.
   reflex(:hit) do |by, damage|
     begin
       @swerve = rand < 0.5 ? 1.0 : -1.0
-      # The wheel is held over rather than set once. The brain may already have a question in
-      # flight — it looked at `@swerve`, then asked for its radar — and the `act` it makes when
-      # that answer arrives would undo this one. Saying it again every 0.05 s wins those frames
-      # back, and from its next pass the brain leaves the controls alone by itself.
-      6.times do
-        act throttle: 1.0, turn: @swerve
-        sleep 0.05
-      end
+      act throttle: 1.0, turn: @swerve
+      sleep 0.3
     ensure
       @swerve = nil
     end
@@ -48,6 +47,12 @@ robot "Scout" do
       else
         heading, throttle = me.heading + wander_turn, 0.7
       end
+
+      # The agreement is checked again *here*, where the controls are actually touched. A hit can
+      # land while the brain is asking its questions, and this decision was made before the
+      # reflex took the wheel: acting on it now would undo the swerve a few frames after it
+      # started. Checking only at the top of the loop is a frame too early.
+      next sleep(0.05) if @swerve
 
       if target
         angle = lead(target, 0.3)

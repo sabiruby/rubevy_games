@@ -101,9 +101,11 @@ class Robot
   # `run_robot` starts one task per reflex before `run`.
   #
   # The controls are last-writer-wins: the brain and a reflex both call `act`, and whichever
-  # question the game answers last in a frame is what the tank does. A reflex that wants the
-  # wheel for a while has to say so and the brain has to leave it alone — the scout does it with
-  # an instance variable, which is shared because both tasks are the same object's.
+  # question the game answers last in a frame is what the tank does. That is why a reflex runs at
+  # a *lower* priority than the brain — it is looked at last in the frame, so its `act` is the one
+  # that sticks. A reflex that wants the wheel for longer than one frame still has to say so and
+  # the brain has to leave it alone: the scout does it with an instance variable, which is shared
+  # because both tasks are the same object's.
   # How many reflexes one robot may have. There is a limit because of how a reflex is called:
   # see `run_reflex`.
   REFLEX_SLOTS = 4
@@ -246,9 +248,12 @@ end
 # game closes the subscription when the robot's `ScriptTask` goes, which is what ends this task.
 def start_reflexes(bot, klass, tasks)
   here = Task.current
-  # a smaller number is a higher priority: a reflex is looked at before the brain is
-  priority = here.priority - 20
-  priority = 0 if priority < 0
+  # A smaller number is a higher priority, and a reflex is deliberately the *lower* of the two:
+  # it is looked at after the brain in a frame, so its `act` is the one the game answers last —
+  # and `act` is last-writer-wins. Being quick off the mark is what starts the reflex; being
+  # last in the frame is what makes it stick (docs/sabiruby-battle.md, *Two tasks, one tank*).
+  priority = here.priority + 20
+  priority = 255 if priority > 255
   klass.reflexes.each do |event, slot|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "#{klass.robot_name}-#{event}", priority: priority) do
