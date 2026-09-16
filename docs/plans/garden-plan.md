@@ -21,6 +21,7 @@
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | G0 | 世界（Rust だけ）: 草が生え、生き物が `Velocity` で動き、腹が減り、草を食べ、死に、昼夜が回る。headless + selftest | 未着手 |
+| G0a | 軽いフリーの 3D アセットに置き換え（下記「アセット」。G0 は基本形状で始めてよい） | 未着手 |
 | G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 未着手 |
 | G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 未着手 |
 | G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 未着手 |
@@ -31,7 +32,7 @@
 
 `garden/` を workspace に足す（`sabibots/` と同じ形: `Cargo.toml`、`src/main.rs`、`src/platform.rs` は sabibots のものを共有できるなら `rubevy-arena` に移す、`ruby/`、`assets/`）。
 **3D**（著者の希望 2026-09-17: Bevy らしさを見せる）。`bevy_pbr` を workspace の features に足し、メッシュは Bevy の基本形状だけ
-（地面 `Plane3d`、草 `Cone`/`Sphere`、Beetle `Capsule3d`、Rabbit `Cuboid` + 耳）、色は `StandardMaterial`。glTF・画像アセットは持たない。
+（地面 `Plane3d`、草 `Cone`/`Sphere`、Beetle `Capsule3d`、Rabbit `Cuboid` + 耳）、色は `StandardMaterial`。G0 の時点ではアセットを持たない（G0a で `.glb` に置き換える）。
 **昼夜は `DirectionalLight` の回転 + 影 + 環境光の色**で見せる（夜に生き物が寝るのが画面で分かる）。カメラは斜め上から、マウスでオービット。
 動くのは XZ 平面（y が上）。Ruby から見える違いは `Transform.translation` が `[x, y, z]` になることと `act(vx, vz)` だけで、
 **3D にしても頭脳のコードは 2 行しか変わらない**ことを `docs/garden.md` に書く。成長・繁殖は `Transform.scale` に出す（`Plant.size` → scale。Ruby からも `e[:Transform][:scale]` で読める）。
@@ -50,6 +51,21 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
   餓死（`ScriptTask` の除去 → 購読解除まで rubevy がやる）、昼夜（60 秒周期。夜になった瞬間に `publish(None, "night", …)`、朝に `"day"`）。
   Rabbit が Beetle に触れると Beetle は `"touched"` を受ける（逃げる反射の材料）。
 * `--headless N` と `SABIBOTS_SELFTEST` に当たる `GARDEN_SELFTEST`: 「10 秒以内に誰かが食べる」「60 秒で夜が来る」「餓死したエンティティが消える」。
+
+## アセット（G0a）
+
+著者の希望（2026-09-17）: 基本形状だけでなく、**軽いフリーの 3D アセット**を使う。条件は **CC0**（帰属不要でも `CREDITS.md` に出典・ライセンス・取得日を書く）、
+**glTF（`.glb`）**、テクスチャは無いか小さい（頂点色かパレット 1 枚）、**合計 2 MB 以内・10 ファイル以内**（wasm と Pages の重さ）。候補:
+
+* 草・木・岩: **Kenney「Nature Kit」**（CC0、330 点、glTF あり。https://kenney.nl/assets/nature-kit ）から低木・草・岩を 3〜4 点。
+  代替: **KayKit「Forest Nature Pack」**（CC0、glTF。https://kaylousberg.itch.io/kaykit-forest ）。
+* 生き物: **Quaternius「Ultimate Animated Animal Pack」**（CC0、12 種、歩く・食べる等のアニメーション付き glTF。https://quaternius.com/packs/ultimateanimatedanimals.html ）
+  から Rabbit 相当 1 点と、Beetle に当たる小さい生き物 1 点（無ければ同パックの別の小動物か、Poly Pizza で CC0 の甲虫を 1 点。https://poly.pizza ）。
+  アニメーションが付くので `bevy_animation` + `bevy_gltf` を features に足し、**歩く/止まる/食べる** を `Velocity` と食事の状態から切り替える（Bevy の `AnimationPlayer`。
+  これも「Bevy らしさ」の一部で、Ruby は一切関知しない）。
+* 実装者がやること: ダウンロードして各ファイルのライセンス表記を確認し、選んだ `.glb` を `garden/assets/models/` に置き、サイズ表（ファイル・三角形数・バイト）を
+  `docs/garden.md` に、出典を `CREDITS.md` に。**2 MB を超えるなら報告して止まる**（Blender で間引く判断は著者）。
+  wasm ではアセットは `fetch` で読まれるので、`web/` の同梱リストに足す。
 
 ## 頭脳（G1）
 
