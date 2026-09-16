@@ -377,9 +377,31 @@ fn main() {
         // (docs/worklog/2026-09-17-battle-followups.md). The chain moves as a whole because
         // the order inside it is the game's own — `answer_requests` sets the controls that
         // `move_robots` then applies, in that order, in the same frame.
+        .init_resource::<WorldClock>()
+        // G9: `P` stops the world, and the world is the six marked below — the clock, the
+        // answers the game gives, the tanks, the tanks pushing each other apart, the bullets and
+        // the blasts. The order of the whole chain is unchanged: the condition is hung on the
+        // systems it is about, one at a time, rather than by moving them into a group of their
+        // own, because the order inside this chain is the game's own (`answer_requests` sets the
+        // controls that `move_robots` then applies, in that order, in the same frame).
         .add_systems(
             Update,
-            (restart_match, answer_requests, move_robots, separate_robots, spawn_turrets, follow_turrets, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
+            (
+                restart_match,
+                advance_clock.run_if(world_moves),
+                answer_requests.run_if(world_moves),
+                move_robots.run_if(world_moves),
+                separate_robots.run_if(world_moves),
+                spawn_turrets,
+                follow_turrets,
+                move_bullets.run_if(world_moves),
+                gray_out_downed,
+                fade_blasts.run_if(world_moves),
+                rebuild_walls,
+                reload_changed,
+                report_ended,
+                update_hud,
+            )
                 .chain()
                 .in_set(RubevySet::Answer),
         );
@@ -742,10 +764,50 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     editor.elsewhere = None;
 }
 
-/// The budget the scripts get when they are not paused, kept while they are.
+/// **`P`: the match is stopped.** The budget the scripts get when they are not paused, kept
+/// while they are — and the flag the rules of the game are gated on (`world_moves`).
+///
+/// Until G9 it stopped the Ruby and nothing else: the tanks rolled on along the controls their
+/// last thought had set, the bullets went on flying, and a match left paused for a minute came
+/// back with the walls closed in. The garden's author found the same thing in the other game and
+/// decided it for both: `P` stops the world.
 #[derive(Resource, Default)]
 struct Paused {
     was: Option<u64>,
+}
+
+impl Paused {
+    fn on(&self) -> bool {
+        self.was.is_some()
+    }
+}
+
+/// **The match's own clock (G9).** Seconds the *world* has run, which is the process's clock
+/// minus everything spent paused.
+///
+/// It is a resource rather than `Time::elapsed_secs()` because the match is written in Ruby
+/// against this number: `rule(:sudden_death, after: 20, every: 2.0)` compares it with
+/// `Rubevy.ask("clock")`, and a clock that ran while the world did not would come back from a
+/// pause with every missed repeat of that rule due at once — the walls closing in five crates in
+/// as many passes. `status`'s and `radar`'s `time` are the same number for the same reason: what
+/// a robot is told the time is should be the time in the match it is fighting.
+#[derive(Resource, Default)]
+struct WorldClock(f32);
+
+/// Every frame the world moves, and none that it does not.
+fn advance_clock(time: Res<Time>, mut clock: ResMut<WorldClock>) {
+    clock.0 += time.delta_secs();
+}
+
+/// The run condition of everything that *is* the match, as against everything that draws it or
+/// edits it (G9): `P` holds it all still — the questions the game answers, the tanks, the
+/// bullets, the blasts and the clock above. The scoreboard, the nameplates, the editor, the
+/// reload watcher and `R` go on.
+///
+/// `Option`, because the headless build has no keyboard to press `P` with and inserts no
+/// `Paused`: a world nobody can pause always moves.
+fn world_moves(paused: Option<Res<Paused>>) -> bool {
+    !paused.is_some_and(|p| p.on())
 }
 
 /// `F2` shows and hides the VM panel; `P` pauses the scripts.
@@ -828,6 +890,9 @@ struct SelfTest {
     insn: u64,
     /// ticks until the earliest sleeping task is due, sampled on the first frame of the pause
     wake: Option<u32>,
+    /// where every robot stood when the pause began, and what the match's clock said (G9)
+    places: Vec<(Entity, Vec3)>,
+    clock: f32,
     /// the robots there were before the restart, so the new ones can be told from them
     before: Vec<Entity>,
     /// how long a step that polls will wait before it gives up and checks anyway
@@ -840,6 +905,10 @@ fn selftest(
     mut editor: ResMut<Editor>,
     mut watched: ResMut<Watched>,
     robots: Query<(Entity, &Robot)>,
+    // G9: where the tanks are, and what the match's own clock says — the two things `P` must
+    // hold still besides the VM
+    bodies: Query<(Entity, &Transform), With<Robot>>,
+    match_clock: Res<WorldClock>,
     tasks: Query<&ScriptTask>,
     world: Res<ScriptWorld>,
     panel: Res<VmInspector>,
@@ -857,6 +926,8 @@ fn selftest(
     let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
     // what every brain has run together: the number that must stop moving while the VM is paused
     let spent = || tasks.iter().map(|t| world.vm.task_instructions(t.task())).sum::<u64>();
+    // and where the tanks are, which must stop moving with it (G9)
+    let places = || -> Vec<(Entity, Vec3)> { bodies.iter().map(|(e, t)| (e, t.translation)).collect() };
     match test.step {
         0 => {
             // show robot 3 and type a different brain into the editor
@@ -933,7 +1004,8 @@ fn selftest(
             let edge = walls.iter().map(|t| t.translation.x.abs().max(t.translation.y.abs())).fold(0.0f32, f32::max);
             let corner = walls.iter().any(|t| (t.translation.x - half).abs() < 0.01 && (t.translation.y - half).abs() < 0.01);
             ok((edge - half).abs() < 0.01 && corner, "the wall ends exactly on its corners");
-            // the VM inspector: `P` stops the scripts by giving the scheduler a budget of 0
+            // the VM inspector: `P` stops the scripts by giving the scheduler a budget of 0 —
+            // and, from G9, the match with them
             test.insn = spent();
             keys.press(KeyCode::KeyP);
             test.step = 7;
@@ -942,20 +1014,28 @@ fn selftest(
         7 => {
             // The pause has taken hold. How many ticks the earliest sleeping task still has to
             // wait is the measure of the scheduler's clock: a budget of 0 stops that clock too
-            // (rubevy `fa37eaa`), so this number must be the same when the pause ends.
+            // (rubevy `fa37eaa`), so this number must be the same when the pause ends. The
+            // tanks' places and the match's clock are the world's side of the same question.
             test.wake = world.vm.task_next_wakeup_ticks();
+            test.places = places();
+            test.clock = match_clock.0;
+            test.insn = spent();
             test.step = 8;
-            test.at = now + 0.5;
+            // two seconds (G9): a tank crosses several units in that, and the match's clock
+            // would have run a tenth of the way to its first rule
+            test.at = now + 2.0;
         }
         8 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
+            ok(places() == test.places, "2 s paused: every robot is where it was");
+            ok(match_clock.0 == test.clock, "2 s paused: the match's clock did not move");
             ok(panel.open && !panel.frames.is_empty(), "the VM panel has the watched robot's frames");
             ok(
                 panel.heap.as_ref().is_some_and(|h| h.live > 0),
                 "the panel has the heap counters",
             );
-            // Half a second paused is ten times a brain's `sleep 0.05`. Before the clock was
+            // Two seconds paused is forty times a brain's `sleep 0.05`. Before the clock was
             // stopped as well, every one of those sleeps came due while nothing was running and
             // the lot of them woke on the frame the budget came back. The ticks left before the
             // earliest is due say so exactly: unchanged, and nothing is due yet.
@@ -965,7 +1045,7 @@ fn selftest(
                     let left = world.vm.task_next_wakeup_ticks();
                     let same = left == Some(was);
                     info!(
-                        "selftest: {} {what}: the next one is due in {was} ticks, as it was half a second ago{}",
+                        "selftest: {} {what}: the next one is due in {was} ticks, as it was two seconds ago{}",
                         if same { "ok  " } else { "FAIL" },
                         if same { String::new() } else { format!(" (now {left:?})") },
                     );
@@ -975,6 +1055,8 @@ fn selftest(
                 other => info!("selftest: --   {what}: the next wakeup was {other:?} ticks off when the pause began"),
             }
             test.insn = spent();
+            test.places = places();
+            test.clock = match_clock.0;
             // `press` on a key already held sets nothing: nothing released it, since nothing
             // here is a real keyboard
             keys.release(KeyCode::KeyP);
@@ -985,6 +1067,11 @@ fn selftest(
         9 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the behaviours are running again");
+            let moved = places()
+                .iter()
+                .any(|(e, at)| test.places.iter().any(|(was, place)| was == e && place != at));
+            ok(moved, "and the match moves again: somebody has driven");
+            ok(match_clock.0 > test.clock, "the match's clock runs again");
             keys.release(KeyCode::KeyP);
             exit.write(AppExit::Success);
             test.step = 10;
@@ -1589,7 +1676,8 @@ fn answer_requests(
     mut shots: ResMut<Shots>,
     mut events: ResMut<Events>,
     mut hud: ResMut<Hud>,
-    time: Res<Time>,
+    // the match's clock, which stops with the match (G9), rather than the process's
+    clock: Res<WorldClock>,
     ruby: Res<RubyDir>,
     mut assets: ResMut<Assets<MrbAsset>>,
     server: Res<AssetServer>,
@@ -1624,7 +1712,7 @@ fn answer_requests(
                 continue;
             }
             "clock" => {
-                world.answer(&request, Answer::Num(time.elapsed_secs() as f64));
+                world.answer(&request, Answer::Num(clock.0 as f64));
                 continue;
             }
             "spawn" => {
@@ -1690,12 +1778,12 @@ fn answer_requests(
         let answer = match request.kind.as_str() {
             // for `srand`: a robot's own dice, rolled from the match's
             "seed" => Answer::Num((rules.roll() * 1_000_000.0).floor() as f64),
-            "status" => Answer::List(status_row(&robot, at, arena.0, time.elapsed_secs())),
+            "status" => Answer::List(status_row(&robot, at, arena.0, clock.0)),
             // the robot itself first, then every other robot still running within range, read
             // through the match's noise: the further away, the less exact
             "radar" => {
                 let range = request.num_or(0, 60.0) as f32;
-                let mut rows = vec![status_row(&robot, at, arena.0, time.elapsed_secs())];
+                let mut rows = vec![status_row(&robot, at, arena.0, clock.0)];
                 for (other, team, hp, pos, vel, heading, turret) in &seen {
                     let dist = pos.distance(at);
                     if *other == me || *hp <= 0.0 || dist > range {

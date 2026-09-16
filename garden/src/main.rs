@@ -1156,6 +1156,10 @@ fn main() {
             .add_observer(tint_species)
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
             .add_systems(Update, (orbit_camera, dress_animations, animate_creatures))
+            // G9: `P` stops the world, and this is the half of it that is not a run condition —
+            // the garden's own clock, held where it stands for as long as the pause lasts. Only
+            // a window can pause, so only a window has it.
+            .add_systems(Update, hold_the_clock.run_if(is_paused).before(day_night))
             // G8: the fog, the sky's gradient and where the two of them stand. `after(day_night)`
             // because the hour it draws is the one that system has just worked out, and
             // `after(orbit_camera)` because the eye it hangs the sky on is the one that system has
@@ -2733,12 +2737,17 @@ fn startle(
 /// derives on it (`garden/src/genome.rs`).
 fn court(
     time: Res<Time>,
+    sky: Res<Sky>,
     mut world: ResMut<ScriptWorld>,
     births: Res<Births>,
     mut test: Option<ResMut<SelfTest>>,
     mut creatures: Query<(Entity, &Creature, &Hunger, &Collider, &Transform, &mut Breeding)>,
 ) {
-    let now = time.elapsed_secs();
+    // **the world's clock, not the process's** (G9). `Breeding::ready_at` is a cooldown in the
+    // garden's own time, and the garden's time is what `P` holds still: with the process's clock
+    // a minute spent paused was a minute off every pair's wait, and the first frame after the
+    // pause had every creature in the garden ready to breed at once.
+    let now = world_now(&time, &sky);
     // the cap is the rule's, and the children already asked for this frame count against it
     let population = creatures.iter().count() + births.0.len();
     if population >= POP_MAX {
@@ -2799,6 +2808,7 @@ fn court(
 /// worked out in Ruby.
 fn hatch(
     time: Res<Time>,
+    sky: Res<Sky>,
     mut commands: Commands,
     mut births: ResMut<Births>,
     look: Option<Res<Look>>,
@@ -2808,7 +2818,8 @@ fn hatch(
     mut test: Option<ResMut<SelfTest>>,
     mut parents: Query<(&mut Hunger, &mut Breeding)>,
 ) {
-    let now = time.elapsed_secs();
+    // the same clock `court` reads the cooldown against (G9)
+    let now = world_now(&time, &sky);
     for birth in births.0.drain(..) {
         let at = Vec2::new(
             birth.at.x.clamp(-HALF_W + 1.0, HALF_W - 1.0),
@@ -3558,9 +3569,41 @@ fn finish_restore(mut commands: Commands, restoring: Res<Restoring>) {
     }
 }
 
-/// The run condition of every rule: a garden that is still being restored does not move.
-fn is_still(restoring: Option<Res<Restoring>>) -> bool {
-    restoring.is_none()
+/// **The run condition of every rule.** A garden that is still being restored does not move —
+/// and, from G9, neither does one the player has stopped with `P`.
+///
+/// The two reasons are the same shape and they are the same condition on purpose: whatever the
+/// world is waiting for, the whole of it waits together. Everything the garden *is* hangs off
+/// this — `day_night`, `move_creatures`, `separate`, `grow_plants`, `sprout_plants`,
+/// `get_hungry`, `eat`, `startle`, `court`, `starve` and `hatch` — while everything that only
+/// *looks* at the garden (the camera, the models, the horizon, the HUD, the editor, the VM
+/// panel, saving and loading) runs on.
+///
+/// `Paused` is an `Option` because the headless build has no keyboard to press `P` with and
+/// never inserts the resource; `None` is a world nobody can pause.
+fn is_still(restoring: Option<Res<Restoring>>, paused: Option<Res<window::Paused>>) -> bool {
+    restoring.is_none() && !paused.is_some_and(|p| p.on())
+}
+
+/// The other half of `P` (G9): while the world is stopped, so is its clock.
+fn is_paused(paused: Option<Res<window::Paused>>) -> bool {
+    paused.is_some_and(|p| p.on())
+}
+
+/// **The garden's clock, held still while `P` is on.**
+///
+/// The world's hour is `world_now` — the process's clock plus `Sky::shift` — so holding it is
+/// walking `shift` back by exactly the frame that has just passed. Nothing else is needed and
+/// nothing else would do: `day_night` is not running, so `sky.phase` stands where it stood, and
+/// when the budget comes back the sun is where it was rather than where the wall clock says. It
+/// is `restore_memory`'s trick (`sky.shift = tick - elapsed`) written as a difference, because
+/// here there is no hour to go back to — only one to stay at.
+///
+/// It is why the pause loses no event. `"night"` and `"day"` are published by `day_night` at the
+/// moment the phase crosses, and a clock that does not move cannot cross anything: there is no
+/// message to be dropped while the scripts cannot read their queues.
+fn hold_the_clock(time: Res<Time>, mut sky: ResMut<Sky>) {
+    sky.shift -= time.delta_secs();
 }
 
 /// `GARDEN_RELOAD_AT` (checks only): F9, pressed by the clock instead of by a finger.
