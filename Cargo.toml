@@ -17,7 +17,9 @@ bevy = { version = "0.19.1", default-features = false, features = [
   # the garden's models (G0a): CC0 glTF from Kenney, loaded as scenes, with the node animations
   # (idle / walk / eat) the two animals carry. `bevy_gltf` brings the loader, `bevy_scene` what a
   # loaded glTF becomes, `bevy_animation` the clips and the `AnimationPlayer` that runs them.
-  "bevy_gltf", "bevy_scene", "bevy_animation",
+  # `gltf_animation` is the one that makes the loader read the clips at all: `bevy_animation`
+  # alone gives you `AnimationPlayer` and an empty `.glb#Animation0`.
+  "bevy_gltf", "bevy_scene", "bevy_animation", "gltf_animation",
 ] }
 # what differs between the PC build and the browser build (threads, X11, WebGL) is added per
 # target in each game's Cargo.toml, so the one `cargo build` picks the right set

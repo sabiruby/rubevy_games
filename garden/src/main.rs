@@ -244,6 +244,10 @@ struct Probe {
     dinner: Entity,
 }
 
+/// Where `make_look` is, so that `spawn_world` can be after it in the build that has one.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct MakeLook;
+
 // ---------------------------------------------------------------------------------------------
 // Resources
 // ---------------------------------------------------------------------------------------------
@@ -492,8 +496,9 @@ fn main() {
                 RubevyPlugin::default(),
             ))
             .init_resource::<Orbit>()
-            .add_systems(Startup, (make_look, spawn_camera))
+            .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
             .add_systems(Update, (orbit_camera, dress_animations, animate_creatures));
+            register_scene_types(&mut app);
         }
     }
 
@@ -519,7 +524,14 @@ fn main() {
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
         .init_resource::<Eaters>()
-        .add_systems(Startup, spawn_world)
+        // `spawn_world` asks for `Option<Res<Look>>`, and a `None` there is how the headless
+        // build says "no models". That makes the order load-bearing: without this the windowed
+        // build's `spawn_world` may run before `make_look` and then it is `None` there too —
+        // which is a garden with no ground, no trees and no creatures, and only the plants that
+        // sprouted later (`sprout_plants` runs in `Update`, long after) with a model on them.
+        // `MakeLook` is a set rather than `after(make_look)` because `make_look` is not in the
+        // headless schedule at all.
+        .add_systems(Startup, spawn_world.after(MakeLook))
         .add_systems(
             Update,
             (
@@ -555,6 +567,48 @@ fn main() {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
     app.run();
+}
+
+/// What a `.glb` needs in the type registry, in the windowed build only.
+///
+/// bevy 0.19 spawns a loaded glTF through `bevy_world_serialization`, and that spawner **panics
+/// on any type in the loaded world the app has not registered** — there is no "skip what you do
+/// not know". Nothing registers Bevy's own types automatically here: that is the
+/// `reflect_auto_register` feature, which registers every type in the binary that derives
+/// `Reflect`. Turning it on would be one line, and it would put a few hundred of Bevy's types in
+/// front of Ruby — the registry would stop being a thing this game decides, which is most of what
+/// the garden is for. So the plumbing a model brings with it is named here, one line each, the
+/// way `Transform` already was. (The game's private components would survive either way: they
+/// derive no `Reflect`, so nothing can register them.)
+///
+/// The cost is that a script running in the window can read these too — `e[:GlobalTransform]`,
+/// `e[:Name]`. They are Bevy's, not the game's, and the component table in `docs/garden.md` is
+/// still the whole of what the *game* offers. The headless build, where the checks live, does
+/// not load a model and does not register them, so what the checks see is exactly the table.
+fn register_scene_types(app: &mut App) {
+    app.register_type::<GlobalTransform>()
+        .register_type::<bevy::transform::components::TransformTreeChanged>()
+        .register_type::<Visibility>()
+        .register_type::<bevy::camera::visibility::VisibilityClass>()
+        .register_type::<bevy::camera::primitives::Aabb>()
+        .register_type::<InheritedVisibility>()
+        .register_type::<ViewVisibility>()
+        .register_type::<Name>()
+        .register_type::<ChildOf>()
+        .register_type::<Children>()
+        .register_type::<Mesh3d>()
+        .register_type::<MeshMaterial3d<StandardMaterial>>()
+        .register_type::<AnimationPlayer>()
+        .register_type::<bevy::animation::AnimationTargetId>()
+        .register_type::<bevy::animation::AnimatedBy>()
+        .register_type::<AnimationGraphHandle>()
+        .register_type::<bevy::gltf::GltfExtras>()
+        .register_type::<bevy::gltf::GltfSceneExtras>()
+        .register_type::<bevy::gltf::GltfMeshExtras>()
+        .register_type::<bevy::gltf::GltfMaterialExtras>()
+        .register_type::<bevy::gltf::GltfMaterialName>()
+        .register_type::<bevy::gltf::GltfMeshName>()
+        .register_type::<bevy::gltf::GltfSceneName>();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -820,8 +874,8 @@ fn spawn_creature(commands: &mut Commands, look: Option<&Look>, species: Species
         // the models face +Z and the world's heading does too (`move_creatures` turns the parent),
         // so the child only sets the size
         let (model, scale) = match species {
-            Species::Beetle => (look.beetle.clone(), 0.42),
-            Species::Rabbit => (look.rabbit.clone(), 0.55),
+            Species::Beetle => (look.beetle.clone(), 0.55),
+            Species::Rabbit => (look.rabbit.clone(), 0.75),
         };
         entity.with_children(|body| {
             body.spawn((WorldAssetRoot(model), Transform::from_scale(Vec3::splat(scale))));
@@ -1468,6 +1522,7 @@ fn dress_animations(
     added: Query<Entity, Added<AnimationPlayer>>,
     parents: Query<&ChildOf>,
     creatures: Query<&Creature>,
+    mut dressed: Local<bevy::platform::collections::HashMap<&'static str, bool>>,
 ) {
     for player in &added {
         let mut at = player;
@@ -1492,6 +1547,13 @@ fn dress_animations(
             .entity(player)
             .insert((AnimationGraphHandle(gaits.graph.clone()), AnimationTransitions::new()));
         commands.entity(owner).insert(Animated { player, playing: Gait::Idle });
+        // once per species, so that a run says out loud whether the clips were found: without
+        // the `gltf_animation` feature the graph is three handles to assets that do not exist,
+        // the scene brings no `AnimationPlayer`, and this line never appears
+        if !*dressed.entry(creature.species.name()).or_insert(false) {
+            dressed.insert(creature.species.name(), true);
+            info!("{} walks, idles and eats from its model", creature.species.name());
+        }
     }
 }
 

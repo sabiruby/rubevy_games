@@ -94,6 +94,20 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
   `bevy_animation` の 0.19.1 が「存在しない」と言われた。実際には全部ある。ローカルの sparse index の
   キャッシュ（`~/.cargo/registry/index/*/.cache/be/vy/*`）が公開前のもので、`cargo update` は
   **既にグラフに入っている crate しか引き直さない**。3 ファイル消して解決。バージョンは 1 つも動いていない。
+* **`bevy_animation` だけではクリップが読めない。** glTF ローダがアニメーションを読むのは
+  `gltf_animation` feature（`bevy_gltf?/bevy_animation`）。無いと `#Animation1` が「存在しない
+  アセット」になり、ERROR が 1 行出るだけで静かに止まる。
+* **`WorldAsset` の spawner は未登録の型があると panic する。** bevy 0.19 は自動登録を
+  `reflect_auto_register` feature に移したので、素の状態では `Transform` すら登録されていない。
+  `reflect_auto_register`（`Reflect` を derive した型を全部登録する）を入れれば 1 行だが、
+  bevy の型が何百と Ruby の前に並び「registry はゲームが決める」という主題を捨てるので入れず、
+  **窓のビルドだけ** 23 個（`GlobalTransform`、`TransformTreeChanged`、`VisibilityClass`、`Aabb`、
+  `Name`、`ChildOf`/`Children`、`Mesh3d`、`MeshMaterial3d<StandardMaterial>`、アニメーション 3、`Gltf*` 7）を
+  手で登録した。窓では Ruby からこれらも読めるが、ゲームの私物は `Reflect` を derive していないので
+  登録しようがなく、確認の場（headless）はモデルを読まないので表のまま。
+* **`make_look` → `spawn_world` の順序が要る。** `Option<Res<Look>>` の `None` はエラーではなく
+  「モデル無し」なので、逆になると地面も木も生き物も出ず、後から生える草だけがモデルを持つ。
+  `make_look` は headless に無いので、空の `SystemSet` を作って `after` した。
 * **bevy 0.19 では `.glb` は `Scene` ではなく `WorldAsset` になる**（置くのは `WorldAssetRoot`）。
   `bevy_scene` は次世代の BSN シーンに名前を取られ、旧来のものは `bevy_world_serialization` に移った。
   `GltfAssetLabel::Scene(0)` だけは `Scene` のまま。

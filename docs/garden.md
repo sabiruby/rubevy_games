@@ -10,7 +10,7 @@ It is 3D: a plane of grass, creatures on it, trees and rocks they cannot walk th
 that goes round once a minute and casts the shadows. That is Bevy being Bevy; what it costs the Ruby side is two lines, and they are listed
 below.
 
-![the garden: evening, long shadows, grass, trees, rocks, rabbits and beetles](garden.png)
+![the garden at 22 seconds: evening, long shadows over a green field, Kenney tufts and bushes of grass, five trees, scattered rocks, and rabbits and beetles walking about](garden.png)
 
 **This file describes stages G0, G0a and G1** (`docs/plans/garden-plan.md`): the world, the models
 in it, and the two kinds of mind — a Ruby task per creature and a task per reflex. G2 turns a Rust
@@ -25,7 +25,9 @@ cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture 
 ```
 
 On WSL without a GPU driver the windowed mode and `--shot` go through the container in `docker/`
-(`docs/wsl-gpu.md`); `--headless` needs nothing.
+(`docs/wsl-gpu.md`); `--headless` needs nothing. `docker/run.sh` is written for sabibots and names
+its volumes, so the garden's picture above was taken with the same `docker run` spelled out by
+hand against volumes of its own.
 
 ## Keys
 
@@ -307,9 +309,29 @@ derive no `Reflect` and are registered nowhere, so a creature cannot tell that i
 alone that it is chewing on screen. It is the clearest example in the game of a thing that is
 entirely the engine's.
 
-(In bevy 0.19 what a `.glb` loads into is a `WorldAsset`, placed with a `WorldAssetRoot`
-component; `Scene` and `SceneRoot` were renamed when `bevy_scene` became the next-generation BSN
-system.)
+**What a `.glb` costs the type registry.** In bevy 0.19 a `.glb` loads into a `WorldAsset`, placed
+with a `WorldAssetRoot` component (`Scene` and `SceneRoot` were renamed when `bevy_scene` became
+the next-generation BSN system), and the spawner that turns one into entities **panics on any
+type in the loaded world the app has not registered**. Nothing registers Bevy's own types here —
+that is the `reflect_auto_register` feature, which registers every type in the binary that derives
+`Reflect`. It would be one line, and it would put a few hundred of Bevy's types in front of Ruby;
+the registry would stop being something this game decides, which is most of what the garden is
+for. So the windowed build names the plumbing a model brings with it, one line each, the way
+`Transform` was already named — twenty-three of them: `GlobalTransform`, `TransformTreeChanged`,
+`Visibility` and its two shadows, `VisibilityClass`, `Aabb`, `Name`, `ChildOf`, `Children`,
+`Mesh3d`, `MeshMaterial3d<StandardMaterial>`, four animation components and the seven `Gltf*`
+ones. They were found one at a time, because the panic names one type and then stops.
+
+A script running in the window can therefore read those too — `e[:GlobalTransform]`, `e[:Name]`.
+They are Bevy's, not the game's, and the table above is still the whole of what the *game* offers;
+`Mind`, `Animated`, `Eating` and the rest derive no `Reflect` and could not be registered even by
+accident. The headless build, which is where every check runs, loads no model and registers none
+of them, so what the checks see is exactly the table.
+
+And one feature name is worth writing down: `bevy_animation` gives you `AnimationPlayer`, but the
+glTF loader only reads the clips out of a file when **`gltf_animation`** is on as well. Without it
+`GltfAssetLabel::Animation(1).from_asset(…)` is an asset that does not exist, and the only sign is
+one `ERROR` line per clip.
 
 **A headless run loads none of it.** The `Look` resource is built only in the windowed build, and
 every spawn takes `Option<&Look>` — the same shape `day_night` uses for `GlobalAmbientLight`,
@@ -318,6 +340,13 @@ way; only the child that carries the look is missing. Loading glTF without a ren
 adding four more plugins to the headless app and would put Bevy's asset loader inside the checks,
 and there is nothing to check: no test looks at a child, and every component a script can see is
 on the parent.
+
+That `Option` is load-bearing in the other direction too, and it is why `spawn_world` is ordered
+`after(MakeLook)`. Without the ordering the windowed build's `spawn_world` can run *before*
+`make_look` and see `None` — and a `None` there is not an error, it is "no models". The result is
+a garden with no ground, no trees and no creatures, in which the only things with a model are the
+plants that sprouted later, because `sprout_plants` runs in `Update`. It renders, it does not warn,
+and it is wrong.
 
 ## Day and night
 
@@ -390,7 +419,7 @@ selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (32/32)
 selftest: ok   the creatures were asleep a second after night fell (11 of them, fastest 0.000 at 26.21 s)
 ```
 
-Three runs of that, all seven ok each time: the turn check counted 29, 38 and 32 touches and every
+Three runs of that, all seven ok each time: the turn check counted 28, 28 and 24 touches and every
 one of them turned.
 
 The starvation needs a creature that certainly starves, and a creature with a brain in a garden of
