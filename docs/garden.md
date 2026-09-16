@@ -10,9 +10,9 @@ It is 3D: a plane of grass, creatures on it, trees and rocks they cannot walk th
 that goes round once a minute and casts the shadows. That is Bevy being Bevy; what it costs the Ruby side is two lines, and they are listed
 below.
 
-![the garden at 22 seconds: evening, long shadows over a green field, Kenney tufts and bushes of grass, five trees, scattered rocks, and rabbits and beetles walking about](garden.png)
+![the garden at 22 seconds: evening, long shadows over a green field that runs on past the wall and fades into the sky, a line of trees along the far edge, Kenney tufts and bushes of grass, scattered rocks, cream rabbits and blue-green beetles walking about](garden.png)
 
-**This file describes stages G0 to G5** (`docs/plans/garden-plan.md`): the
+**This file describes stages G0 to G8** (`docs/plans/garden-plan.md`): the
 world, the models in it, the two kinds of behaviour — a Ruby task per creature and a task per handler —
 the `Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to
 breed, the save file, which is the world and every creature's own memory as JSON, the window —
@@ -31,6 +31,7 @@ GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 cargo run -p garden -- \
     --headless 20 --load g.json --save h.json           # F9's path, with no keyboard to press
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
 cargo run -p garden -- --shot n.png 12 --at midnight    # the same, with the sun where it is at midnight
+cargo run -p garden -- --shot c.png 12 --eye 18         # …from 18 units back instead of 42
 cargo run -p garden -- --shot g.png 10 --guide --lang ja  # …with the H panel open, in Japanese
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
@@ -1091,7 +1092,15 @@ which the garden plays three.
 
 **Cube Pets has no beetle.** Nothing in Kenney's 49 3D kits does. The crab is the nearest thing in
 the same pack — a shell, legs and a scuttle — and using it keeps one palette and one set of clip
-names for both animals. It is the only file here whose name is not what it is used as.
+names for both animals. It is the only file here whose name is not what it is used as. G8 put the
+choice in one constant and photographed two other candidates beside it; the table above is still
+what ships, and "The horizon, and the colour of a creature" below has the pictures.
+
+G8 also stopped that palette being drawn at all. Every creature's material is cloned and tinted
+when its model arrives and the clone has no `base_color_texture`, and the Nature Kit pieces never
+had one — so `colormap.png` is still fetched and decoded, because a `.glb` that names a texture
+wants it there and the loader would complain, and then nothing in the garden samples it. It stays
+in `assets/` for that reason and for no other.
 
 **Walk, idle, eat.** A loaded model brings its own `AnimationPlayer`; `dress_animations` finds
 which creature it belongs to by walking up the hierarchy and gives it that species'
@@ -1240,6 +1249,162 @@ seconds old, photographed at midnight"; with no `--shot` it is simply where the 
 `midnight` is spelled out because it is the one hour anybody asks for by name — it is
 `(0.75 - DAWN_OFFSET) × DAY_LENGTH`, and a test in `garden/src/main.rs` checks that the sun really
 is at its lowest there rather than trusting the arithmetic.
+
+## The horizon, and the colour of a creature (G8)
+
+The author played the browser build a third time and said two things: **the field is a green
+rectangle floating on a flat colour**, and **a rabbit and a beetle look the same**. Both were
+true, and both were cheap to fix — no new asset ships for either, and the whole of it is 1,910
+triangles and 51 KB of wasm.
+
+### The field ended at the wall
+
+It did, literally. The ground was one 40 × 30 plane and past it was `ClearColor`, so the garden
+was a green lozenge on blue. Four pieces replace that, and **every one of them is the window's**:
+a headless run has no `Look`, and none of this is built, the way `day_night` finds no
+`GlobalAmbientLight` there.
+
+| | |
+|---|---|
+| **the ground past the wall** | one more `Plane3d`, 600 × 600, in the field's own material — **2 triangles** |
+| **the sky** | a dome of 12 sides × 4 rings seen from the inside, the gradient in its vertex colours — **84 triangles**, no texture, no cubemap |
+| **the fog** | `DistanceFog` on the camera, coloured with the sky's rim |
+| **the treeline** | 16 more `tree_default.glb` past the wall — **1,824 triangles** |
+
+Four decisions are worth writing down.
+
+**The sky and the far ground ride with the camera.** The dome is centred on the eye every frame
+and the plane is slid under it on XZ, so the rim of one and the edge of the other are always
+exactly as far away as they were last frame. That is what lets the dome be 500 units and the plane
+300 instead of being sized for the worst case — a camera at the far corner of a range that goes to
+110 units of zoom and ±28 of pan — and it is why the camera's default far plane (1,000) is enough
+and the projection is untouched. The plane keeps its own height (2 cm under the field, so the two
+do not fight over the pixels they share), because sliding it up and down would show.
+
+**The gradient is in the mesh, and it is rewritten rather than computed.** Bevy's
+`StandardMaterial` *replaces* `base_color` with the vertex colour where a mesh has one —
+`pbr_fragment.wgsl`, `#ifdef VERTEX_COLORS`, `pbr_input.material.base_color = in.color`, an
+assignment and not a multiply — so a two-colour sky is 49 `[f32; 4]`s and an `insert_attribute`
+when the hour moves. It is only written when one of the two colours has moved by more than a
+255th, which in a sixty-second day is about four times a second against sixty frames. The material
+is `unlit` with `cull_mode: None`, which is what makes the winding and the normals not worth
+thinking about, and `fog_enabled: false`, because a dome 500 units off would otherwise be painted
+entirely in the one colour the fog is.
+
+**The fog's colour is the sky's rim and its distance is the zoom's.** Those two together are the
+trick: the ground fades into exactly the colour of the sky it meets, so the line where they meet
+is not a line; and because the fog starts 14 units past whatever the camera's own distance is, the
+garden is clear at every zoom. `FOG_DEPTH` is the one number here that was measured rather than
+reasoned about. The default camera stands 42 units out and looks **down** at 49°, and the whole
+frame is ground: the true horizon is 26° above the top of it, the furthest ground in the picture
+is 72 units away and the field's far corner is 57. Fifteen units of range is all there is at that
+angle, so a fog deep enough to read as distance from the side does nothing at all from above. 45
+puts a visible haze across the top of the default picture and still dissolves the plain when the
+camera is tilted down to look along it.
+
+**The trees past the wall carry no component at all.** Not `Tree`, not `Collider` — nothing. They
+have to be scenery and not world, or `garden.nearest(:Tree)` would start meaning twenty-three
+trees instead of the seven that are in the garden, and a creature would be told about a tree it
+can never reach (the wall `move_creatures` clamps to is inside them). They are also placed from
+**dice of their own**, seeded by hand: drawing from the world's `Dice` here would move every tree,
+rock, plant and creature in the garden by a number of draws that depends on whether there is a
+window.
+
+The colours are `day_night`'s, as the light is. `sky_colors(height, night, dial)` returns the two
+of them, and its **horizon colour is exactly what `ClearColor` was before G8** — the day's blue,
+and G6b's `NIGHT_SKY` at night, multiplied by the same dial. That was deliberate: the night was
+*measured* against those numbers, and a horizon that moved would make the two sets of measurements
+above and below this section mean different things. The gradient is all above it. Measured the
+same way as G6b (Rec.601 mean of x 690–1060, y 200–870 of a `--at midnight` shot): **44.2**,
+against 44.5 before. `ClearColor` is still set, to the rim's colour, as the thing behind a dome
+that is never expected to fail to cover the screen.
+
+![the same garden at dusk: the sun on the horizon, long shadows, the plain fading into a warm haze](garden-dusk.png)
+
+### A rabbit and a beetle are the same brown
+
+Kenney's Cube Pets share one `Textures/colormap.png`, and the bunny and the crab pick neighbouring
+browns out of it. `RABBIT_TINT` and `BEETLE_TINT` are one number each, and each is used **twice**:
+`tint_species` washes the model in it and `window::species_color` writes the creature's name in the
+HUD in it, so the row in the list is the colour of the thing standing in the grass, and the two
+cannot drift apart.
+
+The tinting hangs on `WorldInstanceReady`, the event the loader triggers on a `WorldAssetRoot`'s
+entity once the model's entities actually exist. There is no earlier moment: before it there are
+no meshes to re-dress. The material is **cloned rather than coloured in place**, and the reason is
+worth being clear about, because colouring in place would in fact work here. A `.glb` loads once
+and every rabbit in the garden is another *instance* of that one `WorldAsset`, so the
+`StandardMaterial` that arrives on a rabbit's mesh is the asset the loader made, shared by every
+rabbit and owned by the loader — and every rabbit does want the same colour. But it is somebody
+else's asset, and the moment two things want two colours out of one file, writing into it is
+wrong. The clone is cached per `(species, source material)`, so ten creatures cost two materials
+and not ten; the source material is part of the key because a model with two materials (Nature
+Kit's tree has `woodBark` and `leafsGreen`) must end up with two clones.
+
+**And the clone drops the texture, which the plan did not ask for.** The plan said the texture's
+light and shade would survive the tint. It would have, if the texture were a shading map. It is
+not: `colormap.png` is 512 × 512 of **flat palette squares** — `ff7e44`, `cf534f`, `6794d9`, … —
+with no shading in it at all, and a model picks its colours by pointing its UVs at them. Multiply
+an orange crab by a blue-green and you get a dark brown; multiply it by anything bright enough not
+to, and the palette's other squares go somewhere unrelated. So the clone sets
+`base_color_texture: None` and the colour is the material's own. What is lost is the painted-on
+detail — a crab's eyes are a square of the palette, and they go. What is gained is a cream animal
+and a blue-green one that are one glance apart across a 40-unit field, which is the thing that was
+asked for. The modelled detail — the creases, the ears, the claws — is geometry and survives.
+
+### Which animal is the beetle?
+
+Cube Pets has no beetle and nothing in Kenney's 49 3D kits does (G0a); the crab is the nearest
+thing in the same pack. G8 asks the author to choose between it and two others, so all three were
+photographed wearing the same garden:
+
+| | | |
+|---|---|---|
+| [the crab](garden-beetle-crab.png) | 676 triangles, 150,768 bytes | **the default** — the only file here whose name is not what it is used as |
+| [the caterpillar](garden-beetle-caterpillar.png) | 578, 130,968 | |
+| [the bee](garden-beetle-bee.png) | 742, 164,356 | |
+
+The two unchosen files are **not in this repository**. Changing them in is one line —
+
+```rust
+const BEETLE_MODEL: &str = "models/animal-crab.glb";
+```
+
+— and that is the whole of the swap, because every file in the pack carries the same eight clips
+in the same order (`static`, `idle`, `walk`, `run`, `eat`, `dance` and two gestures) and one
+material each, so the graph `make_look` builds out of clips 1, 2 and 4 and the tint that makes the
+animal a beetle's colour are both indifferent to which animal it is. The file goes beside the
+others in `garden/assets/models/`, from the same CC0 pack `CREDITS.md` names.
+
+The three pictures are one `--load` of one save, one camera, one hour: same trees, same rocks,
+same light. What is *not* identical is where the creatures are standing, because a creature walks
+and nothing in the game can be told to hold still — the save hands them a `speed` gene of 0.02, so
+they drift by centimetres rather than by metres, and that is as still as a garden gets.
+
+`--eye UNITS` exists for those three pictures. At the default 42 a beetle is thirty pixels across
+in a 1600-wide window, which is a picture of a decision nobody can make; at 18 it is seventy. It
+is the wheel's own range on the command line, and it is a `--shot` flag in the way `--at` is: a
+run with a window and a player has a wheel.
+
+### What it cost
+
+| | before | after |
+|---|---:|---:|
+| triangles, the fixed furniture (ground, 7 trees, 9 rocks, 10 creatures) | 7,300 | **9,210** |
+| …of which is new (2 + 84 + 16 × 114) | — | **1,910** |
+| triangles, a whole garden at the start (55 plants of 32 or 132 as well) | ≈ 12,600 | ≈ **14,500** (+15%) |
+| `garden/game_bg.wasm` | 35,349,242 | **35,401,833** (+52,591, +0.15%) |
+| …gzipped | 10,793,097 | **10,812,671** (+19,574, +0.18%) |
+| `garden/assets` | 322,924 in 10 files | **unchanged** — nothing new ships |
+| the HUD's `VM x / 8.0 ms` | 0.45–0.50 | 0.45–0.56 |
+| frames per decision (windowed selftest) | 1.00 | **1.00** |
+
+The VM reading is one frame's, and it moves with how many creatures happen to be thinking in it;
+what can be said flatly is that **nothing G8 added is on the scripts' path**. `horizon_look` is a
+new `Update` system that moves two transforms, writes four floats into a `DistanceFog` and
+sometimes 49 into a mesh; `tint_species` is an observer that runs once per model, at most twenty
+times in a run. Neither touches the VM, and the headless build — which is where every check lives
+— does not have either of them.
 
 ## Running without a window, and the ten checks
 
