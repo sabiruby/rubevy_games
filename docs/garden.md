@@ -31,6 +31,7 @@ GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 cargo run -p garden -- \
     --headless 20 --load g.json --save h.json           # F9's path, with no keyboard to press
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
 cargo run -p garden -- --shot n.png 12 --at midnight    # the same, with the sun where it is at midnight
+cargo run -p garden -- --shot g.png 10 --guide --lang ja  # …with the H panel open, in Japanese
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
 
@@ -50,7 +51,7 @@ hand against volumes of its own.
 | Home | put the camera back where it started (G6) |
 | click a creature | look at it: the HUD marks it, the editor shows its file, the VM panel its task |
 | Tab | the next creature |
-| H, or ? | the in-game guide, in English and Japanese (G6) |
+| H, or ? | the in-game guide, in English or Japanese — the buttons at its top switch (G6, G6b) |
 | F1 | the editor |
 | F2 | the VM panel |
 | P | pause the scripts (the VM gets a budget of 0; the garden keeps drawing) |
@@ -142,7 +143,7 @@ again to the last digit. A right-drag of 180 px right and 96 px down moves `focu
 `(0.00, 0.00)`. The page's own 21 window checks pass in the same run, with no page error. The
 driver is in `docs/worklog/2026-09-17-garden-G6.md`.
 
-### The guide in the game, in two languages (G6)
+### The guide in the game, in one language at a time (G6, G6b)
 
 The author played the browser build knowing what every key did, and still wrote down "there is no
 explanation in the game". Until G6 the whole of it was one weak grey line at the foot of the HUD
@@ -151,27 +152,47 @@ starts**, `H` or `?` after that (`Esc` closes it), and a hint in the HUD in the 
 names are, saying so.
 
 ![the guide, over the garden](garden-guide.png)
+![the same, in Japanese](garden-guide-ja.png)
 
-Four paragraphs and the key table, in English with the Japanese under it in a quieter blue. The
-paragraphs are not the key list in prose — they are what somebody who has just opened the page is
-actually looking at (grass, hunger, a day that turns over in a minute, creatures pairing off), and
-then the two things a player would never guess: that every mind is a Ruby script in a VM written
-in Rust that reads the ECS components by name, and that clicking a creature and pressing
-Ctrl+Enter hands the new mind to every creature of its species while the garden keeps running.
+Five paragraphs and the key table. The paragraphs are not the key list in prose — they are what
+somebody who has just opened the page is actually looking at (grass, hunger, a day that turns over
+in a minute, creatures pairing off), and then the three things a player would never guess: that
+every mind is a Ruby script in a VM written in Rust that reads the ECS components by name, that a
+creature also runs **reflexes** — a block that waits for one thing to happen to it and runs in a
+task of its own the moment it does, while the main loop goes on thinking — and that clicking a
+creature and pressing Ctrl+Enter hands the new mind to every creature of its species while the
+garden keeps running.
+
+**One language at a time** (G6b). G6 put the English and the Japanese one under the other all the
+way down the panel, and the author's second play said what anybody would: half of what is on the
+screen is not for you, whoever you are. So the two buttons at the top, `English` / `日本語`, pick
+one — each written in its own language, so that neither reader has to recognise a word in the
+other's — and the key table lost a column with them. Which language the panel opens in is:
+
+| | |
+|---|---|
+| `--lang en` / `--lang ja` | what the command line asked for, and it is **not** remembered: a picture taken in Japanese should not change what the next player sees |
+| else, what was clicked last time | `garden.settings.txt` beside the save, or in a browser the `localStorage` key `garden:garden.settings.txt` |
+| else, the machine's own | `LC_ALL`/`LANG` on a PC, `navigator.language` in a browser; anything starting with `ja` is Japanese, anything else is English |
+
+The hint in the HUD stays in **both** languages (`H: help / 操作説明`): it is the one line that has
+to be understood before anybody has chosen anything.
 
 The **frame** is `rubevy-arena`'s (`crates/rubevy-arena/src/guide.rs`): the window, the two keys,
-the two-language layout and the font. The **words** are each game's, and each game keeps all of
-them in one file and nothing else in it:
+the switch and the font. The **words** are each game's, and each game keeps all of them in one
+file and nothing else in it — **the switch changed none of them**, since a paragraph and a key row
+each carry both languages as they always did and only the drawing chooses:
 
 | | |
 |---|---|
 | `garden/src/guide_text.rs` | the garden's words — the file to edit to change them |
 | `sabibots/src/guide_text.rs` | SabiRuby Battle's |
-| `crates/rubevy-arena/src/guide.rs` | the two strings both games show: the HUD's `H: help / 操作説明` and the line at the foot of the panel |
+| `crates/rubevy-arena/src/guide.rs` | the strings both games show: the HUD's `H: help / 操作説明`, the two buttons, and the line at the foot of the panel |
 
 `--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
-over the middle of the window; `cargo run -p garden -- --shot p.png 10 --guide` is how the picture
-above was taken, and looking at it is how "the Japanese is not tofu" was checked.
+over the middle of the window; the two pictures above are
+`cargo run -p garden -- --shot docs/garden-guide.png 10 --guide --lang en` and the same with
+`--lang ja`, and looking at them is how "the Japanese is not tofu" was checked.
 
 ### The font, and re-cutting it when the words change
 
@@ -186,8 +207,11 @@ pub const CJK: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Guide.subset.t
 
 Noto Sans JP (SIL Open Font License 1.1; `CREDITS.md`, with `OFL.txt` beside the file), which is
 9.6 MB as it comes — a variable font with the whole `wght` axis and every Japanese glyph. What is
-in the binary is **62,780 bytes**: pinned to one weight, and cut down to the 327 characters the
-guides actually use. It is added as a **fallback**, appended to both of egui's families rather
+in the binary is **66,796 bytes**: pinned to one weight, and cut down to the 337 characters the
+guides actually use (G6 was 62,780 bytes and 327 characters; G6b's paragraph about
+reflexes and the `日本語` button between them brought fourteen new ones —
+`ブ勝受始専届後瞬繰自語身返預` — and dropped one, the `·` that only the old bilingual footer
+used; the script found all of that by itself by reading the three files again). It is added as a **fallback**, appended to both of egui's families rather
 than replacing them, so egui reaches it only for characters the defaults do not have and every
 Latin glyph in the editor and the panels is what it was.
 

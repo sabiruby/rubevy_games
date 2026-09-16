@@ -594,7 +594,7 @@ growing and fading over a quarter of a second or 0.7 s.
 The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little
 floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The crates are spaced about 2.6 apart with the step stretched so each side is a whole number of them, so every side ends exactly on a corner (a fixed step used to leave the top and right sides a crate past the corner). The walls close in a crate at a time: `shrink(1)` takes one crate off each end of every side, the crate size stays the same, and the arena gets smaller in steps the eye can follow — 25 crates a side at the start, 23, 21, … down to 7, where it stops. A rule with `every:` repeats, which is how the match does it gradually (the first version shrank by 8 and then 6 units at once, which looked like a jump rather than walls moving). The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
 
-## The guide in the game (G6)
+## The guide in the game (G6, one language at a time from G6b)
 
 The author played the browser build of the other game here and wrote down "there is no explanation
 in the game", which is the one complaint a reader of these documents can never make on a player's
@@ -602,22 +602,35 @@ behalf. So both games have a panel, open the first time they start and `H` or `?
 a hint in the scoreboard saying so:
 
 ![the guide, over the battle](battle-guide.png)
+![the same, in Japanese](battle-guide-ja.png)
 
-Four paragraphs and the key table, **in English with the Japanese under it**: what the fight is
-(two teams, health, energy that moving and firing spend), that every brain is a Ruby script in a
-VM written in Rust and that the rules are all on the Rust side, what a reflex is, and that picking
-a robot and pressing Ctrl+Enter hands it a new brain in the middle of the fight.
+Four paragraphs and the key table: what the fight is (two teams, health, energy that moving and
+firing spend), that every brain is a Ruby script in a VM written in Rust and that the rules are
+all on the Rust side, what a reflex is, and that picking a robot and pressing Ctrl+Enter hands it
+a new brain in the middle of the fight.
 
-The frame — the window, the two keys, and the font — is `rubevy-arena`'s
+**One language at a time** (G6b). G6 drew the English and the Japanese together, one under the
+other, and half of a panel that is not for you is half a panel. The two buttons at the top —
+`English` / `日本語` — switch it, each written in its own language so that neither reader has to
+recognise a word in the other's. Which one it opens in is `--lang en|ja` if the command line said,
+else the language clicked last time (remembered in `sabibots.settings.txt`, and in a browser in
+the same local storage the edited scripts go to), else the machine's own: `LC_ALL`/`LANG` on a PC,
+`navigator.language` in a browser, Japanese if it starts with `ja`. The one line that stays in
+both languages is the hint in the scoreboard, `H: help / 操作説明`, because it has to be read
+*before* anybody has chosen anything.
+
+The frame — the window, the two keys, the switch and the font — is `rubevy-arena`'s
 (`crates/rubevy-arena/src/guide.rs`), shared with the garden; the words are this game's and live
-in **`sabibots/src/guide_text.rs`**, which is the one file to edit to change them. egui's default
-fonts have no CJK at all, so a subset of Noto Sans JP goes in the binary as a fallback family;
-`docs/garden.md` explains how that is cut and **`tools/subset-font.sh` re-cuts it, which has to be
-run after editing the Japanese** or a new character is drawn as a blank box. The licence is in
-`CREDITS.md`.
+in **`sabibots/src/guide_text.rs`**, which is the one file to edit to change them, and which the
+switch did not change: every paragraph and every key row still carries both languages and only the
+drawing picks. egui's default fonts have no CJK at all, so a subset of Noto Sans JP goes in the
+binary as a fallback family; `docs/garden.md` explains how that is cut and
+**`tools/subset-font.sh` re-cuts it, which has to be run after editing the Japanese** or a new
+character is drawn as a blank box. The licence is in `CREDITS.md`.
 
 `--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
-over the middle of the window; `--shot p 6 --guide` is how the picture above was taken.
+over the middle of the window; the two pictures above are
+`--shot docs/battle-guide.png 8 --guide --lang en` and the same with `--lang ja`.
 
 ## Seeing it where there is no window
 
@@ -650,6 +663,7 @@ game points `AssetPlugin` at its own `assets/` directory.
 cargo run -p sabibots                    # window
 cargo run -p sabibots -- --headless 15   # 15 seconds, result on stdout, no GPU needed
 cargo run -p sabibots -- --shot p.png 6 --guide   # a picture with the H panel open
+cargo run -p sabibots -- --shot p.png 6 --guide --lang ja   # …in Japanese
 web/build.sh && web/serve.sh             # in a browser (docs/web.md)
 
 SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the reflex check

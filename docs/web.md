@@ -210,9 +210,10 @@ not the download**, and this is the first time the two were measured side by sid
 
 ### What the in-game guide cost (G6)
 
-The guide (`H`) is written in English and Japanese, and egui's default fonts have no CJK at all —
-so a subset of Noto Sans JP, 62,780 bytes, is `include_bytes!`d into `rubevy-arena` and added to
-egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
+The guide (`H`) is written in English and Japanese — one of the two at a time from G6b, switched
+by a button — and egui's default fonts have no CJK at all, so a subset of Noto Sans JP,
+62,780 bytes at G6 and **66,796** after G6b re-cut it (fourteen new characters, one gone), is
+`include_bytes!`d into `rubevy-arena` and added to egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
 condition that the font be subset rather than shipped whole. Measured on the same machine and the
 same binaryen, all four numbers after `wasm-opt -Os`:
 

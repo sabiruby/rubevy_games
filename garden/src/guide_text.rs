@@ -49,6 +49,21 @@ pub fn guide() -> Guide {
          世界は ECS のコンポーネントを名前で読みます(me[:Hunger]、me[:Velocity])。\
          コンポーネントごとの接着コードはゲーム側に 1 行もありません。",
     )
+    // G6b. The one paragraph added after the author's second play: the panel described what a
+    // creature does and never named the thing that makes it answer at once. `reflex` is the
+    // construct a reader will meet first in `beetle.rb`, and `docs/garden.md` explains it at
+    // length; this is the sentence that says it is there at all.
+    .note(
+        "Besides that loop, a creature runs reflexes. reflex(:touched) { ... } is a block that \
+         waits for one thing to happen to it — a rabbit walking over it, night falling, a meal \
+         starting — and runs in a task of its own the moment it does, while the loop goes on \
+         thinking. Whichever task writes to the body last is what the body does, so a reflex \
+         holds the controls for as long as it is acting.",
+        "その繰り返しとは別に、生き物は「反射」も走らせています。reflex(:touched) { ... } は、\
+         自分の身に起きる出来事 — ウサギに触られた、夜になった、食事が始まった — を待ち受けるブロックで、\
+         出来事が届いた瞬間に専用のタスクとして走ります。その間も繰り返しは考え続けています。\
+         体に最後に書き込んだタスクが勝つので、反射は動いている間だけ操作を預かります。",
+    )
     .note(
         "Click a creature and the editor opens on its species' file. Change the text and press \
          Ctrl+Enter: every creature of that species is handed the new mind while the garden keeps \

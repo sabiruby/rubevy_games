@@ -24,6 +24,7 @@
 //!     cargo run -p garden -- --headless 30 --save garden.save.json   # and write it down
 //!     cargo run -p garden -- --load garden.save.json                 # and pick it up again
 //!     cargo run -p garden -- --shot n.png 12 --at midnight           # a picture of the night
+//!     cargo run -p garden -- --shot g.png 10 --guide --lang ja        # …of the guide, in Japanese
 //!
 //! Mouse: drag to orbit, wheel to zoom. F5 saves the garden, F9 brings it back.
 
@@ -922,6 +923,10 @@ fn main() {
     };
     let save_to = after("--save");
     let load_from = after("--load");
+    // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
+    // player's own click is (`rubevy_arena::Settings`), and a picture asked for in Japanese on
+    // the command line should not change what the next run shows a person.
+    let lang_asked = after("--lang");
 
     let mut app = App::new();
     match headless {
@@ -943,18 +948,20 @@ fn main() {
             .add_systems(Update, stop_when_over.after(restore_memory).before(save_world));
         }
         None => {
-            // G6b. What the player chose last time — for now, how bright they want the night.
-            // It is read here rather than in a system because the dial is wanted *before the
-            // first frame*: a `--shot` of the night would otherwise be taken at the brightness
-            // the game was built with rather than the one that was chosen. On a PC this is a
-            // file beside the save; in a browser it is a key in the same local storage the save
-            // uses (`platform.rs`).
+            // G6b. What the player chose last time: the guide's language and the night's dial.
+            // It is read here rather than in a system because both are wanted *before the first
+            // frame* — the guide opens by itself at startup and would show one language and then
+            // jump to the other, and a `--shot` of the night would be taken at the wrong
+            // brightness. On a PC this is a file beside the save; in a browser it is a key in
+            // the same local storage the save uses (`platform.rs`).
             let settings = rubevy_arena::Settings::load(
                 platform::SETTINGS_FILE,
                 "garden: what the panel remembers. Delete a line to go back to the default.",
                 platform::read,
                 platform::write,
             );
+            let lang =
+                rubevy_arena::GuideLang::pick(lang_asked.as_deref(), settings.get("lang"));
             let night = settings
                 .number("night")
                 .map(|n| n.clamp(NIGHT_DIAL_MIN, NIGHT_DIAL_MAX))
@@ -991,6 +998,8 @@ fn main() {
             // (the one that says the Japanese is not tofu) is taken. A player gets it open.
             .insert_resource(rubevy_arena::Guide {
                 open: shot.is_none() || args.iter().any(|a| a == "--guide"),
+                // G6b: one language at a time, and this is the one it starts in
+                lang,
                 ..guide_text::guide()
             })
             .insert_resource(NightDial(night))
