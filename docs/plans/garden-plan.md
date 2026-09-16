@@ -27,6 +27,7 @@
 | G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 済み（`09e8a8c`） |
 | G4 | 窓: エディタ・VM パネル（`rubevy-arena`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 済み（`b520917`。6 つ目の判定は `fd67de4` で原因 2 つを直して 10/10） |
 | G5 | ブラウザ版（`web/` の仕組みを共有、Pages で公開） | 済み（`7d2f67d` 版番号・`10acb53` 2 ゲーム 1 サイト・`625ea59` ブラウザで直した鍵とボタン） |
+| G6 | 遊び心地（著者のブラウザ試遊 2026-09-17）: 夜が暗すぎる、ホイールのズームが 2 段階しか効かない、パン（スライド）が無い、ゲーム内の説明（英語 + 日本語） | 未着手 |
 
 ## 世界（G0）
 
@@ -443,3 +444,21 @@ wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記�
 * rubevy: `Rubevy.set_component`、`Rubevy.find`、`subscribe`/`publish`、`answer_value`、`Task.new` の継承、`Unsubscribed` — main `9104f7c` にすべてある。
   **無いかもしれないもの**: プラグイン初期化で `&mut Vm` を触る入口（`install_json` 用）、`Answer` に Data オブジェクトを載せる形、`answer_requests` の順序を決める `SystemSet`。
 * sabiruby: `sabiruby-serde`（main にある）、`sabiruby-macros`（`macros` feature は release-prep の後）。
+
+## 遊び心地（G6）
+
+著者がブラウザで試遊して気になった 3 点（2026-09-17）。Battle にも同じものを載せる（共通部分は `rubevy-arena`）。
+
+1. **夜が暗すぎる。** 夜の環境光と `DirectionalLight` の下限を上げ、月明かり相当に（生き物と木が輪郭で分かる。真夜中の `--shot` を撮って決める）。
+   昼夜の「差」は残す（寝ているのが分かる程度）。数値は `docs/garden.md` に。
+2. **視点。** ホイールが 2 段階しか効かないのは、ブラウザの `MouseWheel` が `MouseScrollUnit::Pixel`（1 回が大きい）で来て、ズーム範囲の端まで飛んでいる可能性が高い（PC の窓は `Line`）。
+   単位ごとに正規化し、ズームは距離の対数で滑らかに（1 ノッチ ≒ 10%）。**パン**を足す: 右ドラッグ（`Shift`+左ドラッグでも）と矢印/WASD、`Home` で視点リセット。
+   ブラウザで実測（playwright の `mouse.wheel` と drag）して、PC と同じ段数になることを確認。
+3. **ゲーム内の説明。** `H` と `?` で開閉する説明パネル（起動直後に一度表示）。内容: 何が起きているか（草・生き物・昼夜・繁殖）、エディタで頭脳を書き換えられること、
+   キー一覧（F1/F2/P/F5/F9/Tab/H、マウスの回転・パン・ズーム）。**英語 + 日本語の併記**。egui の既定フォントに日本語は無いので、
+   CJK を含む軽いフォント（Noto Sans JP のサブセット。使う文字だけに絞れば数百 KB）を同梱して `FontDefinitions` に足す。
+   **同梱後の wasm 増分を測って報告し、500 KB を超えるなら著者判断**（代替: 日本語だけ画像、または英語のみ + README へのリンク）。
+   Battle にも同じパネル（内容は Battle 用）。共通の枠は `rubevy-arena` に。
+
+確認: 夜の `--shot`、ブラウザでホイール 10 ノッチ・ドラッグ・パンの実測、`H` のパネルが両言語で読める `--shot`（日本語が豆腐でない）、既存の判定すべて。
+
