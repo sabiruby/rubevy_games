@@ -554,7 +554,7 @@ fn draw_scoreboard(
                 }
                 // once it is over the button says so; before that it is there, quieter
                 let label = if over { egui::RichText::new("Play again (R)").strong().size(16.0) } else { egui::RichText::new("Restart (R)") };
-                if ui.button(label).on_hover_text("start the match over; brains applied in the editor are kept").clicked() {
+                if ui.button(label).on_hover_text("start the match over; behaviours applied in the editor are kept").clicked() {
                     restart.0 = true;
                 }
             });
@@ -591,7 +591,7 @@ fn draw_scoreboard(
                     let hint = if robot.handlers > 0 {
                         format!("{} handler(s); {} have run, {} running now", robot.handlers, robot.handler_runs, robot.handler_running)
                     } else {
-                        "this brain has no handler".to_string()
+                        "this behaviour has no handler".to_string()
                     };
                     if ui.add(egui::Label::new(name).sense(egui::Sense::click())).on_hover_text(hint).clicked() {
                         editor.picked = Some(entity.to_bits());
@@ -877,7 +877,7 @@ fn selftest(
             let (_, r3) = by_number(3).unwrap();
             let (_, r4) = by_number(4).unwrap();
             let on_disk = platform::read(&r3.file).unwrap_or_default();
-            ok(r3.brain.as_deref().is_some_and(|b| b.contains("sleep 0.5")), "Apply gives robot 3 the edited brain");
+            ok(r3.brain.as_deref().is_some_and(|b| b.contains("sleep 0.5")), "Apply gives robot 3 the edited behaviour");
             ok(r4.brain.is_none(), "Apply leaves robot 4 (same file) alone");
             ok(on_disk == test.original, "Apply does not touch the file");
             ok(!editor.changed(), "after Apply the text is what the robot runs");
@@ -898,7 +898,7 @@ fn selftest(
             let (_, r3) = by_number(3).unwrap();
             let (_, r4) = by_number(4).unwrap();
             ok(r3.brain.is_none(), "Revert puts robot 3 back on its file");
-            ok(r4.brain.is_some(), "Revert is for the shown robot only: robot 4 keeps its brain");
+            ok(r4.brain.is_some(), "Revert is for the shown robot only: robot 4 keeps its behaviour");
             ok(editor.text == test.original, "Revert shows the file again");
             let on_disk = platform::read(&r3.file).unwrap_or_default();
             ok(on_disk == test.original, "nothing was written");
@@ -927,7 +927,7 @@ fn selftest(
             let r3 = by_number(3).map(|(_, r)| r);
             let r4 = by_number(4).map(|(_, r)| r);
             ok(r3.is_some_and(|r| r.brain.is_none()), "robot 3 comes back on its file");
-            ok(r4.is_some_and(|r| r.brain.is_some()), "robot 4 comes back with its applied brain");
+            ok(r4.is_some_and(|r| r.brain.is_some()), "robot 4 comes back with its applied behaviour");
             // every side ends on a corner: no crate past the wall's line
             let half = arena.0;
             let edge = walls.iter().map(|t| t.translation.x.abs().max(t.translation.y.abs())).fold(0.0f32, f32::max);
@@ -984,7 +984,7 @@ fn selftest(
         }
         9 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
-            ok(spent() > test.insn, "the brains are running again");
+            ok(spent() > test.insn, "the behaviours are running again");
             keys.release(KeyCode::KeyP);
             exit.write(AppExit::Success);
             test.step = 10;
@@ -1175,7 +1175,7 @@ fn handler_selftest(
         // is a different brain. It is not rare in the editor's selftest, which applies a brain
         // three times while the match is being fought.
         if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
-            info!("selftest: --   {}'s brain was replaced within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
+            info!("selftest: --   {}'s behaviour was replaced within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
             continue;
         }
         let ran = robot.handler_runs > watch.runs;
@@ -1294,7 +1294,7 @@ fn restart_match(
         editor.clear();
     }
     start_match(&mut commands, &ruby.0, &mut assets);
-    info!("restart ({} applied brains kept)", kept.0.len());
+    info!("restart ({} applied behaviours kept)", kept.0.len());
 }
 
 fn restart_key(
@@ -1485,7 +1485,7 @@ fn do_editor_actions(
             }
             let what = if count == 1 { label.clone() } else { format!("{count} robots with {name}") };
             editor.applied(format!("applied to {what} (in memory: Save to file to keep it)"));
-            hud.line = format!("new brain: {what}");
+            hud.line = format!("new behaviour: {what}");
         }
         EditorAction::Save => {
             if let Err(e) = platform::write(&file, &text) {

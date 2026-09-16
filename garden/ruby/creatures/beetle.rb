@@ -23,7 +23,7 @@ creature "Beetle" do
 
   # A rabbit has walked over us. `by` is the rabbit, as a `Rubevy::Entity`: the handler reads its
   # position out of the ECS like anything else, and runs the other way. It keeps the wheel for
-  # half a second, so that the brain's next pass does not quietly steer back.
+  # half a second, so that the behaviour's next pass does not quietly steer back.
   on(:touched) do |by|
     next if @asleep
     take_wheel
@@ -90,7 +90,7 @@ creature "Beetle" do
     end
   end
 
-  # --- the brain ------------------------------------------------------------
+  # --- the behaviour --------------------------------------------------------
 
   def run
     loop do

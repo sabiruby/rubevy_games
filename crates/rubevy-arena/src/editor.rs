@@ -282,7 +282,7 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
                     editor.action = Some(EditorAction::Apply);
                 }
                 if let Some(label) = &apply_all_label
-                    && ui.button(label).on_hover_text(format!("run this in every {noun} with this brain")).clicked()
+                    && ui.button(label).on_hover_text(format!("run this in every {noun} with this behaviour")).clicked()
                 {
                     editor.action = Some(EditorAction::ApplyAll);
                 }

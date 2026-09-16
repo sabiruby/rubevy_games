@@ -122,9 +122,9 @@ opens Help, Tab moves the focus. Each page takes them first — `keydown` in the
 
 | | SabiRuby Battle | Garden |
 |---|---|---|
-| F5 | Apply the edited brain | **save the whole garden** |
+| F5 | Apply the edited behaviour | **save the whole garden** |
 | F9 | — | read it back |
-| Ctrl+S | Save the brain (in the browser: `localStorage`) | Save the creature's file |
+| Ctrl+S | Save the behaviour (in the browser: `localStorage`) | Save the creature's file |
 | Ctrl+Enter | — | Apply to every creature of that species |
 | Tab | the next robot | the next creature |
 | F1 / F2 / P | the editor / the VM panel / pause the scripts | the same |
@@ -301,7 +301,7 @@ one frame: `11 creatures never started; the garden is running anyway`, and every
 back with an empty memory while the world itself was exactly right.
 
 Both were the same bug, and it was not "the scheduler stops": ending a creature's `ScriptTask`
-wakes its six reflex tasks with `Rubevy::Unsubscribed`, their empty `rescue` makes the block's
+wakes its six handler tasks with `Rubevy::Unsubscribed`, their empty `rescue` makes the block's
 value `nil`, and `Vm::task_run_limited` read that `nil` as "nothing ready" and ended the host's
 whole frame — six frames a creature, and a browser has fewer frames a second to spare than a PC
 does. sabiruby 0.5.1 tells the two apart. Driven again on the same machine and the same Chromium,

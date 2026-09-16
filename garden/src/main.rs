@@ -1446,7 +1446,7 @@ fn spawn_world(
         let entity =
             spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle));
         commands.entity(entity).insert(Fasting);
-        info!("selftest: a beetle with no brain and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
+        info!("selftest: a beetle with no behaviour and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
         let dinner = spawn_plant(&mut commands, look, dinner_at, PLANT_MAX, false);
         // hungry enough that its script goes looking rather than wandering (the beetle's own
@@ -3425,7 +3425,7 @@ fn stop_when_over(
             velocity.0.x,
             velocity.0.y,
             mind.map(|m| m.last_instructions / m.frames.max(1)).unwrap_or(0),
-            mind.map(|m| m.at.as_str()).unwrap_or("(no brain)")
+            mind.map(|m| m.at.as_str()).unwrap_or("(no behaviour)")
         );
     }
     info!(

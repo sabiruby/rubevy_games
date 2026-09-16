@@ -12,7 +12,7 @@
 
 use rubevy_arena::Guide;
 
-/// What the `H` panel says about the Battle: two teams, energy, the reflex task, and an editor
+/// What the `H` panel says about the Battle: two teams, energy, the handler task, and an editor
 /// whose unit is one robot rather than a whole species.
 pub fn guide() -> Guide {
     Guide::new(
@@ -27,26 +27,30 @@ pub fn guide() -> Guide {
          移動と射撃でエネルギーを使い、少しずつ回復します。動き続ける機は撃つ分が残りません。",
     )
     .note(
-        "Every robot's brain is a Ruby script running in SabiRuby, a VM written in Rust. The \
-         rules of the game are all on the Rust side: a brain asks questions and gives orders \
+        "Every robot's behaviour is a Ruby script running in SabiRuby, a VM written in Rust. The \
+         rules of the game are all on the Rust side: a behaviour asks questions and gives orders \
          through one string-shaped door and never touches the world itself.",
-        "各機の頭脳は Ruby のスクリプトで、Rust で書かれた VM(SabiRuby)の上で動いています。\
-         ゲームの規則はすべて Rust 側にあり、頭脳は文字列の窓口越しに質問と指示を出すだけで、\
+        "各機の行動アルゴリズムは Ruby のスクリプトで、Rust で書かれた VM(SabiRuby)の上で動いています。\
+         ゲームの規則はすべて Rust 側にあり、行動アルゴリズムは文字列の窓口越しに質問と指示を出すだけで、\
          世界には直接触れません。",
     )
     .note(
-        "A robot can run a second task as a reflex: it waits on something happening to it — being \
-         hit — and answers in the same frame, while the main brain goes on thinking about \
-         something else. The panel says which of its tasks is running.",
-        "ロボットは「反射」としてもう 1 つのタスクを走らせられます。撃たれたなどの出来事を待ち、\
-         本体が別のことを考えている間に、同じフレームで反応します。どのタスクが動いているかはパネルに出ます。",
+        "A robot can run handlers beside its behaviour. on(:hit) { ... } is a block with a task \
+         of its own, beside the behaviour's run: it waits on one thing happening to it — being \
+         hit — and fires the moment that arrives, while run goes on thinking about something \
+         else. A sleep inside the block does not stop run, and a handler holds the controls for \
+         as long as it is acting. The panel says which of its tasks is running.",
+        "ロボットは行動アルゴリズムとは別に、イベントの処理も走らせられます。on(:hit) { ... } は、\
+         撃たれたなどの出来事を待ち受けるブロックで、行動アルゴリズムの run とは別のタスクとして、\
+         出来事が届いた瞬間に走ります。中で sleep しても run は止まりません。\
+         動いている間は操作を預かります。どのタスクが動いているかはパネルに出ます。",
     )
     .note(
-        "Pick a robot and the editor opens on its brain. Change the text and press Ctrl+Enter or \
-         F5: that robot is handed the new brain in the middle of the fight, and the file on disk \
-         is left alone until you press Ctrl+S.",
-        "ロボットを選ぶと、その頭脳がエディタに出ます。書き換えて Ctrl+Enter か F5 を押すと、\
-         戦いの途中でその機だけが新しい頭脳に入れ替わります。\
+        "Pick a robot and the editor opens on its behaviour. Change the text and press \
+         Ctrl+Enter or F5: that robot is handed the new behaviour in the middle of the fight, and \
+         the file on disk is left alone until you press Ctrl+S.",
+        "ロボットを選ぶと、その行動アルゴリズムがエディタに出ます。書き換えて Ctrl+Enter か F5 を押すと、\
+         戦いの途中でその機だけが新しい行動アルゴリズムに入れ替わります。\
          ディスクのファイルは Ctrl+S を押すまで書き換わりません。",
     )
     .key("H  ?", "this panel", "この説明")
@@ -55,9 +59,9 @@ pub fn guide() -> Guide {
     .key("Tab", "the next robot", "次のロボット")
     .key("F1", "the editor", "エディタ")
     .key("F2", "the VM panel: frames, registers, heap", "VM パネル(フレーム・レジスタ・ヒープ)")
-    .key("Ctrl+Enter  F5", "apply the edited brain to this robot", "編集した頭脳をこの機に適用")
-    .key("Ctrl+S", "write the brain to its file", "頭脳をファイルに保存")
+    .key("Ctrl+Enter  F5", "apply the edited behaviour", "編集した行動アルゴリズムを適用")
+    .key("Ctrl+S", "write the behaviour to its file", "行動アルゴリズムをファイルに保存")
     .key("P", "pause the scripts; the arena goes on being drawn", "スクリプトを一時停止(闘技場は描かれ続ける)")
-    .key("R", "a new match, keeping the brains applied so far", "適用済みの頭脳のまま試合をやり直す")
+    .key("R", "a new match, keeping the behaviours applied so far", "適用済みの行動アルゴリズムのまま試合をやり直す")
 }
 

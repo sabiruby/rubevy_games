@@ -445,7 +445,7 @@ pub fn show_vm(
     };
     let Some(script) = script else {
         panel.title = mind.name.clone();
-        panel.clear("this creature has no task: it has just been given a new brain, or it starved");
+        panel.clear("this creature has no task: it has just been given a new behaviour, or it starved");
         return;
     };
     panel.spent = mind.spent;
