@@ -19,6 +19,11 @@ mod imp {
     /// What the Save button says, since what it does differs.
     pub const SAVE_LABEL: &str = "Save to file (Ctrl+S)";
 
+    /// **Where the panel's choices are kept (G6b)**: a small text file in the directory the game
+    /// was started from, holding the one thing the Battle remembers — which language the guide
+    /// opens in. Deleting it puts that back to the machine's own language.
+    pub const SETTINGS_FILE: &str = "sabibots.settings.txt";
+
     /// Where the Ruby lives: next to the crate, from the workspace root or from the crate.
     pub fn ruby_dir() -> PathBuf {
         let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("ruby");
@@ -64,6 +69,10 @@ mod imp {
     include!(concat!(env!("OUT_DIR"), "/ruby_files.rs"));
 
     pub const SAVE_LABEL: &str = "Save in browser (Ctrl+S)";
+
+    /// Where the guide's language is remembered (G6b): the `localStorage` key
+    /// `sabibots:sabibots.settings.txt`, beside the scripts this page has saved.
+    pub const SETTINGS_FILE: &str = "sabibots.settings.txt";
 
     /// Keys of `localStorage` are this followed by the file's path.
     const STORE: &str = "sabibots:";

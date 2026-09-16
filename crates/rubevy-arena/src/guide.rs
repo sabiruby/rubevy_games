@@ -7,10 +7,26 @@
 //! that, and a hint in the HUD saying so.
 //!
 //! **The frame is here and the words are the game's.** What a garden is and what a battle is have
-//! nothing in common, but "a window with a paragraph and a key table, in English with the Japanese
-//! under it, that `H` opens" is the same thing twice, and the font is the same problem twice. So
-//! this module owns [`Guide`] — a title, some paragraphs, some key rows, each with both languages
-//! — and each game fills one in.
+//! nothing in common, but "a window with a paragraph and a key table, that `H` opens" is the same
+//! thing twice, and the font is the same problem twice. So this module owns [`Guide`] — a title,
+//! some paragraphs, some key rows, each with both languages — and each game fills one in.
+//!
+//! ## One language at a time (G6b)
+//!
+//! G6 drew both languages: the English paragraph and the Japanese under it, all the way down. The
+//! author played it and said what anybody would — **half of what is on the screen is not for you,
+//! whoever you are.** A reader of either language reads a page twice as long as the one they
+//! needed, and the key table had three columns where two would do. So the panel now shows one
+//! language and a pair of buttons at the top, `English | 日本語`, switches it.
+//!
+//! **Nothing in a game's `guide_text.rs` changed for this.** A [`GuideNote`] still carries both
+//! languages and so does every [`GuideKey`]; [`GuideLang`] only decides which of the two is
+//! drawn. That is what makes the author's "I will fix the Japanese myself" still a one-file job.
+//!
+//! Which language it starts in is [`GuideLang::pick`]: what the command line asked for, else what
+//! the player chose last time ([`crate::settings::Settings`]), else the machine's own — `LANG` on
+//! a PC, `navigator.language` in a browser. The HUD's one-line hint stays in both languages,
+//! because it is the line that has to be understood *before* anybody has chosen anything.
 //!
 //! ## The font
 //!
@@ -42,6 +58,57 @@ pub const CJK: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Guide.subset.t
 /// The name egui knows the font by. Anything unique will do; it is a key in a map.
 const CJK_NAME: &str = "noto_sans_jp_subset";
 
+/// Which language the panel is showing. The text is always there in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GuideLang {
+    #[default]
+    En,
+    Ja,
+}
+
+impl GuideLang {
+    /// What is written to the settings store, and what `--lang` takes.
+    pub fn tag(self) -> &'static str {
+        match self {
+            GuideLang::En => "en",
+            GuideLang::Ja => "ja",
+        }
+    }
+
+    /// `ja`, `ja_JP.UTF-8`, `ja-JP` — anything that starts with `ja` is Japanese, and anything
+    /// else that names a language at all is English, because English is the only other one the
+    /// panel has. `None` for a string that says nothing, so the next answer down is tried.
+    pub fn of_tag(tag: &str) -> Option<GuideLang> {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            None
+        } else if tag.to_ascii_lowercase().starts_with("ja") {
+            Some(GuideLang::Ja)
+        } else {
+            Some(GuideLang::En)
+        }
+    }
+
+    /// What the machine is set to: `LC_ALL`/`LANG`, or the browser's `navigator.language`.
+    pub fn of_environment() -> GuideLang {
+        crate::settings::environment_language()
+            .and_then(|tag| GuideLang::of_tag(&tag))
+            .unwrap_or(GuideLang::En)
+    }
+
+    /// The order the three answers come in: **what was asked for** on the command line, then
+    /// **what was chosen** last time, then **where the machine is**. A player who has never
+    /// touched the buttons gets their own language; one who has gets what they picked, in any
+    /// locale; and `--lang ja` overrides both without remembering itself, which is what a
+    /// screenshot wants.
+    pub fn pick(asked: Option<&str>, chosen: Option<&str>) -> GuideLang {
+        asked
+            .and_then(GuideLang::of_tag)
+            .or_else(|| chosen.and_then(GuideLang::of_tag))
+            .unwrap_or_else(GuideLang::of_environment)
+    }
+}
+
 /// A paragraph of the guide, in both languages.
 #[derive(Debug, Clone)]
 pub struct GuideNote {
@@ -63,30 +130,36 @@ pub struct GuideKey {
 /// thing a player sees is the explanation, and closing it is `H`, `?`, `Esc` or the button.
 #[derive(Resource, Debug, Clone)]
 pub struct Guide {
-    /// The window's title, and the line above the paragraphs.
-    pub title: String,
-    pub subtitle: String,
+    /// The window's title, in each language. G6 drew the English one as the title and the
+    /// Japanese one as a line under it; now one of the two is the title and the other is waiting
+    /// behind the button.
+    pub title_en: String,
+    pub title_ja: String,
     pub notes: Vec<GuideNote>,
     pub keys: Vec<GuideKey>,
     pub open: bool,
+    /// Which language is being drawn. A game sets it from [`GuideLang::pick`] at startup; the
+    /// buttons at the top of the panel change it after that.
+    pub lang: GuideLang,
 }
 
 impl Default for Guide {
     fn default() -> Self {
         Guide {
-            title: "Help".into(),
-            subtitle: String::new(),
+            title_en: "Help".into(),
+            title_ja: "説明".into(),
             notes: Vec::new(),
             keys: Vec::new(),
             open: true,
+            lang: GuideLang::En,
         }
     }
 }
 
 impl Guide {
-    /// A guide with a title. `.note(..)` and `.key(..)` fill it in.
-    pub fn new(title: impl Into<String>, subtitle: impl Into<String>) -> Guide {
-        Guide { title: title.into(), subtitle: subtitle.into(), ..Guide::default() }
+    /// A guide with a title in both languages. `.note(..)` and `.key(..)` fill it in.
+    pub fn new(title_en: impl Into<String>, title_ja: impl Into<String>) -> Guide {
+        Guide { title_en: title_en.into(), title_ja: title_ja.into(), ..Guide::default() }
     }
 
     /// A paragraph: the English, then the Japanese under it.
@@ -167,18 +240,40 @@ fn install_font(mut contexts: EguiContexts, mut done: Local<bool>) {
     info!("the guide's font is in: {} bytes of Noto Sans JP", CJK.len());
 }
 
-/// The English in the ordinary colour, the Japanese under it in a quieter one: two languages in
-/// one column read as one text, and two columns read as a choice the player has to make.
-const JA: egui::Color32 = egui::Color32::from_rgb(150, 178, 210);
+/// The colour of a key's name in the table, and of the language that is not being shown.
 const KEYCOL: egui::Color32 = egui::Color32::from_rgb(255, 226, 150);
 
-fn draw_guide(mut contexts: EguiContexts, mut guide: ResMut<Guide>) {
+/// The two buttons, in their own languages: nobody has to know the word "Japanese" in English or
+/// the word "English" in Japanese to find the one they want. They are the first thing in the
+/// panel because a player who cannot read the paragraph has to be able to see the way out of it
+/// without reading anything.
+const LANG_BUTTONS: [(GuideLang, &str); 2] = [(GuideLang::En, "English"), (GuideLang::Ja, "日本語")];
+
+/// The line at the foot of the panel, which is the one thing it says about itself.
+const FOOT_EN: &str = "H or ? closes this again";
+const FOOT_JA: &str = "H か ? でこの説明を閉じます";
+
+fn draw_guide(
+    mut contexts: EguiContexts,
+    mut guide: ResMut<Guide>,
+    mut settings: Option<ResMut<crate::settings::Settings>>,
+) {
     if !guide.open {
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let mut open = true;
-    egui::Window::new(guide.title.clone())
+    let lang = guide.lang;
+    let title = match lang {
+        GuideLang::En => guide.title_en.clone(),
+        GuideLang::Ja => guide.title_ja.clone(),
+    };
+    egui::Window::new(title)
+        // the title is half of the text that switches, so the window's *name* changes with the
+        // language — and a window egui knows by its name would be a different window after the
+        // click, dropped back at the middle of the screen at its default size. The id is the
+        // thing that is the same window in both languages.
+        .id(egui::Id::new("rubevy-arena-guide"))
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
@@ -194,20 +289,28 @@ fn draw_guide(mut contexts: EguiContexts, mut guide: ResMut<Guide>) {
         // `Middle` every other window here uses, and the guide is still draggable and closable.
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            if !guide.subtitle.is_empty() {
-                ui.label(egui::RichText::new(&guide.subtitle).color(JA));
-                ui.separator();
-            }
+            let mut chose = None;
+            ui.horizontal(|ui| {
+                for (which, label) in LANG_BUTTONS {
+                    if ui.selectable_label(lang == which, label).clicked() {
+                        chose = Some(which);
+                    }
+                }
+            });
+            ui.separator();
             egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 for note in &guide.notes {
-                    ui.label(egui::RichText::new(&note.en).strong());
-                    ui.label(egui::RichText::new(&note.ja).color(JA));
+                    ui.label(match lang {
+                        GuideLang::En => egui::RichText::new(&note.en),
+                        GuideLang::Ja => egui::RichText::new(&note.ja),
+                    });
                     ui.add_space(6.0);
                 }
                 if !guide.keys.is_empty() {
                     ui.separator();
+                    // two columns now, not three: the key and what it does in the one language
                     egui::Grid::new("guide-keys")
-                        .num_columns(3)
+                        .num_columns(2)
                         .spacing([14.0, 3.0])
                         .striped(true)
                         .show(ui, |ui| {
@@ -215,18 +318,31 @@ fn draw_guide(mut contexts: EguiContexts, mut guide: ResMut<Guide>) {
                                 ui.label(
                                     egui::RichText::new(&row.keys).monospace().color(KEYCOL).strong(),
                                 );
-                                ui.label(&row.en);
-                                ui.label(egui::RichText::new(&row.ja).color(JA));
+                                ui.label(match lang {
+                                    GuideLang::En => &row.en,
+                                    GuideLang::Ja => &row.ja,
+                                });
                                 ui.end_row();
                             }
                         });
                 }
                 ui.separator();
                 ui.label(
-                    egui::RichText::new("H or ? closes this again  ·  H か ? でこの説明を閉じます")
-                        .weak(),
+                    egui::RichText::new(match lang {
+                        GuideLang::En => FOOT_EN,
+                        GuideLang::Ja => FOOT_JA,
+                    })
+                    .weak(),
                 );
             });
+            if let Some(which) = chose {
+                guide.lang = which;
+                // remembered where the save file is kept: the next run of this game, in this
+                // browser or in this directory, opens in the language that was clicked
+                if let Some(settings) = settings.as_mut() {
+                    settings.set("lang", which.tag());
+                }
+            }
         });
     if !open {
         guide.open = false;

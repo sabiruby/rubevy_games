@@ -271,6 +271,13 @@ fn main() {
             args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0),
         )
     });
+    // `--lang en|ja` (G6b): which language the guide opens in, for its two pictures. Not
+    // remembered; the player's own click is.
+    let lang_asked = args
+        .iter()
+        .position(|a| a == "--lang")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
 
     let mut app = App::new();
     match headless {
@@ -294,6 +301,18 @@ fn main() {
             .add_systems(Update, stop_when_over);
         }
         None => {
+            // G6b: the one thing this game remembers between runs — which language the guide is
+            // read in. Read before the first frame, because the panel opens by itself and must
+            // not show one language and then jump to the other. `platform.rs` decides whether
+            // that is a file beside the game or a key in the browser's local storage.
+            let settings = rubevy_arena::Settings::load(
+                platform::SETTINGS_FILE,
+                "SabiRuby Battle: what the panel remembers. Delete a line for the default.",
+                platform::read,
+                platform::write,
+            );
+            let lang =
+                rubevy_arena::GuideLang::pick(lang_asked.as_deref(), settings.get("lang"));
             app.add_plugins((
                 DefaultPlugins
                     .set(AssetPlugin {
@@ -326,8 +345,11 @@ fn main() {
             // (the one that says the Japanese is not tofu) is taken. A player gets it open.
             .insert_resource(rubevy_arena::Guide {
                 open: shot.is_none() || args.iter().any(|a| a == "--guide"),
+                // G6b: one language at a time, and this is the one it starts in
+                lang,
                 ..guide_text::guide()
             })
+            .insert_resource(settings)
             .init_resource::<Watched>()
             .init_resource::<Hud>()
             .init_resource::<Paused>()
