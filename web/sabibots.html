@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SabiRuby Battle</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #15161a; color: #d8dae0;
+               font: 15px/1.5 system-ui, sans-serif; overflow: hidden; }
+  #game { position: fixed; inset: 0; }
+  canvas { display: block; width: 100%; height: 100%; outline: none; }
+  #status { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+            padding: 0 16px; pointer-events: none; }
+  #status[hidden] { display: none; }
+  #status small { color: #8a8f99; }
+</style>
+</head>
+<body>
+<div id="game"><canvas id="sabibots" tabindex="0"></canvas></div>
+<div id="status"><div>SabiRuby Battle<br><small id="step">loading the Ruby compiler…</small></div></div>
+<script type="module">
+// Two modules: the game (Bevy + the SabiRuby VM, wasm32-unknown-unknown) and the Ruby compiler
+// (the reference mruby compiler in C, the SabiRuby playground's wasm32-wasip1 module). The game
+// calls window.sabibotsCompile(source) whenever it needs a robot's brain as bytecode.
+import { Sabi, OK } from "./compiler/sabi.js";
+
+const status = document.getElementById("status");
+const step = document.getElementById("step");
+
+// keys the game uses and the browser would take: F5 (Apply) reloads, Ctrl+S (Save) opens a
+// save dialog, Ctrl+Enter, Tab (next robot) moves the focus away
+addEventListener("keydown", (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (e.key === "F5" || e.key === "Tab" || (mod && (e.key === "s" || e.key === "Enter"))) e.preventDefault();
+}, { capture: true });
+
+try {
+  const sabi = await Sabi.create(await fetch("./compiler/sabiruby.wasm"));
+  window.sabibotsCompile = (source) => {
+    if (sabi.compile(source, true) !== OK) throw sabi.text();
+    return sabi.binary();
+  };
+  step.textContent = "loading the game…";
+  const game = await import("./pkg/game.js");
+  setTimeout(() => { status.hidden = true; document.getElementById("sabibots").focus(); }, 0);
+  await game.default();
+} catch (e) {
+  // winit leaves its start-up by throwing on purpose; that one is not a failure
+  if (!String(e).includes("Using exceptions for control flow")) {
+    status.hidden = false;
+    step.textContent = "could not start: " + e;
+    console.error(e);
+  }
+}
+</script>
+</body>
+</html>
