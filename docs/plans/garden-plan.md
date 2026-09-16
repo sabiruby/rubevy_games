@@ -176,8 +176,7 @@ impl Genome {
 
 ## 窓（G4）
 
-`rubevy-arena` のエディタ（生き物のファイルを書き換えて即反映）と VM パネル（`F2`、`Vm::task_context` が sabiruby main に入ったので `#<Task n ctx=i>` の文字列読みは外す —
-sabibots 側も同時に直してよい）を載せる。HUD: 生き物ごとに「1 判断のフレーム数」（`ask` の発行から答えまでを rubevy の stats から）、全体の VM 時間 / 8 ms。
+`rubevy-arena` のエディタ（生き物のファイルを書き換えて即反映）と VM パネル（`F2`。`Vm::task_context` への置き換えは battle-followups で済み）を載せる。HUD: 生き物ごとに「1 判断のフレーム数」（`ask` の発行から答えまでを rubevy の stats から）、全体の VM 時間 / 8 ms。
 `--shot` で 1 枚。
 
 ## ブラウザ版（G5、必須）
