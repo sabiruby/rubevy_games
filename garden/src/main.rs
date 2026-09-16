@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
-use bevy::light::CascadeShadowConfigBuilder;
+use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
 use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
@@ -129,6 +129,63 @@ impl Default for NightDial {
 /// screen is darker than ours, and past that the moon is the sun.
 pub const NIGHT_DIAL_MIN: f32 = 0.5;
 pub const NIGHT_DIAL_MAX: f32 = 2.0;
+
+// ---------------------------------------------------------------------------------------------
+// The horizon (G8). The author played the browser build a third time and said the field was a
+// green rectangle floating on a flat colour — which it was: the world ended at the wall, and past
+// it was `ClearColor` and nothing else. What is here is the cheapest thing that makes it a place:
+// **more ground, fog, a graded sky and a line of trees.** No cubemap, no texture, no second
+// camera pass. All of it is the window's; a headless run has no `Look` and none of this exists in
+// it, the way it has no `GlobalAmbientLight`.
+// ---------------------------------------------------------------------------------------------
+
+/// Half the side of the ground that lies past the field. It is the same material as the field —
+/// one more plane, two triangles — and it **follows the camera on XZ**, so its edge is always
+/// exactly this far away and always inside the fog. A plane pinned to the origin would have to be
+/// four times as big to promise the same thing, and its corners would still be nearer than its
+/// sides.
+const HORIZON_HALF: f32 = 300.0;
+/// and how far under the field it lies, so the two planes do not fight over the pixels they share
+const HORIZON_DROP: f32 = -0.02;
+
+/// The sky: a dome of [`SKY_SIDES`] × [`SKY_RINGS`] seen from the inside, centred on the camera,
+/// **84 triangles and no texture at all**. The colour is in the vertices — Bevy's
+/// `StandardMaterial` *replaces* `base_color` with the vertex colour where a mesh has one
+/// (`pbr_fragment.wgsl`, `#ifdef VERTEX_COLORS`), so a gradient is 49 `[f32; 4]`s and a rewrite
+/// when the hour changes.
+const SKY_RADIUS: f32 = 500.0;
+const SKY_SIDES: usize = 12;
+const SKY_RINGS: usize = 4;
+/// How far below the eye the dome's rim hangs. It only has to be below the horizon the ground
+/// draws; the ground is opaque and hides the rest.
+const SKY_FLOOR: f32 = -0.30;
+/// How much darker the top of the night sky is than its rim. The rim keeps the number G6b
+/// measured the night against ([`NIGHT_SKY`]); the gradient is above it.
+const NIGHT_ZENITH: f32 = 0.55;
+
+/// Where the fog begins, past the camera's own distance from what it is looking at, and how deep
+/// it is. Tying it to the zoom is what keeps the *field* clear at every zoom: the far corner of a
+/// 40 × 30 field is about 14 units further from the eye than the middle is, whatever the eye is,
+/// so a fog that starts at `distance + 14` never touches the garden and always eats what is past
+/// it. The cap is what keeps the end inside [`HORIZON_HALF`]: the ground has to be fog and
+/// nothing else where it stops, or its edge would be a line.
+///
+/// The depth is the number that was measured rather than reasoned about. The default camera
+/// stands 42 units out and looks down at 49°, and **the whole frame is ground**: the true horizon
+/// is 26° above the top of it, and the furthest ground in the picture is only 72 units away
+/// against the field's far corner at 57. Fifteen units of range is all there is at that angle, so
+/// a fog deep enough to look like distance from the side (`end` at 300, say) does nothing at all
+/// from above. Forty-five puts a visible haze across the top of the default picture and still
+/// dissolves the whole plain when the camera is tilted down to look along it.
+const FOG_NEAR: f32 = 14.0;
+const FOG_DEPTH: f32 = 45.0;
+const FOG_NEAR_MAX: f32 = 120.0;
+
+/// A few trees past the wall, so that the edge of the field reads as the edge of the *scenery*
+/// rather than as a fence. They carry no component at all — no `Tree`, no `Collider` — because
+/// nothing can reach them: they are outside the wall `move_creatures` clamps to, and
+/// `garden.nearest(:Tree)` must go on meaning the seven trees that are in the garden.
+const EDGE_TREES: usize = 16;
 
 /// Plants
 const PLANTS_AT_START: usize = 55;
@@ -461,6 +518,15 @@ struct Probe {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 struct MakeLook;
 
+/// **G8.** The two things that are not in the world but around it: the ground past the field and
+/// the sky over it. Both ride with the camera (`horizon_look`), which is why they are marked
+/// rather than found by their mesh.
+#[derive(Component)]
+struct Horizon;
+
+#[derive(Component)]
+struct SkyShell;
+
 // ---------------------------------------------------------------------------------------------
 // Resources
 // ---------------------------------------------------------------------------------------------
@@ -534,6 +600,21 @@ struct Look {
     /// the three clips of each animal, in one graph each
     beetle_gaits: Gaits,
     rabbit_gaits: Gaits,
+}
+
+/// **The sky's mesh, and what colour it is standing at (G8).**
+///
+/// The gradient lives in the mesh's `ATTRIBUTE_COLOR`, so changing the hour means rewriting 49
+/// vertices. `up` is how far up the dome each of those vertices is, 0 at the rim and 1 overhead,
+/// kept here rather than worked back out of the positions; `was` is what was written last, so a
+/// frame in which the sky has not visibly moved writes nothing and the mesh is not sent to the
+/// GPU again. In sixty seconds of a day the sky crosses about 1/255 of its range four times a
+/// second, so this is a write every quarter of a second rather than every frame.
+#[derive(Resource)]
+struct SkyDome {
+    mesh: Handle<Mesh>,
+    up: Vec<f32>,
+    was: Option<(LinearRgba, LinearRgba)>,
 }
 
 /// One animal's walk, idle and eat, as nodes of an `AnimationGraph`. The Kenney "Cube Pets"
@@ -1011,6 +1092,11 @@ fn main() {
             .insert_resource(VmInspector::following())
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
             .add_systems(Update, (orbit_camera, dress_animations, animate_creatures))
+            // G8: the fog, the sky's gradient and where the two of them stand. `after(day_night)`
+            // because the hour it draws is the one that system has just worked out, and
+            // `after(orbit_camera)` because the eye it hangs the sky on is the one that system has
+            // just moved. Neither is in a headless app, and neither is this.
+            .add_systems(Update, horizon_look.after(day_night).after(orbit_camera))
             // F5 and F9 (G3). Only the windowed build has a keyboard to read: `MinimalPlugins`
             // brings no input plugin at all, which is why the headless run is asked on the
             // command line instead.
@@ -1286,22 +1372,151 @@ fn make_look(
     };
     let scene = |file: &str| server.load(GltfAssetLabel::Scene(0).from_asset(file.to_string()));
 
+    let turf = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.36, 0.46, 0.25),
+        perceptual_roughness: 1.0,
+        ..default()
+    });
+    let tree = scene("models/tree_default.glb");
+
     commands.insert_resource(Look {
         ground: meshes.add(Plane3d::new(Vec3::Y, Vec2::new(HALF_W, HALF_D))),
-        turf: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.36, 0.46, 0.25),
-            perceptual_roughness: 1.0,
-            ..default()
-        }),
+        turf: turf.clone(),
         tuft: scene("models/grass.glb"),
         bush: scene("models/plant_bush.glb"),
-        tree: scene("models/tree_default.glb"),
+        tree: tree.clone(),
         rock: scene("models/rock_smallA.glb"),
         beetle: scene("models/animal-crab.glb"),
         rabbit: scene("models/animal-bunny.glb"),
         beetle_gaits: gaits("models/animal-crab.glb"),
         rabbit_gaits: gaits("models/animal-bunny.glb"),
     });
+
+    // G8: the sky's mesh, made here because `make_look` is the windowed build's and nothing else
+    // is. Its colours are written on the first frame by `horizon_look`, so the handle goes in
+    // with none: a mesh with no `ATTRIBUTE_COLOR` is drawn with the material's own `base_color`,
+    // which is the sky's mid blue, and one frame of that is what the first frame of a run is.
+    let (mesh, up) = sky_dome();
+    let mesh = meshes.add(mesh);
+    commands.insert_resource(SkyDome { mesh: mesh.clone(), up, was: None });
+
+    // …and the three things that hang on it. They are made here rather than in `spawn_world`
+    // because `spawn_world` is the world's, and the world is the same with a window and without:
+    // it takes `Option<&Look>` and no `Assets<_>` at all, and a headless app has neither of the
+    // two asset collections this wants. The scenery belongs to the look, so it is built where the
+    // look is.
+    let sky = materials.add(StandardMaterial {
+        // what one frame looks like before `horizon_look` writes the vertices, and what the
+        // vertices then stand in for: a mesh that has an `ATTRIBUTE_COLOR` uses it *instead* of
+        // this, so this is only ever the very first frame
+        base_color: Color::srgb(0.42, 0.62, 0.86),
+        unlit: true,
+        // seen from the inside, and not fogged: the dome is five hundred units away, and fog
+        // would paint the whole of it the one colour the fog is — which is the colour of its rim
+        cull_mode: None,
+        fog_enabled: false,
+        ..default()
+    });
+    commands.spawn((
+        SkyShell,
+        Mesh3d(mesh),
+        MeshMaterial3d(sky),
+        Transform::default(),
+        NotShadowCaster,
+        NotShadowReceiver,
+    ));
+    // the ground past the wall: the field's own material, so the two are one lawn
+    commands.spawn((
+        Horizon,
+        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(HORIZON_HALF)))),
+        MeshMaterial3d(turf),
+        Transform::from_xyz(0.0, HORIZON_DROP, 0.0),
+        NotShadowCaster,
+    ));
+    // and the treeline. Its dice are its own — `Dice` the resource is the world's, and drawing
+    // from it here would move every tree, rock, plant and creature in the garden by a number of
+    // draws that depends on whether there is a window.
+    let mut dice = Dice(0x600D_5EED_0000_0008);
+    for i in 0..EDGE_TREES {
+        // once round the field's rim, one tree per step, each pushed out by a random amount and
+        // slid along by up to half a step so the row is not a fence
+        let step = (i as f32 + dice.between(-0.4, 0.4)) / EDGE_TREES as f32;
+        let out = dice.between(4.0, 15.0);
+        let (x, z) = rim_at(step, out);
+        let scale = dice.between(1.7, 3.1);
+        commands.spawn((
+            WorldAssetRoot(tree.clone()),
+            Transform::from_xyz(x, 0.0, z)
+                .with_scale(Vec3::splat(scale))
+                .with_rotation(Quat::from_rotation_y(dice.between(0.0, std::f32::consts::TAU))),
+        ));
+    }
+}
+
+/// A point `out` units outside the field's wall, `t` of the way round it (0 is the middle of the
+/// `+Z` side). The rim is a rectangle, not a circle, because the field is.
+fn rim_at(t: f32, out: f32) -> (f32, f32) {
+    let (w, d) = (HALF_W + out, HALF_D + out);
+    let side = t.rem_euclid(1.0) * 4.0;
+    match side as u32 {
+        0 => (w * (2.0 * side - 1.0), d),
+        1 => (w, d * (3.0 - 2.0 * side)),
+        2 => (w * (5.0 - 2.0 * side), -d),
+        _ => (-w, d * (2.0 * side - 7.0)),
+    }
+}
+
+/// The dome, and how far up it each of its vertices is.
+///
+/// [`SKY_SIDES`] columns and [`SKY_RINGS`] rows from the rim to a single point overhead:
+/// `(SKY_RINGS - 1) * SKY_SIDES * 2 + SKY_SIDES` = **84 triangles** on 49 vertices. The winding
+/// is not thought about and the normals are not looked at, because the material is `unlit` with
+/// `cull_mode: None` — a sky is the one surface in a game that is only ever a colour.
+fn sky_dome() -> (Mesh, Vec<f32>) {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    use std::f32::consts::{FRAC_PI_2, TAU};
+
+    let mut position: Vec<[f32; 3]> = Vec::new();
+    let mut normal: Vec<[f32; 3]> = Vec::new();
+    let mut up: Vec<f32> = Vec::new();
+    for ring in 0..SKY_RINGS {
+        let t = ring as f32 / SKY_RINGS as f32;
+        let e = SKY_FLOOR + (FRAC_PI_2 - SKY_FLOOR) * t;
+        for side in 0..SKY_SIDES {
+            let a = side as f32 / SKY_SIDES as f32 * TAU;
+            let p = Vec3::new(e.cos() * a.cos(), e.sin(), e.cos() * a.sin());
+            position.push((p * SKY_RADIUS).to_array());
+            normal.push((-p).to_array());
+            up.push(t);
+        }
+    }
+    let apex = position.len() as u32;
+    position.push([0.0, SKY_RADIUS, 0.0]);
+    normal.push([0.0, -1.0, 0.0]);
+    up.push(1.0);
+
+    let mut index: Vec<u32> = Vec::new();
+    for ring in 0..SKY_RINGS - 1 {
+        for side in 0..SKY_SIDES {
+            let next = (side + 1) % SKY_SIDES;
+            let a = (ring * SKY_SIDES + side) as u32;
+            let b = (ring * SKY_SIDES + next) as u32;
+            let (c, d) = (a + SKY_SIDES as u32, b + SKY_SIDES as u32);
+            index.extend_from_slice(&[a, c, b, b, c, d]);
+        }
+    }
+    for side in 0..SKY_SIDES {
+        let next = (side + 1) % SKY_SIDES;
+        let rim = ((SKY_RINGS - 1) * SKY_SIDES) as u32;
+        index.extend_from_slice(&[rim + side as u32, apex, rim + next as u32]);
+    }
+
+    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, position)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normal)
+        .with_inserted_indices(Indices::U32(index));
+    (mesh, up)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1693,7 +1908,17 @@ fn compile_source(
 }
 
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
-    commands.spawn((Camera3d::default(), camera_at(&orbit)));
+    // G8: the fog. Its colour and its two distances are `horizon_look`'s from the first frame, the
+    // way the sun's are `day_night`'s; what is set here is that there is one at all.
+    commands.spawn((
+        Camera3d::default(),
+        camera_at(&orbit),
+        DistanceFog {
+            color: Color::srgb(0.35, 0.5, 0.7),
+            falloff: FogFalloff::Linear { start: 60.0, end: 220.0 },
+            ..default()
+        },
+    ));
 }
 
 fn camera_at(orbit: &Orbit) -> Transform {
@@ -1839,6 +2064,40 @@ fn clamp_focus(focus: Vec2) -> Vec2 {
 /// The sun goes round once a minute: where it is decides the light's direction, its colour and
 /// its strength, the ambient light and the colour of the sky. The moment it goes under, `"night"`
 /// is published to every script that asked for it; at sunrise, `"day"`.
+/// Where the sun stands at a given point in the day: sunrise at phase 0, overhead at 0.25, gone
+/// at 0.5. G8 gave it a name of its own because the horizon wants the same number `day_night`
+/// does, a system later in the same frame.
+fn sun_up(phase: f32) -> Vec3 {
+    let angle = phase * std::f32::consts::TAU;
+    Vec3::new(angle.cos() * 0.8, angle.sin(), 0.35).normalize()
+}
+
+/// **The sky's two colours at a given moment (G8):** what it is along the horizon, and what it is
+/// straight overhead.
+///
+/// The first of them is exactly the number `ClearColor` was before G8 — the day's blue and G6b's
+/// [`NIGHT_SKY`] — because that is the one the night was *measured* against, and a horizon that
+/// changed would make the two sets of measurements in `docs/garden.md` mean different things. The
+/// gradient is all above it: the sky gets deeper towards the top, which is what a sky does and
+/// what makes a dome read as a dome rather than as a wall.
+fn sky_colors(height: f32, night: bool, dial: f32) -> (Color, Color) {
+    if night {
+        let [r, g, b] = NIGHT_SKY;
+        // the same blue, turned up with the rest of it: a sky that stayed put while the ground
+        // brightened would read as fog rather than as a lighter night
+        let lit = |k: f32| {
+            Color::srgb((r * k * dial).min(1.0), (g * k * dial).min(1.0), (b * k * dial).min(1.0))
+        };
+        (lit(1.0), lit(NIGHT_ZENITH))
+    } else {
+        let noon = height.clamp(0.0, 1.0);
+        (
+            Color::srgb(0.35 + 0.15 * noon, 0.5 + 0.22 * noon, 0.7 + 0.22 * noon),
+            Color::srgb(0.15 + 0.11 * noon, 0.33 + 0.21 * noon, 0.64 + 0.24 * noon),
+        )
+    }
+}
+
 fn day_night(
     time: Res<Time>,
     mut sky: ResMut<Sky>,
@@ -1856,9 +2115,7 @@ fn day_night(
     // it was saved at (`Sky::shift`), and in a run that loaded nothing the two are the same number
     let now = world_now(&time, &sky);
     sky.phase = (now / DAY_LENGTH + DAWN_OFFSET).fract();
-    let angle = sky.phase * std::f32::consts::TAU;
-    // the sun's place in the sky: sunrise at phase 0, overhead at 0.25, gone at 0.5
-    let up = Vec3::new(angle.cos() * 0.8, angle.sin(), 0.35).normalize();
+    let up = sun_up(sky.phase);
     let height = up.y;
     let night = height <= 0.0;
 
@@ -1892,15 +2149,11 @@ fn day_night(
         }
     }
     if let Some(mut clear) = clear {
-        clear.0 = if night {
-            // the same blue, turned up with the rest of it: a sky that stayed put while the
-            // ground brightened would read as fog rather than as a lighter night
-            let [r, g, b] = NIGHT_SKY;
-            Color::srgb((r * dial).min(1.0), (g * dial).min(1.0), (b * dial).min(1.0))
-        } else {
-            let noon = height.clamp(0.0, 1.0);
-            Color::srgb(0.35 + 0.15 * noon, 0.5 + 0.22 * noon, 0.7 + 0.22 * noon)
-        };
+        // G8: the sky the window actually shows is the dome (`horizon_look`), and this is what is
+        // behind it — the same colour the dome's rim is, so that nothing the dome fails to cover
+        // is a different blue. In a `--headless` run there is no `ClearColor` and this is skipped
+        // whole, as it was before.
+        clear.0 = sky_colors(height, night, dial).0;
     }
 
     if night != sky.night {
@@ -1912,6 +2165,80 @@ fn day_night(
             test.night_at = Some(now);
         }
     }
+}
+
+/// **The horizon (G8), once a frame, in the window only.**
+///
+/// Three small things, and each of them is a decision:
+///
+/// *The sky and the far ground ride with the camera.* The dome is centred on the eye and the
+/// plane is slid under it on XZ, so the rim of one and the edge of the other are always exactly
+/// as far away as they were last frame. That is what lets both be small — five hundred units and
+/// three hundred — instead of being sized for the worst case of a camera at the far corner of its
+/// range, and it is why the default far plane (1,000) is enough and the projection is untouched.
+/// The plane keeps its own height, because sliding it up and down would show.
+///
+/// *The fog's colour is the sky's rim, and its distance is the zoom's.* Those two together are
+/// the whole trick: the ground fades into exactly the colour of the sky it meets, so the line
+/// where they meet is not a line, and because the fog begins [`FOG_NEAR`] past whatever the
+/// camera's own distance is, no amount of zooming out puts haze on the garden.
+///
+/// *The gradient is rewritten, not recomputed in a shader.* 49 vertices, and only when the colour
+/// has moved by more than a 255th — which in a sixty-second day is about four times a second,
+/// against sixty frames.
+fn horizon_look(
+    sky: Res<Sky>,
+    orbit: Res<Orbit>,
+    dial: Res<NightDial>,
+    mut dome: ResMut<SkyDome>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    mut fog: Query<&mut DistanceFog>,
+    mut shell: Query<&mut Transform, (With<SkyShell>, Without<Horizon>)>,
+    mut ground: Query<&mut Transform, (With<Horizon>, Without<SkyShell>)>,
+) {
+    let up = sun_up(sky.phase);
+    let (horizon, zenith) = sky_colors(up.y, up.y <= 0.0, dial.0);
+    let (horizon, zenith) = (horizon.to_linear(), zenith.to_linear());
+
+    if let Ok(eye) = camera.single() {
+        let at = eye.translation();
+        for mut transform in &mut shell {
+            transform.translation = at;
+        }
+        for mut transform in &mut ground {
+            transform.translation = Vec3::new(at.x, HORIZON_DROP, at.z);
+        }
+    }
+
+    for mut fog in &mut fog {
+        fog.color = Color::LinearRgba(horizon);
+        let start = (orbit.distance + FOG_NEAR).min(FOG_NEAR_MAX);
+        fog.falloff = FogFalloff::Linear { start, end: start + FOG_DEPTH };
+    }
+
+    let moved = |a: LinearRgba, b: LinearRgba| {
+        (a.red - b.red).abs().max((a.green - b.green).abs()).max((a.blue - b.blue).abs()) > 1.0 / 255.0
+    };
+    if dome.was.is_some_and(|(h, z)| !moved(h, horizon) && !moved(z, zenith)) {
+        return;
+    }
+    let Some(mut mesh) = meshes.get_mut(&dome.mesh) else {
+        return;
+    };
+    let colors: Vec<[f32; 4]> = dome
+        .up
+        .iter()
+        .map(|t| {
+            // the rim's colour is held a little way up the dome before the climb starts, so that
+            // the band the eye actually sees along the horizon is the colour the fog is
+            let t = (t * 1.25 - 0.1).clamp(0.0, 1.0);
+            let c = horizon.mix(&zenith, t);
+            [c.red, c.green, c.blue, 1.0]
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    dome.was = Some((horizon, zenith));
 }
 
 /// `Velocity` into `Transform`, on XZ, and the walls stop it. A creature also turns to face the
