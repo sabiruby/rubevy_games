@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rubevy-arena", "sabibots"]
+members = ["crates/rubevy-arena", "garden", "sabibots"]
 
 # One Bevy for the whole repository: a binary can only have one, and keeping the version in one
 # place is what makes bumping it a single edit for every game here.
@@ -9,6 +9,11 @@ bevy = { version = "0.19.1", default-features = false, features = [
   "bevy_asset", "bevy_log", "bevy_window", "bevy_winit", "bevy_core_pipeline",
   "bevy_render", "bevy_sprite", "bevy_text", "bevy_ui", "bevy_ui_render",
   "default_font", "png",
+  # 3D, for the garden: meshes with a StandardMaterial, lights and shadows. The tonemapper a
+  # Camera3d asks for by default (TonyMcMapface) reads its curve from a KTX2 lookup table, which
+  # `tonemapping_luts` embeds; `zstd_rust` is the decompressor for it (the pure-Rust one, so the
+  # browser build has it too). sabibots is 2D and uses none of this — it only pays the build time.
+  "bevy_pbr", "tonemapping_luts", "zstd_rust",
 ] }
 # what differs between the PC build and the browser build (threads, X11, WebGL) is added per
 # target in each game's Cargo.toml, so the one `cargo build` picks the right set
