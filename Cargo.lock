@@ -2573,8 +2573,10 @@ name = "garden"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_egui",
  "js-sys",
  "rubevy",
+ "rubevy-arena",
  "sabiruby",
  "sabiruby-compiler",
  "sabiruby-serde",

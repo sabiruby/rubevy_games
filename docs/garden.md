@@ -12,16 +12,18 @@ below.
 
 ![the garden at 22 seconds: evening, long shadows over a green field, Kenney tufts and bushes of grass, five trees, scattered rocks, and rabbits and beetles walking about](garden.png)
 
-**This file describes stages G0, G0a, G1, G2 and G3** (`docs/plans/garden-plan.md`): the world, the
-models in it, the two kinds of mind — a Ruby task per creature and a task per reflex — the
-`Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to breed, and
-the save file, which is the world and every creature's own memory as JSON. G4 puts the editor and
-the VM panel in the window, and G5 is the browser build.
+**This file describes stages G0, G0a, G1, G2, G3 and G4** (`docs/plans/garden-plan.md`): the
+world, the models in it, the two kinds of mind — a Ruby task per creature and a task per reflex —
+the `Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to
+breed, the save file, which is the world and every creature's own memory as JSON, and the window:
+a creature's file rewritten while the garden runs, the VM looked into while it is paused, and a
+HUD that says what a decision costs. G5 is the browser build.
 
 ```
 cargo run -p garden                                     # a window
 cargo run -p garden -- --headless 90                    # no window, 90 seconds, the result on stdout
 GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the nine checks
+GARDEN_SELFTEST=1 cargo run -p garden                   # a window, and the editor's and the keys'
 cargo run -p garden -- --headless 30 --save g.json      # and write the garden down at the end
 cargo run -p garden -- --load g.json                    # and pick it up again
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
@@ -38,10 +40,17 @@ hand against volumes of its own.
 |---|---|
 | drag (either mouse button) | turn the camera round the garden |
 | wheel | closer / further away |
+| click a creature | look at it: the HUD marks it, the editor shows its file, the VM panel its task |
+| Tab | the next creature |
+| F1 | the editor |
+| F2 | the VM panel |
+| P | pause the scripts (the VM gets a budget of 0; the garden keeps drawing) |
+| Ctrl+Enter | Apply: run the edited text in every creature of that species |
+| Ctrl+S | Save: write it to `beetle.rb` / `rabbit.rb` |
 | F5 | write the garden to `garden.save.json` (G3) |
 | F9 | read it back |
 
-There is nothing else yet. The editor and the VM panel (`rubevy-arena`) arrive in G4.
+The window is described under **The window (G4)** below.
 
 ## The components
 
@@ -564,6 +573,180 @@ at, the rabbits had their trees again, and nothing was logged above `INFO`. What
 pressed is the keys themselves; this machine has no GPU driver and the window goes through the
 container in `docker/` (`docs/wsl-gpu.md`).
 
+## The window (G4)
+
+Three panels, all of them draggable, and the garden behind them. Two of the three are
+`rubevy-arena`'s — the same editor and the same VM inspector SabiRuby Battle uses — so what the
+garden added is the game's half of each: which creature is being looked at, what a species' file
+is, and what the HUD says. That half is one file, `garden/src/window.rs`.
+
+![the garden with its three panels](garden.png)
+
+### The editor: the unit is the species, not the creature
+
+Click a creature (or `Tab`) and the editor on the right shows **the file that creature runs**,
+with a band behind the line its brain is standing on and the rest of the listing shaded by where
+it keeps coming back to. There are two files in the whole game and two buttons along the top:
+`beetle.rb` and `rabbit.rb`.
+
+| button | key | what it does |
+|---|---|---|
+| **▶ Apply to every Beetle** | Ctrl+Enter | compiles the text and restarts **every beetle** on it, in memory; the file is untouched |
+| **Save to file** | Ctrl+S | writes the text to `beetle.rb`; the creatures go back to being file-brained |
+| **Revert** | | forgets the edits and puts the species back on its file |
+
+That is one Apply where Battle has two, and the reason is the whole difference between the two
+games. A robot **has** a file: `3 blue/scout` is one robot running `scout.rb`, and "apply to this
+one" and "apply to everything on `scout.rb`" are different sets. A creature does not have a file —
+the file **is** the species. Every beetle in the garden runs `beetle.rb`, so those two sets are
+the same one, and a text applied in the editor belongs to the species: every beetle restarts on
+it, and **a beetle born half a minute later is born running it** (`Brains`, read by `give_mind`).
+A species running a text that is not its file's is marked `*` on its button and in the HUD.
+
+Restarting is `ScriptTask` off and a new `Script` on, as in Battle: rubevy terminates the old
+task, closes the queues it had subscribed to, and the reflex tasks parked on them unwind and end.
+**What does not come back is what the creature remembered.** `@memory` is a Hash on the object the
+old script made; the new script makes a new one. That is the honest behaviour — a brain that has
+been rewritten is not the brain that learnt those things — and it is the same in Battle.
+
+**They are handed over one at a time, and that is a limit of the VM.** A beetle is seven tasks (a
+brain and six reflexes) and six subscriptions; restarting it means terminating all seven and
+closing all six queues in one frame. Do that to nine beetles at once and everything is fine. Do it
+to **ten** and the VM's scheduler stops for good: `Vm::task_pending()` stays true, `task_run_limits`
+runs nothing, and *every* task in the VM freezes — the rabbits included, which nobody touched, and
+it never comes back. Measured in the window under lavapipe, three seconds after the Apply: nine
+restarts and the whole VM's instruction count has moved on by nine thousand; ten restarts and it
+has not moved at all. Three a frame does not help either, so it is not "how many in one frame" —
+it is how many *within a short while*, which reads like the old contexts not being let go of fast
+enough (`docs/worklog/2026-09-17-garden-G4.md`; it is a VM matter, not the game's, and is reported
+rather than worked around in the VM).
+
+So the game hands them over on a clock: one creature every 0.4 s (`RESTARTS_PER_FRAME`,
+`RESTART_GAP`). A garden of a dozen beetles takes about five seconds to come round to the new
+brain, one after another — which is visible, and honest about what it is. When the VM can take
+them all at once, the queue in `window.rs` is what goes.
+
+Saving `garden/ruby/creatures/beetle.rb` from any other editor does what Save does, through
+`rubevy-arena`'s directory watcher; a species running an applied text is left alone until it is
+saved or reverted.
+
+**What the editor needed in `rubevy-arena`** was four fields, and every one of them was a place
+that had been decided by there being only one game: the first button's words (`apply_label`),
+whether there is a second button at all (`apply_all_label: Option<String>` — `None` draws none),
+which key applies (`apply_key: Option<KeyCode>` — the garden's `F5` is taken by the save file, so
+it is `None` here), and what one of the things being edited is called, for the hover texts
+(`noun`). sabibots changed by one line.
+
+### The VM panel (F2)
+
+The same `VmInspector` Battle has, about the selected creature's *brain* task: the frames it is
+standing in with the author's own line numbers, the registers of one of them named from the debug
+info, the heap and the collector's counters, and how many contexts the VM holds. A garden of
+fifteen creatures is about a hundred contexts — one per brain, one per reflex, and the six
+reflexes of a beetle are six of them — which is what a creature with a reflex per event costs, and
+it is readable at a glance for the first time here.
+
+A creature parked on `garden.nearest` stands in `Task::Queue#pop`, then `Rubevy::Proxy#method_missing`
+at `prelude.rb:47`, then its own `rabbit.rb:77`; the panel says so while it waits.
+
+**`P` pauses the scripts** by setting `ScriptWorld::budget` to 0. Nothing in the VM runs, so the
+panel's numbers stand still while they are read; the garden keeps drawing and the creatures keep
+walking on the velocity their scripts last wrote. The scheduler's clock stops with it (rubevy
+`fa37eaa`), so a creature half way through a `sleep 0.2` is still half way through it when the
+budget comes back.
+
+### The HUD, and what "frames per decision" means
+
+The panel at the top left is one line for the garden and one line per creature:
+
+```
+15 creatures · 30 plants · day 0.50            VM 1.30 / 8.0 ms
+▸ Beetle 99v0    [=========  ] 92.1     13 insn/f   1.0 f/dec  beetle.rb:125
+  Rabbit 103v0   [=======    ] 75.7     29 insn/f   1.0 f/dec  rabbit.rb:80
+```
+
+* **hunger** — 100 is stuffed, 0 is dead; amber under 55, which is where a beetle's own script
+  goes looking for grass.
+* **insn/f** — what that script has run divided by the frames it has lived. It is an average
+  because one frame's figure is nearly always zero: a creature spends nearly every frame *parked*.
+  A beetle is 10 to 15, a rabbit 24 to 29, because a rabbit asks two questions a pass.
+* **the line it is waiting on** — the innermost frame in the creature's *own* file
+  (`ScriptStats::frames`, walked back past the prelude). This is the thing a VM that parks tasks
+  can tell a HUD and an engine's usual scripting cannot: the creature is not in a callback that
+  has lost its place, it is standing on line 125 of `beetle.rb` waiting for an answer.
+* **f/dec — frames per decision.** Defined exactly, because the number is only worth having if it
+  is: **the frames between the burst in which a creature's task asked the world something and the
+  burst in which it ran again with the answer.** A burst ends for one of two reasons, and the game
+  tells them apart without guessing:
+  * `answer_garden` — the system that answers `garden.nearest`, `garden.count`, `genome` and
+    `garden.spawn` — writes the frame number onto the asker (`Mind::asked_frame`). A gap that
+    *starts* on that frame is a `Rubevy.ask` round trip and is known to be one.
+  * Any other gap shorter than the shortest `sleep` in `ruby/` (0.05 s, one line of
+    `run_creature`; three frames at 60 Hz) is a **component read** — `me[:Hunger]`,
+    `plant[:Transform]` — which rubevy answers itself in `answer_components` and which the game
+    never sees as a `Request`. That floor is a fact about the scripts in this repository, not a
+    tolerance, and it is recomputed from the frame time each frame.
+  * Anything longer is a `sleep`, and is not a decision.
+
+  Measured over twenty-five seconds of a headless run: **403 questions the game answered, 1.000
+  frames each; 2352 component reads, 1.000 frames each.** Both are 1, and that is what the
+  placement of `answer_garden` in `RubevySet::Answer` buys — answered anywhere later in the frame
+  and every one of them would read 2.
+* **VM x / 8.0 ms** — the wall time this frame's scripts took, measured round `RubevySet::Tick`
+  (`tick_scripts`, then the commands they left and the component writes), against
+  `ScriptWorld::frame_time`, which is what the scheduler cuts a timeslice short at. Fifteen
+  creatures, a hundred tasks: **1.3 ms of 8.**
+
+### The same panels with no window
+
+`--headless` prints them. The HUD is `hud:` lines with the same fields in the same order, and the
+VM panel is `vm:` lines from the same `VmInspector::log_lines()` the window draws from:
+
+```
+hud: 15 creatures · 30 plants · day 0.50 · VM 1.28 / 8.0 ms this frame (1.30 ms smoothed)
+hud:   Beetle 99v0     hunger  92.1      13 insn/frame   1.0 frames/decision  beetle.rb:125
+hud: frames/decision — 403 questions the game answered, 1.000 frames each; 2352 component reads, 1.000 frames each
+vm: Rabbit 104v0 — context 9  Suspended — 37887 insn — contexts 99 live of 99 — heap live 5049 of 6386 …
+vm:   #0 (no debug info)        pop              pc 133   …
+vm:   #1 prelude.rb:47          method_missing   pc 43    name=:nearest  args=[:Creature]  blk=nil
+vm:   #2 rabbit.rb:77           run              pc 137   spot=[18.5, 0.0, -3.9]  plant=nil  other=nil …
+```
+
+### The window's own checks
+
+`GARDEN_SELFTEST=1` with a window drives the editor the way a click would (by setting
+`Editor::action`) and presses the two keys, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
+for Battle. Save is left out on purpose, since it writes to the repository. Sixteen lines, all
+`ok` (through `docker`, lavapipe):
+
+```
+selftest: ok   P pauses: the scripts' budget is 0
+selftest: ok   nothing ran while it was paused
+selftest: ok   the VM panel has the creature's frames
+selftest: ok   the panel has the heap counters
+selftest: ok   nothing that was sleeping woke on the resume frame: the next one is due in 6 ticks, as it was half a second ago
+selftest: ok   P again gives the budget back
+selftest: ok   the creatures are thinking again
+selftest: ok   F2 hides the VM panel
+selftest: ok   F2 shows it again
+selftest: ok   the editor shows the file of the creature that was clicked
+selftest: ok   typing marks the text edited
+selftest: ok   Apply restarts every beetle on the edited text
+selftest: ok   a beetle born from now on is born running it
+selftest: ok   the rabbits are left alone
+selftest: ok   Apply does not touch the file
+selftest: ok   after Apply the text is what the beetles run
+selftest: ok   every restarted beetle's new task has run
+selftest: ok   the whole VM is still running afterwards
+selftest: ok   Revert puts every beetle back on the file
+selftest: ok   Revert shows the file again
+selftest: ok   nothing was written
+selftest: Rabbit 400v0 — 21 ask round trips, 83 component reads, 1.00 frames/decision
+```
+
+The keys are checked **before** the editor, and on purpose: the editor restarts scripts, and a
+check about the scheduler asked after that would be a check about the restart.
+
 ## Battle and the Garden, in numbers
 
 | | SabiRuby Battle | the Garden |
@@ -572,7 +755,9 @@ container in `docker/` (`docs/wsl-gpu.md`).
 | Rust glue per component made visible to Ruby | — (the ECS is never mentioned) | **0 lines** — the `register_type::<T>()` line, and nothing else |
 | Rust for one type made into a Ruby class | — (none) | **61 lines** with the macros, **113** by hand |
 | the scripts a player writes | `robots/scout.rb` 62 lines (43 without comments and blanks), `robots/hunter.rb` 22 (18) | `creatures/beetle.rb` 128 (68), `creatures/rabbit.rb` 89 (57) |
-| the DSL in front of them | `ruby/prelude.rb` 283 (165) | `ruby/prelude.rb` 449 (218) |
+| the DSL in front of them | `ruby/prelude.rb` 288 (165) | `ruby/prelude.rb` 464 (221) |
+| what the window cost the game (G4) | `src/main.rs`, spread through it | `src/window.rs` **one file**, plus four fields in `rubevy-arena`'s `Editor` and one line in sabibots |
+| a round trip, measured (G4) | one frame (`docs/worklog/2026-09-17-battle-followups.md`) | one frame, both kinds: 403 questions and 2352 component reads, 1.000 frames each |
 | reading one structured argument out of Ruby | — | **72 lines** by hand (G2), **7** with serde (G3) |
 
 The six kinds in Battle are what a *robot* asks; the match script asks eight more (`board`,
@@ -714,26 +899,44 @@ its components, does not get its answers, or does not hear an event:
    read the answer's `[:Transform][:translation]` and wrote `me[:Velocity]`.
 6. **a beetle touched by a rabbit changes heading within 0.5 s.** `startle` notes which way the
    beetle was going at the moment it published `"touched"`; half a second later the heading must
-   be more than 45° off it. Three sorts of touch are not counted, and each of them says something:
+   be more than 45° off it. Four sorts of touch are not counted, and each of them says something:
    a beetle that was **standing still** (nothing to turn from), a beetle **against a wall**
    (`move_creatures` zeroes the component of `Velocity` that would take a creature through one, so
-   a beetle in the corner reads as going due west whatever it does), and a beetle that has been
-   **touched at all in the last 1.5 s** — a rabbit that keeps walking into one publishes every
+   a beetle in the corner reads as going due west whatever it does), a beetle **younger than two
+   seconds** (a newborn is spawned with a `Script`, which rubevy turns into a task on a later
+   frame, and that task's first act is to subscribe — so for the first moments of a life there is
+   nobody listening and an event published then is dropped), and a beetle that has been **sent any
+   `"touched"` at all in the last 1.5 s**: a rabbit that keeps walking into one publishes every
    time the contact is remade, the reflex takes half a second over each message and the rest wait
-   in the queue, so half a second after the fourth message the answer is really about the first.
-   What is left is a beetle that was walking, in the open, and not already running from anything.
-   G2 added a fourth exclusion, because G2 added creatures that are **younger than the world**: a
-   newborn is spawned with a `Script`, which rubevy turns into a task on a later frame, and that
-   task's first act is to subscribe — so for the first moments of a life there is nobody listening
-   and an event published then is dropped. A creature under two seconds old is not counted.
+   in its queue, so half a second after the third message the answer is really about the first.
 
-   **This check is the flaky one, and it was flaky before G2.** It looks at thirty or forty
-   touches in a run and fails when one of them turned by less than 45°. Measured on this machine,
-   in ninety-second runs: the merged G1 binary (`a61a611`, with none of G2 in it) failed once in
-   four (32/33); this branch failed twice in eight (35/37 and 37/39). The failing case is a beetle
-   that *did* change course, by about 39°, which is what the brain's own `wander` looks like — so
-   the likeliest reading is that the message was dropped or answered late, not that the reflex is
-   broken. It is G1's check and G1's problem; nothing was changed here to chase it.
+   **This check was the flaky one, from G1 until G4, and it had two causes — both real.** It was
+   never a tolerance: the threshold is still 45°, the window still half a second, the settling
+   time still 1.5 s. What was wrong was one line of the creatures' library and one line of the
+   check.
+
+   * `@course`, the heading a creature believes it is on, was written by `wander` and `head_to`
+     *before* they called `act` — and `act` does nothing while a reflex holds the wheel. So a
+     brain that thought about walking somewhere while a reflex was running left `@course` pointing
+     along a heading the creature never took, and `flee_from` picks **which side to swerve to**
+     from `@course`. The wrong side turns a 57° escape into a 39° one, which is under the
+     threshold. `act` is now the only thing that sets `@course`, and it sets it only when the
+     write actually went out (`ruby/prelude.rb`). With that, the turn away from the heading the
+     creature really has is `|angle to the escape| + swerve`, never less than the swerve of 57°,
+     and the check is one the game can always pass.
+   * The settling rule above says the clock is reset by *every* message. It was not: G1 reset it
+     inside the three other exclusions, so a message sent to a beetle that happened to be standing
+     still, or in the corner, did not count as having been sent — while it did go into the queue.
+     Measured over six ninety-second runs: **41 of 211 counted touches** had a message in the
+     1.5 s before them that the clock had not seen. Those are the ones where the beetle was
+     answering the earlier message half a second later, and the check was asking about the newer
+     one.
+
+   Measured on this machine, ninety-second runs, ten in a row each time: **before, 9 of 10**
+   (one run failed 35/36); **after, 10 of 10.** `docs/worklog/2026-09-17-garden-G4.md` has the
+   instrumented run that caught each cause and the hypothesis that was measured and thrown away
+   (system ordering: `startle` reads the same `Velocity` the script wrote, 212 samples, not one
+   disagreement).
 7. **creatures sleep at night.** One second after `"night"` is published, nothing that has a
    script may still be moving. The fasting beetle has no script and proves nothing, so it is not
    counted.
@@ -827,8 +1030,7 @@ it is night, so everybody is standing on the `sleep 0.5` of their `@asleep` bran
 
 ## What is not here yet
 
-G4 puts the editor and the VM panel in the window, so that a creature's file can be rewritten
-while the garden runs, with the insn/frame and the waiting line above as a panel rather than a log.
 G5 is the browser build, where the 314 KiB of models are fetched beside the wasm — and where the
 save file above becomes a `localStorage` key, which the code already does and nothing has yet run.
-`docs/plans/garden-plan.md` has all of it.
+`docs/plans/garden-plan.md` has all of it. Sound, and a creature file per *creature* rather than
+per species (the editor could do it; the game has no reason to want it yet), are not planned.

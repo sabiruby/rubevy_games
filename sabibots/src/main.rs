@@ -688,6 +688,9 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
         robot.brain.clone().unwrap_or_else(|| platform::read(&robot.file).unwrap_or_default())
     });
     editor.file = brain_name(robot);
+    // the editor no longer knows what a robot is (`rubevy-arena` had to grow a second game):
+    // the buttons' words are the game's
+    editor.apply_all_label = Some(format!("Apply to all {}", brain_name(robot)));
     editor.save_label = Some(platform::SAVE_LABEL.into());
     editor.in_memory = robot.brain.is_some();
     editor.label = robot.name.clone();

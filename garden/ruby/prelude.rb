@@ -104,9 +104,20 @@ class Creature
   #
   # The holder is a `Task`, not a flag, so the reflex's own `act` still goes through and the test
   # is "is this the task that took it" rather than "is anybody busy".
+  #
+  # It is also **the one place `@course` is set**. `@course` is "where I am going", and a reflex
+  # picks the side it swerves to from it (`flee_from` below), so a `@course` that says something
+  # the creature is not doing is a reflex that turns the wrong way. Writing it here — and only
+  # where the velocity actually went out — is what keeps it true: a `wander` whose `act` was
+  # dropped because a reflex has the wheel now changes nothing, where before it left `@course`
+  # pointing along a heading nobody ever took.
   def act(vx, vz)
     return if @wheel && @wheel != Task.current
-    me[:Velocity] = [[vx.to_f, vz.to_f]]
+    vx = vx.to_f
+    vz = vz.to_f
+    me[:Velocity] = [[vx, vz]]
+    @course = Math.atan2(vz, vx) unless vx == 0.0 && vz == 0.0
+    nil
   end
 
   # A reflex that wants the wheel for a while says so, and gives it back.
@@ -238,12 +249,13 @@ class Creature
   # heading is picked, and `from` is where we are (the caller usually knows already, and asking
   # again would cost another frame).
   def wander(change = 0.25, avoid: nil, from: nil)
-    if @course.nil? || rand < change
-      @course = rand * TWO_PI
-      @course = turn_away(@course, from || here, avoid) if avoid && !avoid.empty?
+    course = @course
+    if course.nil? || rand < change
+      course = rand * TWO_PI
+      course = turn_away(course, from || here, avoid) if avoid && !avoid.empty?
     end
-    act Math.cos(@course) * CRUISE, Math.sin(@course) * CRUISE
-    @course
+    act Math.cos(course) * CRUISE, Math.sin(course) * CRUISE
+    course
   end
 
   # Straight at something, as fast as asked for. Answers the distance that was left, or nil where
@@ -259,11 +271,7 @@ class Creature
       stop
       return 0.0
     end
-    # `@course` is "where I am going", and everything that sets a heading keeps it true — which
-    # matters because `flee_from` picks the side to swerve to from it. A beetle walking to a plant
-    # with a stale `@course` swerves to the wrong side and can end up on the heading it was
-    # already on: a reflex that fired and did nothing.
-    @course = Math.atan2(dz, dx)
+    # `@course` follows from the write: `act` sets it, and only where the write went out.
     act dx / span * speed, dz / span * speed
     span
   end
@@ -276,6 +284,14 @@ class Creature
   # reflex fires, writes a velocity, and the beetle walks on exactly as it was. With it, the
   # heading always changes by at least `swerve` — which is what a startled beetle looks like,
   # and what makes "it turned" a thing that can be checked.
+  #
+  # "The course it was already on" is `@course`, and the guarantee is only worth as much as that
+  # is. `act` is the one thing that sets it (above) and the wheel is taken before this is called,
+  # so nothing can move it between the two reads below and the write at the end: the turn away
+  # from the heading the creature really has is `|angle to the escape| + swerve`, which is never
+  # less than `swerve`. When `@course` could be written by an `act` that never went out, it was
+  # sometimes the *wrong* side, and the beetle turned by 39° instead of 57° or more — which is
+  # exactly the sixth check's old flakiness (`docs/worklog/2026-09-17-garden-G4.md`).
   def flee_from(thing, speed = DASH, swerve: 0.0)
     from = here
     away = place_of(thing)
@@ -289,7 +305,6 @@ class Creature
       side = @course.nil? || angle_diff(@course, course) >= 0 ? 1.0 : -1.0
       course += swerve.abs * side
     end
-    @course = course
     act Math.cos(course) * speed, Math.sin(course) * speed
     span
   end

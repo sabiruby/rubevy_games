@@ -8,7 +8,7 @@ so editing a file changes what happens on screen without a rebuild.
 | game | what it is | state |
 |---|---|---|
 | [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's brain is one Ruby file | playable v0.1 |
-| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | the world, the minds, the genome and the save file (G0–G3); the editor in the window is next |
+| [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | the world, the minds, the genome, the save file and the window (G0–G4); the browser build is next |
 | `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
@@ -18,7 +18,8 @@ the web. Or on a PC:
 ```
 cargo run -p sabibots                   # a window, 2D, 16:9
 cargo run -p sabibots -- --headless 15  # no window: 15 seconds, the result on stdout
-cargo run -p garden                     # the other one, 3D (F5 saves the garden, F9 brings it back)
+cargo run -p garden                     # the other one, 3D: click a creature, edit its file, Ctrl+Enter
+                                        #   (F2 the VM panel, P pause, F5 saves the garden, F9 brings it back)
 cargo run -p garden -- --headless 90    # no window: 90 seconds
 cargo run -p garden -- --headless 30 --save garden.save.json   # ... and write it down at the end
 web/build.sh && web/serve.sh            # the browser build, at http://localhost:8080/
@@ -50,15 +51,19 @@ Three things the VM gives a game, which is what these are built to show:
 ## Layout
 
 ```
-crates/rubevy-arena/   the 2D floor: camera, HUD, watching the Ruby directory for edits
+crates/rubevy-arena/   what both games stand on: the 2D camera and HUD, the code editor,
+                       the VM inspector, and watching the Ruby directory for edits
 sabibots/             SabiRuby Battle
   src/main.rs         the game: arena, robots, bullets, and the answers to what Ruby asks
   src/platform.rs     what differs between the PC build and the browser build
   ruby/prelude.rb     the DSL every robot is written in
   ruby/robots/*.rb    the robots
-garden/               Garden: the 3D world, and the components its creatures will read by name
+garden/               Garden: the 3D world, and the components its creatures read by name
   src/main.rs         the rules, and the components that are the Ruby API
+  src/window.rs       the editor, the VM panel and the HUD — the game's half of rubevy-arena's
   src/platform.rs     the same split as sabibots'
+  ruby/prelude.rb     the DSL the creatures are written in
+  ruby/creatures/*.rb one file per species
 web/                  the browser build: build.sh, serve.sh, index.html (dist/ is the output)
 docs/                 how it is put together, and what is next
 ```

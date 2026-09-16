@@ -28,6 +28,7 @@
 
 mod genome;
 mod platform;
+mod window;
 
 use std::path::{Path, PathBuf};
 
@@ -36,6 +37,7 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
+use rubevy_arena::{EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
 use serde::{Deserialize, Serialize};
@@ -89,6 +91,11 @@ const TOUCH_REACH: f32 = 1.3;
 /// reflex turn it?" cannot be asked of a creature that had no reflexes yet, and before G2 every
 /// creature in the world was as old as the world.
 const NEWBORN_GRACE: f32 = 2.0;
+
+/// How long a beetle has to have been left alone before a `"touched"` sent to it is one the sixth
+/// check can ask a question about: long enough for its reflex task to have finished anything that
+/// was already in its queue (a reflex holds the wheel for half a second over each message).
+const TOUCH_SETTLE: f32 = 1.5;
 
 /// Breeding (G2). Two creatures of one species that meet while this full are told to make a
 /// child — the rule is Rust's, the arithmetic of the child is Ruby's.
@@ -173,12 +180,29 @@ pub enum Species {
 }
 
 impl Species {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Species::Beetle => "Beetle",
             Species::Rabbit => "Rabbit",
         }
     }
+
+    /// The file every creature of it runs — the editor's unit in this game (G4).
+    pub fn file(self) -> &'static str {
+        match self {
+            Species::Beetle => "beetle.rb",
+            Species::Rabbit => "rabbit.rb",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Species::Beetle => 0,
+            Species::Rabbit => 1,
+        }
+    }
+
+    pub const ALL: [Species; 2] = [Species::Beetle, Species::Rabbit];
 }
 
 /// A living thing, how long it has been one, and what it was born with.
@@ -254,23 +278,68 @@ pub struct Rock;
 #[derive(Component)]
 struct Sun;
 
-/// What a creature's script is called and what it has cost, for the log (and for G4's HUD). The
+/// What a creature's script is called and what it has cost, for the HUD and for the log. The
 /// numbers come from `ScriptWorld::stats`, which is rubevy's, not the VM's public surface.
 #[derive(Component)]
-struct Mind {
-    name: String,
+pub struct Mind {
+    pub name: String,
+    /// which file it is running, which in this game is which sort of creature it is: every
+    /// beetle runs `beetle.rb`. (SabiRuby Battle's unit is the other way round — each robot has
+    /// a file of its own — which is why its editor has two Apply buttons and this one has one.)
+    pub species: Species,
     /// instructions the script had run at the end of the last frame
     last_instructions: u64,
     /// and how many it spent on this one
-    spent: u64,
+    pub spent: u64,
     /// how many frames it has been looked at, so that the log can say what it costs on average —
     /// one frame's number is nearly always zero, because a creature spends nearly every frame
     /// parked on a `sleep` or on an answer
-    frames: u64,
+    pub frames: u64,
     /// the line it is standing on, in the creature's own file where it is in one
-    at: String,
+    pub at: String,
     /// how many lines the prelude put in front of the creature's file
-    prelude_lines: u32,
+    pub prelude_lines: u32,
+
+    // --- G4 ----------------------------------------------------------------
+    /// It is running a text applied in the editor rather than what the file says.
+    pub in_memory: bool,
+    /// the line of the creature's *own* file it is standing on, 1-based, for the editor's band
+    pub own_line: Option<u32>,
+    /// and where it has been spending its time, per line, decayed every frame: the editor shades
+    /// the listing with it
+    pub heat: Vec<f32>,
+    /// The frame this task last ran an instruction in.
+    ran_frame: u32,
+    /// The frame `answer_garden` last answered one of the game's own questions for it. A gap that
+    /// starts on that frame is a `Rubevy.ask` round trip and is known to be one; a short gap that
+    /// does not is a component read, which rubevy answers itself and the game never sees.
+    asked_frame: Option<u32>,
+    /// round trips waited out, and the frames they took, split by which of the two they were
+    pub ask_trips: u32,
+    pub ask_frames: u32,
+    pub read_trips: u32,
+    pub read_frames: u32,
+}
+
+impl Mind {
+    /// The HUD's **frames/decision**: the mean number of frames this creature's task waits
+    /// between asking the world something and running again with the answer, over both kinds of
+    /// question. `None` until it has waited for one.
+    /// The script is being replaced: what a round trip cost the old one says nothing about the
+    /// new one (G4's editor).
+    pub fn restart(&mut self) {
+        self.ran_frame = 0;
+        self.asked_frame = None;
+        self.ask_trips = 0;
+        self.ask_frames = 0;
+        self.read_trips = 0;
+        self.read_frames = 0;
+    }
+
+    pub fn frames_per_decision(&self) -> Option<f32> {
+        let trips = self.ask_trips + self.read_trips;
+        (trips > 0).then(|| (self.ask_frames + self.read_frames) as f32 / trips as f32)
+    }
 }
 
 /// Mid-meal, and for a moment after the last bite so that the animation does not flicker between
@@ -421,7 +490,35 @@ impl Gaits {
 
 /// Where the Ruby lives. `ruby/prelude.rb` goes in front of every creature's file.
 #[derive(Resource)]
-struct RubyDir(PathBuf);
+pub struct RubyDir(pub PathBuf);
+
+/// **G4.** A creature file as the editor has it, per species: `None` is "whatever the file says".
+///
+/// This is where the garden and SabiRuby Battle come apart. There, a brain applied in the editor
+/// is a field of the robot, because a robot is the thing that has a file. Here the file *is* the
+/// species: every beetle in the world runs `beetle.rb`, so a text applied in the editor belongs
+/// to the species, every beetle restarts on it, and a beetle born an hour later is born running
+/// it. Nothing reaches the disk until Save (`platform::write`), so trying something on the
+/// beetles does not rewrite the project.
+#[derive(Resource, Default)]
+pub struct Brains {
+    applied: [Option<String>; 2],
+}
+
+impl Brains {
+    pub fn text(&self, species: Species) -> Option<&String> {
+        self.applied[species.index()].as_ref()
+    }
+
+    pub fn set(&mut self, species: Species, text: Option<String>) {
+        self.applied[species.index()] = text;
+    }
+
+    /// Where that species' file lives.
+    pub fn path(&self, ruby: &Path, species: Species) -> PathBuf {
+        ruby.join("creatures").join(species.file())
+    }
+}
 
 /// Which creatures took a bite last frame, so that `"ate"` is published once per meal rather
 /// than sixty times a second — the same decision `"bumped"` and `"touched"` made in G0, and for
@@ -669,15 +766,47 @@ fn main() {
                         ..default()
                     }),
                 RubevyPlugin::default(),
+                // G4: the editor and the VM panel, both `rubevy-arena`'s — the same two SabiRuby
+                // Battle uses. They bring `bevy_egui` between them.
+                EditorPlugin,
+                VmInspectorPlugin,
             ))
             .init_resource::<Orbit>()
+            .init_resource::<window::Watched>()
+            .init_resource::<window::Paused>()
+            .init_resource::<window::Restarting>()
+            // open from the start, so a picture (`--shot`) has it without a key being pressed
+            .insert_resource(VmInspector::following())
             .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
             .add_systems(Update, (orbit_camera, dress_animations, animate_creatures))
             // F5 and F9 (G3). Only the windowed build has a keyboard to read: `MinimalPlugins`
             // brings no input plugin at all, which is why the headless run is asked on the
             // command line instead.
-            .add_systems(Update, save_load_keys.before(save_world));
+            .add_systems(Update, save_load_keys.before(save_world))
+            .add_systems(
+                Update,
+                (
+                    window::choose_watched,
+                    window::show_code,
+                    window::inspect_keys,
+                    window::show_vm,
+                    window::do_editor_actions,
+                    window::reload_changed,
+                    window::restart_queued,
+                )
+                    .chain()
+                    .after(watch_minds),
+            )
+            .add_systems(bevy_egui::EguiPrimaryContextPass, window::draw_hud);
             register_scene_types(&mut app);
+            // a creature's file saved from outside restarts that species, as Save does
+            let dir = platform::ruby_dir();
+            match Watch::new(&dir) {
+                Some(watch) => {
+                    app.insert_resource(watch);
+                }
+                None => warn!("could not watch {dir:?}: saving a creature's file will not reload it"),
+            }
         }
     }
 
@@ -723,6 +852,7 @@ fn main() {
 
     app.insert_resource(Dice(platform::clock_seed()))
         .insert_resource(RubyDir(platform::ruby_dir()))
+        .init_resource::<Brains>()
         .init_resource::<Sky>()
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
@@ -791,7 +921,21 @@ fn main() {
         // costs a second frame per round trip, and where it landed used to be luck (rubevy
         // `docs/host-api.md`, "Where the game's systems go in the frame").
         .add_systems(Update, answer_garden.in_set(RubevySet::Answer))
-        .add_systems(Update, watch_minds.after(RubevySet::Answer));
+        .add_systems(Update, watch_minds.after(RubevySet::Answer))
+        // G4's other HUD number: the wall time the frame's scripts took, measured round the set
+        // that runs them, against `ScriptWorld::frame_time`. Both builds keep it — the headless
+        // run prints it at the end, which is where the figure in `docs/garden.md` comes from.
+        .init_resource::<window::VmClock>()
+        .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick))
+        .add_systems(
+            Update,
+            window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
+        );
+    if selftest && headless.is_none() {
+        // the editor's buttons and the two keys, which no headless run can press
+        app.insert_resource(window::WindowTest::after(3.0))
+            .add_systems(Update, window::window_selftest.before(window::inspect_keys));
+    }
     if selftest {
         // after `separate`, so what it measures is the world as the frame leaves it
         app.init_resource::<SelfTest>()
@@ -891,10 +1035,12 @@ fn make_look(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_world(
     mut commands: Commands,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
+    brains: Res<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
     selftest: Option<Res<SelfTest>>,
@@ -1024,7 +1170,7 @@ fn spawn_world(
         // no two creatures alike, so that `Genome#mix` has something to average
         let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
         let entity = spawn_creature(&mut commands, look, species, at, hunger, genome);
-        give_mind(&mut commands, &ruby.0, &mut mrb, entity, species);
+        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, species);
     }
 
     if keep_clear {
@@ -1041,7 +1187,7 @@ fn spawn_world(
         let probe =
             spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle));
         commands.entity(probe).insert(Probe { dinner });
-        give_mind(&mut commands, &ruby.0, &mut mrb, probe, Species::Beetle);
+        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, probe, Species::Beetle);
         info!(
             "selftest: a hungry beetle at ({:.1}, {:.1}) with one plant {:.1} away",
             probe_at.x,
@@ -1062,7 +1208,7 @@ fn spawn_world(
         ];
         for (offset, genome) in lovers {
             let lover = spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome);
-            give_mind(&mut commands, &ruby.0, &mut mrb, lover, Species::Beetle);
+            give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
         }
         info!(
             "selftest: two hungry beetles {:.1} apart, with four plants between them at ({:.1}, {:.1})",
@@ -1197,20 +1343,41 @@ fn spawn_creature(
 fn give_mind(
     commands: &mut Commands,
     ruby: &Path,
+    brains: &Brains,
     mrb: &mut Assets<MrbAsset>,
     entity: Entity,
     species: Species,
 ) {
-    let file = match species {
-        Species::Beetle => "beetle",
-        Species::Rabbit => "rabbit",
+    // G4: a species whose file has been rewritten in the editor and not saved runs the text that
+    // was applied, and so does anything born into it afterwards — the brain belongs to the
+    // species, not to the creature, because the file does.
+    let applied = brains.text(species);
+    let compiled = match applied {
+        Some(text) => compile_source(ruby, species.file(), text, mrb),
+        None => compile(ruby, &brains.path(ruby, species), mrb),
     };
-    let path = ruby.join("creatures").join(format!("{file}.rb"));
-    let Some((handle, prelude_lines)) = compile(ruby, &path, mrb) else { return };
+    let Some((handle, prelude_lines)) = compiled else { return };
     let name = format!("{} {}", species.name(), entity);
     commands.entity(entity).insert((
         Script::new(handle).with_name(&name).with_priority(100),
-        Mind { name, last_instructions: 0, spent: 0, frames: 0, at: String::new(), prelude_lines },
+        Mind {
+            name,
+            species,
+            last_instructions: 0,
+            spent: 0,
+            frames: 0,
+            at: String::new(),
+            prelude_lines,
+            in_memory: applied.is_some(),
+            own_line: None,
+            heat: Vec::new(),
+            ran_frame: 0,
+            asked_frame: None,
+            ask_trips: 0,
+            ask_frames: 0,
+            read_trips: 0,
+            read_frames: 0,
+        },
     ));
 }
 
@@ -1274,12 +1441,15 @@ fn camera_at(orbit: &Orbit) -> Transform {
 fn orbit_camera(
     mut orbit: ResMut<Orbit>,
     buttons: Res<ButtonInput<MouseButton>>,
+    pointer: Option<Res<bevy_egui::input::EguiWantsInput>>,
     mut motion: MessageReader<MouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
     mut cameras: Query<&mut Transform, With<Camera3d>>,
 ) {
     let mut moved = false;
-    let dragging = buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right);
+    // G4: a drag inside a panel is the panel's, not the camera's
+    let mine = !pointer.is_some_and(|p| p.wants_pointer_input());
+    let dragging = mine && (buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right));
     for m in motion.read() {
         if dragging {
             orbit.yaw -= m.delta.x * 0.005;
@@ -1678,22 +1848,25 @@ fn startle(
                 touching.push((*rabbit, beetle));
                 if !contacts.0.contains(&(*rabbit, beetle)) {
                     world.publish(Some(beetle), "touched", Answer::Entity(*rabbit));
-                    // and, for the selftest, which way it was going when it was told
-                    if let Some(test) = test.as_mut()
-                        && velocity.0.length() > 0.5
-                        && !by_a_wall(at)
-                        && creature.age > NEWBORN_GRACE
-                    {
-                        // and only when this beetle has been left alone for a while. A rabbit
-                        // that keeps walking into one publishes again every time the contact is
-                        // remade, the reflex takes half a second over each message, and the rest
-                        // wait in the queue — so "did it turn?" asked half a second after the
-                        // fourth message is really asking about the first. The clock is reset by
-                        // *every* touch, so what is measured is always a beetle that was not
-                        // already running from something.
+                    // and, for the selftest, which way it was going when it was told.
+                    //
+                    // **The clock is reset by every message, and the guards come after it.** A
+                    // rabbit that keeps walking into a beetle publishes again every time the
+                    // contact is remade; the reflex takes half a second over each one and the
+                    // rest wait in its queue, so "did it turn?" asked half a second after the
+                    // third message is really asking about the first. G1 wrote that down and
+                    // then reset the clock *inside* the three guards below — so a message sent
+                    // to a beetle that happened to be standing still, or in the corner, or a
+                    // second old did not count as having been sent at all, and the next message
+                    // looked like the first thing that had happened to it in a long while.
+                    // Measured over six ninety-second runs: **41 of 211 counted touches** had a
+                    // message in the 1.5 s before them that the clock had not seen, and that is
+                    // where the sixth check's remaining flakiness lived
+                    // (`docs/worklog/2026-09-17-garden-G4.md`).
+                    if let Some(test) = test.as_mut() {
                         let fresh = match test.last_touch.iter_mut().find(|(e, _)| *e == beetle) {
                             Some(seen) => {
-                                let fresh = now - seen.1 > 1.5;
+                                let fresh = now - seen.1 > TOUCH_SETTLE;
                                 seen.1 = now;
                                 fresh
                             }
@@ -1702,7 +1875,13 @@ fn startle(
                                 true
                             }
                         };
-                        if fresh {
+                        // and then: a beetle that was actually walking, in the open, old enough
+                        // to have subscribed to anything (`NEWBORN_GRACE`)
+                        if fresh
+                            && velocity.0.length() > 0.5
+                            && !by_a_wall(at)
+                            && creature.age > NEWBORN_GRACE
+                        {
                             test.touched.push((beetle, now, velocity.0));
                         }
                     }
@@ -1806,6 +1985,7 @@ fn hatch(
     mut births: ResMut<Births>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
+    brains: Res<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut test: Option<ResMut<SelfTest>>,
     mut parents: Query<(&mut Hunger, &mut Breeding)>,
@@ -1818,7 +1998,7 @@ fn hatch(
         );
         let child = spawn_creature(&mut commands, look.as_deref(), birth.species, at, CHILD_HUNGER, birth.genome);
         commands.entity(child).insert(Breeding { ready_at: now + MATE_COOLDOWN, partner: None });
-        give_mind(&mut commands, &ruby.0, &mut mrb, child, birth.species);
+        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, child, birth.species);
         info!(
             "a {} was born at {now:.1} s ({}) — {}",
             birth.species.name(),
@@ -1952,6 +2132,9 @@ fn answer_garden(world: &mut World) {
     let mut newborn: Vec<Birth> = Vec::new();
     // and the first `garden.spawn` this frame that was refused, for the selftest's malformed Hash
     let mut refused: Option<String> = None;
+    // who asked, for the HUD's frames-per-decision (G4): a gap in a task's instruction count that
+    // begins on this frame is a round trip and not a nap (`watch_minds`)
+    let mut askers: Vec<Entity> = Vec::new();
     world.resource_scope(|world: &mut World, mut scripts: Mut<ScriptWorld>| {
         let world = &*world;
         for request in scripts.take_requests() {
@@ -1962,6 +2145,11 @@ fn answer_garden(world: &mut World) {
                 })
                 .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>());
             let asker = request.entity;
+            if let Some(asker) = asker
+                && !askers.contains(&asker)
+            {
+                askers.push(asker);
+            }
             match request.kind.as_str() {
                 "garden.nearest" => {
                     let found = of_kind.zip(asker).and_then(|(rc, me)| {
@@ -2065,6 +2253,12 @@ fn answer_garden(world: &mut World) {
     if !newborn.is_empty() {
         world.resource_mut::<Births>().0.extend(newborn);
     }
+    let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
+    for asker in askers {
+        if let Some(mut mind) = world.get_mut::<Mind>(asker) {
+            mind.asked_frame = Some(frame);
+        }
+    }
     // the selftest's tester asks for a creature whose genome has no `sight`; what it is told is
     // serde's own message, and the check is that the message names the gene
     if let Some(why) = refused
@@ -2075,28 +2269,92 @@ fn answer_garden(world: &mut World) {
     }
 }
 
-/// What a script has cost and where it is standing, read every frame out of
-/// `ScriptWorld::stats`. Until G4 puts a panel in the window this is only for the log at the end
-/// of a headless run, but it is the same two numbers the panel will show — and the second one,
-/// the line a *parked* task is waiting on, is the thing this VM can say and an engine's usual
-/// scripting cannot.
-fn watch_minds(world: Res<ScriptWorld>, mut minds: Query<(&mut Mind, Option<&ScriptTask>)>) {
+/// The shortest `sleep` any script in `ruby/` takes: one line of `run_creature`, before a
+/// creature's first thought. Everything else sleeps for 0.1 s or more.
+///
+/// It is the only number the frames-per-decision measurement below rests on, and it is a fact
+/// about the scripts in this repository rather than a tolerance: a gap between two bursts of a
+/// task that is shorter than the shortest nap it could be taking is a gap spent waiting for the
+/// game.
+const SHORTEST_SLEEP: f32 = 0.05;
+
+/// What a script has cost, where it is standing, and **how long it waits for an answer** — the
+/// three numbers the HUD draws and the headless run prints.
+///
+/// The last of them is what G4 added, and it is worth being exact about, because the whole shape
+/// of the scripts follows from it. A creature's task runs in short bursts and is parked between
+/// them. A burst ends either because the script asked the world something — a component read
+/// (`me[:Hunger]`) or one of the game's two questions (`garden.nearest`) — or because it went to
+/// sleep. Both kinds of question are answered in `RubevySet::Answer` of the same frame, so the
+/// task is ready again on the next one.
+///
+/// So **frames/decision is the number of frames between the burst that asked and the burst that
+/// got the answer**, and the two kinds are told apart like this:
+///
+/// * a gap that *starts* on the frame `answer_garden` answered a question for this creature is a
+///   `Rubevy.ask` round trip, and is known to be one ([`Mind::asked_frame`]);
+/// * any other gap shorter than [`SHORTEST_SLEEP`] is a component read, which rubevy answers
+///   itself in `answer_components` and which the game therefore never sees as a `Request`;
+/// * anything longer is a `sleep`, and is not a decision at all.
+///
+/// Both come out at 1 (`docs/garden.md`, "The window (G4)"), which is what the placement of
+/// `answer_garden` in `RubevySet::Answer` buys: answered anywhere later and every one of these
+/// would read 2.
+fn watch_minds(
+    time: Res<Time>,
+    frame: Res<bevy::diagnostic::FrameCount>,
+    world: Res<ScriptWorld>,
+    mut minds: Query<(&mut Mind, Option<&ScriptTask>)>,
+) {
+    let now = frame.0;
+    // how few frames a gap has to be to be too short for the shortest nap in `ruby/`
+    let dt = time.delta_secs().max(1.0 / 1000.0);
+    let sleep_floor = (SHORTEST_SLEEP / dt).ceil().max(2.0) as u32;
     for (mut mind, script) in &mut minds {
         let Some(script) = script else { continue };
         let stats = world.stats(script);
+        let ran = stats.instructions > mind.last_instructions;
         mind.spent = stats.instructions.saturating_sub(mind.last_instructions);
         mind.last_instructions = stats.instructions;
         mind.frames += 1;
+        if ran {
+            let was = mind.ran_frame;
+            let gap = now.saturating_sub(was);
+            if was > 0 && gap >= 1 {
+                if mind.asked_frame == Some(was) {
+                    mind.ask_trips += 1;
+                    mind.ask_frames += gap;
+                } else if gap < sleep_floor {
+                    mind.read_trips += 1;
+                    mind.read_frames += gap;
+                }
+            }
+            mind.ran_frame = now;
+        }
         // the prelude sits in front of the creature's file in the compiled program, so a line
         // past its end is a line of the author's own file, counted from its own first line
         let lines = mind.prelude_lines;
-        mind.at = match stats.frames.iter().find(|(_, line)| *line > lines) {
-            Some((file, line)) => format!("{file}:{}", line - lines),
+        let own = stats.frames.iter().find(|(_, line)| *line > lines).map(|(f, l)| (f.clone(), l - lines));
+        mind.own_line = own.as_ref().map(|(_, l)| *l);
+        mind.at = match &own {
+            Some((file, line)) => format!("{file}:{line}"),
             None => match stats.location {
                 Some((_, line)) => format!("prelude.rb:{line}"),
                 None => "-".into(),
             },
         };
+        // where it keeps coming back to, for the editor's shading (G4). A brain jumps between
+        // lines far faster than an eye can follow; what is readable is where it *stays*.
+        if let Some(line) = mind.own_line {
+            let i = line.saturating_sub(1) as usize;
+            if mind.heat.len() <= i {
+                mind.heat.resize(i + 1, 0.0);
+            }
+            for h in mind.heat.iter_mut() {
+                *h *= 0.985;
+            }
+            mind.heat[i] += 1.0;
+        }
     }
 }
 
@@ -2289,6 +2547,7 @@ fn load_world(
     mut sky: ResMut<Sky>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
+    brains: Res<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
     old: Query<Entity, Or<(With<Plant>, With<Tree>, With<Rock>, With<Creature>)>>,
@@ -2325,7 +2584,7 @@ fn load_world(
         // the age it had, not a newborn's: `spawn_creature` makes an ordinary creature and this is
         // the one field of it that a file can be older than
         commands.entity(entity).insert(Creature { species: creature.species, age: creature.age, genome: creature.genome });
-        give_mind(&mut commands, &ruby.0, &mut mrb, entity, creature.species);
+        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, creature.species);
         if !creature.memory.is_null() {
             pending.push((entity, creature.memory.clone()));
         }
@@ -2614,6 +2873,7 @@ fn watch_sleep(time: Res<Time>, mut test: ResMut<SelfTest>, creatures: Query<&Ve
 // Running without a window
 // ---------------------------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn stop_when_over(
     time: Res<Time>,
     headless: Res<Headless>,
@@ -2621,8 +2881,12 @@ fn stop_when_over(
     test: Option<Res<SelfTest>>,
     restoring: Option<Res<Restoring>>,
     file: Res<SaveFile>,
+    clock: Res<window::VmClock>,
+    world: Res<ScriptWorld>,
     mut save: ResMut<SaveNow>,
     creatures: Query<(&Creature, &Hunger, &Velocity, &Transform, Option<&Mind>)>,
+    panelled: Query<(Entity, &Creature, &Hunger, &Mind)>,
+    tasks: Query<(&Mind, &ScriptTask)>,
     plants: Query<&Plant>,
     everything: Query<Entity>,
     mut exit: MessageWriter<AppExit>,
@@ -2660,6 +2924,56 @@ fn stop_when_over(
         if sky.night { "night" } else { "day" },
         sky.phase
     );
+    // G4: the window's two panels, in words, for a run that has no window — the same fields the
+    // HUD draws and the same `VmInspector` the VM panel draws, filled here and printed.
+    info!(
+        "hud: {} creatures · {} plants · {} {:.2} · VM {:.2} / {:.1} ms this frame ({:.2} ms smoothed)",
+        panelled.iter().count(),
+        plants.iter().count(),
+        if sky.night { "night" } else { "day" },
+        sky.phase,
+        clock.spent_ms,
+        clock.budget_ms,
+        clock.mean_ms,
+    );
+    for row in window::hud_rows(&panelled) {
+        info!(
+            "hud:   {:<14}{} hunger {:>5.1}  {:>6} insn/frame  {} frames/decision  {}",
+            row.name,
+            if row.in_memory { "*" } else { " " },
+            row.hunger,
+            row.insn_per_frame,
+            match row.per_decision {
+                Some(n) => format!("{n:>4.1}"),
+                None => "   –".into(),
+            },
+            row.at,
+        );
+    }
+    {
+        // and what a round trip cost over the whole run, both kinds of question apart — the
+        // number the HUD's `frames/decision` column is the per-creature form of
+        let (mut ask_trips, mut ask_frames, mut read_trips, mut read_frames) = (0u32, 0u32, 0u32, 0u32);
+        for (_, _, _, mind) in &panelled {
+            ask_trips += mind.ask_trips;
+            ask_frames += mind.ask_frames;
+            read_trips += mind.read_trips;
+            read_frames += mind.read_frames;
+        }
+        let mean = |f: u32, n: u32| if n == 0 { f32::NAN } else { f as f32 / n as f32 };
+        info!(
+            "hud: frames/decision — {ask_trips} questions the game answered, {:.3} frames each; {read_trips} component reads, {:.3} frames each",
+            mean(ask_frames, ask_trips),
+            mean(read_frames, read_trips),
+        );
+        let mut panel = VmInspector::default();
+        for (mind, script) in &tasks {
+            panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
+            for line in panel.log_lines() {
+                info!("{line}");
+            }
+        }
+    }
     // what the population is made of (G2). The world starts with each species' own numbers
     // jittered by a sixth either way; anything the run has moved is breeding and starving —
     // the average of the survivors, not of the born.
