@@ -26,7 +26,7 @@
 | G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 未着手 |
 | G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 未着手 |
 | G4 | 窓: エディタ・VM パネル（`rubevy-arena`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 未着手 |
-| G5 | ブラウザ版（`web/` の仕組みを共有）| 未着手（G4 の後、任意） |
+| G5 | ブラウザ版（`web/` の仕組みを共有、Pages で公開） | 未着手（G4 の後。**著者の希望 2026-09-17: 任意ではなく必須**） |
 
 ## 世界（G0）
 
@@ -42,7 +42,7 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
 40×30 マスの草地。エンティティと**コンポーネント**（すべて `#[derive(Component, Reflect)] #[reflect(Component)]` + `app.register_type::<T>()`。
 これが Ruby から名前で見える条件で、ここ以外に接着コードは書かない）:
 
-* `Plant { size: f32 }` — 毎秒わずかに育ち、食べられると減る。空きマスに確率で芽が出る。
+* `Plant { size: f32 }` — 草。毎秒わずかに育ち、食べられると減る。空きマスに確率で芽が出る。`Tree`（数本、固定、`Collider` 付き）と `Rock` は障害物。
 * `Creature { species: Species, age: f32 }`、`Hunger(f32)`（0 で餓死）、`Velocity(Vec2)`（Rust が `Transform` に積分、壁で止める）、`Sight(f32)`（見える半径）、
   `Memory`（G3 まで空）。`Species` は `enum { Beetle, Rabbit }`（enum も Reflect なら Ruby にはシンボルで見える —
   rubevy `src/reflect.rs` の変換に従う）。
@@ -50,7 +50,13 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
   `ScriptWorld::publish(Some(creature), "ate", …)` と `publish(Some(plant_owner?), …)` は無し — 草は script を持たない）、
   餓死（`ScriptTask` の除去 → 購読解除まで rubevy がやる）、昼夜（60 秒周期。夜になった瞬間に `publish(None, "night", …)`、朝に `"day"`）。
   Rabbit が Beetle に触れると Beetle は `"touched"` を受ける（逃げる反射の材料）。
-* `--headless N` と `SABIBOTS_SELFTEST` に当たる `GARDEN_SELFTEST`: 「10 秒以内に誰かが食べる」「60 秒で夜が来る」「餓死したエンティティが消える」。
+* **当たり判定**（著者の希望 2026-09-17）: 生き物どうし、生き物と木・岩は**すり抜けない**。物理エンジン（avian/rapier）は入れず（wasm と依存の重さ、
+  規則が見えなくなる）、XZ 平面の円で書く: `Collider { radius: f32 }`（`Reflect`、Ruby からも `e[:Collider]` で読める）を生き物・木・岩に付け、
+  移動の後に「重なった 2 円を半径の和まで押し戻す」（生き物どうしは半分ずつ、木・岩は動かない）。40×30 マスで数十体なので、マスの格子（`HashMap<(i32,i32), Vec<Entity>>`）で
+  近傍だけ調べれば十分。草（`Plant`）は**食べる対象なので通り抜けられる**（接触＝食事）。木は食べられない障害物で、`Tree`（`Plant` とは別のコンポーネント）。
+  押し戻されたフレームに `publish(Some(creature), "bumped", …)`（相手のエンティティ）を出し、G1 で `reflex(:bumped)` が向きを変える材料にする。
+  selftest: 「90 秒間、生き物どうし・生き物と木の中心距離が半径の和の 90% を下回るフレームが無い」。
+* `--headless N` と `SABIBOTS_SELFTEST` に当たる `GARDEN_SELFTEST`: 「10 秒以内に誰かが食べる」「60 秒で夜が来る」「餓死したエンティティが消える」「すり抜けが無い」。
 
 ## アセット（G0a）
 
@@ -144,9 +150,16 @@ impl Genome {
 sabibots 側も同時に直してよい）を載せる。HUD: 生き物ごとに「1 判断のフレーム数」（`ask` の発行から答えまでを rubevy の stats から）、全体の VM 時間 / 8 ms。
 `--shot` で 1 枚。
 
-## ブラウザ版（G5、任意）
+## ブラウザ版（G5、必須）
 
-`web/build.sh` をゲーム名引数付きにして共有。`localStorage` のセーブは G3 で `platform.rs` に隠す。Pages は `rubevy_games/garden/`。
+`web/build.sh` は既にゲーム名を引数に取る（`build.sh sabibots`）が、出力先が `web/dist` 1 つで、`index.html` と Pages の workflow が sabibots 前提。
+これを **2 ゲームを 1 つの Pages に**する形にする: `web/dist/` 直下に入口の `index.html`（2 つのゲームへのリンクとひとこと）、`web/dist/sabibots/`、`web/dist/garden/`。
+`build.sh` は `build.sh <game>` で `dist/<game>/` に書き、`build.sh all` で両方 + 入口。workflow は `all` を回す。
+URL は `https://sabiruby.github.io/rubevy_games/`（入口）、`…/sabibots/`、`…/garden/`。**今の `…/rubevy_games/` で Battle が開く URL は変わる**ので、
+入口ページに Battle へのリンクを一番上に置き、README・`docs/web.md`・book 側の参照（本体が直す）を更新する。
+アセット（G0a の `.glb`）は `dist/garden/assets/` に同梱し `fetch` で読む。`localStorage` のセーブは G3 で `platform.rs` に隠す。
+wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記録。lavapipe の `--shot` とは別に、ブラウザで 1 分動かして selftest 相当（食べる・夜・餓死）が
+ログに出ることを確認（`web/serve.sh` + headless Chrome があれば自動、無ければ手で）。
 
 ## 確認
 
