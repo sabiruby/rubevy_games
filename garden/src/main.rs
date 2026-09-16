@@ -601,6 +601,11 @@ fn main() {
         .register_type::<Plant>()
         .register_type::<Creature>()
         .register_type::<Species>()
+        // `Genome` is a *field* of `Creature`, not a component, and a nested field is reached
+        // through its parent: taking this line out changes nothing a script can see (measured —
+        // `me[:Creature][:genome]` still reads as a Hash, and the breeding check still passes).
+        // It is here because the type is one the game means Ruby to have, and G3 will hand one
+        // to `Serde<CreatureSpec>` by name.
         .register_type::<Genome>()
         .register_type::<Hunger>()
         .register_type::<Velocity>()

@@ -23,7 +23,7 @@
 | G0 | 世界（Rust だけ）: 草が生え、生き物が `Velocity` で動き、腹が減り、草を食べ、死に、昼夜が回る。headless + selftest | 済み（`2ece3a6` + 当たり判定） |
 | G0a | 軽いフリーの 3D アセットに置き換え（下記「アセット」。G0 は基本形状で始めてよい） | 済み（`58d6940`。Kenney の Nature Kit + Cube Pets、7 ファイル 314 KiB） |
 | G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 済み（`ed54e59`） |
-| G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 未着手 |
+| G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 済み（`223fc0d`） |
 | G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 未着手 |
 | G4 | 窓: エディタ・VM パネル（`rubevy-arena`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 未着手 |
 | G5 | ブラウザ版（`web/` の仕組みを共有、Pages で公開） | 未着手（G4 の後。**著者の希望 2026-09-17: 任意ではなく必須**） |
@@ -190,17 +190,19 @@ end
 Rust の構造体を Ruby から使う。**マクロを使う版**を本番にし、比較のために手書き版（`define_closure` × 6）を `docs/garden.md` に行数付きで並べる（コードは入れない）:
 
 ```rust
-#[derive(Clone, Serialize, Deserialize, RubyClass)]
+// 実装したもの（`garden/src/genome.rs`）。Serialize/Deserialize は G3 で足す
+#[derive(Clone, Copy, Debug, Reflect, RubyClass)]
 #[ruby(name = "Genome")]
-pub struct Genome { speed: f32, sight: f32, appetite: f32 }
+pub struct Genome { pub speed: f32, pub sight: f32, pub appetite: f32 }
 
 #[ruby_methods]
 impl Genome {
     fn new(speed: f64, sight: f64, appetite: f64) -> Self { … }
     fn speed(&self) -> f64 { … }  fn sight(&self) -> f64 { … }  fn appetite(&self) -> f64 { … }
-    fn mix(&self, other: &Genome) -> Genome { … }          // 平均
-    fn mutate(&self, vm: &mut Vm, rate: f64) -> Genome { … } // VM の乱数（`Random`）を使う
-    fn to_h(&self, vm: &mut Vm) -> Value { … }               // Serde<T> を返す形でもよい
+    fn mix(&self, vm: &mut Vm, other: Value) -> VmResult<Genome> { … }   // 平均。`&Genome` は取れない
+    fn mutate(&self, vm: &mut Vm, rate: f64) -> VmResult<Genome> { … }   // VM の乱数（`Random`）
+    fn to_h(&self, vm: &mut Vm) -> VmResult<Value> { … }
+    fn to_s(&self) -> String { … }
 }
 ```
 
@@ -209,6 +211,42 @@ impl Genome {
 * 繁殖: `Hunger` が満ちた 2 体が触れると Rust が子を産み、`Genome#mix` → `#mutate` を **Ruby から**呼ぶ形にする（`reflex(:mate) { |partner| child = my_genome.mix(partner_genome).mutate(0.1); garden.spawn(species: …, genome: child.to_h) }`）。
   規則（誰が誰と産めるか）は Rust、値の計算は Ruby から Rust のメソッドを呼ぶ、という分担を見せる。
 * `sabiruby-macros` は `sabiruby` の `macros` feature（release-prep の Part C で入る）経由。それまでは `sabiruby-macros = { git = … }` 直接でよい。
+
+**実装で分かったこと（G2、`docs/worklog/2026-09-17-garden-G2.md`、成果は `docs/garden.md` の「The genome (G2)」）**:
+
+* **マクロ版 61 行 / 手書き版 113 行**（どちらもコメントと空行を除いたコード行、同じ 8 メソッド）。
+  手書き版は実際にビルドを通してから数えて消した（`garden/src/genome_by_hand.rs`、コミットしていない）。
+  差の 52 行は全部配管 — store と tag、クラスと特異クラス、返り値ごとの `data_new`、
+  引数ごとの `data_of` と型エラー、メソッドごとの引数個数、引数ごとの `FromRuby`。
+  手書き版には**有利に**倒してある（`Genome` は `Copy` なので store から借りずにコピーで済ませ、
+  `take_out`/`give_back` が要らない。getter 3 本は 1 つのクロージャで共有）。
+* **`mix(&self, other: &Genome)` は書けない。** マクロが引数を変換するのは `FromRuby` で、
+  参照に `FromRuby` は無い（`docs/design/macros.md`「What it does not cover」）。
+  自分と同じクラスのオブジェクトを取るメソッドは `&mut Vm` をもらって自分で
+  `Genome::borrow(vm, other)` する。副作用として `g.mix(g)` は
+  `RuntimeError: Genome is already in use by a call on the same object` になる
+  （`&mut Vm` を取るメソッドは自分のレシーバを store から出しているため）。計画書の擬似コードは直した。
+* **乱数は VM の `Random`。** native が受け取るのは `&mut Vm` だけで Bevy の `World` には触れないので、
+  ゲームの `Dice` リソースは届かない（rubevy `docs/host-api.md`）。`clock_seed` の私物 RNG にすると
+  Ruby から `srand` で手が入らない 2 本目の運になるので、`vm.funcall(Random, :rand)` にした。
+  スクリプトの `rand` と同じ 1 本の流れになる。
+* **「触れたら」という規則はほとんど発火しない。** 2 つの円が重なるのは `separate` が押し戻す 1 フレームだけで、
+  そのフレームに `"bumped"` が出て両方のスクリプトが互いから逃げる。40 秒の実測で、満腹な同種 2 匹が
+  最も近づいたのは **1.24**（半径の和は 0.80）。「1 体分の距離（2.0）以内」に変えた。
+  閾値 `MATE_HUNGER` も 85 では 90 秒に 2 回・0 回のこともあり、75（甲虫自身の「草を探す」55 より十分上）にした。
+* **子は生まれた瞬間、まだ耳が無い。** `Script` が `ScriptTask` になるのは次以降のフレームで、
+  そのタスクが最初にするのが購読なので、生後すぐに publish された出来事は落ちる。
+  規則ではない（聞こえなかった生き物はただ歩き続ける）が、G1 の「触られたら向きを変える」判定は
+  生後 2 秒未満を数えないようにした（`NEWBORN_GRACE`）。
+* **費用は「子が来たとき」に払う。** `"mate"` を publish した時点で腹を減らすと、購読していない
+  スクリプト（ウサギには `reflex(:mate)` が無い）にも課金することになる。publish は 2 秒ごとの再送にして、
+  親の腹と 20 秒のクールダウンは `hatch`（子が実際に生まれるフレーム）で引く。
+* **kwargs は `method_missing(name, *args)` に Hash で届く。** `garden.spawn(species: …, genome: …, at: …)`
+  が `Rubevy::Proxy` を通って `Arg::Value` の Hash 1 個になることは実測で確認した（計画書の綴りのまま書ける）。
+* **G1 の 6 つ目の判定はもともと不安定。** 「ウサギに触られた甲虫が 0.5 秒で向きを変える」は
+  main にマージ済みの G1 バイナリ（`a61a611`）でも 90 秒 4 回中 1 回落ちる（32/33）。
+  この枝でも 3 回連続 ok の後 4 回目が 35/37。落ちる例は「39 度だけ曲がった」= 脳の `wander` に見える形なので、
+  反射が壊れたのではなく取りこぼしか遅れ。G1 の課題なのでここでは追っていない。
 
 ## セーブ/ロード（G3）
 
