@@ -231,7 +231,8 @@ mruby-task's tasks.
 robot "Scout" do
   reflex(:hit) do |by, damage|      # `by` is the attacker's name, `damage` a number
     @swerve = rand < 0.5 ? 1.0 : -1.0
-    6.times { act throttle: 1.0, turn: @swerve; sleep 0.05 }
+    act throttle: 1.0, turn: @swerve
+    sleep 0.3
     @swerve = nil
   end
 
@@ -267,26 +268,37 @@ everything that needs one.
   prelude used to copy the `@rubevy_entity` the scheduler puts on the robot's own task; since
   rubevy `9104f7c` a task made with `Task.new` inherits it from the task that made it (rubevy's
   `docs/host-api.md`, *Events*), so there is nothing here to copy.
-* **Its priority is the brain's less 20** — a smaller number is looked at first, so a reflex that
-  is ready runs before the brain does in that frame.
+* **Its priority is the brain's plus 20** — a *lower* priority, since a smaller number is looked
+  at first. That is on purpose, and the next section is why.
 
 ### Two tasks, one tank: last writer wins
 
 Both tasks call `act` on the same robot, and `act` simply sets the controls: **whichever question
 the game answers last in a frame is what the tank does.** There is no locking and no arbitration,
-and there is a wrinkle worth knowing:
+so the rule that matters is which of the two asks last:
 
-* A reflex is the *higher* priority, so it runs *first* in a frame — and therefore its `act`
-  reaches the game *before* the brain's. Being quicker off the mark makes a reflex lose the tie,
-  not win it.
-* Worse, the brain usually has a question in flight when the hit lands (it looked, then asked for
-  its radar), and the `act` it makes when that answer comes back would undo the swerve a few
-  frames later.
+* **A reflex is the lower priority, so it runs last in a frame** — its `act` reaches the game
+  after the brain's, and the tank obeys the reflex. Being quick off the mark is what *starts* a
+  reflex the same frame the hit lands; being last in the frame is what makes it stick.
+* It was the other way round at first (the plan asked for a higher priority, thinking "sooner" was
+  "stronger"), and with last-writer-wins a reflex that runs first always loses the tie. The scout
+  coped by saying `act` again every 0.05 s for the whole swerve — a workaround that is gone now
+  that the order is right: one `act` and a `sleep 0.3`.
+* The brain usually has a question in flight when the hit lands (it looked at `@swerve`, then
+  asked for its radar), and the `act` it makes when that answer comes back would undo the swerve
+  a frame or two later. That is the part the priority cannot fix.
 
-So a reflex that wants the wheel for a while says so again while it holds it, and the brain leaves
-the controls alone — `@swerve` in `scout.rb` is that agreement, and it is an ordinary instance
-variable because both tasks are the same object's. A reflex that only sets a flag, logs, or fires
-once needs none of this.
+So a reflex that wants the wheel for longer than a frame says so, and the brain leaves the
+controls alone while it does — `@swerve` in `scout.rb` is that agreement, and it is an ordinary
+instance variable because both tasks are the same object's. A reflex that only sets a flag, logs,
+or fires once needs none of this.
+
+What the order is worth, measured with the selftest's own check (`the heading changed within
+0.3 s of the hit`, 20 s headless runs): with the reflex at the lower priority and one `act`,
+five runs out of five pass and every swerve turns the hull at least 0.48 rad. With the priority
+the other way round and the same one `act`, two runs out of three fail. The old
+say-it-again-every-frame reflex passes either way, but turns as little as 0.25 rad when it has to
+fight the brain for the wheel.
 
 The reflexes of one robot share one task, on purpose: a robot hit again while its reflex is still
 running gets the second reflex when the first has finished, rather than two swerves fighting.
