@@ -16,7 +16,6 @@
 //! * **`F5` is taken.** It saves the garden (G3), so the editor's apply key here is
 //!   `Ctrl+Enter` and the button (`Editor::apply_key`).
 
-use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use rubevy::{MrbAsset, Script, ScriptTask, ScriptWorld};
@@ -55,35 +54,12 @@ impl Paused {
     }
 }
 
-/// How long the VM had this frame, against what it is allowed.
-///
-/// The span is measured round `RubevySet::Tick` — `tick_scripts`, then `drain_commands` and
-/// `apply_component_writes`, which are the frame's scripts and everything they asked for. It is
-/// wall time, not CPU: it is the number the budget is *about* (`ScriptWorld::frame_time`, 8 ms),
-/// so it is the number to show beside it.
-#[derive(Resource, Default)]
-pub struct VmClock {
-    started: Option<Instant>,
-    /// milliseconds the last frame's scripts took
-    pub spent_ms: f32,
-    /// smoothed, because a single frame's figure flickers faster than it can be read
-    pub mean_ms: f32,
-    /// what `ScriptWorld::frame_time` allows, in milliseconds
-    pub budget_ms: f32,
-}
-
-pub fn vm_clock_start(mut clock: ResMut<VmClock>) {
-    clock.started = Some(Instant::now());
-}
-
-pub fn vm_clock_end(mut clock: ResMut<VmClock>, world: Res<ScriptWorld>) {
-    let Some(started) = clock.started.take() else { return };
-    let spent = started.elapsed().as_secs_f32() * 1000.0;
-    clock.spent_ms = spent;
-    // a fifth of the new reading: about a sixth of a second of memory at 60 Hz
-    clock.mean_ms = clock.mean_ms * 0.8 + spent * 0.2;
-    clock.budget_ms = world.frame_time.map(|d| d.as_secs_f32() * 1000.0).unwrap_or(0.0);
-}
+/// **The VM's share of the frame lives in `rubevy-arena` now** (G9). It was written here in G4,
+/// and the VM panel — which both games have — is where it is shown, so it moved to the panel:
+/// `VmInspectorPlugin` measures it in the windowed build and the headless one adds the two
+/// systems itself (`main`). The names are re-exported because the callers here, the HUD and
+/// `crate::stop_when_over`, are the garden's own.
+pub use rubevy_arena::inspect::{vm_clock_end, vm_clock_start, VmClock};
 
 // ---------------------------------------------------------------------------------------------
 // Picking a creature
@@ -481,6 +457,8 @@ pub fn show_vm(
         return;
     };
     panel.spent = mind.spent;
+    // G9: the panel's top half says insn/frame, and this is the same average the HUD's column is
+    panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
     panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
 }
 
@@ -834,11 +812,21 @@ pub fn window_selftest(
             let Some((entity, mind, _)) = a_beetle() else { return };
             watched.entity = Some(entity);
             test.original = platform::read(&brains.path(&ruby.0, mind.species)).unwrap_or_default();
-            keys.press(KeyCode::KeyP);
+            // G9: the panel starts closed, so the first key of the run is the one that opens it.
+            // Everything below wants to see the frames it draws.
+            ok(!panel.open, "the VM panel starts closed");
+            keys.press(KeyCode::F2);
             test.step = 1;
             test.at = now + 0.2;
         }
         1 => {
+            ok(panel.open, "F2 opens it");
+            keys.release(KeyCode::F2);
+            keys.press(KeyCode::KeyP);
+            test.step = 2;
+            test.at = now + 0.2;
+        }
+        2 => {
             // once the pause has taken hold, and not on the frame it was asked for: the scripts
             // and the rules of *that* frame had already run when the key was read
             test.insn = spent();
@@ -846,14 +834,14 @@ pub fn window_selftest(
             test.places = places();
             test.hunger = hunger();
             test.phase = sky.phase;
-            test.step = 2;
+            test.step = 3;
             // **two seconds** (G9), not the half second the scripts-only pause was checked over:
             // a creature walks about four units in two seconds, the meters fall by a tenth of
             // themselves, and the day turns by 1/30 of itself — each of them far past anything a
             // comparison could miss
             test.at = now + 2.0;
         }
-        2 => {
+        3 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
             // the three the author asked for: **the world**, not only the VM
@@ -881,10 +869,10 @@ pub fn window_selftest(
             test.phase = sky.phase;
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::KeyP);
-            test.step = 3;
+            test.step = 4;
             test.at = now + 0.5;
         }
-        3 => {
+        4 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the creatures are thinking again");
             // and the world with them. Positions are "somebody moved" rather than "everybody
@@ -904,24 +892,24 @@ pub fn window_selftest(
             ok(sky.phase > test.phase, "the day turns again");
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::F2);
-            test.step = 4;
-            test.at = now + 0.2;
-        }
-        4 => {
-            ok(!panel.open, "F2 hides the VM panel");
-            keys.release(KeyCode::F2);
-            keys.press(KeyCode::F2);
             test.step = 5;
             test.at = now + 0.2;
         }
         5 => {
-            ok(panel.open, "F2 shows it again");
+            ok(!panel.open, "F2 hides the VM panel");
             keys.release(KeyCode::F2);
+            keys.press(KeyCode::F2);
             test.step = 6;
             test.at = now + 0.2;
         }
-        // --- and then the editor, which restarts the scripts ---------------
         6 => {
+            ok(panel.open, "F2 shows it again");
+            keys.release(KeyCode::F2);
+            test.step = 7;
+            test.at = now + 0.2;
+        }
+        // --- and then the editor, which restarts the scripts ---------------
+        7 => {
             ok(
                 editor.file == "beetle.rb" && editor.text.contains("creature \"Beetle\""),
                 "the editor shows the file of the creature that was clicked",
@@ -933,10 +921,10 @@ pub fn window_selftest(
             // Every beetle is handed over in the frame `do_editor_actions` runs — there is no
             // queue any more (see `restart_species`) — so this is a breath for the new tasks to
             // be made and to run their first instructions, not a wait for a queue to drain.
-            test.step = 7;
+            test.step = 8;
             test.at = now + 0.6;
         }
-        7 => {
+        8 => {
             let on_disk = platform::read(&brains.path(&ruby.0, Species::Beetle)).unwrap_or_default();
             let every = beetles().count();
             let applied = beetles().filter(|(_, m, _)| m.in_memory).count();
@@ -955,17 +943,17 @@ pub fn window_selftest(
                 "every restarted beetle's new task has run",
             );
             test.insn = spent();
-            test.step = 8;
+            test.step = 9;
             test.at = now + 9.0;
         }
-        8 => {
+        9 => {
             // the VM did not stop: every task, restarted or not, is still being given the CPU
             ok(spent() > test.insn, "the whole VM is still running afterwards");
             editor.action = Some(EditorAction::Revert);
-            test.step = 9;
+            test.step = 10;
             test.at = now + 0.6;
         }
-        9 => {
+        10 => {
             ok(
                 beetles().count() > 0 && beetles().all(|(_, m, _)| !m.in_memory),
                 "Revert puts every beetle back on the file",
@@ -998,7 +986,7 @@ pub fn window_selftest(
             } else {
                 info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
             }
-            test.step = 10;
+            test.step = 11;
         }
         _ => {}
     }

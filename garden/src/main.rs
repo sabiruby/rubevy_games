@@ -1064,6 +1064,10 @@ fn main() {
     };
     let save_to = after("--save");
     let load_from = after("--load");
+    // `--vm` (G9): open the VM panel. The panel is closed unless somebody asks for it, and on a
+    // command line this is the asking — `--shot docs/garden-vm.png 14 --vm` is how the picture in
+    // `docs/garden.md` is taken. A player asks with `F2`.
+    let wants_vm = args.iter().any(|a| a == "--vm");
     // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
     // player's own click is (`rubevy_arena::Settings`), and a picture asked for in Japanese on
     // the command line should not change what the next run shows a person.
@@ -1148,8 +1152,10 @@ fn main() {
             .insert_resource(Orbit { distance: eye.unwrap_or(Orbit::default().distance), ..default() })
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
-            // open from the start, so a picture (`--shot`) has it without a key being pressed
-            .insert_resource(VmInspector::following())
+            // **Closed** (G9). It used to open with the game, which is a debugger thrown over the
+            // middle of the window at somebody who came to look at a garden; `F2` opens it, and a
+            // picture gets it only where `--vm` asks — `--shot docs/garden-vm.png 14 --vm`.
+            .insert_resource(VmInspector::following().opened(wants_vm))
             .init_resource::<Tints>()
             // G8: the loaded model's materials, cloned and tinted per species the moment the
             // loader has built the model's entities
@@ -1343,15 +1349,20 @@ fn main() {
         // `docs/host-api.md`, "Where the game's systems go in the frame").
         .add_systems(Update, answer_garden.in_set(RubevySet::Answer))
         .add_systems(Update, watch_minds.after(RubevySet::Answer))
-        // G4's other HUD number: the wall time the frame's scripts took, measured round the set
-        // that runs them, against `ScriptWorld::frame_time`. Both builds keep it — the headless
-        // run prints it at the end, which is where the figure in `docs/garden.md` comes from.
-        .init_resource::<window::VmClock>()
-        .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick))
-        .add_systems(
-            Update,
-            window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
-        );
+        // (G4's other HUD number, the wall time the frame's scripts took, is added below: in a
+        // window `VmInspectorPlugin` measures it, and only the headless build adds it itself.)
+        ;
+    if headless.is_some() {
+        // G4's other HUD number, measured round the set that runs the scripts. In a window it is
+        // `VmInspectorPlugin`'s, because the VM panel is what shows it (G9); here there is no
+        // plugin and no panel, and the figure is printed at the end of the run.
+        app.init_resource::<window::VmClock>()
+            .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick))
+            .add_systems(
+                Update,
+                window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
+            );
+    }
     if selftest && headless.is_none() {
         // G6: and the camera, which is the one thing a browser check has no other way to read
         app.insert_resource(CameraLog);
@@ -3971,6 +3982,9 @@ fn stop_when_over(
         );
         let mut panel = VmInspector::default();
         for (mind, script) in &tasks {
+            // the same two figures the window's panel is handed (`window::show_vm`)
+            panel.spent = mind.spent;
+            panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
             panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
             for line in panel.log_lines() {
                 info!("{line}");

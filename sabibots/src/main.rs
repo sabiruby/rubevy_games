@@ -271,6 +271,10 @@ fn main() {
             args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0),
         )
     });
+    // `--vm` (G9): open the VM panel. It is closed unless somebody asks, and on a command line
+    // this is the asking — `--shot docs/vm-inspector.png 14 --vm` is how the picture in
+    // `docs/sabiruby-battle.md` is taken. A player asks with `F2`.
+    let wants_vm = args.iter().any(|a| a == "--vm");
     // `--lang en|ja` (G6b): which language the guide opens in, for its two pictures. Not
     // remembered; the player's own click is.
     let lang_asked = args
@@ -353,8 +357,9 @@ fn main() {
             .init_resource::<Watched>()
             .init_resource::<Hud>()
             .init_resource::<Paused>()
-            // open from the start, so a screenshot (`--shot`) shows it without a key being pressed
-            .insert_resource(VmInspector::following())
+            // **Closed** (G9): `F2` opens it, and a screenshot gets it only where `--vm` asks.
+            // The panel is a debugger and a match is not read through one by default.
+            .insert_resource(VmInspector::following().opened(wants_vm))
             .add_systems(
                 Update,
                 (restart_key, choose_watched, show_code, inspect_keys, show_vm, do_editor_actions, spawn_nameplates, follow_nameplates, spawn_life_bars, follow_life_bars)
@@ -1005,13 +1010,22 @@ fn selftest(
             let corner = walls.iter().any(|t| (t.translation.x - half).abs() < 0.01 && (t.translation.y - half).abs() < 0.01);
             ok((edge - half).abs() < 0.01 && corner, "the wall ends exactly on its corners");
             // the VM inspector: `P` stops the scripts by giving the scheduler a budget of 0 —
-            // and, from G9, the match with them
+            // and, from G9, the match with them. The panel starts closed now, so `F2` opens it
+            // first: the checks below are about what it draws.
             test.insn = spent();
-            keys.press(KeyCode::KeyP);
+            ok(!panel.open, "the VM panel starts closed");
+            keys.press(KeyCode::F2);
             test.step = 7;
-            test.at = now + 0.1;
+            test.at = now + 0.2;
         }
         7 => {
+            ok(panel.open, "F2 opens it");
+            keys.release(KeyCode::F2);
+            keys.press(KeyCode::KeyP);
+            test.step = 8;
+            test.at = now + 0.1;
+        }
+        8 => {
             // The pause has taken hold. How many ticks the earliest sleeping task still has to
             // wait is the measure of the scheduler's clock: a budget of 0 stops that clock too
             // (rubevy `fa37eaa`), so this number must be the same when the pause ends. The
@@ -1020,12 +1034,12 @@ fn selftest(
             test.places = places();
             test.clock = match_clock.0;
             test.insn = spent();
-            test.step = 8;
+            test.step = 9;
             // two seconds (G9): a tank crosses several units in that, and the match's clock
             // would have run a tenth of the way to its first rule
             test.at = now + 2.0;
         }
-        8 => {
+        9 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
             ok(places() == test.places, "2 s paused: every robot is where it was");
@@ -1061,10 +1075,10 @@ fn selftest(
             // here is a real keyboard
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::KeyP);
-            test.step = 9;
+            test.step = 10;
             test.at = now + 0.5;
         }
-        9 => {
+        10 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the behaviours are running again");
             let moved = places()
@@ -1074,7 +1088,7 @@ fn selftest(
             ok(match_clock.0 > test.clock, "the match's clock runs again");
             keys.release(KeyCode::KeyP);
             exit.write(AppExit::Success);
-            test.step = 10;
+            test.step = 11;
         }
         _ => {}
     }
