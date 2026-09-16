@@ -24,6 +24,7 @@
 //!     cargo run -p garden -- --headless 30 --save garden.save.json   # and write it down
 //!     cargo run -p garden -- --load garden.save.json                 # and pick it up again
 //!     cargo run -p garden -- --shot n.png 12 --at midnight           # a picture of the night
+//!     cargo run -p garden -- --shot c.png 12 --eye 18                # …from 18 units back
 //!     cargo run -p garden -- --shot g.png 10 --guide --lang ja        # …of the guide, in Japanese
 //!
 //! Mouse: drag to orbit, wheel to zoom. F5 saves the garden, F9 brings it back.
@@ -205,6 +206,14 @@ pub fn species_tint(species: Species) -> (f32, f32, f32) {
         Species::Rabbit => RABBIT_TINT,
     }
 }
+
+/// **Which model a beetle wears.** Cube Pets has no beetle (G0a); the crab is the nearest thing
+/// in the pack, and G8 asked the author to choose between it and two others. Changing this line —
+/// to `"models/animal-caterpillar.glb"` or `"models/animal-bee.glb"` — is the whole of the swap:
+/// the clips are in the same order in every file of the pack, and the tint above is what makes
+/// the animal a beetle's colour whatever it is underneath. The other two files are **not in this
+/// repository**; they come from the same CC0 pack (`CREDITS.md`) and go beside this one.
+const BEETLE_MODEL: &str = "models/animal-crab.glb";
 
 /// Plants
 const PLANTS_AT_START: usize = 55;
@@ -1031,6 +1040,19 @@ fn main() {
         .position(|a| a == "--at")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| if s == "midnight" { Some(MIDNIGHT) } else { s.parse::<f32>().ok() });
+    // `--eye UNITS`: **how far back the camera stands when the picture is taken.** The wheel's
+    // range, on the command line, and nothing else — the same zoom `Home` puts back. G8 added it
+    // for one job: three pictures of the same garden wearing three different beetles, close
+    // enough that the difference between a crab and a bee is something a person can see. At the
+    // default 42 a beetle is thirty pixels across in a 1600-wide window, which is a picture of a
+    // decision nobody can make. It is a `--shot` flag in the way `--at` is: a run with a window
+    // and a player has a wheel.
+    let eye = args
+        .iter()
+        .position(|a| a == "--eye")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<f32>().ok())
+        .map(|d| d.clamp(ZOOM_MIN, ZOOM_MAX));
     // `GARDEN_SELFTEST=1` on a PC, `?selftest` in the page's address (G5): a browser has no
     // environment, and the checks are what says from outside that the world is alive
     let selftest = platform::selftest_asked();
@@ -1123,7 +1145,7 @@ fn main() {
             })
             .insert_resource(NightDial(night))
             .insert_resource(settings)
-            .init_resource::<Orbit>()
+            .insert_resource(Orbit { distance: eye.unwrap_or(Orbit::default().distance), ..default() })
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
             // open from the start, so a picture (`--shot`) has it without a key being pressed
@@ -1428,9 +1450,9 @@ fn make_look(
         bush: scene("models/plant_bush.glb"),
         tree: tree.clone(),
         rock: scene("models/rock_smallA.glb"),
-        beetle: scene("models/animal-crab.glb"),
+        beetle: scene(BEETLE_MODEL),
         rabbit: scene("models/animal-bunny.glb"),
-        beetle_gaits: gaits("models/animal-crab.glb"),
+        beetle_gaits: gaits(BEETLE_MODEL),
         rabbit_gaits: gaits("models/animal-bunny.glb"),
     });
 
