@@ -262,3 +262,28 @@ terminate されたタスクは巻き戻らない**ので `:off` を言わない
 余裕も測った。直したあとにもう 3 回回して、命中 57 件の旋回はすべて **0.74 rad**——
 0.3 秒で戦車が回れるいっぱいである。**誰も舵を取り返していない。** 前の形（握り直す）では
 0.25〜0.78 rad にばらけていて、そのばらつきこそが脳と reflex の取り合いだったことになる。
+
+## 4. `Vm::task_context` で文字列解析を捨てる（`crates/rubevy-arena/src/inspect.rs`）
+
+D2 で VM パネルを作ったとき、「このタスクは VM の何番目のコンテキストに立っているか」を
+返す入り口が sabiruby に無かった。`Vm::snapshot` は全コンテキストを返し、`Vm::task_*` は
+1 タスクについて答えるが、2 つをつなぐものが無い。ところが `Vm::render` がタスクを
+`#<Task 12 ctx=3>` と描くので、**ctx は文字列としてなら公開されていた**。
+`inspect.rs` はそれを読んでいた——`ctx=` を探して、続く数字を取って、`parse` する 4 行である。
+デバッグ用の書式は API ではないので、読めなければ静かに諦める（コンテキスト無し、
+パネルが理由を出す）ようにしてあった。
+
+sabiruby 0.5.0 に `Vm::task_context(task) -> Option<usize>` が入った（`src/vm.rs:930`）。
+`pub fn task_context` とその長い注意書きごと消して、呼び出し側を `vm.task_context(task)` にした。
+返り値の型も `Option<usize>` で同じなので、`let Some(ctx) = … else { … }` の形はそのままである。
+`sabiruby::Value` の import も要らなくなった（`Value::Obj(task)` を `render` に渡すのが
+最後の用途だった）。差分は 20 行減って 1 行増える。
+
+パネルの見え方が変わっていないことは `--headless 8` で確かめた。ヘッドレスは VM パネルの中身を
+テキストで吐くので、コンテキスト番号（`context 2 Suspended`）、フレーム
+（`#0 scout.rb:58 run pc 326`）、レジスタ（`target=#<Contact:…> threat=nil …`）が
+前と同じ形で出る。
+
+この 4 つ目は、D2 の worklog が「VM に欲しいのは `Vm::task_context(task)` か
+`Vm::task_snapshot(task, regs_frames)`、**小さいほうで足りる**」と書いて残していたものが、
+小さいほうで入って戻ってきた、という形になっている。

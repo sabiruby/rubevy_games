@@ -107,6 +107,11 @@ sabiruby 側の小さな追加）。rubevy の `ScriptWorld::stats` の隣に `s
   計画書が書いた `Vm::task_snapshot(task, regs_frames) -> Option<TaskSnapshot>`
   （`inspect.rs`、`snapshot` の 1 コンテキストぶんを `context_view` に切り出すだけ）。
   **小さいほうで足りる。** 入ったらこの関数は中身が入れ替わるだけで消える。
+* **（2026-09-17）`Vm::task_context` が sabiruby 0.5.0 に入ったので、消えた。** 予告どおり
+  `inspect.rs` の文字列解析（`#<Task n ctx=i>` から `ctx=` を探して数字を読む 4 行）は削除し、
+  `vm.task_context(task)` の 1 行になった。`Value` の import も要らなくなった。
+  パネルの見え方は変わらない（`--headless` が出す VM パネルのテキストで、
+  コンテキスト番号・フレーム・レジスタが前と同じに出ることを確認）。
 * **フレームのファイル名は `FrameView` に無い。** `Vm::task_frames(task)` にはあるが、
   こちらにはフレームの中身が無い。2 つは**同じフレームを同じ順で飛ばす**（`ir.lines.is_empty()`、
   内側から）ので、`line.is_some()` のフレームだけを順に対応させれば合う。飛ばされるのは mrblib で、

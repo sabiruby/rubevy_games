@@ -554,11 +554,12 @@ Nothing in the panel runs Ruby: sabiruby renders a value in Rust (`Vm::render`),
 robot cannot move it, allocate, or raise. The cost is that an object with an `inspect` of its own
 shows the default form.
 
-It reads `Vm::snapshot` and `Vm::task_frames`. Joining the two — *which* of the VM's contexts is
-this task's — has no entry point in the VM yet, and `rubevy-arena`'s `inspect.rs` gets it out of
-the way the VM renders a task (`#<Task 12 ctx=3>`) until sabiruby has a `task_context` or a
-`task_snapshot`. The panel lives in `rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the
-other games get it too.
+It reads `Vm::snapshot`, `Vm::task_frames` and `Vm::task_context`. The last of those is what
+joins the other two — *which* of the VM's contexts this task stands in — and it did not exist when
+the panel was built: `rubevy-arena`'s `inspect.rs` read the index out of the way the VM renders a
+task (`#<Task 12 ctx=3>`), which is a debugging format and not an API, and gave up quietly if it
+ever changed. sabiruby 0.5.0 answers it properly and the parser is gone. The panel lives in
+`rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the other games get it too.
 
 ## Starting again
 
