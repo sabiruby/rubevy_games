@@ -30,7 +30,15 @@
 ## 世界（G0）
 
 `garden/` を workspace に足す（`sabibots/` と同じ形: `Cargo.toml`、`src/main.rs`、`src/platform.rs` は sabibots のものを共有できるなら `rubevy-arena` に移す、`ruby/`、`assets/`）。
-2D 見下ろし、40×30 マスの草地。エンティティと**コンポーネント**（すべて `#[derive(Component, Reflect)] #[reflect(Component)]` + `app.register_type::<T>()`。
+**3D**（著者の希望 2026-09-17: Bevy らしさを見せる）。`bevy_pbr` を workspace の features に足し、メッシュは Bevy の基本形状だけ
+（地面 `Plane3d`、草 `Cone`/`Sphere`、Beetle `Capsule3d`、Rabbit `Cuboid` + 耳）、色は `StandardMaterial`。glTF・画像アセットは持たない。
+**昼夜は `DirectionalLight` の回転 + 影 + 環境光の色**で見せる（夜に生き物が寝るのが画面で分かる）。カメラは斜め上から、マウスでオービット。
+動くのは XZ 平面（y が上）。Ruby から見える違いは `Transform.translation` が `[x, y, z]` になることと `act(vx, vz)` だけで、
+**3D にしても頭脳のコードは 2 行しか変わらない**ことを `docs/garden.md` に書く。成長・繁殖は `Transform.scale` に出す（`Plant.size` → scale。Ruby からも `e[:Transform][:scale]` で読める）。
+当たり判定は距離（球）。WSL の `--shot` は lavapipe なので影付き PBR は 1 枚数秒かかるが、headless は描画しないので selftest に影響しない。
+wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測）。
+
+40×30 マスの草地。エンティティと**コンポーネント**（すべて `#[derive(Component, Reflect)] #[reflect(Component)]` + `app.register_type::<T>()`。
 これが Ruby から名前で見える条件で、ここ以外に接着コードは書かない）:
 
 * `Plant { size: f32 }` — 毎秒わずかに育ち、食べられると減る。空きマスに確率で芽が出る。
