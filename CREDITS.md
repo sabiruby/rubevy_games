@@ -18,6 +18,35 @@ text beside them as `LICENSE-kenney.txt`:
 CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is
 how anyone who wants more of it finds the pack.
 
+## Models (the Garden)
+
+Two more packs by **Kenney** (<https://kenney.nl>), both **CC0 1.0 Universal (public domain)**.
+Each pack's own licence text is in `garden/assets/models/` beside the files, as
+`LICENSE-kenney-nature-kit.txt` and `LICENSE-kenney-cube-pets.txt`.
+
+**Nature Kit 2.1** (<https://kenney.nl/assets/nature-kit>), downloaded 2026-09-17, glTF-binary
+from the pack's own `Models/GLTF format/`:
+
+| file | used as |
+|---|---|
+| `grass.glb` | a tuft of grass — the `Plant` a creature eats |
+| `plant_bush.glb` | the rounder sort of the same |
+| `tree_default.glb` | a `Tree`: an obstacle, not food |
+| `rock_smallA.glb` | a `Rock` |
+
+**Cube Pets 2.0** (<https://kenney.nl/assets/cube-pets>), downloaded 2026-09-17, from
+`Models/GLB format/`. These are node-animated (no skeleton) and carry eight clips each — `static`,
+`idle`, `walk`, `run`, `eat`, `dance` and two gestures — of which the garden plays three:
+
+| file | used as |
+|---|---|
+| `animal-bunny.glb` | the Rabbit |
+| `animal-crab.glb` | the Beetle — the pack has no beetle, and a crab is the nearest thing in it: a shell, six legs and a scuttle. It is the only model here that is not what it is called |
+| `Textures/colormap.png` | the one palette both of them index into, referenced from inside the `.glb` by that relative path |
+
+Sizes and triangle counts are in `docs/garden.md`; the whole set is 314 KiB in seven files,
+against the plan's budget of 2 MB in ten.
+
 ## Font
 
 The text is Bevy's built-in default font (Fira Mono, SIL Open Font License 1.1), which ships with

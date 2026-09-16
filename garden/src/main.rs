@@ -1,18 +1,22 @@
-//! Garden — a small world, in 3D, whose rules are Rust and whose minds will be Ruby.
+//! Garden — a small world, in 3D, whose rules are Rust and whose minds are Ruby.
 //!
-//! This is stage G0 of `docs/plans/garden-plan.md`: the world alone. Grass grows, creatures walk
-//! about, get hungry, eat, starve, and the sun goes round once a minute. **No script runs yet.**
-//! What G0 is really for is the shape of the data: every component a creature has is
-//! `#[derive(Component, Reflect)] #[reflect(Component)]` and is handed to `register_type`, which
-//! is the whole of what it takes for G1's Ruby to say
+//! This is stages G0, G0a and G1 of `docs/plans/garden-plan.md`. Grass grows, creatures walk
+//! about, get hungry, eat, starve, and the sun goes round once a minute — and **what walks is a
+//! Ruby task per creature** (`ruby/creatures/*.rb`), reading and writing its own ECS components
+//! by name:
 //!
-//!     me[:Hunger]                       # → 42.0
-//!     me[:Velocity] = [vx, vz]
+//!     me[:Hunger]                       # → [42.0]
+//!     me[:Velocity] = [[vx, vz]]
 //!     plant[:Transform][:translation]   # → [x, y, z]
 //!
 //! There is no per-component glue anywhere in this file, and there is not meant to be: rubevy
-//! walks Bevy's type registry (`docs/host-api.md`, "Components by name"). The table in
-//! `docs/garden.md` is that registry, written out.
+//! walks Bevy's type registry (`docs/host-api.md`, "Components by name"), and so does the one
+//! answering system here — `answer_garden` resolves `:Plant` through `ReflectComponent` rather
+//! than matching on a name. The table in `docs/garden.md` is that registry, written out.
+//!
+//! The two questions a script asks that are *not* a component read are `garden.nearest(kind)`
+//! and `garden.count(kind)`. That is the whole of the game's `ask` surface; SabiRuby Battle's
+//! is six kinds, and the difference is the point of the two samples standing side by side.
 //!
 //!     cargo run -p garden                     # a window
 //!     cargo run -p garden -- --headless 90    # no window, 90 seconds, the result on stdout
@@ -22,10 +26,13 @@
 
 mod platform;
 
+use std::path::{Path, PathBuf};
+
+use bevy::gltf::GltfAssetLabel;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
-use rubevy::{Answer, RubevyPlugin, ScriptWorld};
+use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
 
 // ---------------------------------------------------------------------------------------------
 // The field. It lies on XZ with y up, which is the only thing 3D costs the Ruby side: a position
@@ -184,18 +191,62 @@ pub struct Rock;
 #[derive(Component)]
 struct Sun;
 
-/// **The placeholder brain — this is what G1 deletes.** Until a Ruby task writes `Velocity`,
-/// something has to, or the world is a still life. It picks a new heading every second or so and
-/// walks. Nothing else in this file knows it exists; a creature spawned without it simply stands
-/// where it is (which is how the selftest arranges a starvation).
+/// What a creature's script is called and what it has cost, for the log (and for G4's HUD). The
+/// numbers come from `ScriptWorld::stats`, which is rubevy's, not the VM's public surface.
 #[derive(Component)]
-struct Wander {
+struct Mind {
+    name: String,
+    /// instructions the script had run at the end of the last frame
+    last_instructions: u64,
+    /// and how many it spent on this one
+    spent: u64,
+    /// how many frames it has been looked at, so that the log can say what it costs on average —
+    /// one frame's number is nearly always zero, because a creature spends nearly every frame
+    /// parked on a `sleep` or on an answer
+    frames: u64,
+    /// the line it is standing on, in the creature's own file where it is in one
+    at: String,
+    /// how many lines the prelude put in front of the creature's file
+    prelude_lines: u32,
+}
+
+/// Mid-meal, and for a moment after the last bite so that the animation does not flicker between
+/// two blades of grass. Set by `eat`, read by `animate_creatures` — and by nothing else.
+#[derive(Component)]
+struct Eating {
     until: f32,
 }
 
-/// The selftest's fasting beetle: no `Wander`, almost no hunger left.
+/// Which of the model's clips a creature is playing, and the entity of the `AnimationPlayer` the
+/// scene brought with it. Only the windowed build has either.
+#[derive(Component)]
+struct Animated {
+    player: Entity,
+    playing: Gait,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gait {
+    Idle,
+    Walk,
+    Eat,
+}
+
+/// The selftest's fasting beetle: no script, almost no hunger left.
 #[derive(Component)]
 struct Fasting;
+
+/// The selftest's probe: a hungry beetle put down within sight of exactly one plant, to see
+/// whether a script-driven creature actually walks to its food.
+#[derive(Component)]
+struct Probe {
+    /// the plant it was given
+    dinner: Entity,
+}
+
+/// Where `make_look` is, so that `spawn_world` can be after it in the build that has one.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct MakeLook;
 
 // ---------------------------------------------------------------------------------------------
 // Resources
@@ -243,25 +294,58 @@ fn pair_key(a: Entity, b: Entity) -> (u64, u64) {
     if a.to_bits() <= b.to_bits() { (a.to_bits(), b.to_bits()) } else { (b.to_bits(), a.to_bits()) }
 }
 
-/// The meshes and materials, made once. Plants come up while the world runs, so the handles have
-/// to outlive `Startup`.
+/// The models, loaded once (G0a). Every one of them is a CC0 `.glb` from Kenney in
+/// `assets/models/`; what the game had before was Bevy's own primitives, and the swap changed no
+/// component at all, because the look was already a **child** of the entity that carries them.
+///
+/// A headless run has no `Look`: the models are the renderer's business, the components are not,
+/// and the checks are all about the components. Every spawn below takes `Option<&Look>` for
+/// exactly that reason, the way `day_night` takes `Option<ResMut<GlobalAmbientLight>>`.
 #[derive(Resource)]
 struct Look {
-    tuft: Handle<Mesh>,
-    bush: Handle<Mesh>,
-    beetle: Handle<Mesh>,
-    rabbit_body: Handle<Mesh>,
-    rabbit_ear: Handle<Mesh>,
-    trunk: Handle<Mesh>,
-    canopy: Handle<Mesh>,
-    boulder: Handle<Mesh>,
-    leaf: Handle<StandardMaterial>,
-    shell: Handle<StandardMaterial>,
-    fur: Handle<StandardMaterial>,
-    bark: Handle<StandardMaterial>,
-    needle: Handle<StandardMaterial>,
-    stone: Handle<StandardMaterial>,
+    ground: Handle<Mesh>,
+    turf: Handle<StandardMaterial>,
+    tuft: Handle<WorldAsset>,
+    bush: Handle<WorldAsset>,
+    tree: Handle<WorldAsset>,
+    rock: Handle<WorldAsset>,
+    beetle: Handle<WorldAsset>,
+    rabbit: Handle<WorldAsset>,
+    /// the three clips of each animal, in one graph each
+    beetle_gaits: Gaits,
+    rabbit_gaits: Gaits,
 }
+
+/// One animal's walk, idle and eat, as nodes of an `AnimationGraph`. The Kenney "Cube Pets"
+/// models carry eight clips each — `static`, `idle`, `walk`, `run`, `eat`, `dance` and two
+/// gestures — and the garden uses three of them.
+#[derive(Clone)]
+struct Gaits {
+    graph: Handle<AnimationGraph>,
+    idle: AnimationNodeIndex,
+    walk: AnimationNodeIndex,
+    eat: AnimationNodeIndex,
+}
+
+impl Gaits {
+    fn node(&self, gait: Gait) -> AnimationNodeIndex {
+        match gait {
+            Gait::Idle => self.idle,
+            Gait::Walk => self.walk,
+            Gait::Eat => self.eat,
+        }
+    }
+}
+
+/// Where the Ruby lives. `ruby/prelude.rb` goes in front of every creature's file.
+#[derive(Resource)]
+struct RubyDir(PathBuf);
+
+/// Which creatures took a bite last frame, so that `"ate"` is published once per meal rather
+/// than sixty times a second — the same decision `"bumped"` and `"touched"` made in G0, and for
+/// the same reason: a reflex is for an event, and the queue holds 64.
+#[derive(Resource, Default)]
+struct Eaters(Vec<Entity>);
 
 /// `--headless N`: how long the world may run.
 #[derive(Resource)]
@@ -291,7 +375,8 @@ impl Default for Orbit {
     }
 }
 
-/// `GARDEN_SELFTEST=1`: the four things the plan asks the world to prove about itself.
+/// `GARDEN_SELFTEST=1`: what the plan asks the world to prove about itself — G0's four things
+/// about the rules, and G1's three about the minds.
 #[derive(Resource)]
 struct SelfTest {
     /// when somebody first ate
@@ -306,12 +391,51 @@ struct SelfTest {
     /// how many frames had a pair below 0.9, and how many frames were looked at
     overlaps: u32,
     frames: u32,
+
+    // --- G1: the minds -----------------------------------------------------
+    /// how far the probe beetle started from the plant it was given, and how close it ever got
+    probe_from: f32,
+    probe_closest: f32,
+    /// when it got there, if it did
+    probe_reached: Option<f32>,
+    /// beetles that were touched by a rabbit while walking: when, and which way they were going
+    touched: Vec<(Entity, f32, Vec2)>,
+    /// when each beetle was last put on that list, so that a beetle a rabbit keeps walking into
+    /// is looked at once rather than five times: the reflex takes half a second to run and the
+    /// second message waits in the queue behind the first, so the answer to "did it turn?" for
+    /// touch four is about touch one
+    last_touch: Vec<(Entity, f32)>,
+    /// how many of those were still there to look at half a second later, and how many had turned
+    turn_checked: u32,
+    turned: u32,
+    /// the fastest anybody moved in the second after night fell, and how many creatures were
+    /// looked at in that frame
+    asleep_at: Option<f32>,
+    awake_speed: f32,
+    asleep_counted: u32,
 }
 
 impl Default for SelfTest {
     fn default() -> Self {
-        // `closest` is a minimum, so it starts where nothing can be worse
-        SelfTest { ate_at: None, night_at: None, starved: None, closest: f32::INFINITY, overlaps: 0, frames: 0 }
+        // the minima start where nothing can be worse; `awake_speed` is a maximum
+        SelfTest {
+            ate_at: None,
+            night_at: None,
+            starved: None,
+            closest: f32::INFINITY,
+            overlaps: 0,
+            frames: 0,
+            probe_from: 0.0,
+            probe_closest: f32::INFINITY,
+            probe_reached: None,
+            touched: Vec::new(),
+            last_touch: Vec::new(),
+            turn_checked: 0,
+            turned: 0,
+            asleep_at: None,
+            awake_speed: 0.0,
+            asleep_counted: 0,
+        }
     }
 }
 
@@ -345,10 +469,9 @@ fn main() {
                 bevy::asset::AssetPlugin { file_path: platform::assets_dir(), ..default() },
                 RubevyPlugin::default(),
             ))
-            // no renderer here, but the same startup builds the same entities, so what the
-            // headless run tests is the world the window shows
-            .init_asset::<Mesh>()
-            .init_asset::<StandardMaterial>()
+            // no renderer here, and from G0a no models either: the same startup builds the same
+            // entities with the same components, and only the child that carries the look is
+            // missing. What the headless run tests is the world, not the picture of it.
             .insert_resource(Headless { until: seconds })
             .add_systems(Update, stop_when_over);
         }
@@ -373,8 +496,9 @@ fn main() {
                 RubevyPlugin::default(),
             ))
             .init_resource::<Orbit>()
-            .add_systems(Startup, spawn_camera)
-            .add_systems(Update, orbit_camera);
+            .add_systems(Startup, (make_look.in_set(MakeLook), spawn_camera))
+            .add_systems(Update, (orbit_camera, dress_animations, animate_creatures));
+            register_scene_types(&mut app);
         }
     }
 
@@ -395,15 +519,27 @@ fn main() {
         .register_type::<Rock>();
 
     app.insert_resource(Dice(platform::clock_seed()))
+        .insert_resource(RubyDir(platform::ruby_dir()))
         .init_resource::<Sky>()
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
-        .add_systems(Startup, (make_look, spawn_world).chain())
+        .init_resource::<Eaters>()
+        // `spawn_world` asks for `Option<Res<Look>>`, and a `None` there is how the headless
+        // build says "no models". That makes the order load-bearing: without this the windowed
+        // build's `spawn_world` may run before `make_look` and then it is `None` there too —
+        // which is a garden with no ground, no trees and no creatures, and only the plants that
+        // sprouted later (`sprout_plants` runs in `Update`, long after) with a model on them.
+        // `MakeLook` is a set rather than `after(make_look)` because `make_look` is not in the
+        // headless schedule at all.
+        .add_systems(Startup, spawn_world.after(MakeLook))
         .add_systems(
             Update,
             (
                 day_night,
-                wander,        // G0 only; G1's Ruby writes `Velocity` instead
+                // G0's `wander` stood here, writing `Velocity` so that the world was not a still
+                // life. It is gone: the only thing that writes `Velocity` now is
+                // `me[:Velocity] = [[vx, vz]]` in a Ruby task, and every system below reads it
+                // without caring who wrote it.
                 move_creatures,
                 separate,
                 grow_plants,
@@ -414,10 +550,18 @@ fn main() {
                 starve,
             )
                 .chain(),
-        );
+        )
+        // The one system that answers a script. It goes in `RubevySet::Answer`, which is the
+        // only placement where a question is answered on the frame it was asked — anywhere else
+        // costs a second frame per round trip, and where it landed used to be luck (rubevy
+        // `docs/host-api.md`, "Where the game's systems go in the frame").
+        .add_systems(Update, answer_garden.in_set(RubevySet::Answer))
+        .add_systems(Update, watch_minds.after(RubevySet::Answer));
     if selftest {
         // after `separate`, so what it measures is the world as the frame leaves it
-        app.init_resource::<SelfTest>().add_systems(Update, watch_overlap.after(separate));
+        app.init_resource::<SelfTest>()
+            .add_systems(Update, watch_overlap.after(separate))
+            .add_systems(Update, (watch_probe, watch_turning, watch_sleep).after(RubevySet::Answer));
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
@@ -425,76 +569,112 @@ fn main() {
     app.run();
 }
 
+/// What a `.glb` needs in the type registry, in the windowed build only.
+///
+/// bevy 0.19 spawns a loaded glTF through `bevy_world_serialization`, and that spawner **panics
+/// on any type in the loaded world the app has not registered** — there is no "skip what you do
+/// not know". Nothing registers Bevy's own types automatically here: that is the
+/// `reflect_auto_register` feature, which registers every type in the binary that derives
+/// `Reflect`. Turning it on would be one line, and it would put a few hundred of Bevy's types in
+/// front of Ruby — the registry would stop being a thing this game decides, which is most of what
+/// the garden is for. So the plumbing a model brings with it is named here, one line each, the
+/// way `Transform` already was. (The game's private components would survive either way: they
+/// derive no `Reflect`, so nothing can register them.)
+///
+/// The cost is that a script running in the window can read these too — `e[:GlobalTransform]`,
+/// `e[:Name]`. They are Bevy's, not the game's, and the component table in `docs/garden.md` is
+/// still the whole of what the *game* offers. The headless build, where the checks live, does
+/// not load a model and does not register them, so what the checks see is exactly the table.
+fn register_scene_types(app: &mut App) {
+    app.register_type::<GlobalTransform>()
+        .register_type::<bevy::transform::components::TransformTreeChanged>()
+        .register_type::<Visibility>()
+        .register_type::<bevy::camera::visibility::VisibilityClass>()
+        .register_type::<bevy::camera::primitives::Aabb>()
+        .register_type::<InheritedVisibility>()
+        .register_type::<ViewVisibility>()
+        .register_type::<Name>()
+        .register_type::<ChildOf>()
+        .register_type::<Children>()
+        .register_type::<Mesh3d>()
+        .register_type::<MeshMaterial3d<StandardMaterial>>()
+        .register_type::<AnimationPlayer>()
+        .register_type::<bevy::animation::AnimationTargetId>()
+        .register_type::<bevy::animation::AnimatedBy>()
+        .register_type::<AnimationGraphHandle>()
+        .register_type::<bevy::gltf::GltfExtras>()
+        .register_type::<bevy::gltf::GltfSceneExtras>()
+        .register_type::<bevy::gltf::GltfMeshExtras>()
+        .register_type::<bevy::gltf::GltfMaterialExtras>()
+        .register_type::<bevy::gltf::GltfMaterialName>()
+        .register_type::<bevy::gltf::GltfMeshName>()
+        .register_type::<bevy::gltf::GltfSceneName>();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Building the world
 // ---------------------------------------------------------------------------------------------
 
+/// The models (G0a), loaded once, and the ground they stand on. Only the windowed build runs
+/// this: a headless world has no `Look`, and every spawn below simply leaves the child out.
+///
+/// The grass, the tree and the rock are Kenney's Nature Kit; the rabbit and the beetle are
+/// Kenney's Cube Pets, which are node-animated (no skin) and carry `idle`, `walk` and `eat`
+/// among their eight clips. `assets/models/` has the two packs' own licence texts beside them,
+/// and `CREDITS.md` the sizes and the sources.
 fn make_look(
     mut commands: Commands,
+    server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
+    // the clips of one glb, by their index in it: 0 static, 1 idle, 2 walk, 3 run, 4 eat, and
+    // three the garden has no use for
+    let mut gaits = |file: &str| {
+        let clip = |i: u32| server.load(GltfAssetLabel::Animation(i as usize).from_asset(file.to_string()));
+        let (graph, nodes) = AnimationGraph::from_clips([clip(1), clip(2), clip(4)]);
+        Gaits { graph: graphs.add(graph), idle: nodes[0], walk: nodes[1], eat: nodes[2] }
+    };
+    let scene = |file: &str| server.load(GltfAssetLabel::Scene(0).from_asset(file.to_string()));
+
     commands.insert_resource(Look {
-        tuft: meshes.add(Cone { radius: 0.38, height: 1.1 }),
-        bush: meshes.add(Sphere::new(0.45)),
-        beetle: meshes.add(Capsule3d::new(0.32, 0.55)),
-        rabbit_body: meshes.add(Cuboid::new(0.55, 0.5, 0.85)),
-        rabbit_ear: meshes.add(Cuboid::new(0.1, 0.45, 0.08)),
-        trunk: meshes.add(Cylinder::new(0.18, 2.0)),
-        canopy: meshes.add(Cone { radius: 1.0, height: 2.4 }),
-        boulder: meshes.add(Sphere::new(ROCK_RADIUS)),
-        leaf: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.30, 0.62, 0.22),
-            perceptual_roughness: 0.9,
-            ..default()
-        }),
-        shell: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.24, 0.16, 0.12),
-            perceptual_roughness: 0.35,
-            metallic: 0.25,
-            ..default()
-        }),
-        fur: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.88, 0.84, 0.78),
-            perceptual_roughness: 0.95,
-            ..default()
-        }),
-        bark: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.35, 0.24, 0.16),
+        ground: meshes.add(Plane3d::new(Vec3::Y, Vec2::new(HALF_W, HALF_D))),
+        turf: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.36, 0.46, 0.25),
             perceptual_roughness: 1.0,
             ..default()
         }),
-        needle: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.13, 0.33, 0.16),
-            perceptual_roughness: 0.9,
-            ..default()
-        }),
-        stone: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.52, 0.52, 0.55),
-            perceptual_roughness: 0.8,
-            ..default()
-        }),
+        tuft: scene("models/grass.glb"),
+        bush: scene("models/plant_bush.glb"),
+        tree: scene("models/tree_default.glb"),
+        rock: scene("models/rock_smallA.glb"),
+        beetle: scene("models/animal-crab.glb"),
+        rabbit: scene("models/animal-bunny.glb"),
+        beetle_gaits: gaits("models/animal-crab.glb"),
+        rabbit_gaits: gaits("models/animal-bunny.glb"),
     });
 }
 
 fn spawn_world(
     mut commands: Commands,
-    look: Res<Look>,
+    look: Option<Res<Look>>,
+    ruby: Res<RubyDir>,
+    mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     selftest: Option<Res<SelfTest>>,
 ) {
-    // the ground: one plane, 40 × 30
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::new(HALF_W, HALF_D)))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.36, 0.46, 0.25),
-            perceptual_roughness: 1.0,
-            ..default()
-        })),
-        Transform::default(),
-    ));
+    let look = look.as_deref();
+
+    // the ground: one plane, 40 × 30. It is the only mesh left that is not a model, because a
+    // lawn made of Kenney's 1 × 1 grass tiles would be twelve hundred entities for a flat green.
+    if let Some(look) = look {
+        commands.spawn((
+            Mesh3d(look.ground.clone()),
+            MeshMaterial3d(look.turf.clone()),
+            Transform::default(),
+        ));
+    }
 
     // the sun. Its rotation, colour and brightness are `day_night`'s from the first frame; what
     // is set here is what does not change — that it casts shadows, and over how much ground.
@@ -512,10 +692,19 @@ fn spawn_world(
     ));
 
     // the selftest wants a creature that certainly starves, which means one that certainly does
-    // not eat: it is spawned in the far corner without the placeholder brain, so it never moves,
-    // and the grass is kept away from it. Everything else about it is an ordinary beetle.
+    // not eat: it is spawned in the far corner **with no script at all**, so it never moves, and
+    // the grass is kept away from it. Everything else about it is an ordinary beetle — what it
+    // lacks is a brain. (In G0 the same beetle was the one without the `Wander` component.)
     let fasting_at = Vec2::new(-HALF_W + 3.0, -HALF_D + 3.0);
+    // and one that certainly has something to walk to: a hungry beetle in the other far corner
+    // with one plant five units away, which is inside a beetle's `Sight` of eight and outside
+    // everything else.
+    let probe_at = Vec2::new(HALF_W - 3.0, HALF_D - 3.0);
+    let dinner_at = probe_at + Vec2::new(-4.0, -3.0);
     let keep_clear = selftest.is_some();
+    let clear_of_fixtures = |at: Vec2| {
+        !keep_clear || (at.distance(fasting_at) > 6.0 && at.distance(probe_at) > 7.0)
+    };
 
     // trees and rocks first: they never move, so everything else is placed around them. They are
     // kept apart from each other at the start, because the separation pass moves creatures only
@@ -528,8 +717,7 @@ fn spawn_world(
         let mut room = false;
         for _ in 0..40 {
             at = Vec2::new(dice.between(-HALF_W + 2.0, HALF_W - 2.0), dice.between(-HALF_D + 2.0, HALF_D - 2.0));
-            let clear_of_fasting = !keep_clear || at.distance(fasting_at) > 6.0;
-            if clear_of_fasting && solid.iter().all(|(p, r)| p.distance(at) > r + radius + 1.5) {
+            if clear_of_fixtures(at) && solid.iter().all(|(p, r)| p.distance(at) > r + radius + 1.5) {
                 room = true;
                 break;
             }
@@ -538,9 +726,9 @@ fn spawn_world(
             continue;
         }
         if tree {
-            spawn_tree(&mut commands, &look, at);
+            spawn_tree(&mut commands, look, at);
         } else {
-            spawn_rock(&mut commands, &look, at, dice.between(0.8, 1.25));
+            spawn_rock(&mut commands, look, at, dice.between(0.8, 1.25));
         }
         solid.push((at, radius));
     }
@@ -548,7 +736,7 @@ fn spawn_world(
     let mut grass: Vec<Vec2> = Vec::new();
     for _ in 0..PLANTS_AT_START {
         let at = Vec2::new(dice.between(-HALF_W + 1.0, HALF_W - 1.0), dice.between(-HALF_D + 1.0, HALF_D - 1.0));
-        if keep_clear && at.distance(fasting_at) < 6.0 {
+        if !clear_of_fixtures(at) {
             continue;
         }
         // grass under a tree cannot be reached, so it is not put there
@@ -557,7 +745,7 @@ fn spawn_world(
         }
         let size = dice.between(0.3, PLANT_MAX);
         let round = dice.roll() < 0.35;
-        spawn_plant(&mut commands, &look, at, size, round);
+        spawn_plant(&mut commands, look, at, size, round);
         grass.push(at);
     }
 
@@ -577,84 +765,90 @@ fn spawn_world(
             // to undo on the first frame, and the overlap check looks at that frame too
             let clear_of_solid = solid.iter().all(|(p, r)| p.distance(at) > r + radius + 0.6);
             let clear_of_kin = taken.iter().all(|p: &Vec2| p.distance(at) > 2.0);
-            if clear_of_grass && clear_of_solid && clear_of_kin {
+            if clear_of_fixtures(at) && clear_of_grass && clear_of_solid && clear_of_kin {
                 break;
             }
         }
         taken.push(at);
         let hunger = dice.between(45.0, 90.0);
-        let entity = spawn_creature(&mut commands, &look, species, at, hunger);
-        commands.entity(entity).insert(Wander { until: dice.between(0.3, 1.4) });
+        let entity = spawn_creature(&mut commands, look, species, at, hunger);
+        give_mind(&mut commands, &ruby.0, &mut mrb, entity, species);
     }
 
     if keep_clear {
-        let entity = spawn_creature(&mut commands, &look, Species::Beetle, fasting_at, 3.0);
+        let entity = spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0);
         commands.entity(entity).insert(Fasting);
-        info!("selftest: a beetle with nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
+        info!("selftest: a beetle with no brain and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
+
+        let dinner = spawn_plant(&mut commands, look, dinner_at, PLANT_MAX, false);
+        // hungry enough that its script goes looking rather than wandering (the beetle's own
+        // threshold is 55), and far enough that getting there has to be walking
+        let probe = spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0);
+        commands.entity(probe).insert(Probe { dinner });
+        give_mind(&mut commands, &ruby.0, &mut mrb, probe, Species::Beetle);
+        info!(
+            "selftest: a hungry beetle at ({:.1}, {:.1}) with one plant {:.1} away",
+            probe_at.x,
+            probe_at.y,
+            probe_at.distance(dinner_at)
+        );
     }
 }
 
-/// A plant: the entity carries the component and the scale, the mesh hangs under it. Splitting
-/// them is what lets `Transform.scale` be the plant's size without the mesh having to know.
-fn spawn_plant(commands: &mut Commands, look: &Look, at: Vec2, size: f32, round: bool) {
-    let (mesh, y) = if round { (look.bush.clone(), 0.45) } else { (look.tuft.clone(), 0.55) };
-    commands
-        .spawn((
-            Plant { size },
-            Transform::from_xyz(at.x, 0.0, at.y).with_scale(Vec3::splat(size)),
-            Visibility::default(),
-        ))
-        .with_children(|plant| {
-            plant.spawn((Mesh3d(mesh), MeshMaterial3d(look.leaf.clone()), Transform::from_xyz(0.0, y, 0.0)));
+/// A plant: the entity carries the component and the scale, the model hangs under it. Splitting
+/// them is what lets `Transform.scale` be the plant's size without the model having to know.
+fn spawn_plant(commands: &mut Commands, look: Option<&Look>, at: Vec2, size: f32, round: bool) -> Entity {
+    let mut plant = commands.spawn((
+        Plant { size },
+        Transform::from_xyz(at.x, 0.0, at.y).with_scale(Vec3::splat(size)),
+        Visibility::default(),
+    ));
+    if let Some(look) = look {
+        // Kenney's grass is about a quarter of a unit high, and a plant here is a tuft a beetle
+        // can hide in: the model is scaled up inside the child, where nothing Ruby reads is
+        let (model, scale) = if round { (look.bush.clone(), 2.6) } else { (look.tuft.clone(), 2.2) };
+        plant.with_children(|plant| {
+            plant.spawn((WorldAssetRoot(model), Transform::from_scale(Vec3::splat(scale))));
         });
+    }
+    plant.id()
 }
 
-/// A tree: a trunk and a cone of needles, and a `Collider` that does not move. `Tree`, not
-/// `Plant` — walking into grass is eating, walking into a tree is not.
-fn spawn_tree(commands: &mut Commands, look: &Look, at: Vec2) {
-    commands
-        .spawn((
-            Tree,
-            Collider { radius: TREE_RADIUS },
-            Transform::from_xyz(at.x, 0.0, at.y),
-            Visibility::default(),
-        ))
-        .with_children(|tree| {
-            tree.spawn((
-                Mesh3d(look.trunk.clone()),
-                MeshMaterial3d(look.bark.clone()),
-                Transform::from_xyz(0.0, 1.0, 0.0),
-            ));
-            tree.spawn((
-                Mesh3d(look.canopy.clone()),
-                MeshMaterial3d(look.needle.clone()),
-                Transform::from_xyz(0.0, 3.0, 0.0),
-            ));
+/// A tree, and a `Collider` that does not move. `Tree`, not `Plant` — walking into grass is
+/// eating, walking into a tree is not.
+fn spawn_tree(commands: &mut Commands, look: Option<&Look>, at: Vec2) {
+    let mut tree = commands.spawn((
+        Tree,
+        Collider { radius: TREE_RADIUS },
+        Transform::from_xyz(at.x, 0.0, at.y),
+        Visibility::default(),
+    ));
+    if let Some(look) = look {
+        tree.with_children(|tree| {
+            tree.spawn((WorldAssetRoot(look.tree.clone()), Transform::from_scale(Vec3::splat(2.2))));
         });
+    }
 }
 
-/// A rock: a squashed sphere, and the same immovable circle.
-fn spawn_rock(commands: &mut Commands, look: &Look, at: Vec2, squash: f32) {
-    commands
-        .spawn((
-            Rock,
-            Collider { radius: ROCK_RADIUS },
-            Transform::from_xyz(at.x, 0.0, at.y),
-            Visibility::default(),
-        ))
-        .with_children(|rock| {
+/// A rock: the same immovable circle, and a boulder squashed a little so that nine of them do
+/// not look like nine of one thing.
+fn spawn_rock(commands: &mut Commands, look: Option<&Look>, at: Vec2, squash: f32) {
+    let mut rock = commands.spawn((
+        Rock,
+        Collider { radius: ROCK_RADIUS },
+        Transform::from_xyz(at.x, 0.0, at.y),
+        Visibility::default(),
+    ));
+    if let Some(look) = look {
+        rock.with_children(|rock| {
             rock.spawn((
-                Mesh3d(look.boulder.clone()),
-                MeshMaterial3d(look.stone.clone()),
-                Transform::from_xyz(0.0, ROCK_RADIUS * 0.55, 0.0)
-                    .with_scale(Vec3::new(squash, 0.62, 1.0 / squash)),
+                WorldAssetRoot(look.rock.clone()),
+                Transform::from_scale(Vec3::new(3.4 * squash, 3.0, 3.4 / squash)),
             ));
         });
+    }
 }
 
-/// A creature: the same split. The entity's `Transform` is position and facing and nothing else,
-/// which is what a brain reads and writes; the shape is a child, and G0a swaps it for a `.glb`
-/// without a single component changing.
 fn radius_of(species: Species) -> f32 {
     match species {
         Species::Beetle => BEETLE_RADIUS,
@@ -662,7 +856,10 @@ fn radius_of(species: Species) -> f32 {
     }
 }
 
-fn spawn_creature(commands: &mut Commands, look: &Look, species: Species, at: Vec2, hunger: f32) -> Entity {
+/// A creature: the same split. The entity's `Transform` is position and facing and nothing else,
+/// which is what a brain reads and writes; the model is a child — which is exactly why G0a swapped
+/// six primitives for six `.glb` files without a single component changing.
+fn spawn_creature(commands: &mut Commands, look: Option<&Look>, species: Species, at: Vec2, hunger: f32) -> Entity {
     let mut entity = commands.spawn((
         Creature { species, age: 0.0 },
         Hunger(hunger),
@@ -673,36 +870,72 @@ fn spawn_creature(commands: &mut Commands, look: &Look, species: Species, at: Ve
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
     ));
-    match species {
-        Species::Beetle => {
-            entity.with_children(|body| {
-                body.spawn((
-                    Mesh3d(look.beetle.clone()),
-                    MeshMaterial3d(look.shell.clone()),
-                    // a capsule stands up by default; a beetle lies along the way it walks
-                    Transform::from_xyz(0.0, 0.32, 0.0)
-                        .with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
-                ));
-            });
-        }
-        Species::Rabbit => {
-            entity.with_children(|body| {
-                body.spawn((
-                    Mesh3d(look.rabbit_body.clone()),
-                    MeshMaterial3d(look.fur.clone()),
-                    Transform::from_xyz(0.0, 0.3, 0.0),
-                ));
-                for side in [-1.0f32, 1.0] {
-                    body.spawn((
-                        Mesh3d(look.rabbit_ear.clone()),
-                        MeshMaterial3d(look.fur.clone()),
-                        Transform::from_xyz(side * 0.14, 0.72, -0.24),
-                    ));
-                }
-            });
-        }
+    if let Some(look) = look {
+        // the models face +Z and the world's heading does too (`move_creatures` turns the parent),
+        // so the child only sets the size
+        let (model, scale) = match species {
+            Species::Beetle => (look.beetle.clone(), 0.55),
+            Species::Rabbit => (look.rabbit.clone(), 0.75),
+        };
+        entity.with_children(|body| {
+            body.spawn((WorldAssetRoot(model), Transform::from_scale(Vec3::splat(scale))));
+        });
     }
     entity.id()
+}
+
+/// The mind: `ruby/prelude.rb` and one creature file, compiled together and hung on the entity as
+/// a `Script`. rubevy starts it on the next frame, and from then on the creature moves because a
+/// Ruby task says so.
+fn give_mind(
+    commands: &mut Commands,
+    ruby: &Path,
+    mrb: &mut Assets<MrbAsset>,
+    entity: Entity,
+    species: Species,
+) {
+    let file = match species {
+        Species::Beetle => "beetle",
+        Species::Rabbit => "rabbit",
+    };
+    let path = ruby.join("creatures").join(format!("{file}.rb"));
+    let Some((handle, prelude_lines)) = compile(ruby, &path, mrb) else { return };
+    let name = format!("{} {}", species.name(), entity);
+    commands.entity(entity).insert((
+        Script::new(handle).with_name(&name).with_priority(100),
+        Mind { name, last_instructions: 0, spent: 0, frames: 0, at: String::new(), prelude_lines },
+    ));
+}
+
+/// The prelude and one creature's file, compiled to bytecode in process (the reference compiler),
+/// so the game reads `.rb` and nothing has to be built ahead of time. The two are compiled as one
+/// program, which is why neither needs a `require`; the answer says how many lines the prelude
+/// added, so a line can be reported in the author's own terms.
+fn compile(ruby: &Path, creature: &Path, mrb: &mut Assets<MrbAsset>) -> Option<(Handle<MrbAsset>, u32)> {
+    let body = match platform::read(creature) {
+        Ok(b) => b,
+        Err(e) => {
+            error!("{e}");
+            return None;
+        }
+    };
+    let name = creature.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let prelude = match platform::read(&ruby.join("prelude.rb")) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("{e}");
+            return None;
+        }
+    };
+    let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_creature\n");
+    let prelude_lines = prelude.lines().count() as u32 + 2;
+    match platform::compile(&src, &name) {
+        Ok(bytes) => Some((mrb.add(MrbAsset { bytes }), prelude_lines)),
+        Err(e) => {
+            error!("{e}");
+            None
+        }
+    }
 }
 
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
@@ -819,22 +1052,6 @@ fn day_night(
         if night && let Some(test) = test.as_mut() && test.night_at.is_none() {
             test.night_at = Some(now);
         }
-    }
-}
-
-/// **The placeholder brain (G0 only).** A heading, held for a second or so, then another one.
-/// G1 deletes this system and the `Wander` component with it; what writes `Velocity` from then on
-/// is `me[:Velocity] = [vx, vz]` in a Ruby task, and nothing else in this file changes.
-fn wander(time: Res<Time>, mut dice: ResMut<Dice>, mut creatures: Query<(&Creature, &mut Wander, &mut Velocity)>) {
-    let now = time.elapsed_secs();
-    for (creature, mut wander, mut velocity) in &mut creatures {
-        if now < wander.until {
-            continue;
-        }
-        wander.until = now + dice.between(0.6, 1.8);
-        let heading = dice.between(0.0, std::f32::consts::TAU);
-        let speed = creature.species.speed() * dice.between(0.4, 1.0);
-        velocity.0 = Vec2::new(heading.cos(), heading.sin()) * speed;
     }
 }
 
@@ -1021,7 +1238,7 @@ fn grow_plants(time: Res<Time>, mut plants: Query<(&mut Plant, &mut Transform)>)
 fn sprout_plants(
     time: Res<Time>,
     mut commands: Commands,
-    look: Res<Look>,
+    look: Option<Res<Look>>,
     mut dice: ResMut<Dice>,
     plants: Query<&Transform, With<Plant>>,
 ) {
@@ -1035,7 +1252,7 @@ fn sprout_plants(
         return;
     }
     let round = dice.roll() < 0.35;
-    spawn_plant(&mut commands, &look, at, PLANT_MIN, round);
+    spawn_plant(&mut commands, look.as_deref(), at, PLANT_MIN, round);
 }
 
 /// Being alive costs.
@@ -1048,16 +1265,25 @@ fn get_hungry(time: Res<Time>, mut creatures: Query<(&mut Creature, &mut Hunger)
 }
 
 /// Eating is standing on it: a distance test, a bite out of the plant, and the news.
+///
+/// A bite is taken on every frame of the contact, but `"ate"` is published on the **first** of
+/// them, with what that first mouthful was worth. The plan says "publish `ate`", and G0 did it
+/// per frame while nothing was listening; a meal lasts a second or two, so a listening script
+/// would have had a hundred messages for one event — which is the queue (64, oldest dropped)
+/// filled by one creature having lunch, and a `reflex(:ate)` woken sixty times a second to be
+/// told the same thing. It is the decision `"bumped"` and `"touched"` already made in G0.
 fn eat(
     time: Res<Time>,
     mut commands: Commands,
     mut world: ResMut<ScriptWorld>,
+    mut eaters: ResMut<Eaters>,
     mut test: Option<ResMut<SelfTest>>,
     mut creatures: Query<(Entity, &Transform, &mut Hunger), With<Creature>>,
     mut plants: Query<(Entity, &Transform, &mut Plant), Without<Creature>>,
 ) {
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
+    let mut eating_now: Vec<Entity> = Vec::new();
     for (creature, at, mut hunger) in &mut creatures {
         if hunger.0 >= HUNGER_MAX {
             continue;
@@ -1078,8 +1304,17 @@ fn eat(
             let bite = (EAT_RATE * dt).min(plant.size);
             plant.size -= bite;
             hunger.0 = (hunger.0 + bite * FOOD_VALUE).min(HUNGER_MAX);
-            // the creature's own scripts hear it; the grass has none to hear anything
-            world.publish(Some(creature), "ate", Answer::Num((bite * FOOD_VALUE) as f64));
+            eating_now.push(creature);
+            // the creature's own scripts hear it; the grass has none to hear anything. The
+            // payload is how big the plant is, not how big the mouthful was: one frame's bite is
+            // always the same number and says nothing, while the size of the thing it has just
+            // sat down to is what a script would want to remember.
+            if !eaters.0.contains(&creature) {
+                world.publish(Some(creature), "ate", Answer::Num(plant.size as f64));
+            }
+            // and the model chews for a moment longer than the last bite, so that walking from
+            // one blade of grass to the next does not flicker between two clips
+            commands.entity(creature).insert(Eating { until: now + 0.35 });
             if let Some(test) = test.as_mut() && test.ate_at.is_none() {
                 test.ate_at = Some(now);
                 info!("selftest: first meal at {now:.2} s");
@@ -1090,36 +1325,64 @@ fn eat(
             break; // one plant at a time
         }
     }
+    eaters.0 = eating_now;
 }
 
 /// A rabbit walking into a beetle is news to the beetle — the material for G1's `reflex(:touched)`
 /// — and it is published once per contact, not once per frame.
 fn startle(
+    time: Res<Time>,
     mut world: ResMut<ScriptWorld>,
     mut contacts: ResMut<Contacts>,
-    creatures: Query<(Entity, &Creature, &Transform)>,
+    mut test: Option<ResMut<SelfTest>>,
+    creatures: Query<(Entity, &Creature, &Transform, &Velocity)>,
 ) {
-    let mut now: Vec<(Entity, Entity)> = Vec::new();
+    let now = time.elapsed_secs();
+    let mut touching: Vec<(Entity, Entity)> = Vec::new();
     let rabbits: Vec<(Entity, Vec2)> = creatures
         .iter()
-        .filter(|(_, c, _)| c.species == Species::Rabbit)
-        .map(|(e, _, t)| (e, Vec2::new(t.translation.x, t.translation.z)))
+        .filter(|(_, c, _, _)| c.species == Species::Rabbit)
+        .map(|(e, _, t, _)| (e, Vec2::new(t.translation.x, t.translation.z)))
         .collect();
-    for (beetle, creature, at) in &creatures {
+    for (beetle, creature, at, velocity) in &creatures {
         if creature.species != Species::Beetle {
             continue;
         }
         let here = Vec2::new(at.translation.x, at.translation.z);
         for (rabbit, there) in &rabbits {
             if here.distance(*there) <= TOUCH_REACH {
-                now.push((*rabbit, beetle));
+                touching.push((*rabbit, beetle));
                 if !contacts.0.contains(&(*rabbit, beetle)) {
                     world.publish(Some(beetle), "touched", Answer::Entity(*rabbit));
+                    // and, for the selftest, which way it was going when it was told
+                    if let Some(test) = test.as_mut() && velocity.0.length() > 0.5 && !by_a_wall(at) {
+                        // and only when this beetle has been left alone for a while. A rabbit
+                        // that keeps walking into one publishes again every time the contact is
+                        // remade, the reflex takes half a second over each message, and the rest
+                        // wait in the queue — so "did it turn?" asked half a second after the
+                        // fourth message is really asking about the first. The clock is reset by
+                        // *every* touch, so what is measured is always a beetle that was not
+                        // already running from something.
+                        let fresh = match test.last_touch.iter_mut().find(|(e, _)| *e == beetle) {
+                            Some(seen) => {
+                                let fresh = now - seen.1 > 1.5;
+                                seen.1 = now;
+                                fresh
+                            }
+                            None => {
+                                test.last_touch.push((beetle, now));
+                                true
+                            }
+                        };
+                        if fresh {
+                            test.touched.push((beetle, now, velocity.0));
+                        }
+                    }
                 }
             }
         }
     }
-    contacts.0 = now;
+    contacts.0 = touching;
 }
 
 /// An empty meter is the end of it. Despawning takes the entity's `ScriptTask` with it, and
@@ -1146,6 +1409,294 @@ fn starve(
 }
 
 // ---------------------------------------------------------------------------------------------
+// The two questions the game answers (G1)
+// ---------------------------------------------------------------------------------------------
+
+/// `garden.nearest(:Plant)` and `garden.count(:Plant)` — the whole of this game's `ask` surface.
+/// SabiRuby Battle answers six kinds (`status`, `radar`, `incoming`, `act`, `seed`, `reflex`);
+/// the garden answers two, because everything else a creature wants to know is a component it
+/// can read for itself.
+///
+/// **There is no per-component code here either.** The kind of thing to look for arrives as a
+/// string, and it is resolved the way rubevy resolves `e[:Hunger]`: through the type registry to
+/// a `ReflectComponent`, whose `contains` says whether an entity has one. So `garden.count(:Rock)`
+/// works, and so would `garden.nearest(:Whatever)` the day something registers a `Whatever` —
+/// without this function being touched. What is typed here is the game's *rule*: how far a
+/// creature may see (`Sight`) and that it never finds itself.
+///
+/// It runs in `RubevySet::Answer`, so a question asked on this frame is answered on this frame
+/// and the script wakes with it on the next one.
+fn answer_garden(world: &mut World) {
+    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
+    let registry = registry.read();
+    world.resource_scope(|world: &mut World, mut scripts: Mut<ScriptWorld>| {
+        let world = &*world;
+        for request in scripts.take_requests() {
+            let of_kind = request
+                .text(0)
+                .and_then(|name| {
+                    registry.get_with_short_type_path(name).or_else(|| registry.get_with_type_path(name))
+                })
+                .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>());
+            let asker = request.entity;
+            match request.kind.as_str() {
+                "garden.nearest" => {
+                    let found = of_kind.zip(asker).and_then(|(rc, me)| {
+                        let at = world.get::<Transform>(me)?.translation;
+                        let here = Vec2::new(at.x, at.z);
+                        // how far it may look is its own business, and its own component
+                        let reach = world.get::<Sight>(me).map(|s| s.0).unwrap_or(0.0);
+                        let mut best: Option<(Entity, f32)> = None;
+                        for other in world.iter_entities() {
+                            let entity = other.id();
+                            if entity == me || !rc.contains(other) {
+                                continue;
+                            }
+                            let Some(there) = other.get::<Transform>() else { continue };
+                            let span = here.distance(Vec2::new(there.translation.x, there.translation.z));
+                            if span > reach {
+                                continue;
+                            }
+                            if best.is_none_or(|(_, b)| span < b) {
+                                best = Some((entity, span));
+                            }
+                        }
+                        best.map(|(e, _)| e)
+                    });
+                    match found {
+                        Some(entity) => scripts.answer(&request, Answer::Entity(entity)),
+                        None => scripts.answer(&request, Answer::Nil),
+                    }
+                }
+                "garden.count" => {
+                    let count = match of_kind {
+                        Some(rc) => world.iter_entities().filter(|e| rc.contains(*e)).count(),
+                        None => 0,
+                    };
+                    scripts.answer(&request, Answer::Num(count as f64));
+                }
+                other => {
+                    warn!("garden: nobody answers {other:?}");
+                    scripts.answer(&request, Answer::Nil);
+                }
+            }
+        }
+    });
+}
+
+/// What a script has cost and where it is standing, read every frame out of
+/// `ScriptWorld::stats`. Until G4 puts a panel in the window this is only for the log at the end
+/// of a headless run, but it is the same two numbers the panel will show — and the second one,
+/// the line a *parked* task is waiting on, is the thing this VM can say and an engine's usual
+/// scripting cannot.
+fn watch_minds(world: Res<ScriptWorld>, mut minds: Query<(&mut Mind, Option<&ScriptTask>)>) {
+    for (mut mind, script) in &mut minds {
+        let Some(script) = script else { continue };
+        let stats = world.stats(script);
+        mind.spent = stats.instructions.saturating_sub(mind.last_instructions);
+        mind.last_instructions = stats.instructions;
+        mind.frames += 1;
+        // the prelude sits in front of the creature's file in the compiled program, so a line
+        // past its end is a line of the author's own file, counted from its own first line
+        let lines = mind.prelude_lines;
+        mind.at = match stats.frames.iter().find(|(_, line)| *line > lines) {
+            Some((file, line)) => format!("{file}:{}", line - lines),
+            None => match stats.location {
+                Some((_, line)) => format!("prelude.rb:{line}"),
+                None => "-".into(),
+            },
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The models move (G0a). Ruby knows nothing about any of this.
+// ---------------------------------------------------------------------------------------------
+
+/// A scene brings its own `AnimationPlayer` when it is spawned, on whichever of its nodes carries
+/// the animation. This finds the creature it belongs to by walking up the hierarchy, gives the
+/// player the right graph, and remembers where it is.
+fn dress_animations(
+    mut commands: Commands,
+    look: Res<Look>,
+    added: Query<Entity, Added<AnimationPlayer>>,
+    parents: Query<&ChildOf>,
+    creatures: Query<&Creature>,
+    mut dressed: Local<bevy::platform::collections::HashMap<&'static str, bool>>,
+) {
+    for player in &added {
+        let mut at = player;
+        let mut owner = None;
+        loop {
+            if creatures.get(at).is_ok() {
+                owner = Some(at);
+                break;
+            }
+            match parents.get(at) {
+                Ok(parent) => at = parent.parent(),
+                Err(_) => break,
+            }
+        }
+        let Some(owner) = owner else { continue };
+        let Ok(creature) = creatures.get(owner) else { continue };
+        let gaits = match creature.species {
+            Species::Beetle => look.beetle_gaits.clone(),
+            Species::Rabbit => look.rabbit_gaits.clone(),
+        };
+        commands
+            .entity(player)
+            .insert((AnimationGraphHandle(gaits.graph.clone()), AnimationTransitions::new()));
+        commands.entity(owner).insert(Animated { player, playing: Gait::Idle });
+        // once per species, so that a run says out loud whether the clips were found: without
+        // the `gltf_animation` feature the graph is three handles to assets that do not exist,
+        // the scene brings no `AnimationPlayer`, and this line never appears
+        if !*dressed.entry(creature.species.name()).or_insert(false) {
+            dressed.insert(creature.species.name(), true);
+            info!("{} walks, idles and eats from its model", creature.species.name());
+        }
+    }
+}
+
+/// Walk when it is moving, eat when it is eating, idle otherwise — decided from `Velocity` and
+/// the `Eating` mark, which are the game's own state. A creature's script never knows that any
+/// of this happened, and could not reach it if it wanted to: `Animated`, `Eating` and `Gait`
+/// derive no `Reflect` and are registered nowhere.
+fn animate_creatures(
+    time: Res<Time>,
+    look: Res<Look>,
+    mut creatures: Query<(&Creature, &Velocity, Option<&Eating>, &mut Animated)>,
+    mut players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
+) {
+    let now = time.elapsed_secs();
+    for (creature, velocity, eating, mut animated) in &mut creatures {
+        let want = if eating.is_some_and(|e| e.until > now) {
+            Gait::Eat
+        } else if velocity.0.length() > 0.2 {
+            Gait::Walk
+        } else {
+            Gait::Idle
+        };
+        let Ok((mut player, mut transitions)) = players.get_mut(animated.player) else { continue };
+        if animated.playing == want && player.playing_animations().count() > 0 {
+            continue;
+        }
+        let gaits = match creature.species {
+            Species::Beetle => &look.beetle_gaits,
+            Species::Rabbit => &look.rabbit_gaits,
+        };
+        transitions
+            .play(&mut player, gaits.node(want), std::time::Duration::from_millis(180))
+            .repeat();
+        animated.playing = want;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The three checks G1 adds (`GARDEN_SELFTEST=1`)
+// ---------------------------------------------------------------------------------------------
+
+/// **A hungry creature with a plant in sight reaches it.** The probe beetle was put down with
+/// one plant five units away and nothing else within seven, and forty points of hunger — under
+/// its own script's threshold of fifty-five. Nothing in Rust moves it; if it gets there, a Ruby
+/// task read `me[:Hunger]`, asked `garden.nearest(:Plant)`, read the answer's
+/// `[:Transform][:translation]` and wrote `me[:Velocity]`.
+fn watch_probe(
+    time: Res<Time>,
+    mut test: ResMut<SelfTest>,
+    probes: Query<(&Transform, &Probe)>,
+    plants: Query<&Transform, With<Plant>>,
+) {
+    let now = time.elapsed_secs();
+    for (at, probe) in &probes {
+        let here = Vec2::new(at.translation.x, at.translation.z);
+        let Ok(dinner) = plants.get(probe.dinner) else {
+            // the plant is gone, which happens when it has been eaten: it was reached
+            if test.probe_reached.is_none() {
+                test.probe_reached = Some(now);
+                test.probe_closest = 0.0;
+            }
+            continue;
+        };
+        let span = here.distance(Vec2::new(dinner.translation.x, dinner.translation.z));
+        if test.probe_from == 0.0 {
+            test.probe_from = span;
+        }
+        test.probe_closest = test.probe_closest.min(span);
+        if span < REACH + 0.5 && test.probe_reached.is_none() {
+            test.probe_reached = Some(now);
+            info!("selftest: the hungry beetle reached its plant at {now:.2} s");
+        }
+    }
+}
+
+/// **A beetle touched by a rabbit changes heading within 0.5 s.** `startle` notes the beetle and
+/// the way it was going at the moment the game published `"touched"`; half a second later this
+/// looks again. Only a beetle that was actually walking is counted, because "it turned" means
+/// nothing about one that was standing still or asleep.
+fn watch_turning(
+    time: Res<Time>,
+    mut test: ResMut<SelfTest>,
+    creatures: Query<(&Velocity, &Transform)>,
+) {
+    let now = time.elapsed_secs();
+    let mut still_waiting: Vec<(Entity, f32, Vec2)> = Vec::new();
+    let mut checked = 0u32;
+    let mut turned = 0u32;
+    for (beetle, at, was) in std::mem::take(&mut test.touched) {
+        if now - at < 0.5 {
+            still_waiting.push((beetle, at, was));
+            continue;
+        }
+        let Ok((now_going, place)) = creatures.get(beetle) else { continue }; // starved meanwhile
+        // and not against a wall: `move_creatures` zeroes the component of `Velocity` that would
+        // take a creature through one, so a beetle in the corner reads as going due west both
+        // before the reflex and after it however it turned. The reflex is not what failed there,
+        // and a check that says it did would be a check about the walls.
+        if by_a_wall(place) {
+            continue;
+        }
+        checked += 1;
+        // the angle between the two headings: a flee is roughly a reversal, and anything past a
+        // quarter turn is a different course than the one it was on
+        let a = was.normalize_or_zero();
+        let b = now_going.0.normalize_or_zero();
+        if b == Vec2::ZERO || a.dot(b) < 0.7 {
+            turned += 1;
+        }
+    }
+    test.touched = still_waiting;
+    test.turn_checked += checked;
+    test.turned += turned;
+}
+
+/// Within a unit of the edge of the field, where `move_creatures` clips `Velocity` and a heading
+/// stops being readable from it.
+fn by_a_wall(at: &Transform) -> bool {
+    at.translation.x.abs() > HALF_W - 1.5 || at.translation.z.abs() > HALF_D - 1.5
+}
+
+/// **Creatures sleep at night.** One second after the game published `"night"`, nothing with a
+/// script should still be moving: both species have `reflex(:night) { @asleep = true; stop }`,
+/// and their run loops keep it that way. The fasting beetle has no script and is standing still
+/// anyway, so it proves nothing and is not counted — `Mind` is the mark of a creature that has
+/// a brain to fall asleep with.
+fn watch_sleep(time: Res<Time>, mut test: ResMut<SelfTest>, creatures: Query<&Velocity, With<Mind>>) {
+    let Some(night) = test.night_at else { return };
+    if test.asleep_at.is_some() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if now - night < 1.0 {
+        return;
+    }
+    test.asleep_at = Some(now);
+    for velocity in &creatures {
+        test.awake_speed = test.awake_speed.max(velocity.0.length());
+        test.asleep_counted += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Running without a window
 // ---------------------------------------------------------------------------------------------
 
@@ -1154,7 +1705,7 @@ fn stop_when_over(
     headless: Res<Headless>,
     sky: Res<Sky>,
     test: Option<Res<SelfTest>>,
-    creatures: Query<(&Creature, &Hunger, &Velocity, &Transform)>,
+    creatures: Query<(&Creature, &Hunger, &Velocity, &Transform, Option<&Mind>)>,
     plants: Query<&Plant>,
     everything: Query<Entity>,
     mut exit: MessageWriter<AppExit>,
@@ -1163,16 +1714,21 @@ fn stop_when_over(
     if now < headless.until {
         return;
     }
-    for (creature, hunger, velocity, at) in &creatures {
+    for (creature, hunger, velocity, at, mind) in &creatures {
+        // the last two columns are the script's: what it spent on the frame that has just gone,
+        // and the line of its own file it is standing on — which is the line it is *waiting* on,
+        // since a creature spends most of its life parked on a `sleep` or on an answer
         info!(
-            "{:<7} hunger {:>5.1}  age {:>5.1}  at ({:>6.1}, {:>6.1})  v ({:>5.1}, {:>5.1})",
-            creature.species.name(),
+            "{:<14} hunger {:>5.1}  age {:>5.1}  at ({:>6.1}, {:>6.1})  v ({:>5.1}, {:>5.1})  {:>6} insn/frame  {}",
+            mind.map(|m| m.name.clone()).unwrap_or_else(|| creature.species.name().into()),
             hunger.0,
             creature.age,
             at.translation.x,
             at.translation.z,
             velocity.0.x,
-            velocity.0.y
+            velocity.0.y,
+            mind.map(|m| m.last_instructions / m.frames.max(1)).unwrap_or(0),
+            mind.map(|m| m.at.as_str()).unwrap_or("(no brain)")
         );
     }
     info!(
@@ -1213,6 +1769,40 @@ fn stop_when_over(
                 test.frames, test.closest, test.overlaps
             ),
         );
+        // --- G1: the minds -------------------------------------------------
+        match test.probe_reached {
+            Some(at) => ok(
+                true,
+                format!(
+                    "a hungry creature with a plant in sight reached it (from {:.1} away, at {at:.2} s)",
+                    test.probe_from
+                ),
+            ),
+            None => ok(
+                false,
+                format!(
+                    "a hungry creature with a plant in sight reached it (it started {:.1} away and got no closer than {:.1})",
+                    test.probe_from, test.probe_closest
+                ),
+            ),
+        }
+        ok(
+            test.turn_checked > 0 && test.turned == test.turn_checked,
+            format!(
+                "a beetle touched by a rabbit changed heading within 0.5 s ({}/{})",
+                test.turned, test.turn_checked
+            ),
+        );
+        match test.asleep_at {
+            Some(at) => ok(
+                test.asleep_counted > 0 && test.awake_speed < 0.05,
+                format!(
+                    "the creatures were asleep a second after night fell ({} of them, fastest {:.3} at {at:.2} s)",
+                    test.asleep_counted, test.awake_speed
+                ),
+            ),
+            None => ok(false, "the creatures were asleep a second after night fell (night never came)".into()),
+        }
     }
     exit.write(AppExit::Success);
 }
