@@ -19,7 +19,7 @@ mod platform;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use rubevy::{Answer, MrbAsset, RubevyPlugin, Script, ScriptEnded, ScriptTask, ScriptWorld};
+use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptEnded, ScriptTask, ScriptWorld};
 use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, Hud, ScriptPanel, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::Value;
 
@@ -336,10 +336,18 @@ fn main() {
         .init_resource::<Events>()
         .init_resource::<Rules>()
         .add_systems(Startup, (spawn_match, spawn_arena))
+        // The whole chain sits in `RubevySet::Answer`, which rubevy puts after the set that
+        // runs the scripts and collects their questions. That is what makes `answer_requests`
+        // see a question on the frame it was asked, so the script wakes on the next frame
+        // rather than the one after: a round trip costs one frame, not two
+        // (docs/worklog/2026-09-17-battle-followups.md). The chain moves as a whole because
+        // the order inside it is the game's own — `answer_requests` sets the controls that
+        // `move_robots` then applies, in that order, in the same frame.
         .add_systems(
             Update,
             (restart_match, answer_requests, move_robots, separate_robots, spawn_turrets, follow_turrets, move_bullets, gray_out_downed, fade_blasts, rebuild_walls, reload_changed, report_ended, update_hud)
-                .chain(),
+                .chain()
+                .in_set(RubevySet::Answer),
         );
     if std::env::var("SABIBOTS_SELFTEST").is_ok() {
         // the reflex check wants a fight, not a mouse, so it runs in both modes

@@ -75,12 +75,24 @@ loop do
 end
 ```
 
-**A question costs two frames**, measured (`docs/worklog/2026-09-16-showpieces-d2-d3.md`): the
+**A question costs one frame**, measured (`docs/worklog/2026-09-17-battle-followups.md`): the
 task asks and parks, the request reaches the game with that frame's commands, `answer_requests`
-answers it — and the scheduler only reaches the task again on the frame after that, because
-`answer_requests` is an ordinary system of this game and nothing orders it before rubevy's
-`tick_scripts`. Answering in `PreUpdate` instead makes it one frame; that is a change to the
-game's schedule and is the author's to make, so it has not been made.
+answers it in the same frame, and the scheduler wakes the task on the next one.
+
+It cost *two* until 2026-09-17, and the fix was one line. `answer_requests` is an ordinary system
+of this game, and nothing said where in the frame it ran; dropped between rubevy's `tick_scripts`
+and `drain_commands` it could not see a question until the frame after it was asked. rubevy now
+publishes the three `SystemSet`s it builds its own frame out of, and the game's chain of thirteen
+systems says `.in_set(RubevySet::Answer)` — the set that runs after the scripts have been ticked
+and their questions collected. Measured with a robot that does nothing but count frames, the same
+one as the study below: 2.0 frames a question before, 1.0 after.
+
+**The match got busier**, and this is worth knowing before anyone reads a robot's numbers as its
+own doing. A scout's decision is three questions, so its loop went from about 150 ms round
+(6 frames of questions plus its `sleep 0.05`) to about 100 ms: every robot aims and fires half
+again as often. Counting the hits the selftest watches over five 20-second headless runs, it went
+from 11–17 a run to 15–27. The robots were not retuned for it — they are the same files — and the
+difference is entirely in how often each of them gets to decide.
 
 Either way the cost is per *question*, which is why `act` sets all four controls at once and
 `radar` brings the robot's own status back with it: a brain that asked one question per control
@@ -96,39 +108,41 @@ that way. They were measured against each other with a robot that does nothing b
 scout, with three other robots on the field:
 
 ```ruby
-# as it is: three questions, six frames
-target = nearest_enemy(45)                                   # ask("radar", 45)  — 2 frames
-threat = incoming(18).find { |shot| on_collision?(shot) }    # ask("incoming",18) — 2 frames
-act throttle: 1.0, turn: steer_to(heading), aim: angle, fire: 0.3   # ask("act") — 2 frames
+# as it is: three questions, three frames
+target = nearest_enemy(45)                                   # ask("radar", 45)  — 1 frame
+threat = incoming(18).find { |shot| on_collision?(shot) }    # ask("incoming",18) — 1 frame
+act throttle: 1.0, turn: steer_to(heading), aim: angle, fire: 0.3   # ask("act") — 1 frame
 ```
 
 ```ruby
-# over the ECS bridge: nine reads and a question — eleven frames — and it knows less
+# over the ECS bridge: nine reads and a question — ten frames — and it knows less
 me    = Rubevy.entity
 here  = me[:Transform]                     # 1 frame — where I am, which way I point
 mine  = me[:Robot]                         # 1 frame — hp, energy, cooldown: a component
 foes  = Rubevy.find(:Robot)                # 1 frame — every robot in the world, near or far
 seen  = foes.map { |f| [f[:Transform], f[:Robot]] }   # 2 reads each: 6 frames
 robot = Rubevy::Proxy.new("robot")
-robot.act(1.0, turn, angle, 0.3)           # 2 frames — a proxy call *is* `Rubevy.ask`
+robot.act(1.0, turn, angle, 0.3)           # 1 frame — a proxy call *is* `Rubevy.ask`
 ```
 
-One decision of the scout, three other robots on the field, measured:
+One decision of the scout, three other robots on the field. The per-question costs are measured;
+the rows are their sums:
 
 | | questions per decision | frames |
 |---|---|---|
-| `ask("radar")` / `incoming` / `act` (today) | 3 | 6 |
-| `Entity#[]` + `Proxy`, positions only | 5 | 6 |
-| `Entity#[]` + `Proxy`, everything the scout uses | 10 | 11 |
+| `ask("radar")` / `incoming` / `act` (today) | 3 | 3 |
+| `Entity#[]` + `Proxy`, positions only | 5 | 5 |
+| `Entity#[]` + `Proxy`, everything the scout uses | 10 | 10 |
 
 * **A component read is a round trip, and there is one per component per entity.** A question can
   carry a whole table back (`radar` answers every contact with its position, velocity, heading,
   distance and bearing in one `Answer::Rows`); `e[:Transform]` answers one component of one
   entity. What the boundary costs is questions, and the component form asks one per fact.
-* **A component read is quicker than a question, though** — one frame against two — because
-  rubevy answers the four kinds it reserves itself (`component.get`, `component.has`,
-  `components`, `entities.with`) in a system that runs *before* `tick_scripts`. That is where the
-  `PreUpdate` note above comes from: the difference is the ordering, not the mechanism.
+* **A component read is no quicker than a question any more** — both are one frame. It used to
+  be one against two, because rubevy answers the four kinds it reserves itself
+  (`component.get`, `component.has`, `components`, `entities.with`) in a system of its own and
+  the game's answers were arriving a frame late. The difference was never the mechanism, only
+  where in the frame the answering ran; both now run in `RubevySet::Answer`.
 * **`Rubevy.find` walks the world.** In this game it answers 345 entities (every crate of the
   wall, every shot, every nameplate) unless the game registers a component that means "a robot" —
   and `radar` already answers "the robots within 45 units, as this robot can see them".
@@ -137,7 +151,7 @@ One decision of the scout, three other robots on the field, measured:
   reading is what a robot can know. `Contact#distance` and `#bearing` are computed on the game's
   side for the same reason.
 * **`Rubevy::Proxy` is `Rubevy.ask` with a method name on it** — `proxy.act(…)` is
-  `Rubevy.ask("robot.act", …).pop`, measured at the same two frames. It reads well, and it hides
+  `Rubevy.ask("robot.act", …).pop`, measured at the same one frame. It reads well, and it hides
   the one thing a robot's author must see: which calls wait. `act` is a word that says "do this";
   `robot.act` is a word that says "ask and wait", written to look like neither.
 

@@ -131,6 +131,21 @@ sabiruby 側の小さな追加）。rubevy の `ScriptWorld::stats` の隣に `s
   順序が指定されていないので 2 フレーム。`PreUpdate` に移すと**全ロボットの反応が半分のフレーム数**に
   なる（スカウトの 1 判断 6 → 3。試して戻した）。ゲームのスケジュールを変える話なので入れていない。
   入れるなら rubevy 側に公開の `SystemSet` があるほうが素直（`tick_scripts` は非公開）。
+* **（2026-09-17、著者判断）`RubevySet::Answer` に入れた。** rubevy `fa37eaa` が
+  `Deliver` / `Tick` / `Answer` の 3 つの `SystemSet` を公開したので、13 本の `.chain()` に
+  `.in_set(RubevySet::Answer)` を付けた（鎖の中の順序はゲーム自身のものなので、
+  `answer_requests` だけを出さずに鎖ごと動かした）。D3 と同じ計測ロボットで測り直した:
+
+  | | 前（`fa37eaa` 前） | 後 |
+  |---|---|---|
+  | `ask status` / `ask radar` / `act` | 2.0 フレーム | **1.0 フレーム** |
+  | スカウトの 1 判断（radar + incoming + act） | 6.0 フレーム | **3.0 フレーム** |
+  | `Proxy#method_missing` → `ask` | 2.0 フレーム | **1.0 フレーム** |
+  | 成分読み（`e[:Transform]`、`has?`、`find`） | 1.0 フレーム | 1.0 フレーム（変わらず） |
+
+  **手触りは変わった。** ロボットの判断の周期が約 150 ms → 約 100 ms になり、
+  selftest が見ている被弾の数が 20 秒あたり 11〜17 → 15〜27 に増えた。ロボットは**調整していない**
+  （指示どおり）。上の表と手触りの話は `docs/sabiruby-battle.md` の *The boundary* に書いた。
 * **ヘッドレスでは型が登録されていない**（`MinimalPlugins`）。`e[:Transform]` は**エラーではなく nil**、
   `components` は `[]`。窓では `DefaultPlugins` が登録するので同じスクリプトの振る舞いが違う。
   計測のために一時的に `register_type::<Transform>()` を足して戻した。範囲外だが食い違いは残っている。
