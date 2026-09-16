@@ -127,7 +127,10 @@ opens Help, Tab moves the focus. Each page takes them first — `keydown` in the
 | Ctrl+S | Save the brain (in the browser: `localStorage`) | Save the creature's file |
 | Ctrl+Enter | — | Apply to every creature of that species |
 | Tab | the next robot | the next creature |
-| F1 / F2 / P | — / — / — | the editor / the VM panel / pause the scripts |
+| F1 / F2 / P | the editor / the VM panel / pause the scripts | the same |
+| H, ? | the in-game guide (G6) | the same |
+| wheel | — | zoom: a tenth of the distance per notch, and the browser's `deltaY` is read as 100 pixels to the notch (G6; `docs/garden.md`) |
+| right-drag, Shift+drag, WASD, Home | — | slide the view, and put it back (G6) |
 
 F5 is the one that mattered for the garden, because there the key *saves* and the browser's own
 meaning for it is Reload — the exact opposite of what the player pressed it for. Two things were
@@ -204,6 +207,31 @@ runs it, because the raw size is what the browser must decode and keep, but **th
 not the download**, and this is the first time the two were measured side by side here. Kept
 (author's decision 2026-09-17): what the browser decodes and holds matters more here than the
 0.7 MB of transfer.
+
+### What the in-game guide cost (G6)
+
+The guide (`H`) is written in English and Japanese, and egui's default fonts have no CJK at all —
+so a subset of Noto Sans JP, 62,780 bytes, is `include_bytes!`d into `rubevy-arena` and added to
+egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
+condition that the font be subset rather than shipped whole. Measured on the same machine and the
+same binaryen, all four numbers after `wasm-opt -Os`:
+
+| | before G6 | with the camera (G6.2) | with the guide and the font (G6.3) | the guide's delta |
+|---|---|---|---|---|
+| `garden/pkg/game_bg.wasm` | 35,216,938 | 35,217,417 | **35,306,969** | **+89,552** (+0.25%) |
+| its `gzip -9` | 10,715,122 | 10,716,945 | **10,772,842** | **+55,897** (+0.52%) |
+| `sabibots/pkg/game_bg.wasm` | 34,794,885 | — | **34,884,167** | **+89,282** (+0.26%) |
+| its `gzip -9` | 10,593,843 | — | **10,649,110** | **+55,267** (+0.52%) |
+
+**About 90 KB per game, of which 63 KB is the font**; the other 27 KB is the panel, the two games'
+strings and what egui's font machinery pulls in with a second family. Gzipped — which is what the
+wire carries, since Pages serves gzip — it is 55 KB, because a subsetted `glyf` table is already
+close to incompressible. A quarter of a per cent on a 35 MB module, for the difference between a
+page that explains itself and one that does not.
+
+The font was 9,589,900 bytes as it comes from Google Fonts. Shipping it whole would have been a
+27% increase on the module, which is the decision the subsetting avoided; `tools/subset-font.sh`
+is what has to be run again when the Japanese is edited (`docs/garden.md`, `CREDITS.md`).
 
 **The garden is 1.2% bigger than Battle** (39.25 vs 38.77 MB raw), which is the whole of 3D:
 `bevy_pbr`, `bevy_gltf`, `bevy_animation` and the glTF loader against Battle's sprites. The plan

@@ -47,10 +47,32 @@ from the pack's own `Models/GLTF format/`:
 Sizes and triangle counts are in `docs/garden.md`; the whole set is 314 KiB in seven files,
 against the plan's budget of 2 MB in ten.
 
-## Font
+## Fonts
 
-The text is Bevy's built-in default font (Fira Mono, SIL Open Font License 1.1), which ships with
-the engine; nothing is added to this repository for it.
+Bevy's own text is its built-in default font (Fira Mono, SIL Open Font License 1.1), which ships
+with the engine, and the panels drawn over egui use egui's defaults (Ubuntu-Light and two Noto
+symbol faces, likewise shipped with it). Nothing is added to this repository for either.
+
+One font is. The in-game guide (`H`) is written in English **and Japanese**, and none of the fonts
+above has a single CJK character in it:
+
+**Noto Sans JP**, by Google, **SIL Open Font License 1.1**. The licence text is
+`crates/rubevy-arena/assets/fonts/OFL.txt`, beside the file, exactly as it comes from
+[google/fonts `ofl/notosansjp`](https://github.com/google/fonts/tree/main/ofl/notosansjp)
+(downloaded 2026-09-17).
+
+| file | what it is |
+|---|---|
+| `crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf` | 62,780 bytes: Noto Sans JP pinned to `wght=400` and subset to the 327 characters the guides use |
+| `crates/rubevy-arena/assets/fonts/OFL.txt` | its licence |
+
+The source font is 9,589,900 bytes; what is in each binary is 0.65% of that. `tools/subset-font.sh`
+is the recipe — it reads the characters out of `garden/src/guide_text.rs`,
+`sabibots/src/guide_text.rs` and `crates/rubevy-arena/src/guide.rs` and cuts the font again, which
+has to be done whenever the Japanese is edited. The OFL allows the font to be modified and bundled
+(this is a subset, not a renamed font: the name records say "Noto Sans JP Subset" and the copyright
+and licence records are Noto's own, unchanged). What the size costs the browser build is measured
+in `docs/web.md`.
 
 ## In the browser build
 

@@ -594,6 +594,31 @@ growing and fading over a quarter of a second or 0.7 s.
 The window is 16:9 and the arena square: the camera keeps the arena's height (plus a little
 floor past the wall) in view, and the floor reaches past the wall sideways. When the match closes the walls in, `ArenaSize` changes and the wall of crates is rebuilt at the new edge. The crates are spaced about 2.6 apart with the step stretched so each side is a whole number of them, so every side ends exactly on a corner (a fixed step used to leave the top and right sides a crate past the corner). The walls close in a crate at a time: `shrink(1)` takes one crate off each end of every side, the crate size stays the same, and the arena gets smaller in steps the eye can follow — 25 crates a side at the start, 23, 21, … down to 7, where it stops. A rule with `every:` repeats, which is how the match does it gradually (the first version shrank by 8 and then 6 units at once, which looked like a jump rather than walls moving). The camera stays where it was framed, so the walls are seen moving in; zooming to follow them made the shrink hard to notice, and it is off by default (`ArenaPlugin::follow_shrink`).
 
+## The guide in the game (G6)
+
+The author played the browser build of the other game here and wrote down "there is no explanation
+in the game", which is the one complaint a reader of these documents can never make on a player's
+behalf. So both games have a panel, open the first time they start and `H` or `?` after that, with
+a hint in the scoreboard saying so:
+
+![the guide, over the battle](battle-guide.png)
+
+Four paragraphs and the key table, **in English with the Japanese under it**: what the fight is
+(two teams, health, energy that moving and firing spend), that every brain is a Ruby script in a
+VM written in Rust and that the rules are all on the Rust side, what a reflex is, and that picking
+a robot and pressing Ctrl+Enter hands it a new brain in the middle of the fight.
+
+The frame — the window, the two keys, and the font — is `rubevy-arena`'s
+(`crates/rubevy-arena/src/guide.rs`), shared with the garden; the words are this game's and live
+in **`sabibots/src/guide_text.rs`**, which is the one file to edit to change them. egui's default
+fonts have no CJK at all, so a subset of Noto Sans JP goes in the binary as a fallback family;
+`docs/garden.md` explains how that is cut and **`tools/subset-font.sh` re-cuts it, which has to be
+run after editing the Japanese** or a new character is drawn as a blank box. The licence is in
+`CREDITS.md`.
+
+`--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
+over the middle of the window; `--shot p 6 --guide` is how the picture above was taken.
+
 ## Seeing it where there is no window
 
 `cargo run -p sabibots -- --shot shot.png 5` opens the window, waits five seconds, writes a PNG
@@ -624,6 +649,7 @@ game points `AssetPlugin` at its own `assets/` directory.
 ```
 cargo run -p sabibots                    # window
 cargo run -p sabibots -- --headless 15   # 15 seconds, result on stdout, no GPU needed
+cargo run -p sabibots -- --shot p.png 6 --guide   # a picture with the H panel open
 web/build.sh && web/serve.sh             # in a browser (docs/web.md)
 
 SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the reflex check

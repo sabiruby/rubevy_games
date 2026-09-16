@@ -23,10 +23,13 @@
 //!     GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90
 //!     cargo run -p garden -- --headless 30 --save garden.save.json   # and write it down
 //!     cargo run -p garden -- --load garden.save.json                 # and pick it up again
+//!     cargo run -p garden -- --shot n.png 12 --at midnight           # a picture of the night
 //!
 //! Mouse: drag to orbit, wheel to zoom. F5 saves the garden, F9 brings it back.
 
 mod genome;
+/// G6: the words of the `H` panel, and the only file to edit to change them.
+mod guide_text;
 mod platform;
 mod window;
 
@@ -37,7 +40,7 @@ use bevy::input::mouse::{MouseMotion, MouseWheel};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
-use rubevy_arena::{EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
+use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
 use serde::{Deserialize, Serialize};
@@ -60,6 +63,29 @@ const DAY_LENGTH: f32 = 60.0;
 /// Where in that turn the world starts: a little after sunrise, so the first thing a run sees is
 /// daylight and the first `"night"` is something that arrives rather than something that was.
 const DAWN_OFFSET: f32 = 0.08;
+
+/// Midnight, on the world's clock, in the first turn of the sun: the phase where the sun is
+/// furthest under the ground is 0.75, and `phase = (now / DAY_LENGTH + DAWN_OFFSET).fract()`
+/// makes that `now = (0.75 - DAWN_OFFSET) * DAY_LENGTH`. `--at MIDNIGHT` is the darkest picture
+/// the garden has.
+const MIDNIGHT: f32 = (0.75 - DAWN_OFFSET) * DAY_LENGTH;
+
+/// **How dark the night is (G6).** The author played the browser build and could not see the
+/// creatures or the trees at night at all, so both numbers below are floors rather than the
+/// nothing they used to be — moonlight, not a power cut.
+///
+/// `MOON_LUX` is the `DirectionalLight` that stands in for the moon. It is what draws the *edges*:
+/// a creature has a lit side and a shadowed side, and the tree trunks have a direction. The real
+/// moon is about 0.1 lux and this is four thousand times that, which is honest — a night in a
+/// game has to be read, and a photograph of a real moonlit field needs a long exposure to look
+/// like this. What it must not be is the sun: the dimmest *day* the garden has is 1,200 lux at
+/// the horizon, and 400 keeps a clear gap under it.
+///
+/// `NIGHT_AMBIENT` is what fills the shadowed side, and it is the number that decides whether a
+/// beetle under a tree exists. The day's floor is 120 at the horizon; 55 is under half of that,
+/// so dusk still reads as the light going out.
+const MOON_LUX: f32 = 400.0;
+const NIGHT_AMBIENT: f32 = 55.0;
 
 /// Plants
 const PLANTS_AT_START: usize = 55;
@@ -659,18 +685,65 @@ struct Shot {
     taken: bool,
 }
 
-/// Where the camera stands, in the only three numbers a look from above needs.
-#[derive(Resource)]
+/// Where the camera stands: three numbers for the look from above, and — since G6 — the point on
+/// the ground it is looking *at*, which is what panning moves.
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
 struct Orbit {
     yaw: f32,
     pitch: f32,
     distance: f32,
+    /// The spot on the ground the camera turns around and points at, on XZ. `Home` puts it back.
+    focus: Vec2,
 }
 
 impl Default for Orbit {
     fn default() -> Self {
-        Orbit { yaw: 0.0, pitch: 0.85, distance: 42.0 }
+        Orbit { yaw: 0.0, pitch: 0.85, distance: 42.0, focus: Vec2::ZERO }
     }
+}
+
+/// **The wheel (G6).** The author played the browser build and found the wheel had two steps in
+/// it: all the way in, all the way out. The reason is in the unit a wheel message carries.
+///
+/// A mouse on a PC sends *lines* — winit hands Bevy `MouseScrollUnit::Line` with `y = ±1.0` per
+/// notch — and a browser sends *pixels*: a `wheel` event's `deltaY` is how far the page would
+/// scroll, and one notch of a real mouse in Chromium is 100 of them (Firefox sends 3 lines, and
+/// winit turns that into `Line` again). The old code was `distance -= y * 2.0`, so one notch was
+/// two units on a PC and a hundred on a page — and the range is 12 to 90 units wide, which a
+/// hundred crosses in one turn of the finger. Two steps.
+///
+/// So a message is first turned into **notches** ([`notches_of`]), and the notches are then a
+/// *ratio* rather than a subtraction ([`zoom_by`]): ten per cent nearer per notch, which is the
+/// same felt step at 8 units as at 80 — the thing a subtraction cannot be. Thirty notches cross
+/// the whole range either way, in both builds — about ten flicks of a finger, where it used to be
+/// one on a page and forty on a PC.
+const ZOOM_PER_NOTCH: f32 = 1.10;
+/// One notch of a wheel, in the pixels a browser measures one in.
+const PIXELS_PER_NOTCH: f32 = 100.0;
+/// How close and how far the camera may get. Six units is a creature filling a third of the
+/// window; a hundred and ten has the whole forty-by-thirty field and its walls in view.
+const ZOOM_MIN: f32 = 6.0;
+const ZOOM_MAX: f32 = 110.0;
+/// A pixel of drag, in world units per unit of distance: panning feels the same however close in
+/// the camera is, which it would not if the ground moved a fixed number of units per pixel.
+const PAN_PER_PIXEL: f32 = 0.0016;
+/// Arrow keys and WASD, in world units per second per unit of distance.
+const PAN_PER_SECOND: f32 = 0.9;
+/// How far past the wall the eye may wander before it is stopped.
+const PAN_LIMIT: f32 = 8.0;
+
+/// One wheel message as a number of notches, whatever unit it arrived in.
+fn notches_of(unit: bevy::input::mouse::MouseScrollUnit, y: f32) -> f32 {
+    use bevy::input::mouse::MouseScrollUnit;
+    match unit {
+        MouseScrollUnit::Line => y,
+        MouseScrollUnit::Pixel => y / PIXELS_PER_NOTCH,
+    }
+}
+
+/// `notches` notches of wheel from `distance`, as a ratio, kept inside the range.
+fn zoom_by(distance: f32, notches: f32) -> f32 {
+    (distance * ZOOM_PER_NOTCH.powf(-notches)).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
 /// `GARDEN_SELFTEST=1`: what the plan asks the world to prove about itself — G0's four things
@@ -784,6 +857,18 @@ fn main() {
             args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(6.0),
         )
     });
+    // `--at SECONDS`: **where the garden's clock stands when the picture is taken** — or, with no
+    // `--shot`, where it starts. G6 wanted a picture of midnight, and waiting forty seconds for
+    // one on lavapipe (which draws a shadowed PBR frame in about a second) is not a way to
+    // compare two sets of light numbers. It moves `Sky::shift`, which is G3's clock and nothing
+    // else: the plants have grown as long as the run is old and the creatures are as hungry as
+    // they have had time to get. Only the sun has moved. `--at MIDNIGHT` is the darkest one.
+    // `--at midnight` is the one hour anybody asks for by name, so it has one.
+    let at = args
+        .iter()
+        .position(|a| a == "--at")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| if s == "midnight" { Some(MIDNIGHT) } else { s.parse::<f32>().ok() });
     // `GARDEN_SELFTEST=1` on a PC, `?selftest` in the page's address (G5): a browser has no
     // environment, and the checks are what says from outside that the world is alive
     let selftest = platform::selftest_asked();
@@ -838,7 +923,18 @@ fn main() {
                 // Battle uses. They bring `bevy_egui` between them.
                 EditorPlugin,
                 VmInspectorPlugin,
+                // G6: the `H` panel, and with it the Japanese font every egui panel in the game
+                // now has as a fallback (`rubevy_arena::guide`)
+                GuidePlugin,
             ))
+            // G6. A picture is asked for one thing, and the panel sits over the middle of the
+            // window — which would be that thing. So a `--shot` run starts with it shut unless
+            // `--guide` says otherwise, and `--shot p 8 --guide` is how the guide's own picture
+            // (the one that says the Japanese is not tofu) is taken. A player gets it open.
+            .insert_resource(rubevy_arena::Guide {
+                open: shot.is_none() || args.iter().any(|a| a == "--guide"),
+                ..guide_text::guide()
+            })
             .init_resource::<Orbit>()
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
@@ -949,7 +1045,13 @@ fn main() {
     app.insert_resource(Dice(platform::clock_seed()))
         .insert_resource(RubyDir(platform::ruby_dir()))
         .init_resource::<Brains>()
-        .init_resource::<Sky>()
+        // `--at` starts the sky ahead, and where a picture is asked for it counts back from the
+        // moment of the picture, so `--shot p 8 --at 40` is a garden eight seconds old whose sun
+        // is where it would be at forty
+        .insert_resource(Sky {
+            shift: at.map(|at| at - shot.as_ref().map(|(_, after)| *after).unwrap_or(0.0)).unwrap_or(0.0),
+            ..default()
+        })
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
         .init_resource::<Eaters>()
@@ -1028,6 +1130,8 @@ fn main() {
             window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
         );
     if selftest && headless.is_none() {
+        // G6: and the camera, which is the one thing a browser check has no other way to read
+        app.insert_resource(CameraLog);
         // the editor's buttons and the two keys, which no headless run can press
         app.insert_resource(window::WindowTest::after(3.0))
             .add_systems(Update, window::window_selftest.before(window::inspect_keys));
@@ -1524,45 +1628,138 @@ fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
 }
 
 fn camera_at(orbit: &Orbit) -> Transform {
-    let eye = Vec3::new(
-        orbit.distance * orbit.pitch.cos() * orbit.yaw.sin(),
-        orbit.distance * orbit.pitch.sin(),
-        orbit.distance * orbit.pitch.cos() * orbit.yaw.cos(),
-    );
-    Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y)
+    let focus = Vec3::new(orbit.focus.x, 0.0, orbit.focus.y);
+    let eye = focus
+        + Vec3::new(
+            orbit.distance * orbit.pitch.cos() * orbit.yaw.sin(),
+            orbit.distance * orbit.pitch.sin(),
+            orbit.distance * orbit.pitch.cos() * orbit.yaw.cos(),
+        );
+    Transform::from_translation(eye).looking_at(focus, Vec3::Y)
 }
 
-/// Drag to turn round the garden, wheel to come closer. The whole camera, because a world seen
-/// from one fixed angle does not look like a world.
+/// The two directions a pan can go, on the ground, as the window sees them: to the right of the
+/// screen, and away from the viewer. They are the camera's own axes flattened onto XZ, so panning
+/// after turning the camera goes where the eye expects rather than where the world's X is.
+fn ground_axes(yaw: f32) -> (Vec2, Vec2) {
+    let (s, c) = yaw.sin_cos();
+    // the camera stands at +Z when the yaw is 0 and looks towards -Z; its right is +X
+    (Vec2::new(c, -s), Vec2::new(-s, -c))
+}
+
+/// Drag to turn round the garden, drag with the other button to slide it, wheel to come closer,
+/// `Home` to put it all back. The whole camera, because a world seen from one fixed angle does
+/// not look like a world — and, since G6, one seen from one fixed *place* does not either: the
+/// field is forty by thirty and a beetle in a corner was something you could turn towards but
+/// never go to.
+#[allow(clippy::too_many_arguments)]
 fn orbit_camera(
+    time: Res<Time>,
     mut orbit: ResMut<Orbit>,
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     pointer: Option<Res<bevy_egui::input::EguiWantsInput>>,
     mut motion: MessageReader<MouseMotion>,
     mut wheel: MessageReader<MouseWheel>,
     mut cameras: Query<&mut Transform, With<Camera3d>>,
+    watch: Option<Res<CameraLog>>,
+    mut said_at: Local<f32>,
 ) {
-    let mut moved = false;
-    // G4: a drag inside a panel is the panel's, not the camera's
-    let mine = !pointer.is_some_and(|p| p.wants_pointer_input());
-    let dragging = mine && (buttons.pressed(MouseButton::Left) || buttons.pressed(MouseButton::Right));
+    let was = *orbit;
+    // G4: a drag inside a panel is the panel's, not the camera's; nor is a key typed into the
+    // editor the camera's, or `w` in a creature's brain would slide the garden about
+    let (mine, mine_keys) = match pointer {
+        Some(p) => (!p.wants_pointer_input(), !p.wants_keyboard_input()),
+        None => (true, true),
+    };
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    // left drag turns; right drag — or Shift and left, for a trackpad and for a browser that
+    // keeps the right button for its own menu — slides
+    let turning = mine && buttons.pressed(MouseButton::Left) && !shift;
+    let sliding = mine
+        && (buttons.pressed(MouseButton::Right) || (buttons.pressed(MouseButton::Left) && shift));
+    let (right, away) = ground_axes(orbit.yaw);
     for m in motion.read() {
-        if dragging {
+        if turning {
             orbit.yaw -= m.delta.x * 0.005;
             orbit.pitch = (orbit.pitch + m.delta.y * 0.005).clamp(0.12, 1.45);
-            moved = true;
+        } else if sliding {
+            // the ground is grabbed and pulled: the mouse moves right, the garden moves right,
+            // so the point the camera looks at moves left
+            let step = PAN_PER_PIXEL * orbit.distance;
+            let d = right * -m.delta.x * step + away * m.delta.y * step;
+            orbit.focus = clamp_focus(orbit.focus + d);
         }
     }
     for w in wheel.read() {
-        orbit.distance = (orbit.distance - w.y * 2.0).clamp(12.0, 90.0);
-        moved = true;
+        let notches = notches_of(w.unit, w.y);
+        let was_at = orbit.distance;
+        orbit.distance = zoom_by(orbit.distance, notches);
+        if watch.is_some() {
+            // one line per wheel *message*, because the message is what the browser and the
+            // window disagreed about: the unit and the raw number are in it, so the log says
+            // what arrived as well as what was done with it
+            info!(
+                "camera: wheel {:?} y={} -> {notches:.3} notches, distance {was_at:.2} -> {:.2}",
+                w.unit, w.y, orbit.distance
+            );
+        }
     }
-    if moved {
+    if mine_keys {
+        let mut d = Vec2::ZERO;
+        if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+            d += away;
+        }
+        if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+            d -= away;
+        }
+        if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+            d += right;
+        }
+        if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+            d -= right;
+        }
+        if d != Vec2::ZERO {
+            let step = PAN_PER_SECOND * orbit.distance * time.delta_secs();
+            orbit.focus = clamp_focus(orbit.focus + d.normalize_or_zero() * step);
+        }
+        if keys.just_pressed(KeyCode::Home) {
+            *orbit = Orbit::default();
+        }
+    }
+    if *orbit != was {
         let at = camera_at(&orbit);
         for mut transform in &mut cameras {
             *transform = at;
         }
+        // a drag is sixty messages a second and the wheel has already said its piece, so the
+        // rest of the camera's life is sampled rather than logged
+        let now = time.elapsed_secs();
+        if watch.is_some() && now - *said_at > 0.25 {
+            *said_at = now;
+            info!(
+                "camera: yaw {:.3} pitch {:.3} distance {:.2} focus ({:.2}, {:.2})",
+                orbit.yaw, orbit.pitch, orbit.distance, orbit.focus.x, orbit.focus.y
+            );
+        }
     }
+}
+
+/// `GARDEN_SELFTEST=1`, or `?selftest` in a page's address: the camera says what it is doing.
+///
+/// G6 had to answer "how many steps does one turn of the wheel have *in a browser*", and there is
+/// nothing to read from outside a wasm canvas — no window title, no `Transform` to query, and the
+/// camera is not in the HUD. A console line is the one thing playwright can collect, so the
+/// checks make the camera write one. Off in an ordinary run: this is a game, not a log.
+#[derive(Resource)]
+struct CameraLog;
+
+/// The eye may go a little past the wall, and no further: a garden you can lose is not a garden.
+fn clamp_focus(focus: Vec2) -> Vec2 {
+    Vec2::new(
+        focus.x.clamp(-HALF_W - PAN_LIMIT, HALF_W + PAN_LIMIT),
+        focus.y.clamp(-HALF_D - PAN_LIMIT, HALF_D + PAN_LIMIT),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1592,11 +1789,11 @@ fn day_night(
     let height = up.y;
     let night = height <= 0.0;
 
-    // at night the light comes from where the sun is not: a moon, dim and blue, still casting
-    // the shadows that say the world is 3D
+    // at night the light comes from where the sun is not: a moon, blue and much weaker than the
+    // sun, still casting the shadows that say the world is 3D
     let from = if night { -up } else { up };
     let (color, illuminance) = if night {
-        (Color::srgb(0.55, 0.64, 1.0), 300.0)
+        (Color::srgb(0.62, 0.70, 1.0), MOON_LUX)
     } else {
         // low sun is orange, high sun is white
         let noon = height.clamp(0.0, 1.0);
@@ -1614,8 +1811,8 @@ fn day_night(
     // neither, and everything above it still runs
     if let Some(mut ambient) = ambient {
         if night {
-            ambient.color = Color::srgb(0.35, 0.45, 0.8);
-            ambient.brightness = 30.0;
+            ambient.color = Color::srgb(0.45, 0.54, 0.85);
+            ambient.brightness = NIGHT_AMBIENT;
         } else {
             ambient.color = Color::srgb(0.7, 0.8, 1.0);
             ambient.brightness = 120.0 + 260.0 * height.clamp(0.0, 1.0);
@@ -1623,7 +1820,7 @@ fn day_night(
     }
     if let Some(mut clear) = clear {
         clear.0 = if night {
-            Color::srgb(0.03, 0.04, 0.10)
+            Color::srgb(0.06, 0.08, 0.17)
         } else {
             let noon = height.clamp(0.0, 1.0);
             Color::srgb(0.35 + 0.15 * noon, 0.5 + 0.22 * noon, 0.7 + 0.22 * noon)
@@ -3355,4 +3552,81 @@ fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mu
     commands
         .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
         .observe(bevy::render::view::screenshot::save_to_disk(path));
+}
+
+// ---------------------------------------------------------------------------------------------
+// The camera's arithmetic (G6)
+// ---------------------------------------------------------------------------------------------
+
+/// The wheel is the one thing in the game whose bug was invisible on the machine it was written
+/// on: a PC sends lines and a browser sends pixels, and the old code read the number without
+/// asking which. There is no window in a test and no browser either, so what is checked here is
+/// the two functions the messages are put through — that the same turn of the same finger is the
+/// same number of notches in both units, and that a notch is a ratio.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::input::mouse::MouseScrollUnit;
+
+    #[test]
+    fn a_notch_is_a_notch_in_either_unit() {
+        // a PC mouse through winit: one notch, one line
+        assert_eq!(notches_of(MouseScrollUnit::Line, 1.0), 1.0);
+        // Chromium: one notch, a hundred pixels of would-be scrolling
+        assert_eq!(notches_of(MouseScrollUnit::Pixel, 100.0), 1.0);
+        assert_eq!(notches_of(MouseScrollUnit::Pixel, -300.0), -3.0);
+    }
+
+    #[test]
+    fn ten_notches_are_ten_steps_and_not_the_end_of_the_range() {
+        // what the author's browser did: ten notches from the default, in pixels, one at a time
+        let mut d = Orbit::default().distance;
+        let mut seen = vec![d];
+        for _ in 0..10 {
+            d = zoom_by(d, notches_of(MouseScrollUnit::Pixel, 100.0));
+            seen.push(d);
+        }
+        // ten distinct distances, each a tenth nearer than the last, and nowhere near the stop
+        for pair in seen.windows(2) {
+            assert!((pair[0] / pair[1] - ZOOM_PER_NOTCH).abs() < 1e-4, "{pair:?}");
+        }
+        assert!(seen.last().unwrap() > &ZOOM_MIN, "{seen:?}");
+        // and the same ten in lines land in the same place: this is the whole of the browser fix
+        let mut line = Orbit::default().distance;
+        for _ in 0..10 {
+            line = zoom_by(line, notches_of(MouseScrollUnit::Line, 1.0));
+        }
+        assert!((line - seen[10]).abs() < 1e-3, "{line} vs {}", seen[10]);
+    }
+
+    #[test]
+    fn the_range_is_reached_but_not_passed() {
+        assert_eq!(zoom_by(ZOOM_MIN, 5.0), ZOOM_MIN);
+        assert_eq!(zoom_by(ZOOM_MAX, -5.0), ZOOM_MAX);
+        // from one end to the other is about thirty notches, not one
+        let notches = (ZOOM_MAX / ZOOM_MIN).ln() / ZOOM_PER_NOTCH.ln();
+        assert!((29.0..32.0).contains(&notches), "{notches}");
+    }
+
+    #[test]
+    fn panning_follows_the_screen_and_stops_at_the_wall() {
+        // looking down the -Z axis: the screen's right is +X, away is -Z
+        let (right, away) = ground_axes(0.0);
+        assert!((right - Vec2::new(1.0, 0.0)).length() < 1e-5, "{right}");
+        assert!((away - Vec2::new(0.0, -1.0)).length() < 1e-5, "{away}");
+        // turned a quarter round, the screen's right is -Z
+        let (right, _) = ground_axes(std::f32::consts::FRAC_PI_2);
+        assert!((right - Vec2::new(0.0, -1.0)).length() < 1e-5, "{right}");
+        // and the eye cannot leave the garden behind
+        let far = clamp_focus(Vec2::new(1000.0, -1000.0));
+        assert_eq!(far, Vec2::new(HALF_W + PAN_LIMIT, -HALF_D - PAN_LIMIT));
+    }
+
+    #[test]
+    fn midnight_is_the_darkest_moment() {
+        let phase = (MIDNIGHT / DAY_LENGTH + DAWN_OFFSET).fract();
+        assert!((phase - 0.75).abs() < 1e-5, "{phase}");
+        let up = (phase * std::f32::consts::TAU).sin();
+        assert!(up < -0.999, "{up}");
+    }
 }

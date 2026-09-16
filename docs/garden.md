@@ -30,6 +30,7 @@ cargo run -p garden -- --load g.json                    # and pick it up again
 GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 cargo run -p garden -- \
     --headless 20 --load g.json --save h.json           # F9's path, with no keyboard to press
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
+cargo run -p garden -- --shot n.png 12 --at midnight    # the same, with the sun where it is at midnight
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
 
@@ -42,10 +43,14 @@ hand against volumes of its own.
 
 | | |
 |---|---|
-| drag (either mouse button) | turn the camera round the garden |
-| wheel | closer / further away |
+| left-drag | turn the camera round the garden |
+| right-drag, or Shift and left-drag | slide the view over the field (G6) |
+| W A S D, or the arrow keys | the same, without a mouse (G6) |
+| wheel | closer / further away: a tenth of the distance per notch (G6) |
+| Home | put the camera back where it started (G6) |
 | click a creature | look at it: the HUD marks it, the editor shows its file, the VM panel its task |
 | Tab | the next creature |
+| H, or ? | the in-game guide, in English and Japanese (G6) |
 | F1 | the editor |
 | F2 | the VM panel |
 | P | pause the scripts (the VM gets a budget of 0; the garden keeps drawing) |
@@ -56,9 +61,150 @@ hand against volumes of its own.
 
 In a browser the same keys do the same things (the page takes F5 back from the browser, which
 would otherwise reload it), and the two buttons in the HUD are what a player who has not read this
-finds. `docs/web.md` has the rest.
+finds. `docs/web.md` has the rest. The window itself is described under **The window (G4)** below.
 
-The window is described under **The window (G4)** below.
+### The wheel had two steps in it, and the unit is why (G6)
+
+The author played the browser build and found the wheel did one thing: all the way in, or all the
+way out. It was right on the machine the code was written on and wrong on a page, and the reason
+is in the *unit* a wheel message carries.
+
+Bevy's `MouseWheel` has a `unit` field, and until G6 nothing here read it. A mouse on a PC sends
+lines — winit hands over `MouseScrollUnit::Line` with `y = ±1.0` per notch. A browser sends
+pixels: a `wheel` event's `deltaY` is how far the page would scroll, and one notch of a real mouse
+in Chromium is **100** of them. The old line was
+
+```rust
+orbit.distance = (orbit.distance - w.y * 2.0).clamp(12.0, 90.0);
+```
+
+so one notch was two units on a PC and two hundred in a browser, against a range 78 units wide.
+Two steps, and the second one was the clamp.
+
+So a message becomes a number of **notches** first, and the notches are a *ratio* rather than a
+subtraction:
+
+```rust
+fn notches_of(unit: MouseScrollUnit, y: f32) -> f32 {
+    match unit {
+        MouseScrollUnit::Line => y,
+        MouseScrollUnit::Pixel => y / PIXELS_PER_NOTCH,   // 100.0
+    }
+}
+
+fn zoom_by(distance: f32, notches: f32) -> f32 {
+    (distance * ZOOM_PER_NOTCH.powf(-notches)).clamp(ZOOM_MIN, ZOOM_MAX)   // 1.10, 6.0, 110.0
+}
+```
+
+A ratio is the whole point of the second one: ten per cent is the same felt step at 8 units as at
+80, which a fixed subtraction cannot be — it is either too coarse close in or too slow far out.
+Thirty notches cross the range either way, in both builds, which is about ten flicks of a finger.
+The two functions are pure and have tests of their own in `garden/src/main.rs`, because the bug
+they fix is invisible in every environment a test runs in.
+
+### Panning
+
+The field is forty by thirty and the camera used to be nailed to the middle of it: a beetle in a
+corner was something you could turn *towards* and never go *to*. `Orbit` grew a fourth number —
+`focus`, the point on the ground the camera turns around and looks at — and `camera_at` places the
+eye relative to it instead of relative to the origin.
+
+Which button does which is the only decision in it. Left-drag turns, and right-drag or Shift and
+left-drag slide; the right button is there because it is the usual one, and Shift and left because
+a trackpad may not have a right button and a browser may want the right one for its own menu. The
+drag is turned by the camera's yaw before it is added (`ground_axes`), so sliding goes where the
+eye expects rather than where the world's X happens to be, and it is scaled by the distance, so it
+feels the same close in as far out. `Home` puts all four numbers back.
+
+### What the browser actually does, measured
+
+`GARDEN_SELFTEST=1` — or `?selftest` in the page's address — makes the camera write a line every
+time a wheel message arrives and a sampled line while it is being dragged. That is the only way to
+read a camera out of a wasm canvas from outside, and it is what these numbers come from; an
+ordinary run logs nothing. Driven in headless Chromium 153 (playwright, software WebGL) against
+`web/dist/garden/?selftest`, ten `mouse.wheel(0, -100)` one at a time:
+
+```
+wheel Pixel y=100 -> 1.000 notches, distance 42.00 -> 38.18
+wheel Pixel y=100 -> 1.000 notches, distance 38.18 -> 34.71
+wheel Pixel y=100 -> 1.000 notches, distance 34.71 -> 31.56
+… 28.69, 26.08, 23.71, 21.55, 19.59, 17.81 …
+wheel Pixel y=100 -> 1.000 notches, distance 17.81 -> 16.19
+distinct distances: 10 of 10
+```
+
+**Ten notches, ten steps**, each exactly a tenth of the one before, where the author found two —
+and the unit in the log is the evidence for the diagnosis rather than a guess about it: `Pixel`,
+100 per notch, which is exactly what `PIXELS_PER_NOTCH` says. Ten notches back out land on 42.00
+again to the last digit. A right-drag of 180 px right and 96 px down moves `focus` to
+`(-11.09, -5.91)`; holding `W` for 0.7 s moves it to `(-12.10, -15.72)`; `Home` puts it at
+`(0.00, 0.00)`. The page's own 21 window checks pass in the same run, with no page error. The
+driver is in `docs/worklog/2026-09-17-garden-G6.md`.
+
+### The guide in the game, in two languages (G6)
+
+The author played the browser build knowing what every key did, and still wrote down "there is no
+explanation in the game". Until G6 the whole of it was one weak grey line at the foot of the HUD
+and the file you are reading, in another window. So: a panel, **open the first time the game
+starts**, `H` or `?` after that (`Esc` closes it), and a hint in the HUD in the colour the key
+names are, saying so.
+
+![the guide, over the garden](garden-guide.png)
+
+Four paragraphs and the key table, in English with the Japanese under it in a quieter blue. The
+paragraphs are not the key list in prose — they are what somebody who has just opened the page is
+actually looking at (grass, hunger, a day that turns over in a minute, creatures pairing off), and
+then the two things a player would never guess: that every mind is a Ruby script in a VM written
+in Rust that reads the ECS components by name, and that clicking a creature and pressing
+Ctrl+Enter hands the new mind to every creature of its species while the garden keeps running.
+
+The **frame** is `rubevy-arena`'s (`crates/rubevy-arena/src/guide.rs`): the window, the two keys,
+the two-language layout and the font. The **words** are each game's, and each game keeps all of
+them in one file and nothing else in it:
+
+| | |
+|---|---|
+| `garden/src/guide_text.rs` | the garden's words — the file to edit to change them |
+| `sabibots/src/guide_text.rs` | SabiRuby Battle's |
+| `crates/rubevy-arena/src/guide.rs` | the two strings both games show: the HUD's `H: help / 操作説明` and the line at the foot of the panel |
+
+`--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
+over the middle of the window; `cargo run -p garden -- --shot p.png 10 --guide` is how the picture
+above was taken, and looking at it is how "the Japanese is not tofu" was checked.
+
+### The font, and re-cutting it when the words change
+
+egui's default fonts are Ubuntu-Light and two Noto *symbol* faces: **no CJK at all**. Japanese in
+a label is the replacement box — tofu — and there is no system font to fall back on, because the
+browser build is a wasm module with no access to the machine's fonts and font discovery would be a
+megabyte of code and a different answer on every machine. So the font is in the binary:
+
+```rust
+pub const CJK: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Guide.subset.ttf");
+```
+
+Noto Sans JP (SIL Open Font License 1.1; `CREDITS.md`, with `OFL.txt` beside the file), which is
+9.6 MB as it comes — a variable font with the whole `wght` axis and every Japanese glyph. What is
+in the binary is **62,780 bytes**: pinned to one weight, and cut down to the 327 characters the
+guides actually use. It is added as a **fallback**, appended to both of egui's families rather
+than replacing them, so egui reaches it only for characters the defaults do not have and every
+Latin glyph in the editor and the panels is what it was.
+
+Cutting the font to the text means the two have to be cut **together**:
+
+```
+tools/subset-font.sh          # after editing any Japanese in the three files above
+cargo build --release -p garden -p sabibots
+web/build.sh all              # for the pages
+```
+
+The script reads the characters out of those three files itself, fetches Noto Sans JP if it is not
+given a path to one, pins `wght=400` with `fontTools.varLib.instancer` and subsets with
+`fontTools.subset` (fonttools 4.65 in a venv). **A Japanese word edited into a guide without
+running it is drawn as blank boxes**, because the character is not in the subset — which is the
+one way this arrangement can go wrong, and the reason the script exists rather than a note saying
+which font was used.
 
 ## The components
 
@@ -977,6 +1123,48 @@ place.
 
 That is what makes `"night"` legible on screen rather than a number in a log: the creatures stop
 where they stand when it arrives, and the picture says so.
+
+### How dark the night is, and why it changed (G6)
+
+The author played the browser build and could not see the garden at night at all — not dimly, at
+all. The numbers were an honest guess at what a night looks like and a wrong guess at what a night
+*on a screen* has to be, so they were raised until a picture of midnight was readable, and no
+further: the point of a night is still that it is one.
+
+| | before | after |
+|---|---|---|
+| the moon (`DirectionalLight.illuminance`) | 300 lux | **400 lux** (`MOON_LUX`) |
+| the ambient light (`GlobalAmbientLight.brightness`) | 30 | **55** (`NIGHT_AMBIENT`) |
+| the moon's colour | `srgb(0.55, 0.64, 1.00)` | `srgb(0.62, 0.70, 1.00)` |
+| the ambient colour | `srgb(0.35, 0.45, 0.80)` | `srgb(0.45, 0.54, 0.85)` |
+| the sky (`ClearColor`) | `srgb(0.03, 0.04, 0.10)` | `srgb(0.06, 0.08, 0.17)` |
+
+The two that matter are the first two, and they do different jobs. The moon is a directional light
+and it draws *edges*: a creature has a lit side and a shadowed side and the tree trunks have a
+direction, which is what stops the garden looking like a flat black card. The ambient is what
+fills the shadowed side, and it is the one that decides whether a beetle standing under a tree
+exists at all. Raising only the moon made the tops of things bright and the rest of them still
+missing; raising only the ambient made everything grey and flat. Both, and the day is still a day:
+the dimmest daylight the garden has is 1,200 lux at the horizon with an ambient of 120, so
+moonlight is a third of the worst daylight and the eye reads the difference immediately. Measured
+on the picture below against the same crop of `docs/garden.png`, the ground's mean luminance is
+**18 → 26 out of 255** at midnight, against **81** in the afternoon.
+
+![the garden at midnight](garden-night.png)
+
+`--at SECONDS` is what makes that picture cheap to take. It moves `Sky::shift` — G3's clock, the
+one a loaded garden uses to go on from the hour it was saved at — and nothing else, so the world
+is as old as the run is and only the sun has moved:
+
+```
+cargo run -p garden -- --shot docs/garden-night.png 12 --at midnight
+```
+
+With a `--shot` it counts back from the moment of the picture, so that reads as "a garden twelve
+seconds old, photographed at midnight"; with no `--shot` it is simply where the clock starts.
+`midnight` is spelled out because it is the one hour anybody asks for by name — it is
+`(0.75 - DAWN_OFFSET) × DAY_LENGTH`, and a test in `garden/src/main.rs` checks that the sun really
+is at its lowest there rather than trusting the arithmetic.
 
 ## Running without a window, and the ten checks
 
