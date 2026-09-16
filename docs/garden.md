@@ -550,11 +550,11 @@ its components, does not get its answers, or does not hear an event:
    and an event published then is dropped. A creature under two seconds old is not counted.
 
    **This check is the flaky one, and it was flaky before G2.** It looks at thirty or forty
-   touches in a run and fails when one of them turned by less than 45°. Measured on this machine:
-   the merged G1 binary (`a61a611`) failed once in four ninety-second runs (32/33); this branch
-   passed three runs in a row and then failed a fourth (35/37). The failing case is a beetle that
-   *did* change course, by about 39°, which is what the brain's own `wander` looks like — so the
-   likeliest reading is that the message was dropped or answered late, not that the reflex is
+   touches in a run and fails when one of them turned by less than 45°. Measured on this machine,
+   in ninety-second runs: the merged G1 binary (`a61a611`, with none of G2 in it) failed once in
+   four (32/33); this branch failed twice in eight (35/37 and 37/39). The failing case is a beetle
+   that *did* change course, by about 39°, which is what the brain's own `wander` looks like — so
+   the likeliest reading is that the message was dropped or answered late, not that the reflex is
    broken. It is G1's check and G1's problem; nothing was changed here to chase it.
 7. **creatures sleep at night.** One second after `"night"` is published, nothing that has a
    script may still be moving. The fasting beetle has no script and proves nothing, so it is not
@@ -611,9 +611,10 @@ selftest: ok   the creatures were asleep a second after night fell (15 of them, 
 selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.95 s: speed 2.049 vs 2.400/2.000, mean 2.200; sight 7.723 vs 9.000/7.000, mean 8.000; appetite 1.007 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [6 pairings, 3 children]
 ```
 
-Three runs of that, all eight ok each time: the turn check counted 35, 31 and 44 touches and every
-one of them turned, and the first child arrived at 6.42, 16.47 and 1.95 seconds out of 4, 3 and 6
-born. A fourth run failed check 6 at 35/37, which is the pre-existing flake described above.
+Eight runs of that. The genome check passed every time — the first child arrived between 1.95 and
+16.47 seconds, with three to six born in ninety seconds — and so did the other six; check 6 failed
+twice, which is the pre-existing flake described above (the same binary from `main` fails once in
+four).
 
 The starvation needs a creature that certainly starves, and a creature with a brain in a garden of
 fifty-five plants usually does not. So `GARDEN_SELFTEST=1` puts one beetle in the far corner with
