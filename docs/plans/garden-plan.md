@@ -21,8 +21,8 @@
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | G0 | 世界（Rust だけ）: 草が生え、生き物が `Velocity` で動き、腹が減り、草を食べ、死に、昼夜が回る。headless + selftest | 済み（`2ece3a6` + 当たり判定） |
-| G0a | 軽いフリーの 3D アセットに置き換え（下記「アセット」。G0 は基本形状で始めてよい） | 未着手 |
-| G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 未着手 |
+| G0a | 軽いフリーの 3D アセットに置き換え（下記「アセット」。G0 は基本形状で始めてよい） | 済み（`58d6940`。Kenney の Nature Kit + Cube Pets、7 ファイル 314 KiB） |
+| G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 済み（`ed54e59`） |
 | G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 未着手 |
 | G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 未着手 |
 | G4 | 窓: エディタ・VM パネル（`rubevy-arena`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 未着手 |
@@ -87,6 +87,40 @@ wasm は Battle の 30 MB から 35〜40 MB に増える見込み（G5 で実測
      `if me[:Hunger] < 30 → 草を探す` とは逆。後者 2 つに合わせて**満腹度（0 が死、食べると増える）**として実装した。
   2. `"bumped"` の頻度。計画書は「押し戻されたフレームに publish」。字義通りだと木に寄りかかった 1.5 秒で ≒90 回出て、
      rubevy のキュー（64、古いものから落ちる）が 1 つの出来事で埋まる。`"touched"` と同じく**接触が始まったフレームだけ**にした。戻すのは 1 行。
+
+**実装で分かったこと（G0a・G1、`docs/worklog/2026-09-17-garden-G0a-G1.md`）**:
+
+* **「crates.io に無い」と cargo が言ったら、まずキャッシュを疑う。** `bevy_gltf` / `bevy_scene` /
+  `bevy_animation` の 0.19.1 が「存在しない」と言われた。実際には全部ある。ローカルの sparse index の
+  キャッシュ（`~/.cargo/registry/index/*/.cache/be/vy/*`）が公開前のもので、`cargo update` は
+  **既にグラフに入っている crate しか引き直さない**。3 ファイル消して解決。バージョンは 1 つも動いていない。
+* **bevy 0.19 では `.glb` は `Scene` ではなく `WorldAsset` になる**（置くのは `WorldAssetRoot`）。
+  `bevy_scene` は次世代の BSN シーンに名前を取られ、旧来のものは `bevy_world_serialization` に移った。
+  `GltfAssetLabel::Scene(0)` だけは `Scene` のまま。
+* **Quaternius「Ultimate Animated Animals」は使えなかった**（CC0 だが 12 種にウサギも虫もおらず、
+  `.glb` でなく `.gltf` + `.bin`）。Kenney の Cube Pets 2.0 に替えた。**Kenney の 3D 49 キットに甲虫は無い**ので、
+  Beetle にはカニを当てた（同じパレット・同じクリップ名で済む）。替えるなら caterpillar か bee が同じパックにある。
+* **headless はモデルを読まない。** `Look` を窓のときだけ作り、spawn 系は `Option<&Look>` を取る
+  （`day_night` の `Option<ResMut<GlobalAmbientLight>>` と同じ形）。glTF を headless で読むには
+  プラグインを 4 つ足すことになり、selftest が Bevy のローダの試験になる。確かめたいコンポーネントは
+  全部親にあり、子は 1 つも見ていない。
+* **`Velocity(Vec2)` は Ruby から `[[vx, vz]]`。** タプル構造体 1 個の中に Vec2 なので、書くのも
+  `me[:Velocity] = [[vx, vz]]`。計画書の擬似コード（`[vx, vz]`）はフィールド数が合わない。`act` の中に隠した。
+  `Hunger(f32)` も同じ理由で `me[:Hunger][0]`。
+* **`Rubevy::Proxy` は rubevy の prelude に入っていない**（`assets/scripts/proxy.rb` というサンプル）。
+  ゲームが持つもの、という rubevy 自身の説明どおり、garden の prelude に 20 行を写した。
+* **`garden.nearest` / `count` はコンポーネント名で `match` しない。** 型名 →
+  `AppTypeRegistry::get_with_short_type_path` → `ReflectComponent::contains` で解く（rubevy の
+  `entities.with` と同じ）。そうしないと「コンポーネント 1 つあたりの接着コード 0 行」が嘘になる。
+* **`"ate"` は 1 食に 1 回。** 毎フレーム publish すると 1 回の食事でキュー（64）が埋まる。
+  payload も「一口の価値」（常に 1.0）から「座った草の大きさ」に変えた。
+* **反射と脳のハンドルの取り合い。** 反射は 1〜2 フレームで `act` するが、脳は読みを重ねて 4〜5 フレーム
+  かかるので、**反射の直後に脳の `act` が上書きする**（last-writer-wins）。`Creature#act` に
+  「今ハンドルを持っているタスク以外は書かない」を入れた（フラグではなく `Task.current` で持つ）。
+  「夜に velocity 0」が落ちたのも同じ形で、脳の `@asleep` 分岐にも `stop` が要る（計画書の擬似コードが
+  `act 0, 0; sleep 0.5; next` になっているのはこのため）。
+* **`Velocity` は壁で成分が 0 になる**ので、壁際の生き物の「向き」は `Velocity` から読めない。
+  「触られたら向きを変える」の selftest は壁際を数えない。
 
 ## アセット（G0a）
 
