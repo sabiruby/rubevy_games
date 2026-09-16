@@ -600,6 +600,30 @@ struct Loading {
     save: GardenSave,
 }
 
+/// `GARDEN_RELOAD_AT=SECONDS` (checks only): the `--load` file goes in through F9's door.
+///
+/// `--load PATH` reads its file before the first frame, and F9 reads one into a garden that has
+/// been running for minutes. They end in the same `load_world`, but they are not the same thing
+/// to the *creatures*: the first builds minds that have never run, the second replaces minds that
+/// have. G5 found that only the second one lost the memories it read (`11 creatures never
+/// started; the garden is running anyway`), and a headless run could not reach it, because
+/// `MinimalPlugins` has no keyboard to press F9 with. So this defers the `--load`: the garden is
+/// built new at t=0, lives its own life for `at` seconds, and only then opens the file — which is
+/// F9 exactly, in a run that a shell can drive.
+///
+/// `restored` is what lets `--headless N` with `GARDEN_RELOAD_AT=N` write a file that can be
+/// compared byte for byte with the one it read: `stop_when_over` will not end the run until the
+/// deferred load has put every memory back, and it is set in `restore_memory`, which runs just
+/// before `stop_when_over` on that same frame — so the save is of the world as it was read, with
+/// no frame of walking between.
+#[derive(Resource)]
+struct ReloadAt {
+    at: f32,
+    path: String,
+    asked: bool,
+    restored: bool,
+}
+
 /// A loaded world whose minds are still starting.
 ///
 /// A creature's `@memory` cannot be put back until there is something to put it on: the Hash
@@ -889,7 +913,23 @@ fn main() {
     // beside it. A run that was given a real `--load` keeps it; the check then says it did not run.
     let probe = (selftest && load_from.is_none()).then(write_a_save_from_another_version);
     let mut version_refused = None;
-    if let Some(path) = load_from.as_ref().or(probe.as_ref()) {
+    // `GARDEN_RELOAD_AT=SECONDS` (checks only): the `--load` is not for the first frame. The
+    // garden is built new, runs on its own, and the file goes in at `SECONDS` through the same
+    // door F9 uses — which is the one path a headless run had no way to reach (`ReloadAt`).
+    let reload_at = selftest.then(platform::reload_asked_at).flatten();
+    let deferred = match (reload_at, load_from.as_ref()) {
+        (Some(at), Some(path)) => {
+            app.insert_resource(ReloadAt { at, path: path.clone(), asked: false, restored: false })
+                .add_systems(Update, reload_while_running.before(load_world));
+            true
+        }
+        (Some(_), None) => {
+            error!("GARDEN_RELOAD_AT wants a --load PATH to open; loading nothing");
+            false
+        }
+        _ => false,
+    };
+    if let Some(path) = (!deferred).then(|| load_from.as_ref().or(probe.as_ref())).flatten() {
         match read_save(path) {
             // the world is not built by `spawn_world` at all in this case: `load_world` does it on
             // the first frame, exactly as F9 does it on the four-hundredth
@@ -2756,6 +2796,7 @@ fn restore_memory(
     mut restoring: ResMut<Restoring>,
     mut sky: ResMut<Sky>,
     mut scripts: ResMut<ScriptWorld>,
+    mut reload: Option<ResMut<ReloadAt>>,
     tasks: Query<&ScriptTask>,
 ) {
     // the world's clock stands still while this lasts
@@ -2778,6 +2819,11 @@ fn restore_memory(
         warn!("{} creatures never started; the garden is running anyway", restoring.pending.len());
         restoring.done = true;
     }
+    // `stop_when_over` runs between this and `save_world`, so a run told to reload at its last
+    // second ends on this frame and writes the world it just read
+    if restoring.done && let Some(reload) = reload.as_mut() {
+        reload.restored = true;
+    }
 }
 
 /// The last thing in a frame that finished restoring: the world may move again.
@@ -2793,6 +2839,33 @@ fn finish_restore(mut commands: Commands, restoring: Res<Restoring>) {
 /// The run condition of every rule: a garden that is still being restored does not move.
 fn is_still(restoring: Option<Res<Restoring>>) -> bool {
     restoring.is_none()
+}
+
+/// `GARDEN_RELOAD_AT` (checks only): F9, pressed by the clock instead of by a finger.
+///
+/// Nothing here is a second way to load: it puts a `Loading` in exactly as `save_load_keys` does
+/// for the key, and `load_world` is the one that does the work.
+fn reload_while_running(
+    time: Res<Time>,
+    mut reload: ResMut<ReloadAt>,
+    mut note: ResMut<SaveNote>,
+    sky: Res<Sky>,
+    mut commands: Commands,
+) {
+    if reload.asked || time.elapsed_secs() < reload.at {
+        return;
+    }
+    reload.asked = true;
+    match read_save(&reload.path) {
+        Ok(save) => {
+            info!("GARDEN_RELOAD_AT: loading {} into the running garden", reload.path);
+            commands.insert_resource(Loading { save });
+        }
+        Err(e) => {
+            error!("{e}");
+            note.say(world_now(&time, &sky), true, e);
+        }
+    }
 }
 
 /// F5 and F9, and the HUD's two buttons, in the window. The headless build has no `ButtonInput`
@@ -3038,6 +3111,7 @@ fn stop_when_over(
     headless: Res<Headless>,
     sky: Res<Sky>,
     test: Option<Res<SelfTest>>,
+    reload: Option<Res<ReloadAt>>,
     restoring: Option<Res<Restoring>>,
     file: Res<SaveFile>,
     clock: Res<window::VmClock>,
@@ -3057,6 +3131,11 @@ fn stop_when_over(
     // a world that is still being read back is not a world to report on, and `--headless 0
     // --load X --save Y` is exactly that run: it ends on the frame the last memory goes home
     if restoring.is_some_and(|r| !r.done) {
+        return;
+    }
+    // and a run told to reload at `N` with `--headless N` ends on the frame *that* load is whole,
+    // not on the frame the clock struck
+    if reload.is_some_and(|r| !r.restored) {
         return;
     }
     for (creature, hunger, velocity, at, mind) in &creatures {

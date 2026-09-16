@@ -27,6 +27,8 @@ GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the ten checks
 GARDEN_SELFTEST=1 cargo run -p garden                   # a window, and the editor's and the keys'
 cargo run -p garden -- --headless 30 --save g.json      # and write the garden down at the end
 cargo run -p garden -- --load g.json                    # and pick it up again
+GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 cargo run -p garden -- \
+    --headless 20 --load g.json --save h.json           # F9's path, with no keyboard to press
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
 web/build.sh garden && web/serve.sh                     # the browser build, at .../garden/
 ```
@@ -608,12 +610,50 @@ the nearest one to the text (measured in a four-line program against the same ve
 The writer was always exact; it is the reading side that rounds. The feature costs parsing speed,
 which a file read once has none to spare.
 
-F9 — a load into a garden that is *already running*, where everything alive is despawned first —
-takes the same `load_world` the command line does, and it was run once headlessly with a throwaway
-hook (not committed): seventy-three entities made way, the world came back at the hour it was saved
-at, the rabbits had their trees again, and nothing was logged above `INFO`. What has not been
-pressed is the keys themselves; this machine has no GPU driver and the window goes through the
-container in `docker/` (`docs/wsl-gpu.md`).
+### Loading into a garden that is already running
+
+F9 — everything alive despawned and a file's creatures built in its place — takes the same
+`load_world` the command line does, but it is not the same thing to the *creatures*: `--load`
+builds minds that have never run, F9 replaces minds that have. G5 found that only the second one
+lost what it read (`11 creatures never started; the garden is running anyway`, every creature back
+with an empty `@memory`), and it found it in a browser, because a headless run has no keyboard to
+press F9 with.
+
+It has one now. `GARDEN_RELOAD_AT=SECONDS`, read only when `GARDEN_SELFTEST` is set, holds the
+`--load` file back: the garden is built new, lives its own life, and the file goes in at `SECONDS`
+through F9's door (`ReloadAt`, `reload_while_running`). It puts a `Loading` in exactly as the key
+does, and nothing else about the path is different. Told to reload at the second the run ends, it
+writes the world it just read — `restore_memory` marks the load whole just before `stop_when_over`
+looks, so no frame of walking gets between the restore and the save:
+
+```
+$ ./target/release/garden --headless 30 --save a.json
+saved 12 creatures, 47 plants at 30.0 s to a.json (13057 bytes)
+$ GARDEN_SELFTEST=1 GARDEN_RELOAD_AT=20 ./target/release/garden \
+      --headless 20 --load a.json --save b.json
+GARDEN_RELOAD_AT: loading a.json into the running garden
+loaded 12 creatures, 47 plants, 7 trees, 9 rocks at 30.0 s (69 entities made way)
+saved 12 creatures, 47 plants at 30.0 s to b.json (13057 bytes)
+$ diff a.json b.json && echo IDENTICAL
+IDENTICAL
+```
+
+Sixty-nine entities made way, every memory came home, and the two files are the same bytes — a
+garden that had been running for twenty seconds with minds of its own. No `creatures never started`
+line, no `WARN`, no `ERROR`.
+
+**And this is the same bug as the restart queue's.** The hook was built to find out whether the
+fault was the VM or `restore_memory`'s timing, so it was run against both VMs in the same
+container, and the interesting number is not pass or fail but *how long the restore took*: the
+line that says the file was loaded and the line that says it was written back are **1.48 s apart on
+sabiruby 0.5.0** and **6 ms apart on 0.5.1**. The old VM got there in the end, which is why a PC
+never saw the failure: `RESTORE_PATIENCE` is five seconds and 1.5 is well inside it. A browser is
+slower than this container, and the wait is what it spends the whole of — twelve creatures
+despawned at once is seventy-two reflex tasks ending with `nil`, and on 0.5.0 each of those cost
+the host a whole frame. Nothing in the game needed fixing.
+
+What has not been pressed is the key itself; this machine has no GPU driver and the window goes
+through the container in `docker/` (`docs/wsl-gpu.md`).
 
 ## The window (G4)
 

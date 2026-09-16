@@ -75,6 +75,17 @@ mod imp {
         std::env::var("GARDEN_SELFTEST").is_ok()
     }
 
+    /// `GARDEN_RELOAD_AT=SECONDS`, the checks' only way to press F9 without a keyboard.
+    ///
+    /// A headless run has no `ButtonInput` at all, so the one path a key drives — "read a file
+    /// into a garden that is already running" — had no check on it, and the one thing that went
+    /// wrong there (G5's finding 1) was found in a browser rather than here. This says when to
+    /// open the `--load` file, instead of opening it before the first frame. It is read only when
+    /// `GARDEN_SELFTEST` is set, so it is not a switch a player can trip.
+    pub fn reload_asked_at() -> Option<f32> {
+        std::env::var("GARDEN_RELOAD_AT").ok().and_then(|s| s.parse::<f32>().ok())
+    }
+
     /// Where the tenth check's file goes (G5). A temporary directory on a PC, because the file is
     /// about `--load` and not about where a file lives.
     pub fn another_version_file() -> String {
@@ -175,6 +186,12 @@ mod imp {
         web_sys::window()
             .and_then(|w| w.location().search().ok())
             .is_some_and(|q| q.contains("selftest"))
+    }
+
+    /// A page has no environment and no `--load`: the browser's checks press F9 for real
+    /// (`web/garden.html` sends the key), so there is nothing to defer here.
+    pub fn reload_asked_at() -> Option<f32> {
+        None
     }
 
     /// Where the tenth check's file goes (G5). There is no temporary directory here: it is a
