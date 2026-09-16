@@ -12,16 +12,18 @@ below.
 
 ![the garden at 22 seconds: evening, long shadows over a green field, Kenney tufts and bushes of grass, five trees, scattered rocks, and rabbits and beetles walking about](garden.png)
 
-**This file describes stages G0, G0a, G1 and G2** (`docs/plans/garden-plan.md`): the world, the
-models in it, the two kinds of mind — a Ruby task per creature and a task per reflex — and the
-`Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to breed.
-G3 saves the world and each creature's `@memory`, G4 puts the editor and the VM panel in the
-window, and G5 is the browser build.
+**This file describes stages G0, G0a, G1, G2 and G3** (`docs/plans/garden-plan.md`): the world, the
+models in it, the two kinds of mind — a Ruby task per creature and a task per reflex — the
+`Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to breed, and
+the save file, which is the world and every creature's own memory as JSON. G4 puts the editor and
+the VM panel in the window, and G5 is the browser build.
 
 ```
 cargo run -p garden                                     # a window
 cargo run -p garden -- --headless 90                    # no window, 90 seconds, the result on stdout
-GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the eight checks
+GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the nine checks
+cargo run -p garden -- --headless 30 --save g.json      # and write the garden down at the end
+cargo run -p garden -- --load g.json                    # and pick it up again
 cargo run -p garden -- --shot docs/garden.png 22        # a window, one picture at 22 s, and out
 ```
 
@@ -36,6 +38,8 @@ hand against volumes of its own.
 |---|---|
 | drag (either mouse button) | turn the camera round the garden |
 | wheel | closer / further away |
+| F5 | write the garden to `garden.save.json` (G3) |
+| F9 | read it back |
 
 There is nothing else yet. The editor and the VM panel (`rubevy-arena`) arrive in G4.
 
@@ -60,7 +64,7 @@ line, the registration — is the number the plan asks for.
 | `Hunger` | `f32` (tuple) | `[62.3]` | 100 is full, 0 is dead. Falls by 1.6/s, rises by eating |
 | `Velocity` | `Vec2` (tuple) | `[[1.2, -0.7]]` | integrated into `Transform` on XZ, clipped to the creature's top speed, stopped by the walls |
 | `Sight` | `f32` (tuple) | `[8.0]` | how far `garden.nearest(:Plant)` looks for the creature that asked. It is set at birth from the creature's own `genome.sight`, which starts near 8 for a beetle and 12 for a rabbit |
-| `Memory` | — (unit) | `{}` | empty until G3, where it becomes the Ruby `@memory` that is saved. It is here from G0 so the table does not change shape later |
+| `Memory` | — (unit) | `{}` | that this creature remembers things. It stayed a marker at G3, which is the finding rather than an omission: what it remembers is a Ruby Hash in the VM, and the save file reads it from there (below) rather than keeping a second copy here |
 | `Transform` | Bevy's | `{translation: [x, y, z], rotation: [...], scale: [...]}` | position, facing and — for a plant — its size again, as `scale` |
 
 `Species` is a field-less enum and is registered too, so it reads as a Symbol: `:Beetle`,
@@ -387,15 +391,189 @@ collected, and that is the VM's doing, not rubevy's — `set_on_free`, which rub
 `Rubevy::Entity`, is a different place. A creature that has asked for its genome holds it for its
 life; a child's genome, once read out into a component, is the game's.
 
+## Saving and loading (G3)
+
+**F5** writes the garden to `garden.save.json`, **F9** reads it back; without a window it is
+`--save PATH` (written when the run ends) and `--load PATH` (read before the first frame). In the
+browser there is no file — `platform::write` puts the same text in `localStorage` under
+`garden:garden.save.json`, which is where a saved creature file already goes.
+
+```
+cargo run -p garden -- --headless 30 --save garden.save.json   # a garden, written down
+cargo run -p garden -- --load garden.save.json                 # and picked up again
+```
+
+The file is one struct with `#[derive(Serialize, Deserialize)]` on it (`GardenSave` in
+`garden/src/main.rs`), and there is no schema anywhere else. A real one, cut down to one plant and
+one creature:
+
+```json
+{
+  "tick": 30.013807,
+  "day_phase": 0.5802301,
+  "night": true,
+  "plants": [ { "at": [-18.510439, -12.502432], "size": 1.4 } ],
+  "trees": [ [-16.647482, -9.710527] ],
+  "rocks": [ [-10.369152, 4.2812824] ],
+  "creatures": [
+    {
+      "species": "Beetle",
+      "at": [-19.01399, -7.1129208],
+      "hunger": 76.82623,
+      "age": 30.013792,
+      "genome": { "speed": 2.3462436, "sight": 8.815449, "appetite": 0.9204452 },
+      "memory": {
+        "meals": 3,
+        "favorite": { "at": [-17.096527099609375, 1.6607341766357422], "size": 0.8215940594673157 }
+      }
+    }
+  ]
+}
+```
+
+`species` is a `Species` and `genome` is the same `Genome` the component holds and a script mixes
+— three derives on one type now, and none of them knows about the others: `Reflect` for
+`me[:Creature][:genome]`, `RubyClass` for the object with `mix` on it, serde for this file.
+
+### The memory is the script's, and the game reads it out of the VM
+
+`memory` is the one field that is not the game's data. It is the Ruby Hash a creature keeps in
+`@memory`, and the save reads it **out of the VM without asking the script**:
+
+```rust
+let being = vm.ivar_get(task, "@being").obj()?;        // the creature object, on the task
+let memory = vm.ivar_get(being, "@memory");            // its Hash
+sabiruby_serde::from_value::<serde_json::Value>(vm, memory)?
+```
+
+There is no `Rubevy.ask("memory.dump")` and no `to_json` in any creature's file: the save button
+does not wake a creature up. Loading is the same two entry points the other way round —
+`to_value` builds the Hash again and `ivar_set` hangs it back on the object.
+
+The one line of arrangement it needed is in the prelude:
+
+```ruby
+Task.current.instance_variable_set(:@being, being)
+```
+
+A task's `self` is the VM's `main` object and **every task shares it**, so a top-level `@ivar` in
+one creature's file would be the same variable in every other creature's — which is why a creature
+is an object of its own in the first place, and why the host cannot find that object without being
+shown it. rubevy hangs the entity on the task in exactly the same way (`@rubevy_entity`). One line
+of Ruby, two `ivar_get`s of Rust, and a game can read anything a script remembers.
+
+**Two things about the timing, both of which the round-trip check made visible.** The object a
+memory hangs on does not exist until the script's first frame — `run_creature` makes it — so the
+restore happens *at the end of that frame*, and a `run` that reads `memory` on its first line
+would read an empty Hash and have its work replaced a moment later. The prelude therefore sleeps
+once (`sleep 0.05`) between taking the subscriptions and the first thought; before that line was
+there, a loaded rabbit walked the whole garden with `Rubevy.find(:Tree)` to learn what it already
+remembered. And while a loaded garden's minds are starting, **the world does not move**: the rules
+have a run condition, and the world's clock (`Sky::shift`) is held, so the garden that is read back
+is the garden that was written down rather than that garden plus two frames of walking.
+
+**The keys of `@memory` are Strings.** JSON has no others, so a Hash written with Symbol keys would
+quietly become a different Hash after a load — `memory[:meals]` finding nothing where `"meals"`
+now sits. Everywhere else in the garden a Hash key is a Symbol, because everywhere else it never
+leaves the VM.
+
+### The spawn Hash, by hand and by serde
+
+`garden.spawn(species:, genome:, at:)` is the one question whose argument has a shape. G2 read it
+key by key with `Vm::hash_entries` and `FromRuby`; G3 reads it with one call.
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreatureSpec {
+    pub species: Species,
+    pub genome: Genome,
+    pub at: [f32; 2],
+}
+
+// in `answer_garden`, where `read_birth(&mut scripts.vm, asked)` used to be:
+sabiruby_serde::from_value::<CreatureSpec>(&mut scripts.vm, asked).map_err(|e| scripts.vm.describe_error(&e))
+```
+
+| | by hand (G2) | by serde (G3) |
+|---|---:|---:|
+| reading the Hash | **72 lines** (`read_birth` 47 + `read_genome` 25) | **7 lines** — the struct |
+| the rule about it (the genome clamped to what a body can be) | 3 of those lines | 10 lines (`CreatureSpec::into_birth`) |
+| the message for `{speed:, appetite:}` | `"genome: wants speed, sight and appetite; got 2 of them"` | `"missing field \`sight\` (TypeError)"` |
+| the message for a key nobody knows | `"spawn: unknown key \"colour\""` | serde's, naming the three fields there are |
+
+Lines of code as G2 counted them: comments and blank lines are not counted, and the 72 were
+written to be read rather than to be short. What the 65 that went were doing was matching key
+names against strings, turning a Symbol into a `Species` with a `match`, counting how many genes
+had turned up, and building a different error sentence for each way of getting it wrong. serde's
+derive writes all of that, and it writes the same thing for `Genome` and `Species` without
+`CreatureSpec` mentioning them, which is the part that does not show in a line count: the
+hand-written reader had a `read_genome` because a nested Hash is a second function, and there is
+no `read_species` here at all.
+
+The clamp stayed. Deserializing is about shape, and a range is a rule — `into_birth` is where a
+script that asks for ten times its species' speed is told what it is actually getting.
+
+**It is still an `ask`, not a native.** `Serde<T>` is made for `define_fn`, and
+`vm.define_fn(garden, "spawn", |spec: Serde<CreatureSpec>| …)` would have been one line shorter
+again — but a native is handed the `&mut Vm` and nothing else. It could not count the creatures
+already in the garden, could not spawn anything, and could not answer `true` or the reason: it
+would have to leave a note behind for a system to pick up, which is exactly what a `Request`
+already is. So `garden.spawn` stays in `RubevySet::Answer` with the other questions, and the serde
+crate is used for the half it is needed for — reading the argument.
+
+### What is not in the file, and why
+
+A rock's squash and whether a plant is a bush or a tuft are the model's business and are rolled
+again on the way in. A breeding cooldown, who bumped into whom last frame, which rabbit is standing
+on which beetle are bookkeeping about a *run*, not about a world. `Velocity` is not saved either: a
+creature that is picked up again stands still until its brain says otherwise. `Memory` stayed the
+empty marker component it has been since G0 — what a creature remembers lives in the VM, and a
+component would be a second copy of it with nobody to keep it in step.
+
+### The round trip, measured
+
+```
+$ ./target/release/garden --headless 30 --save s1.json
+saved 10 creatures, 41 plants at 30.0 s to s1.json (11338 bytes)
+$ ./target/release/garden --load s1.json --headless 0 --save s2.json
+loaded 10 creatures, 41 plants, 7 trees, 9 rocks at 30.0 s (0 entities made way)
+saved 10 creatures, 41 plants at 30.0 s to s2.json (11338 bytes)
+$ diff s1.json s2.json && echo IDENTICAL
+IDENTICAL
+```
+
+Two processes: one builds a world, runs it for thirty seconds and writes it down; the other starts
+with nothing, reads that file, hands every creature its memory back and writes the world out again
+— and the two files are the same bytes. Positions, hunger, age, every genome, the day's phase and
+every `@memory` down to the rabbit that remembers where seven trees are.
+
+It was not the same bytes at first, and the reason is worth keeping. Four numbers differed in the
+last digit — `9.595357894897461` came back as `9.59535789489746`, one unit in the last place lower
+— and all four were in a rabbit's remembered tree positions, which are the only `f64`s in the file
+that are not re-rounded to `f32` on the way in. **serde_json's parser is not exactly the inverse of
+its writer** unless it is asked to be: the `float_roundtrip` feature is what makes a parsed float
+the nearest one to the text (measured in a four-line program against the same version, 1.0.151).
+The writer was always exact; it is the reading side that rounds. The feature costs parsing speed,
+which a file read once has none to spare.
+
+F9 — a load into a garden that is *already running*, where everything alive is despawned first —
+takes the same `load_world` the command line does, and it was run once headlessly with a throwaway
+hook (not committed): seventy-three entities made way, the world came back at the hour it was saved
+at, the rabbits had their trees again, and nothing was logged above `INFO`. What has not been
+pressed is the keys themselves; this machine has no GPU driver and the window goes through the
+container in `docker/` (`docs/wsl-gpu.md`).
+
 ## Battle and the Garden, in numbers
 
 | | SabiRuby Battle | the Garden |
 |---|---|---|
-| `ask` kinds a robot / creature uses | **6** — `status`, `radar`, `incoming`, `act`, `seed`, `reflex` | **4** — `garden.nearest`, `garden.count` (G1), `genome`, `garden.spawn` (G2) |
+| `ask` kinds a robot / creature uses | **6** — `status`, `radar`, `incoming`, `act`, `seed`, `reflex` | **4** — `garden.nearest`, `garden.count` (G1), `genome`, `garden.spawn` (G2). G3 added none: the save file goes *round* the scripts, not through them |
 | Rust glue per component made visible to Ruby | — (the ECS is never mentioned) | **0 lines** — the `register_type::<T>()` line, and nothing else |
 | Rust for one type made into a Ruby class | — (none) | **61 lines** with the macros, **113** by hand |
-| the scripts a player writes | `robots/scout.rb` 62 lines (43 without comments and blanks), `robots/hunter.rb` 22 (18) | `creatures/beetle.rb` 114 (66), `creatures/rabbit.rb` 84 (54) |
-| the DSL in front of them | `ruby/prelude.rb` 283 (165) | `ruby/prelude.rb` 398 (210) |
+| the scripts a player writes | `robots/scout.rb` 62 lines (43 without comments and blanks), `robots/hunter.rb` 22 (18) | `creatures/beetle.rb` 128 (68), `creatures/rabbit.rb` 89 (57) |
+| the DSL in front of them | `ruby/prelude.rb` 283 (165) | `ruby/prelude.rb` 449 (218) |
+| reading one structured argument out of Ruby | — | **72 lines** by hand (G2), **7** with serde (G3) |
 
 The six kinds in Battle are what a *robot* asks; the match script asks eight more (`board`,
 `spawn`, `win`, `rules`, `shrink`, `clock`, `events`, `arena`). The Garden had two after G1, and
@@ -513,7 +691,7 @@ place.
 That is what makes `"night"` legible on screen rather than a number in a log: the creatures stop
 where they stand when it arrives, and the picture says so.
 
-## Running without a window, and the eight checks
+## Running without a window, and the nine checks
 
 `--headless N` runs exactly the same systems for N seconds with no renderer and prints every
 creature — where it is, what it has cost its script, and the line of its own file that script is
@@ -578,43 +756,58 @@ and one is about the genome (G2), which is the whole round trip in a single line
    standing together. In four consecutive runs the first child arrived at 1.95, 1.96, 2.00 and
    6.42 seconds. Wild pairings happen too, and are counted in the same line.
 
+and one is about the save file (G3):
+
+9. **a spawn Hash with a gene missing names the gene.** The only script in the game that is not a
+   creature — four lines of Ruby, in `main.rs` rather than in `ruby/`, started under
+   `GARDEN_SELFTEST=1` — asks for `garden.spawn(species: "Beetle", genome: {speed: 2.0,
+   appetite: 1.0}, at: [0.0, 0.0])`, and what it is told has to name `sight`. It does, in serde's
+   own words and nobody else's: **``missing field `sight` (TypeError)``**. What it is really
+   checking is that a Hash of the wrong shape fails *legibly* on the way from a script into a Rust
+   struct, which is the half of `sabiruby-serde` this game leans on.
+
 ```
 $ GARDEN_SELFTEST=1 ./target/release/garden --headless 90
 selftest: a beetle with no brain and nothing to eat stands at (-17.0, -12.0)
 selftest: a hungry beetle at (17.0, 12.0) with one plant 5.0 away
 selftest: two hungry beetles 9.0 apart, with four plants between them at (-14.0, 9.0)
-[script] Rabbit: 7 trees, and 37 plants to start with
-selftest: first meal at 0.50 s
-selftest: the hungry beetle reached its plant at 1.77 s
-Beetle 100v0 starved at 1.9 s (age 1.9 s)
-a Beetle was born at 2.0 s (110v0) — speed 2.05, sight 7.7, appetite 1.01
-[script] Beetle: child 1: speed 2.05, sight 7.7, appetite 1.01
-a Beetle was born at 4.1 s (113v0) — speed 2.25, sight 8.3, appetite 1.06
+selftest: a tester script will ask for a creature with a gene missing
+[script] Tester: a genome with no sight: missing field `sight` (TypeError)
+[script] Rabbit: 7 trees, and 41 plants to start with
+selftest: first meal at 1.08 s
+selftest: the hungry beetle reached its plant at 1.84 s
+Beetle 109v0 starved at 1.9 s (age 1.9 s)
+[script] Beetle: {"meals":1,"favorite":{"at":[-13.300000190734863,9.199999809265137],"size":1.3832240104675293}}
+a Beetle was born at 5.4 s (121v0) — speed 2.17, sight 8.1, appetite 0.98
 night at 25.2 s
-Beetle 91v0 starved at 45.9 s (age 45.9 s)
 day at 55.2 s
-a Beetle was born at 72.3 s (150v0) — speed 2.06, sight 7.4, appetite 1.09
+a Beetle was born at 60.4 s (153v0) — speed 1.97, sight 7.9, appetite 0.96
+Beetle 117v0 starved at 66.8 s (age 66.8 s)
+a Beetle was born at 83.9 s (169v0) — speed 1.98, sight 7.8, appetite 1.03
 night at 85.2 s
-Beetle 110v0   hunger  91.0  age  88.0  at (   5.2,    3.4)  v (  0.0,   0.0)       8 insn/frame  beetle.rb:92
-Rabbit  98v0   hunger  56.5  age  90.0  at ( -18.7,  -13.0)  v (  0.0,   0.0)      16 insn/frame  rabbit.rb:55
+Beetle 153v0   hunger  62.6  age  29.6  at (  10.6,   -5.7)  v (  0.0,   0.0)      10 insn/frame  beetle.rb:102
+Rabbit 106v0   hunger  54.8  age  90.0  at (  -0.8,    1.5)  v (  0.0,   0.0)      16 insn/frame  rabbit.rb:60
 …
-14 creatures, 42 plants, night at phase 0.58
-10 × Beetle: mean genome speed 2.15, sight 7.8, appetite 1.02 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
-4 × Rabbit: mean genome speed 3.47, sight 12.1, appetite 1.04 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
-selftest: ok   somebody ate within 10 s (first at 0.50 s)
+19 creatures, 40 plants, night at phase 0.58
+15 × Beetle: mean genome speed 2.13, sight 8.0, appetite 0.96 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
+4 × Rabbit: mean genome speed 3.29, sight 10.5, appetite 1.04 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
+selftest: ok   somebody ate within 10 s (first at 1.08 s)
 selftest: ok   night arrived by 60 s (at 25.21 s)
-selftest: ok   the starved creature's entity is gone (100v0 starved at 1.89 s)
-selftest: ok   nothing walked through anything over 5358 frames (closest pair 0.953 of the radii, 0 frames under 0.9)
-selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.77 s)
-selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (31/31)
+selftest: ok   the starved creature's entity is gone (109v0 starved at 1.89 s)
+selftest: ok   nothing walked through anything over 5358 frames (closest pair 0.956 of the radii, 0 frames under 0.9)
+selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.84 s)
+selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (42/42)
 selftest: ok   the creatures were asleep a second after night fell (15 of them, fastest 0.000 at 26.22 s)
-selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.95 s: speed 2.049 vs 2.400/2.000, mean 2.200; sight 7.723 vs 9.000/7.000, mean 8.000; appetite 1.007 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [6 pairings, 3 children]
+selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 5.39 s: speed 2.166 vs 2.184/2.069, mean 2.127; sight 8.124 vs 8.757/8.667, mean 8.712; appetite 0.985 vs 0.966/1.107, mean 1.037 (mutated off both parents)) [8 pairings, 7 children]
+selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
 ```
 
-Eight runs of that. The genome check passed every time — the first child arrived between 1.95 and
-16.47 seconds, with three to six born in ninety seconds — and so did the other six; check 6 failed
-twice, which is the pre-existing flake described above (the same binary from `main` fails once in
-four).
+Eight runs of that at G2, and four more at G3. The genome check has passed every time — the first
+child arrives between 1.95 and 16.47 seconds, with three to seven born in ninety seconds — and so
+has everything else except check 6, which failed twice in the eight and once in the four (39/40),
+the pre-existing flake described above (the same binary from `main`, with none of G2 or G3 in it,
+fails once in four). The G3 check has not failed: all four runs were told the same sentence,
+naming the gene that was not there.
 
 The starvation needs a creature that certainly starves, and a creature with a brain in a garden of
 fifty-five plants usually does not. So `GARDEN_SELFTEST=1` puts one beetle in the far corner with
@@ -634,9 +827,8 @@ it is night, so everybody is standing on the `sleep 0.5` of their `@asleep` bran
 
 ## What is not here yet
 
-G3 saves and loads the world and each creature's `@memory` through serde — the rabbit already
-keeps one, and `garden.spawn`'s Hash, which G2 reads field by field with `Vm::hash_entries`, is
-what `Serde<CreatureSpec>` is meant to replace there. G4 puts the editor and the VM panel in the window, so that a
-creature's file can be rewritten while the garden runs, with the insn/frame and the waiting line
-above as a panel rather than a log. G5 is the browser build, where the 314 KiB of models are
-fetched beside the wasm. `docs/plans/garden-plan.md` has all of it.
+G4 puts the editor and the VM panel in the window, so that a creature's file can be rewritten
+while the garden runs, with the insn/frame and the waiting line above as a panel rather than a log.
+G5 is the browser build, where the 314 KiB of models are fetched beside the wasm — and where the
+save file above becomes a `localStorage` key, which the code already does and nothing has yet run.
+`docs/plans/garden-plan.md` has all of it.
