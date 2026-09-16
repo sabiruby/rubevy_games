@@ -644,7 +644,7 @@ pub fn draw_hud(
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "Tab next · F1 editor · F2 VM · P pause · F5 save · F9 load · drag to turn, wheel to zoom",
+                    "Tab next · F1 editor · F2 VM · P pause · F5 save · F9 load · drag to turn, right-drag or WASD to slide, wheel to zoom, Home to reset",
                 )
                 .weak(),
             );
