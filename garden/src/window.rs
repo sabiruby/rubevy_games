@@ -733,7 +733,7 @@ fn hunger_bar(ui: &mut egui::Ui, hunger: f32) {
 // The window's own checks (`GARDEN_SELFTEST=1` with a window)
 // ---------------------------------------------------------------------------------------------
 
-/// What the nine headless checks cannot reach: the editor's buttons and the two keys.
+/// What the ten headless checks cannot reach: the editor's buttons and the two keys.
 ///
 /// It is sabibots' arrangement (`SABIBOTS_SELFTEST=1 docker/run.sh`) — drive the editor the way a
 /// click would, by setting `Editor::action`, and look at what happened to the creatures and to the
