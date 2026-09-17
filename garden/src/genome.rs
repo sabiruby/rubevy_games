@@ -58,7 +58,8 @@ const SPREAD: f32 = 0.18;
 impl Genome {
     /// The species' own, which is what the numbers were before G2: a beetle walks at 2.2 and sees
     /// eight, a rabbit walks at 3.4 and sees twelve. `appetite` is new and is 1 for both — it
-    /// multiplies `HUNGER_RATE`, so 1 is exactly the world G1 ran.
+    /// multiplies `hunger_rate` in `ruby/world.rb` (it was `HUNGER_RATE` in `main.rs` until W1), so
+    /// 1 is exactly the world G1 ran.
     pub fn of(species: Species) -> Genome {
         match species {
             Species::Beetle => Genome { speed: 2.2, sight: 8.0, appetite: 1.0 },

@@ -45,7 +45,7 @@ use bevy::prelude::*;
 // G8: the event the glTF loader triggers when a model's entities actually exist, which is the
 // only moment a loaded material can be replaced (`tint_species`).
 use bevy::world_serialization::WorldInstanceReady;
-use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
+use rubevy::{Answer, Arg, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
 use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
@@ -65,6 +65,12 @@ const HALF_W: f32 = FIELD_W / 2.0;
 const HALF_D: f32 = FIELD_D / 2.0;
 
 /// One turn of the sun. Night is the half of it the sun spends under the ground.
+///
+/// **It is the default now, not the rule** (W1): the rule is `day_length` in `ruby/world.rb`, and
+/// what it says arrives in [`Sky::day_length`] through `garden.rules`. This is what the sun turns
+/// at before that file has said anything, and what it goes on turning at where that file will not
+/// compile. `MIDNIGHT` and `--at midnight` are worked out from it because they are about the
+/// picture a `--shot` takes, which is taken in the first seconds of a run.
 const DAY_LENGTH: f32 = 60.0;
 /// Where in that turn the world starts: a little after sunrise, so the first thing a run sees is
 /// daylight and the first `"night"` is something that arrives rather than something that was.
@@ -215,25 +221,30 @@ pub fn species_tint(species: Species) -> (f32, f32, f32) {
 /// repository**; they come from the same CC0 pack (`CREDITS.md`) and go beside this one.
 const BEETLE_MODEL: &str = "models/animal-crab.glb";
 
-/// Plants
+/// **Plants — what is left here of them** (W1).
+///
+/// How fast grass grows, how often a blade comes up and how many the field holds are rules, and
+/// rules are `ruby/world.rb`'s: `PLANT_GROWTH`, `SPROUT_RATE` and `PLANTS_MAX` were deleted from
+/// this block and written there, with the same numbers. What stayed is the garden's *furniture*
+/// — how many blades a new world starts with, how big a seed is when it is put down, and how big
+/// a fully grown one is, which the first plants and the checks' fixtures are made at.
 const PLANTS_AT_START: usize = 55;
-const PLANTS_MAX: usize = 90;
-/// how often a new one comes up, per second
-const SPROUT_RATE: f32 = 0.7;
 const PLANT_MIN: f32 = 0.18;
+/// A plant at its full size. `world.rb` has this number too, as the cap its growth stops at —
+/// which is the same fact said in the two places that need it: here it is what the world is built
+/// with, there it is what the rule does.
 const PLANT_MAX: f32 = 1.4;
-const PLANT_GROWTH: f32 = 0.06;
 
 /// Creatures
 const BEETLES: usize = 6;
 const RABBITS: usize = 4;
+/// A full meter. The rule that fills it and the rule that empties it are `world.rb`'s
+/// (`hunger_max`, `hunger_rate`, `eat_rate`, `food_value`); this is here because the HUD draws a
+/// bar and a bar needs to know what full is.
 const HUNGER_MAX: f32 = 100.0;
-const HUNGER_RATE: f32 = 1.6;
-/// how much plant a creature takes per second of standing on one, and what a unit of plant is
-/// worth in hunger
-const EAT_RATE: f32 = 1.0;
-const FOOD_VALUE: f32 = 60.0;
-/// how close is touching, for eating and for a rabbit startling a beetle
+/// How close is touching, for a rabbit startling a beetle — and the distance the fifth check
+/// measures the probe's walk against. Eating has a reach of its own and it is `world.rb`'s now,
+/// with this same number in it: `startle` is a rule that stayed and `eat` is one that went.
 const REACH: f32 = 1.1;
 const TOUCH_REACH: f32 = 1.3;
 
@@ -251,46 +262,23 @@ const NEWBORN_GRACE: f32 = 2.0;
 /// was already in its queue (a handler holds the wheel for half a second over each message).
 const TOUCH_SETTLE: f32 = 1.5;
 
-/// Breeding (G2). Two creatures of one species that meet while this full are told to make a
-/// child — the rule is Rust's, the arithmetic of the child is Ruby's.
+/// Breeding (W2). **Every number that was here is in `ruby/world.rb` now** — how full two
+/// creatures have to be, how close, how often the rules may say so, what a child costs its
+/// parents and how long they may not have another — on the lines named beside them there, with
+/// the values they had here. What is left in this source is the two the *game* builds with, and
+/// they are here because the game has to have an answer before `world.rb` has spoken (and when
+/// it never does, because it will not compile): they are [`DAY_LENGTH`]'s neighbours, not the
+/// rules'.
 ///
-/// Three quarters full, not nine tenths. The first number here was 85, and it made breeding a
-/// thing that happened twice in a ninety-second run and sometimes not at all: a creature is only
-/// over 85 for the nine seconds after a meal, and two of them have to be over it *at the same
-/// time and in the same place*. 75 is still well past the 55 at which a beetle's own script goes
-/// looking for grass, and it is above what a parent is left with afterwards.
-const MATE_HUNGER: f32 = 75.0;
-/// what it costs each parent, which is most of the reason the population does not run away: a
-/// parent is left under its own script's "go and find something to eat" line and has to eat its
-/// way back up past `MATE_HUNGER` before it can do this again
-const MATE_COST: f32 = 30.0;
-/// and how long it may not, whatever it eats. Both are charged when the **child arrives**, not
-/// when the rule speaks: whether a creature does anything at all with `"mate"` is its script's
-/// business, and a rule that charged for the message would be charging for a message the script
-/// may never have subscribed to.
-const MATE_COOLDOWN: f32 = 20.0;
-/// how often the rule may tell the same creature about a partner. A creature whose script does
-/// not listen (the rabbit has no `on(:mate)`) is told again and again and nothing whatever
-/// happens — that is what `publish` to nobody costs — and one whose script does listen answers
-/// within a frame or two. This is only what keeps one meeting from becoming sixty messages.
-const COURT_RETRY: f32 = 2.0;
-/// a newborn starts hungry — well under `MATE_HUNGER`, so nothing is born breeding
+/// a newborn's meter, until `world.rb` says otherwise with `garden.rules(child_hunger:)`. Well
+/// under the three quarters the rules breed at, so nothing is born breeding.
 const CHILD_HUNGER: f32 = 50.0;
-/// how many creatures the garden holds. The cap is the rule's, checked before `"mate"` goes out
-/// and again when the child is asked for, because a script answers a frame later.
+/// how many creatures the game will make, until `world.rb` says otherwise with
+/// `garden.rules(pop_max:)`. The rules hold the population down long before this — a pair is
+/// never told to breed when the garden is full — and this is the game refusing to *build* past
+/// what it was told, which is a different job: a script may ask for a creature without anybody
+/// having told it to.
 const POP_MAX: usize = 24;
-/// How close two creatures have to be to court: within about a body's length or two of each
-/// other, not overlapping.
-///
-/// "When they touch" was the first rule, and it almost never fires. Two creatures only overlap
-/// for the single frame it takes `separate` to push them apart, and the frame it does,
-/// `"bumped"` goes out and both scripts run from each other — so the sum of the radii (0.8 for
-/// two beetles) is a distance the world spends almost no time at. Measured over forty seconds
-/// with `GARDEN_DEBUG=1`: the nearest two *well-fed* beetles of the same species ever came was
-/// **1.24**, and the pair never once reached 1.05. What a meeting actually looks like here is two
-/// creatures eating at the same clump of grass, which `eat`'s own reach (1.1 plus half the
-/// plant) leaves about two units apart — so that is the number.
-const MATE_REACH: f32 = 2.0;
 
 /// Solid things. Circles on XZ, pushed apart after the move; no physics crate, because the rule
 /// is three lines and a physics crate is a megabyte of wasm and a second vocabulary.
@@ -376,6 +364,20 @@ pub struct Creature {
     pub species: Species,
     pub age: f32,
     pub genome: Genome,
+    /// **Who asked for it** (W2), where anybody did: the creature whose script called
+    /// `garden.spawn`. The world's first ten and everything read back from a save have none.
+    ///
+    /// It is here because the rules are Ruby's and a rule has to be able to *find* a newborn.
+    /// The cost of a child falls on its parents when the child is actually in the world, and the
+    /// only frame in which `world.rb` can tell that a creature is new is the frame it first sees
+    /// it — which is the frame whose `age` is still exactly zero, because the thing that ages a
+    /// creature is that same rule. So "age is zero and somebody asked for me" is a newborn, said
+    /// in two fields the rules already read.
+    ///
+    /// `Option<Entity>` rather than an `Entity` and a placeholder because Ruby has to tell the
+    /// two apart: an Option reads as `:None` or as `{Some: [creature]}` (rubevy `src/reflect.rs`)
+    /// and it is never written from there.
+    pub parent: Option<Entity>,
 }
 
 /// How full it is: `HUNGER_MAX` is stuffed, 0 is dead. (The name is the plan's; read it as "the
@@ -532,17 +534,44 @@ enum Gait {
     Eat,
 }
 
-/// When a creature may court again. Private, like `Mind` and `Eating`: a cooldown is the rule's
-/// bookkeeping, not something a creature knows about itself, and *not registering it* is the
-/// whole of saying so.
-#[derive(Component)]
+/// When a creature may court again, and who it was last told about.
+///
+/// **It is Ruby's now** (W2), and that is the whole of the change: it was a private component
+/// because the rule that kept it was `court`, in this file, and the rule is `ruby/world.rb`'s.
+/// A component is how a rule keeps something about a creature that has to outlive the rule's own
+/// script — the editor takes `world.rb` away and gives it back while the garden runs, and a
+/// cooldown held in an instance variable of the world object would be forgiven by every
+/// keystroke — and it is how the same fact dies with the creature it is about, without anybody
+/// sweeping a table of entities that are not there any more.
+///
+/// The alternative was a Hash in `world.rb` keyed by entity, and both of those are why it is not
+/// that (`docs/worklog/2026-09-17-garden-world.md`, W2).
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[reflect(Component)]
 struct Breeding {
-    /// the earliest the rule may tell this creature about a partner again
+    /// the earliest the rules may tell this creature about a partner again — in the garden's own
+    /// clock, which is what `garden.now` answers and what `P` holds still
     ready_at: f32,
-    /// who it was last told about, so that the cost of the child can be charged to both parents
-    /// when the child actually arrives — a frame or two later, and from Ruby
-    partner: Option<Entity>,
+    /// who it was last told about, so that the cost of a child can be charged to **both** parents
+    /// when the child arrives, a frame or two later
+    ///
+    /// [`Entity::PLACEHOLDER`] where it has been told about nobody, and not an `Option<Entity>`,
+    /// because this one **is written from Ruby**: rubevy applies a Hash field by field, and a
+    /// `{Some: […]}` cannot turn a `None` into a `Some` (`src/reflect.rs`, `apply_enum` — the
+    /// fields of a variant are only written while the value is already that variant). A rule
+    /// that reads the placeholder gets a creature that does not exist, whose components all read
+    /// `nil`, which is the answer it wanted anyway.
+    partner: Entity,
 }
+
+/// **The one entity the world's script sits on** (W1).
+///
+/// rubevy hangs a task on an entity, so the rules need one — and having one is not a formality:
+/// `Rubevy.entity` is what `garden.within(me, …)` and `garden.spawn` read to know who is asking,
+/// and it is what the editor will restart in W3, exactly as `restart_species` restarts a species.
+/// It has no `Transform` and no `Mind`: it is not in the world, it is the world's opinion of it.
+#[derive(Component)]
+struct WorldScript;
 
 /// The selftest's fasting beetle: no script, almost no hunger left.
 #[derive(Component)]
@@ -606,12 +635,46 @@ impl Dice {
 /// is shifted — a cooldown or a contact is bookkeeping about *this* run and is not in the save —
 /// and while a loaded world's minds are starting (`Restoring`) it is held so that the world's
 /// clock stands perfectly still.
-#[derive(Resource, Default)]
+///
+/// `day_length` is the one rule of the sun's that Ruby owns (W1). The sun is *drawn* here — the
+/// light, the colour, the sky's gradient are all Rust — so what crosses the boundary is the one
+/// number the drawing needs, handed over once by `world.rb`'s `day_length` through
+/// `garden.rules`. Until it says otherwise it is [`DAY_LENGTH`], which is also what a garden whose
+/// `world.rb` will not compile keeps running on.
+#[derive(Resource)]
 struct Sky {
     phase: f32,
     night: bool,
     shift: f32,
+    day_length: f32,
 }
+
+impl Default for Sky {
+    fn default() -> Self {
+        Sky { phase: 0.0, night: false, shift: 0.0, day_length: DAY_LENGTH }
+    }
+}
+
+/// **The second VM's name tag (W1): the world's own.**
+///
+/// The creatures' VM is the app's first and is spelled as it always was (`ScriptWorld`,
+/// `RubevySet::Tick`, `Script::new`); this one is the same plugin added again under a name,
+/// reading `ruby/` and running exactly one script — `ruby/world.rb`, the rules. The tag is a type
+/// and nothing else: it implements nothing, holds nothing and costs nothing at run time (rubevy
+/// `docs/host-api.md`, "Two VMs in one app").
+///
+/// Why a second VM rather than one more task in the creatures': the rules and the creatures are
+/// two pieces of somebody else's writing and the editor swaps either without the other, so a
+/// runaway `world.rb` must not be able to spend the beetles' frame, and a constant one of them
+/// defines must not be able to reach the other. What it costs is that a message published to one
+/// VM does not reach the other, which is why `tell` (W2) goes through Rust.
+///
+/// **It shadows Bevy's `World`**, which `bevy::prelude::*` brings in: an item written in a module
+/// wins over a glob import. The three places in this file that mean Bevy's world therefore spell
+/// it out (`bevy::ecs::world::World`), and the name is worth that, because every other mention of
+/// `World` here — `ScriptWorld<World>`, `RubevySet::<World>::tick()`, `Script::<World>::for_vm` —
+/// is the thing this game calls the world.
+struct World;
 
 /// Which rabbit is standing on which beetle right now, so `"touched"` is published when a contact
 /// begins rather than sixty times a second while it lasts.
@@ -711,12 +774,22 @@ pub struct RubyDir(pub PathBuf);
 /// to the species, every beetle restarts on it, and a beetle born an hour later is born running
 /// it. Nothing reaches the disk until Save (`platform::write`), so trying something on the
 /// beetles does not rewrite the project.
+///
+/// **W3 gave it a third slot, and it is not a species.** `ruby/world.rb` is the rules, it is
+/// edited in the same panel by the same three buttons, and what "applied, not saved" means about
+/// it is word for word what it means about `beetle.rb` — so it is the same resource with one more
+/// place in the array rather than a second one beside it. The two indices a species answers are
+/// [`Species::index`]; the third is [`Brains::WORLD`], and nothing else may be there.
 #[derive(Resource, Default)]
 pub struct Brains {
-    applied: [Option<String>; 2],
+    applied: [Option<String>; 3],
 }
 
 impl Brains {
+    /// Where the world's rules sit in `applied`: after the two species, whose slots are their own
+    /// `index()`. It is also the id the editor's third button carries (`window::show_code`).
+    pub const WORLD: usize = Species::ALL.len();
+
     pub fn text(&self, species: Species) -> Option<&String> {
         self.applied[species.index()].as_ref()
     }
@@ -729,22 +802,149 @@ impl Brains {
     pub fn path(&self, ruby: &Path, species: Species) -> PathBuf {
         ruby.join("creatures").join(species.file())
     }
+
+    /// The rules as the editor has them: `None` is "whatever `ruby/world.rb` says" (W3).
+    pub fn world(&self) -> Option<&String> {
+        self.applied[Brains::WORLD].as_ref()
+    }
+
+    pub fn set_world(&mut self, text: Option<String>) {
+        self.applied[Brains::WORLD] = text;
+    }
+
+    /// Where the rules live. They are not under `creatures/`: a creature's file is one of a kind
+    /// the game has two of, and this one is the garden's own.
+    pub fn world_path(&self, ruby: &Path) -> PathBuf {
+        ruby.join(WORLD_FILE)
+    }
 }
 
-/// Which creatures took a bite last frame, so that `"ate"` is published once per meal rather
-/// than sixty times a second — the same decision `"bumped"` and `"touched"` made in G0, and for
-/// the same reason: a handler is for an event, and the queue holds 64.
-#[derive(Resource, Default)]
-struct Eaters(Vec<Entity>);
+/// The rules' file name, in the one place both the loader and the editor read it from (W3).
+pub const WORLD_FILE: &str = "world.rb";
 
-/// The children a script has asked for this frame (`garden.spawn`), read out of the Ruby Hash in
-/// `answer_garden` and spawned by `hatch` a moment later.
+/// How many seeds `world.rb` asked for this frame (`garden.sprout`), read in `answer_world` and
+/// put in the ground by `sprout_plants` a moment later.
 ///
-/// The two are separated because the answering system has the whole `World` and no `Commands`,
-/// while spawning a creature wants `Look`, `RubyDir` and `Assets<MrbAsset>` — which are three
-/// ordinary system parameters. Reading the Hash needs the VM; making the creature does not.
+/// The split is `Births`' below, and for the same reason: the answering system has the whole
+/// world and no `Commands`, while putting a plant down wants `Look` and `Dice`, which are
+/// ordinary system parameters. What the rule decided — *whether* there is room and *whether* the
+/// dice came up — is `world.rb`'s; where the seed lands and what it is made of is the garden's
+/// furniture and stayed here.
 #[derive(Resource, Default)]
-struct Births(Vec<Birth>);
+struct Sprouts(u32);
+
+/// **What one pass of `world.rb`'s `each_frame` costs** (W1), and the wall time this VM's tick
+/// took — the two numbers `ScriptWorld<World>`'s `budget` and `frame_time` were chosen from.
+///
+/// The world's script is one task that waits on one `Rubevy.ask("frame")` and therefore runs
+/// **exactly one pass per frame**, so the instructions it ran between two frames *are* a pass:
+/// there is nothing to separate out and no gap to interpret, which is what makes this a simpler
+/// measurement than the creatures' `insn/decision` (`watch_minds`).
+#[derive(Resource, Default)]
+struct WorldMeter {
+    /// `ScriptStats::instructions` at the end of the last frame
+    last_instructions: u64,
+    /// what a pass cost, one entry per frame in which the script ran at all
+    passes: Vec<u64>,
+    /// the last of them, which is the figure the HUD draws (W3). The list above is for choosing a
+    /// budget after the run; this is what the rules cost *now*, beside what the creatures cost
+    /// now, which is the comparison the panel is for.
+    last_pass: u64,
+    /// the biggest of them, kept here rather than worked out twice
+    most: u64,
+    /// milliseconds `RubevySet::<World>::tick()` took, this frame and smoothed
+    started: Option<bevy::platform::time::Instant>,
+    spent_ms: f32,
+    mean_ms: f32,
+    most_ms: f32,
+    /// and every frame's, so that a **budget** can be chosen from the shape of the thing rather
+    /// than from its two ends: a mean says nothing about how often the worst happens, and the
+    /// worst on its own is usually the first frame
+    times: Vec<f32>,
+}
+
+impl WorldMeter {
+    /// The middle pass. `None` until one has been measured.
+    fn median(&self) -> Option<u64> {
+        if self.passes.is_empty() {
+            return None;
+        }
+        let mut sorted = self.passes.clone();
+        sorted.sort_unstable();
+        Some(sorted[sorted.len() / 2])
+    }
+
+    /// The tick time at the middle and at the 99th frame in a hundred. The second is the number a
+    /// `frame_time` has to clear: a budget that bites once in a hundred frames is a rule that runs
+    /// at half speed twice a second.
+    fn milliseconds(&self) -> (f32, f32) {
+        if self.times.is_empty() {
+            return (f32::NAN, f32::NAN);
+        }
+        let mut sorted = self.times.clone();
+        sorted.sort_by(f32::total_cmp);
+        let at = |q: f32| sorted[((sorted.len() as f32 * q) as usize).min(sorted.len() - 1)];
+        (at(0.5), at(0.99))
+    }
+}
+
+/// Why the world has no rules, where it has none: `ruby/world.rb` would not compile, or would not
+/// be read.
+///
+/// A garden whose rules will not compile **runs anyway** — the grass stops growing and nobody gets
+/// hungry, and everything that is still Rust (the sun, the walking, the pushing apart) carries on
+/// — and this is the sentence that says so, on the HUD and in the log. Refusing to start would be
+/// the wrong answer to a typo in a file the player is invited to edit.
+#[derive(Resource, Default)]
+pub struct WorldTrouble(pub Option<String>);
+
+/// **The game's side of making a creature**: the children a script has asked for this frame
+/// (`garden.spawn`), read out of the Ruby Hash in `answer_garden`, and the two numbers the
+/// building of one needs.
+///
+/// The asking and the making are separate because the answering system has the whole `World` and
+/// no `Commands`, while spawning a creature wants `Look`, `RubyDir` and `Assets<MrbAsset>` —
+/// three ordinary system parameters. Reading the Hash needs the VM; making the creature does not.
+///
+/// `hunger` and `cap` are `world.rb`'s, handed over once by `garden.rules` (W2) and living here
+/// rather than in a `Rules` resource of their own, **where they are used** — which is the same
+/// arrangement `day_length` has in [`Sky`], for the same reason (`docs/plans/garden-world-plan.md`
+/// §2, default 7). What the rules keep for themselves is who may breed with whom and what it
+/// costs them; what crosses is what the *builder* cannot do without.
+#[derive(Resource)]
+struct Births {
+    /// asked for, not yet made
+    waiting: Vec<Birth>,
+    /// what a newborn's meter says when it arrives (`world.rb`'s `child_hunger`)
+    hunger: f32,
+    /// how many creatures the game will make (`world.rb`'s `pop_max`)
+    cap: usize,
+}
+
+impl Default for Births {
+    /// The game's own answers, for the frames before `world.rb` has spoken — and for a garden
+    /// whose `world.rb` will not compile, which runs on them for ever.
+    fn default() -> Self {
+        Births { waiting: Vec::new(), hunger: CHILD_HUNGER, cap: POP_MAX }
+    }
+}
+
+/// **What the run has to say about its two VMs, as one system parameter.**
+///
+/// `stop_when_over` was at Bevy's limit of sixteen system parameters before W1 added a second VM
+/// to report on, and a `SystemParam` of its own is the answer Bevy gives to that: one parameter
+/// that expands to five, named for the reason the five travel together.
+#[derive(bevy::ecs::system::SystemParam)]
+struct VmReport<'w> {
+    /// the creatures' VM: what its tick cost this frame, and the VM itself for the panel
+    clock: Res<'w, window::VmClock>,
+    scripts: Res<'w, ScriptWorld>,
+    /// and the world's: what a pass of `each_frame` cost, why it has no rules where it has none,
+    /// and the share of the frame it is allowed
+    meter: Res<'w, WorldMeter>,
+    trouble: Res<'w, WorldTrouble>,
+    world: Res<'w, ScriptWorld<World>>,
+}
 
 /// `--headless N`: how long the world may run.
 #[derive(Resource)]
@@ -994,9 +1194,18 @@ struct SelfTest {
     asleep_counted: u32,
 
     // --- G2: the genome ----------------------------------------------------
-    /// every `"mate"` the rule has published: who was told, its own genome, its partner's, when
+    /// every pairing a child was asked out of: who asked, its own genome, its partner's, when.
+    ///
+    /// W2 moved where this is written rather than what it says. `court` filled it, because
+    /// `court` was the rule and knew both parents; the rule is `ruby/world.rb`'s now and reports
+    /// nothing, so it is taken in `answer_spawn` out of the asker's `Creature` and the `Breeding`
+    /// the rules wrote on it — the check watches the world instead of being told.
     matings: Vec<(Entity, Genome, Genome, f32)>,
-    /// how many went out, and how many children came back
+    /// how many times the rules said `"mate"`, and how many children came back. The first is
+    /// counted where the message is carried across to the creatures' VM (`answer_world`), and it
+    /// is the only thing left in this source that knows that name — for the sake of the line the
+    /// eighth check prints when no child was born at all, which would otherwise not be able to
+    /// say whether the rules had been silent or the scripts had.
     courtings: u32,
     births: u32,
     /// the first child a script asked the game for: when it was asked for, and what the check
@@ -1014,6 +1223,43 @@ struct SelfTest {
     /// why the save from another version was not loaded, as `--load` said it. `None` means it was
     /// loaded — or that this run was given a `--load` of its own and the check did not run
     version_refused: Option<String>,
+
+    // --- W1: the rules are Ruby's ---------------------------------------------
+    /// the first moment a plant was seen to be **bigger** than it was the frame before, which is
+    /// `world.rb`'s `each_frame` having run and having written what it worked out
+    grew_at: Option<f32>,
+    /// what every plant measured last frame, for the line above
+    grass: Vec<(Entity, f32)>,
+    /// what every creature's meter said last frame, so that a rise is a meal and a fall is
+    /// hunger. It stands where `eat` and `starve` used to write `ate_at` and `starved` from the
+    /// inside: the rules are somebody else's now, and a check of a rule that is somebody else's
+    /// has to watch what it **did to the world**
+    meters: Vec<(Entity, f32)>,
+    /// every creature that was there last frame, for the same reason: `starve` used to say who it
+    /// despawned and now nothing here decides that
+    alive: Vec<(Entity, Species, f32)>,
+
+    // --- W1: the rules can be swapped while the world runs --------------------
+    /// the frozen rules (an `each_frame` that does nothing) have been asked for
+    freeze_asked: bool,
+    /// …and the world's task has actually restarted on them, at this moment
+    frozen_at: Option<f32>,
+    /// how many times a creature's meter fell while they were in force. It should be none: the
+    /// rules that make a creature hungry are in the file that was taken away
+    fell_while_frozen: u32,
+    // --- W2: the world says something and the creatures hear it --------------
+    /// the rules have said `"season"` at least once, which is when it is worth reading anybody's
+    /// memory (a `read_memory` per creature is two `ivar_get`s and a conversion, and doing it on
+    /// every frame of a ninety-second run to find out that nothing has been said yet would be
+    /// the check costing more than the thing it checks)
+    season_told: bool,
+    /// the first creature whose `@memory` came back with a season in it, what it said, and when
+    season_heard: Option<(String, String, f32)>,
+    /// the real rules have been asked for again
+    thaw_asked: bool,
+    /// …and a meter has fallen since, which is the second half of the check: rules that stop when
+    /// they are replaced and never start again are not rules that are alive
+    fell_after_thaw: bool,
 }
 
 impl Default for SelfTest {
@@ -1044,9 +1290,42 @@ impl Default for SelfTest {
             born_ok: false,
             bad_spawn: None,
             version_refused: None,
+            grew_at: None,
+            grass: Vec::new(),
+            meters: Vec::new(),
+            alive: Vec::new(),
+            freeze_asked: false,
+            frozen_at: None,
+            fell_while_frozen: 0,
+            season_told: false,
+            season_heard: None,
+            thaw_asked: false,
+            fell_after_thaw: false,
         }
     }
 }
+
+/// **Check 12's rules**: a `world.rb` that does nothing at all.
+///
+/// It is the smallest thing that is still a world — it compiles, it defines an `each_frame`, and
+/// that `each_frame` is empty — so the garden it leaves behind is one where the grass does not
+/// grow, nobody gets hungry, nobody eats, nobody breeds and nobody starves, while everything
+/// that is still Rust (the sun, the walking, the pushing apart, a rabbit startling a beetle)
+/// carries on exactly as before. That is what makes "no meter fell for five seconds" a statement
+/// about *these* rules and not about the world having stopped.
+///
+/// W2 made that sentence simpler rather than harder. While breeding was Rust's, taking the rules
+/// away made it happen *more* — nobody was getting hungry, so everybody stayed over
+/// `MATE_HUNGER` — and every child charged its parents thirty points, which is a meter falling
+/// for a reason the check had to be told to ignore (`SelfTest::paid`, now gone). Breeding is in
+/// the file that is taken away, so there is nothing left in this build that can lower a meter
+/// while it is away.
+const FROZEN_WORLD: &str = r#"world do
+  day_length 60.0
+  each_frame do |dt|
+  end
+end
+"#;
 
 // ---------------------------------------------------------------------------------------------
 
@@ -1120,6 +1399,10 @@ fn main() {
                 bevy::log::LogPlugin { filter: "info,bevy_asset=off".into(), ..default() },
                 bevy::asset::AssetPlugin { file_path: platform::assets_dir(), ..default() },
                 RubevyPlugin::default(),
+                // W1: the world's own VM, the same plugin under a name tag. Its asset root is
+                // the game's, because nothing in `ruby/` uses `require` — the prelude and the
+                // file are compiled as one program, here as for a creature.
+                RubevyPlugin::<World>::for_vm(platform::assets_dir()),
             ))
             // no renderer here, and from G0a no models either: the same startup builds the same
             // entities with the same components, and only the child that carries the look is
@@ -1166,6 +1449,8 @@ fn main() {
                         ..default()
                     }),
                 RubevyPlugin::default(),
+                // W1: and the world's own, as in the headless arm above
+                RubevyPlugin::<World>::for_vm(platform::assets_dir()),
                 // G4: the editor and the VM panel, both `rubevy-arena`'s — the same two SabiRuby
                 // Battle uses. They bring `bevy_egui` between them.
                 EditorPlugin,
@@ -1253,6 +1538,9 @@ fn main() {
         // to `Serde<CreatureSpec>` by name.
         .register_type::<Genome>()
         .register_type::<Hunger>()
+        // W2: the cooldown, because the rule that keeps it is `ruby/world.rb`'s now. This line
+        // and the two derives on `Breeding` are the whole of "Ruby can see it"
+        .register_type::<Breeding>()
         .register_type::<Velocity>()
         .register_type::<Sight>()
         .register_type::<Memory>()
@@ -1320,13 +1608,58 @@ fn main() {
         })
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
-        .init_resource::<Eaters>()
         .init_resource::<Births>()
+        // W1: the seeds `world.rb` asked for, the cost of its pass, and why it has no rules where
+        // it has none
+        .init_resource::<Sprouts>()
+        .init_resource::<WorldMeter>()
+        .init_resource::<WorldTrouble>()
         // The one thing this game puts in the VM (G2): the `Genome` class and its seven methods.
         // `ScriptWorld::vm` is public and the resource exists as soon as `RubevyPlugin` is added,
         // while no script runs before the first `Update` — so `Startup` is the place and rubevy
         // needs no entry point for it (rubevy `docs/host-api.md`, "Adding to the VM").
-        .add_systems(Startup, install_host_api)
+        .add_systems(Startup, (install_host_api, install_world_answers))
+        // **The two VMs' frames, ordered against each other** (W1). Nothing in rubevy orders them
+        // — each plugin chains its own three sets and no more (rubevy `docs/host-api.md`, "Two
+        // VMs in one app") — so this line is the whole of the arrangement, and it is the reason
+        // the rules can be Ruby at all:
+        //
+        //   the Rust rules → the world's tick → **the creatures' tick** → the answers
+        //
+        // The world's writes are applied at the end of its own tick (`apply_component_writes`),
+        // so a `Hunger` the rules worked out this frame is the `Hunger` a beetle reads in the
+        // *same* frame's tick — a read is answered inside the tick, out of the world as it stands
+        // there (rubevy, "A read costs no frame"). The other way round it would be a frame old,
+        // and a creature deciding on a meter one frame behind the rule that wrote it is exactly
+        // the kind of luck `.before(RubevySet::Tick)` was put in to end
+        // (`docs/worklog/2026-09-17-sync-reads.md`, §1).
+        //
+        // `is_still` is the run condition the deleted rule chain carried, now where the rules
+        // are: a garden that is being read back from a file does not age while its minds are
+        // starting, and `P` stops the world. Skipping the set skips the tick, so the pass simply
+        // does not happen — the world's task is parked on `Rubevy.ask("frame")` either way, and
+        // the delta it wakes with is one frame's and not the pause's.
+        //
+        // `VmClockSet` is the pair of systems that time the creatures' tick (`rubevy-arena`). They
+        // are ordered against `RubevySet::Tick` and would otherwise have had the world's tick
+        // scheduled inside their window, which made the HUD's "VM 0.9 ms" read 2.1 — one VM's
+        // figure against two VMs' work. Ordering the world's tick ahead of the pair puts each
+        // number back on its own VM.
+        .configure_sets(
+            Update,
+            RubevySet::<World>::tick()
+                .before(RubevySet::Tick)
+                .before(window::VmClockSet)
+                .run_if(is_still),
+        )
+        // W2: and the world's *answers* before the creatures' tick too, which is what makes
+        // `tell` arrive in the frame it was said. rubevy chains each VM's own three sets and no
+        // more (`docs/host-api.md`, "Two VMs in one app"), so without this line the system that
+        // carries a message from one VM to the other could be scheduled after the VM it carries
+        // it to has already had its frame — and a beetle would hear about its lunch on the next
+        // one. Nothing of the creatures' is read here that their tick has not already written:
+        // the world's questions are about the world.
+        .configure_sets(Update, RubevySet::<World>::answer().before(RubevySet::Tick))
         // `spawn_world` asks for `Option<Res<Look>>`, and a `None` there is how the headless
         // build says "no models". That makes the order load-bearing: without this the windowed
         // build's `spawn_world` may run before `make_look` and then it is `None` there too —
@@ -1335,6 +1668,8 @@ fn main() {
         // `MakeLook` is a set rather than `after(make_look)` because `make_look` is not in the
         // headless schedule at all.
         .add_systems(Startup, spawn_world.after(MakeLook))
+        // W1: and the rules, on an entity of their own in the world's VM
+        .add_systems(Startup, give_the_world_its_rules)
         .add_systems(
             Update,
             (
@@ -1345,42 +1680,35 @@ fn main() {
                 // without caring who wrote it.
                 move_creatures,
                 separate,
-                grow_plants,
-                sprout_plants,
-                get_hungry,
-                eat,
                 startle,
-                court,
-                starve,
             )
                 .chain()
                 // G3: a garden that is being read back does not age while its minds are starting
                 .after(load_world)
-                // **The rules move the world before the scripts look at it.** Every component a
-                // script reads is written in this chain — `Transform` by `move_creatures`,
-                // `separate` and `grow_plants`, `Hunger` by `get_hungry` and `eat`, `Creature` by
-                // `get_hungry`, `eat` and `court` — and since 2026-09-17 a read is answered
-                // *inside* `RubevySet::Tick`, out of the world as it stands there (rubevy
-                // `docs/host-api.md`, "A read costs no frame"). So where this chain lands is no
-                // longer only a question of when the HUD sees a number: it decides whether
-                // `me[:Hunger]` is this frame's hunger or the last frame's.
+                // **What is left of the rules moves the world before anybody looks at it.**
                 //
-                // It was unordered against `RubevySet` until now, and measured, bevy's executor
-                // was splitting it around the tick and splitting it *differently every frame* —
-                // `day_night` before, `starve` after on some frames and before on others
-                // (`docs/worklog/2026-09-17-sync-reads.md`, §1). A script could therefore read
-                // this frame's world or the last one's depending on the frame, which is not a
-                // thing a garden should be deciding by luck.
-                .before(RubevySet::Tick)
+                // These four are the mechanics rather than the rules (W1): where a creature ends
+                // up when it walks and when it is pushed, who is standing on whom, and where the
+                // sun is. The five that used to stand between them — `grow_plants`,
+                // `sprout_plants`, `get_hungry`, `eat`, `starve` — are `ruby/world.rb` now.
+                //
+                // It is `.before(RubevySet::<World>::tick())` rather than `.before(RubevySet::
+                // ::Tick)` because the world's VM is the first of the two to run and the rules
+                // are what it reads: a `Transform` this chain has just written is the `Transform`
+                // `garden.within` measures from, in the same frame. Since the world's tick is
+                // itself before the creatures', ordering against it orders against both — the
+                // chain kept everything the 2026-09-17 ordering bought it
+                // (`docs/worklog/2026-09-17-sync-reads.md`, §1 and §8), and moved one set earlier.
+                .before(RubevySet::<World>::tick())
                 .run_if(is_still),
         )
         // G3: `--load` before the first frame, F9 at any time. It is before the scripts are dealt
         // with, so a creature that was despawned here has lost its `ScriptTask` — and with it its
         // task in the VM and its queues — before rubevy looks at the world again.
         .add_systems(Update, load_world.run_if(resource_exists::<Loading>).before(RubevySet::Deliver))
-        // after the answers, because what it spawns was asked for in this frame's
-        // `answer_garden` and the request is answered there too
-        .add_systems(Update, hatch.after(RubevySet::Answer).run_if(is_still))
+        // after the answers, because what it makes was asked for in this frame's `answer_garden`
+        // and the request is answered there too
+        .add_systems(Update, children_arrive.after(RubevySet::Answer).run_if(is_still))
         // G3, in this order and after the scripts have had their frame: put the memories back
         // (which needs the object a script makes in its first frame), then write the file if
         // anybody asked for one, then — last — let a restored world start moving. A run that
@@ -1401,7 +1729,30 @@ fn main() {
         // costs a second frame per round trip, and where it landed used to be luck (rubevy
         // `docs/host-api.md`, "Where the game's systems go in the frame").
         .add_systems(Update, answer_garden.in_set(RubevySet::Answer))
+        // W1: and the one that answers the *world's* script, in the world VM's own set. It is a
+        // different system reading a different resource, which is how the answering side knows
+        // which VM asked (rubevy `docs/host-api.md`, "Two VMs in one app").
+        .add_systems(Update, answer_world.in_set(RubevySet::<World>::answer()))
+        // W1: what the rules did, read from the outside.
+        //
+        // `plants_wear_their_size` is the look: `Plant.size` is also the entity's
+        // `Transform.scale` — one number seen two ways, which `grow_plants` used to write both
+        // halves of — and `world.rb` writes the number, not the picture of it.
+        // `note_the_rules` is the other direction: what a rule *did* to the world, for the things
+        // that used to be noted from inside the rule itself (the chewing animation, and three of
+        // the checks). `sprout_plants` puts down the seeds the rules asked for.
+        //
+        // All three are after the world's tick, which is where its writes land.
+        .add_systems(
+            Update,
+            (plants_wear_their_size, note_the_rules, sprout_plants)
+                .after(RubevySet::<World>::tick())
+                .after(RubevySet::Answer),
+        )
         .add_systems(Update, watch_minds.after(RubevySet::Answer))
+        // W1: what one pass of `world.rb` costs, round the set that runs it
+        .add_systems(Update, world_clock_start.before(RubevySet::<World>::tick()))
+        .add_systems(Update, world_clock_end.after(RubevySet::<World>::tick()).before(RubevySet::Tick))
         // (G4's other HUD number, the wall time the frame's scripts took, is added below: in a
         // window `VmInspectorPlugin` measures it, and only the headless build adds it itself.)
         ;
@@ -1410,24 +1761,41 @@ fn main() {
         // `VmInspectorPlugin`'s, because the VM panel is what shows it (G9); here there is no
         // plugin and no panel, and the figure is printed at the end of the run.
         app.init_resource::<window::VmClock>()
-            .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick))
+            .add_systems(Update, window::vm_clock_start.before(RubevySet::Tick).in_set(window::VmClockSet))
             .add_systems(
                 Update,
-                window::vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer),
+                window::vm_clock_end
+                    .after(RubevySet::Tick)
+                    .before(RubevySet::Answer)
+                    .in_set(window::VmClockSet),
             );
     }
     if selftest && headless.is_none() {
         // G6: and the camera, which is the one thing a browser check has no other way to read
         app.insert_resource(CameraLog);
         // the editor's buttons and the two keys, which no headless run can press
-        app.insert_resource(window::WindowTest::after(3.0))
-            .add_systems(Update, window::window_selftest.before(window::inspect_keys));
+        // before both of the systems whose keys it presses: `inspect_keys` reads `F2` and `P`, and
+        // `choose_watched` reads `F3` and `Tab`. A key pressed into `ButtonInput` after the system
+        // that reads it has run in that frame is a key nobody ever sees — `just_pressed` is
+        // cleared in the next frame's `PreUpdate`.
+        app.insert_resource(window::WindowTest::after(3.0)).add_systems(
+            Update,
+            window::window_selftest.before(window::inspect_keys).before(window::choose_watched),
+        );
     }
     if selftest {
         // after `separate`, so what it measures is the world as the frame leaves it
         app.insert_resource(SelfTest { version_refused, ..default() })
             .add_systems(Update, watch_overlap.after(separate))
-            .add_systems(Update, (watch_probe, watch_turning, watch_sleep).after(RubevySet::Answer));
+            .add_systems(
+                Update,
+                (watch_probe, watch_turning, watch_sleep, watch_the_rules, watch_the_season)
+                    .after(RubevySet::Answer),
+            )
+            // W1's twelfth check: the rules taken away and given back while the world runs. It is
+            // after `note_the_rules`, because what it looks at is the falling meters that system
+            // counted on this frame.
+            .add_systems(Update, swap_the_rules.after(note_the_rules));
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
@@ -1785,13 +2153,13 @@ fn spawn_world(
         let hunger = dice.between(45.0, 90.0);
         // no two creatures alike, so that `Genome#mix` has something to average
         let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
-        let entity = spawn_creature(&mut commands, look, species, at, hunger, genome);
+        let entity = spawn_creature(&mut commands, look, species, at, hunger, genome, None);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, species);
     }
 
     if keep_clear {
         let entity =
-            spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle));
+            spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle), None);
         commands.entity(entity).insert(Fasting);
         info!("selftest: a beetle with no behaviour and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
@@ -1801,7 +2169,7 @@ fn spawn_world(
         // the species' own genome, not a rolled one: the check below is written for a beetle
         // that sees exactly eight units, and a rolled `Sight` of 6.6 would be testing the dice
         let probe =
-            spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle));
+            spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle), None);
         commands.entity(probe).insert(Probe { dinner });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, probe, Species::Beetle);
         info!(
@@ -1823,7 +2191,8 @@ fn spawn_world(
             (Vec2::new(4.5, 0.0), Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }),
         ];
         for (offset, genome) in lovers {
-            let lover = spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome);
+            let lover =
+                spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome, None);
             give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
         }
         info!(
@@ -1924,9 +2293,10 @@ fn spawn_creature(
     at: Vec2,
     hunger: f32,
     genome: Genome,
+    parent: Option<Entity>,
 ) -> Entity {
     let mut entity = commands.spawn((
-        Creature { species, age: 0.0, genome },
+        Creature { species, age: 0.0, genome, parent },
         Hunger(hunger),
         Velocity(Vec2::ZERO),
         // G2: how far it sees is its genome's, not its species'. `Sight` stays a component of
@@ -1934,7 +2304,7 @@ fn spawn_creature(
         // may look, and what a script reads with `me[:Sight]`.
         Sight(genome.sight),
         Collider { radius: radius_of(species) },
-        Breeding { ready_at: 0.0, partner: None },
+        Breeding { ready_at: 0.0, partner: Entity::PLACEHOLDER },
         Memory,
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
@@ -2096,6 +2466,85 @@ fn compile_source(
             None
         }
     }
+}
+
+/// **The world's rules, compiled and hung on an entity of their own** (W1).
+///
+/// It is `give_mind`'s shape with everything a creature needs taken out. There is one of these
+/// and there is no `Mind`: the HUD's columns are about creatures, and what the world's script
+/// costs is measured by `WorldMeter` instead, because it is one task that runs one pass a frame
+/// and does not have to be told apart from anything.
+///
+/// **A `world.rb` that will not compile is not a reason to refuse to start.** The file is one the
+/// player is invited to edit, and a typo in it should leave a garden that runs — the sun turns,
+/// the creatures walk, nothing grows and nobody gets hungry — with a sentence on the HUD saying
+/// so. That is [`WorldTrouble`], and it is the whole of the error handling here.
+fn give_the_world_its_rules(
+    mut commands: Commands,
+    ruby: Res<RubyDir>,
+    mut mrb: ResMut<Assets<MrbAsset>>,
+    mut trouble: ResMut<WorldTrouble>,
+) {
+    let entity = commands.spawn(WorldScript).id();
+    match compile_world(&ruby.0, &mut mrb) {
+        Ok(handle) => {
+            // the priority rubevy gives a script by default. A creature's is set because a
+            // creature has handlers that must be looked at before its behaviour (`give_mind`);
+            // the world has one task and nothing to be ahead of.
+            commands.entity(entity).insert(Script::<World>::for_vm(handle).with_name("world"));
+        }
+        Err(why) => {
+            error!("the world has no rules: {why}");
+            trouble.0 = Some(why);
+        }
+    }
+}
+
+/// `ruby/world.rb`, as the file says it.
+fn compile_world(ruby: &Path, mrb: &mut Assets<MrbAsset>) -> Result<Handle<MrbAsset>, String> {
+    let body = platform::read(&ruby.join(WORLD_FILE))?;
+    compile_world_source(ruby, &body, mrb)
+}
+
+/// **Put a compiled `world.rb` on the world's entity in place of the one it is wearing.**
+///
+/// It is `window::restart_species` for a garden that has one of the thing rather than a dozen,
+/// and it is the road W1's twelfth check already drove (`swap_the_rules`); W3 made it a function
+/// because the editor's `F3` drives the same one. Dropping the `ScriptTask<World>` is what ends
+/// the old rules: rubevy terminates the task and closes the queues it was subscribed to, and the
+/// timer tasks `every` made — which are asleep and have no subscription to lose — stop themselves
+/// the next time they wake, because `run_world` wrote a new `$world_being` over theirs
+/// (`ruby/world_prelude.rb`). The new `Script` becomes a task on the next frame.
+///
+/// **What does not come back is the world's state.** `@season` is an instance variable of the
+/// object the old script made, and the new script makes a new one — so a garden whose rules are
+/// replaced opens in the wet season again, exactly as a beetle handed a new behaviour has
+/// forgotten what it ate. What *is* kept is everything the rules wrote into components: a
+/// `Breeding` cooldown outlives the rule that set it, which is most of why it is a component
+/// (W2).
+fn wear_the_rules(commands: &mut Commands, entity: Entity, handle: Handle<MrbAsset>) {
+    commands
+        .entity(entity)
+        .remove::<ScriptTask<World>>()
+        .remove::<rubevy::ScriptDone<World>>()
+        .insert(Script::<World>::for_vm(handle).with_name("world"));
+}
+
+/// `world_prelude.rb` and one world, compiled as one program — which is why neither needs a
+/// `require` — with `run_world` on the end, exactly as a creature's file gets `run_creature`.
+///
+/// It answers no line offset, where `compile_source` does: that number is for the editor's band
+/// and the HUD's line column, which are a creature's, and W3 is where the world gets a panel of
+/// its own.
+fn compile_world_source(
+    ruby: &Path,
+    body: &str,
+    mrb: &mut Assets<MrbAsset>,
+) -> Result<Handle<MrbAsset>, String> {
+    let prelude = platform::read(&ruby.join("world_prelude.rb"))?;
+    let src = format!("{prelude}\n# ---- world.rb ----\n{body}\nrun_world\n");
+    let bytes = platform::compile(&src, "world.rb")?;
+    Ok(mrb.add(MrbAsset { bytes }))
 }
 
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
@@ -2305,7 +2754,11 @@ fn day_night(
     // the world's clock, not the process's: a garden read back from a file goes on from the hour
     // it was saved at (`Sky::shift`), and in a run that loaded nothing the two are the same number
     let now = world_now(&time, &sky);
-    sky.phase = (now / DAY_LENGTH + DAWN_OFFSET).fract();
+    // **the length of the day is `world.rb`'s** (W1). `day_length 60.0` in that file reaches this
+    // line through `garden.rules`; until it does — and for ever, if that file will not compile —
+    // it is [`DAY_LENGTH`]. A `day_length` of zero would divide by it, so a rule that asks for
+    // nonsense is ignored rather than obeyed (`answer_world`).
+    sky.phase = (now / sky.day_length + DAWN_OFFSET).fract();
     let up = sun_up(sky.phase);
     let height = up.y;
     let night = height <= 0.0;
@@ -2603,110 +3056,269 @@ fn watch_overlap(mut test: ResMut<SelfTest>, solids: Query<(&Collider, &Transfor
     }
 }
 
-/// Grass grows, and the growth is the scale: one number, seen two ways.
-fn grow_plants(time: Res<Time>, mut plants: Query<(&mut Plant, &mut Transform)>) {
-    let dt = time.delta_secs();
-    for (mut plant, mut transform) in &mut plants {
-        plant.size = (plant.size + PLANT_GROWTH * dt).min(PLANT_MAX);
+// ---------------------------------------------------------------------------------------------
+// **What is left of the grass, hunger and eating** (W1).
+//
+// The rules themselves are `ruby/world.rb`. Five systems stood here — `grow_plants`,
+// `sprout_plants`, `get_hungry`, `eat`, `starve` — and what is in their place is three systems
+// that know nothing about any rule: one that shows a plant's size, one that puts a plant down
+// where the rules asked for one, and one that watches what the rules did and tells the parts of
+// the game that were being told from the inside.
+// ---------------------------------------------------------------------------------------------
+
+/// A plant's size is also its `Transform.scale` — one number seen two ways, which is what lets a
+/// script watch grass grow without the game telling it anything (`docs/garden.md`, the component
+/// table).
+///
+/// `grow_plants` wrote both halves because it was the thing that grew the plant. The rule is
+/// Ruby's now and writes the number; the *picture* of the number stays here, where the rest of
+/// the look is, and it is the one line of that swap that is not a deletion. It is a plain copy,
+/// so it is right whatever changed the size — growth, a bite, or a person editing `world.rb`.
+fn plants_wear_their_size(mut plants: Query<(&Plant, &mut Transform), Changed<Plant>>) {
+    for (plant, mut transform) in &mut plants {
         transform.scale = Vec3::splat(plant.size);
     }
 }
 
-/// New grass comes up on an empty patch, now and then, up to a limit.
+/// The seeds `world.rb` asked for this frame, put in the ground.
+///
+/// **Where a seed may land is the garden's furniture; whether one lands is the rule.** So the
+/// dice for *when* are in Ruby (`rand < sprout_rate * dt`, and the cap on how many blades the
+/// field holds), and what is here is the spot, the refusal to put one on top of another, the size
+/// a new blade starts at and whether it is a tuft or a bush — none of which a rule has an opinion
+/// about and all of which want `Look`, `Dice` and `Commands`.
+///
+/// It is the same split as `garden.spawn` and `children_arrive`, and it has the same reason: the system that
+/// answers a script has the whole world and no `Commands`.
 fn sprout_plants(
-    time: Res<Time>,
     mut commands: Commands,
     look: Option<Res<Look>>,
     mut dice: ResMut<Dice>,
+    mut asked: ResMut<Sprouts>,
     plants: Query<&Transform, With<Plant>>,
 ) {
-    let count = plants.iter().count();
-    if count >= PLANTS_MAX || dice.roll() > SPROUT_RATE * time.delta_secs() {
-        return;
-    }
-    let at = Vec2::new(dice.between(-HALF_W + 1.0, HALF_W - 1.0), dice.between(-HALF_D + 1.0, HALF_D - 1.0));
-    // not on top of another one
-    if plants.iter().any(|t| Vec2::new(t.translation.x, t.translation.z).distance(at) < 1.5) {
-        return;
-    }
-    let round = dice.roll() < 0.35;
-    spawn_plant(&mut commands, look.as_deref(), at, PLANT_MIN, round);
-}
-
-/// Being alive costs.
-fn get_hungry(time: Res<Time>, mut creatures: Query<(&mut Creature, &mut Hunger)>) {
-    let dt = time.delta_secs();
-    for (mut creature, mut hunger) in &mut creatures {
-        creature.age += dt;
-        // G2: `appetite` is the third gene, and it is the price of the other two — a creature
-        // that was born fast and far-sighted burns through itself at the same rate unless the
-        // dice were kind, which is what makes a genome something to select rather than a wish
-        hunger.0 -= HUNGER_RATE * creature.genome.appetite * dt;
-    }
-}
-
-/// Eating is standing on it: a distance test, a bite out of the plant, and the news.
-///
-/// A bite is taken on every frame of the contact, but `"ate"` is published on the **first** of
-/// them, with what that first mouthful was worth. The plan says "publish `ate`", and G0 did it
-/// per frame while nothing was listening; a meal lasts a second or two, so a listening script
-/// would have had a hundred messages for one event — which is the queue (64, oldest dropped)
-/// filled by one creature having lunch, and an `on(:ate)` woken sixty times a second to be
-/// told the same thing. It is the decision `"bumped"` and `"touched"` already made in G0.
-fn eat(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut world: ResMut<ScriptWorld>,
-    mut eaters: ResMut<Eaters>,
-    mut test: Option<ResMut<SelfTest>>,
-    mut creatures: Query<(Entity, &Transform, &mut Hunger), With<Creature>>,
-    mut plants: Query<(Entity, &Transform, &mut Plant), Without<Creature>>,
-) {
-    let dt = time.delta_secs();
-    let now = time.elapsed_secs();
-    let mut eating_now: Vec<Entity> = Vec::new();
-    for (creature, at, mut hunger) in &mut creatures {
-        if hunger.0 >= HUNGER_MAX {
+    for _ in 0..std::mem::take(&mut asked.0) {
+        let at = Vec2::new(
+            dice.between(-HALF_W + 1.0, HALF_W - 1.0),
+            dice.between(-HALF_D + 1.0, HALF_D - 1.0),
+        );
+        // not on top of another one
+        if plants.iter().any(|t| Vec2::new(t.translation.x, t.translation.z).distance(at) < 1.5) {
             continue;
         }
-        let here = Vec2::new(at.translation.x, at.translation.z);
-        for (plant_entity, plant_at, mut plant) in &mut plants {
-            // another creature may have finished this one off earlier in this same loop: the
-            // despawn is a command and has not happened yet, but the component is already empty.
-            // Without this a second mouth despawns an entity that is on its way out, which Bevy
-            // reports as "the entity … is invalid; its index now has generation 1".
-            if plant.size <= 0.02 {
-                continue;
-            }
-            let there = Vec2::new(plant_at.translation.x, plant_at.translation.z);
-            if here.distance(there) > REACH + plant.size * 0.5 {
-                continue;
-            }
-            let bite = (EAT_RATE * dt).min(plant.size);
-            plant.size -= bite;
-            hunger.0 = (hunger.0 + bite * FOOD_VALUE).min(HUNGER_MAX);
-            eating_now.push(creature);
-            // the creature's own scripts hear it; the grass has none to hear anything. The
-            // payload is how big the plant is, not how big the mouthful was: one frame's bite is
-            // always the same number and says nothing, while the size of the thing it has just
-            // sat down to is what a script would want to remember.
-            if !eaters.0.contains(&creature) {
-                world.publish(Some(creature), "ate", Answer::Num(plant.size as f64));
-            }
-            // and the model chews for a moment longer than the last bite, so that walking from
-            // one blade of grass to the next does not flicker between two clips
-            commands.entity(creature).insert(Eating { until: now + 0.35 });
-            if let Some(test) = test.as_mut() && test.ate_at.is_none() {
-                test.ate_at = Some(now);
-                info!("selftest: first meal at {now:.2} s");
-            }
-            if plant.size <= 0.02 {
-                commands.entity(plant_entity).despawn();
-            }
-            break; // one plant at a time
+        let round = dice.roll() < 0.35;
+        spawn_plant(&mut commands, look.as_deref(), at, PLANT_MIN, round);
+    }
+}
+
+/// **What the rules did, read from the outside** (W1).
+///
+/// Three things in this game used to be noted by the rule that caused them, because the rule was
+/// here: the chewing animation (`eat` inserted `Eating`), the first meal and the first death (the
+/// checks' `ate_at` and `starved`). The rules are somebody else's file now, and they say nothing
+/// to the game beyond writing components and despawning entities — which is the point, and which
+/// means the way to know a creature ate is that **its meter went up**, and the way to know one
+/// starved is that **it is not there any more**.
+///
+/// That is a better test than the one it replaces. `eat` recording its own success proved that
+/// `eat` ran; a meter that is higher than it was proves the world changed, whoever changed it, and
+/// it would still be true of a `world.rb` that fed creatures in some quite different way.
+///
+/// It runs after the world's tick, where that VM's writes and despawns land.
+fn note_the_rules(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut test: Option<ResMut<SelfTest>>,
+    creatures: Query<(Entity, &Creature, &Hunger)>,
+) {
+    let now = time.elapsed_secs();
+    let mut meters: Vec<(Entity, f32)> = Vec::with_capacity(creatures.iter().len());
+    let mut alive: Vec<(Entity, Species, f32)> = Vec::with_capacity(creatures.iter().len());
+    // what the meters said last frame, and who was here to have one
+    //
+    // **W2 took a list away from here.** While breeding was Rust's, `hatch` charged a parent
+    // thirty points for a child and told this system which parents it had charged, because a
+    // meter that fell for *that* reason was not the rules getting anybody hungry — and the
+    // twelfth check, which is exactly "no meter fell while the rules were away", counted two of
+    // them. Breeding is a rule now and the rule is in the file the check takes away, so a fall
+    // while the rules are gone is once again impossible rather than accounted for.
+    let mut was: Vec<(Entity, f32)> = Vec::new();
+    let mut were: Vec<(Entity, Species, f32)> = Vec::new();
+    if let Some(test) = test.as_mut() {
+        was = std::mem::take(&mut test.meters);
+        were = std::mem::take(&mut test.alive);
+    }
+    let mut first_meal: Option<f32> = None;
+    let mut fell = 0u32;
+    for (entity, creature, hunger) in &creatures {
+        meters.push((entity, hunger.0));
+        alive.push((entity, creature.species, creature.age));
+        let Some((_, before)) = was.iter().find(|(e, _)| *e == entity) else { continue };
+        if hunger.0 > *before {
+            // a mouthful. The model chews for a moment longer than the last bite, so that walking
+            // from one blade of grass to the next does not flicker between two clips
+            commands.entity(entity).insert(Eating { until: now + 0.35 });
+            first_meal.get_or_insert(now);
+        } else if hunger.0 < *before {
+            fell += 1;
         }
     }
-    eaters.0 = eating_now;
+    // and who went. The only thing that despawns a creature is `world.rb`'s own `Rubevy.despawn`
+    // on an empty meter — W2 added a way to be *born* and none to go — so a creature that was
+    // here and is not is one that starved.
+    let gone: Vec<(Entity, Species, f32)> =
+        were.into_iter().filter(|(e, ..)| !meters.iter().any(|(a, _)| a == e)).collect();
+    for (entity, species, age) in &gone {
+        info!("{} {} starved at {now:.1} s (age {:.1} s)", species.name(), entity, age);
+    }
+
+    let Some(mut test) = test else { return };
+    test.meters = meters;
+    test.alive = alive;
+    if let Some(at) = first_meal
+        && test.ate_at.is_none()
+    {
+        test.ate_at = Some(at);
+        info!("selftest: first meal at {at:.2} s");
+    }
+    if let Some((entity, _, _)) = gone.first()
+        && test.starved.is_none()
+    {
+        test.starved = Some((*entity, now));
+    }
+    // the twelfth check's evidence: while the frozen rules are in force nothing may make a
+    // creature hungrier, and once the real ones are back something must
+    if test.frozen_at.is_some_and(|at| now - at < FREEZE_WINDOW) {
+        test.fell_while_frozen += fell;
+    } else if test.thaw_asked && fell > 0 {
+        test.fell_after_thaw = true;
+    }
+}
+
+/// **The eleventh check: the rules really are running, and they really are Ruby's.**
+///
+/// A plant that is bigger than it was is `world.rb`'s `each_frame` having run *and* having written
+/// what it worked out — nothing else in this build makes a plant grow, and the growth is not
+/// something the game could be doing by accident. Measured at the moment it is first seen, so the
+/// check can say how long the world took to come to life.
+fn watch_the_rules(mut test: ResMut<SelfTest>, time: Res<Time>, plants: Query<(Entity, &Plant)>) {
+    if test.grew_at.is_some() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let mut sizes: Vec<(Entity, f32)> = Vec::with_capacity(plants.iter().len());
+    for (entity, plant) in &plants {
+        sizes.push((entity, plant.size));
+        if test.grew_at.is_none()
+            && let Some((_, before)) = test.grass.iter().find(|(e, _)| *e == entity)
+            && plant.size > *before
+        {
+            test.grew_at = Some(now);
+            info!("selftest: the grass grew at {now:.2} s — `world.rb` is running");
+        }
+    }
+    test.grass = sizes;
+}
+
+/// **The thirteenth check: what the world says reaches the creatures** (W2).
+///
+/// The rules declare a season (`tell :all, "season", …` in `world.rb`), a creature's
+/// `on(:season)` writes it into its own `@memory`, and this reads that memory back **out of the
+/// VM** — the same two `ivar_get`s the save file is made of (`read_memory`). So what it proves is
+/// the whole road and not a step of it: the world's VM said something, the game carried it across
+/// to the creatures' VM, a handler in a script nobody here has read ran, and the thing it
+/// remembered is in the heap where the save would find it.
+///
+/// It reads nothing until the rules have actually said it (`season_told`), and nothing after the
+/// first creature is found to have heard it.
+fn watch_the_season(
+    time: Res<Time>,
+    mut test: ResMut<SelfTest>,
+    mut scripts: ResMut<ScriptWorld>,
+    creatures: Query<(&Mind, &ScriptTask)>,
+) {
+    if !test.season_told || test.season_heard.is_some() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    for (mind, task) in &creatures {
+        let memory = read_memory(&mut scripts.vm, task.task());
+        let Some(season) = memory.get("season").and_then(|v| v.as_str()) else { continue };
+        info!("selftest: {} knows it is the {season} season at {now:.2} s", mind.name);
+        test.season_heard = Some((mind.name.clone(), season.to_string(), now));
+        return;
+    }
+}
+
+/// How long the frozen rules are left in force before the twelfth check asks its question. Five
+/// seconds is the plan's (`docs/plans/garden-world-plan.md` §3.1) and it is a long time in a world
+/// where a creature loses `1.6 * appetite` of its meter every second: every creature in the garden
+/// would have lost eight points of it, and the check is that **none** lost any.
+const FREEZE_WINDOW: f32 = 5.0;
+/// When the rules are taken away. It is after everything the first ten checks are about has
+/// happened — the first meal (under a second), the first death (1.9 s), the probe's walk (1.8 s)
+/// — and well before the night the seventh check watches for (25 s).
+const FREEZE_AT: f32 = 20.0;
+
+/// **The twelfth check: the rules can be replaced while the world runs.**
+///
+/// At [`FREEZE_AT`] the world's script is swapped for [`FROZEN_WORLD`], whose `each_frame` does
+/// nothing, by exactly the road the editor will use in W3 and `restart_species` already uses for a
+/// creature: take the `ScriptTask` away, which ends the task and closes its queues, and put a new
+/// `Script` on. For [`FREEZE_WINDOW`] after the new task has actually started, no creature's meter
+/// may fall. Then the real rules go back and one has to fall again.
+///
+/// The window starts when the task restarts and not when the swap was asked for: compiling and
+/// starting a script takes a frame or two, and a check that began counting before the new rules
+/// were in force would be counting the old ones.
+fn swap_the_rules(
+    mut commands: Commands,
+    time: Res<Time>,
+    ruby: Res<RubyDir>,
+    mut mrb: ResMut<Assets<MrbAsset>>,
+    mut test: ResMut<SelfTest>,
+    script: Query<(Entity, Option<&ScriptTask<World>>), With<WorldScript>>,
+) {
+    let now = time.elapsed_secs();
+    let Ok((entity, task)) = script.single() else { return };
+    let mut wear = |body: Option<&str>, commands: &mut Commands| {
+        let compiled = match body {
+            Some(text) => compile_world_source(&ruby.0, text, &mut mrb),
+            None => compile_world(&ruby.0, &mut mrb),
+        };
+        match compiled {
+            Ok(handle) => {
+                wear_the_rules(commands, entity, handle);
+                Ok(())
+            }
+            Err(why) => Err(why),
+        }
+    };
+    if !test.freeze_asked && now >= FREEZE_AT {
+        test.freeze_asked = true;
+        if let Err(why) = wear(Some(FROZEN_WORLD), &mut commands) {
+            error!("selftest: the frozen rules would not compile: {why}");
+        }
+        return;
+    }
+    // the swap is in force from the frame the new task exists
+    if test.freeze_asked && test.frozen_at.is_none() {
+        if task.is_some() {
+            test.frozen_at = Some(now);
+            info!("selftest: the rules were taken away at {now:.2} s");
+        }
+        return;
+    }
+    if !test.thaw_asked && test.frozen_at.is_some_and(|at| now - at >= FREEZE_WINDOW) {
+        test.thaw_asked = true;
+        info!(
+            "selftest: the rules go back at {now:.2} s ({} meters fell while they were away)",
+            test.fell_while_frozen
+        );
+        if let Err(why) = wear(None, &mut commands) {
+            error!("selftest: the real rules would not compile the second time: {why}");
+        }
+    }
 }
 
 /// A rabbit walking into a beetle is news to the beetle — the material for G1's `on(:touched)`
@@ -2788,99 +3400,20 @@ fn startle(
     contacts.0 = touching;
 }
 
-/// **Breeding (G2): the rule is Rust's, the child is Ruby's.**
+/// **The children a script asked for, made** (G2, and W2's leftover of `hatch`).
 ///
-/// Two creatures of one species that are touching and both this full are a pair, and the game
-/// publishes `"mate"` to **one** of them — the one with the lower entity id, so that a meeting is
-/// one message and not two, and one child and not two — with the other as a `Rubevy::Entity`.
-/// That is the whole of what Rust decides: who may breed with whom, how often, and how many
-/// creatures the garden holds.
+/// There were two systems here. `court` looked for a pair, published `"mate"` and kept the
+/// cooldown; `hatch` made the child and charged its parents. Both are `ruby/world.rb` now —
+/// which two of them mattered is what W2 is about — and what is left is the part that was never
+/// a rule: a creature's **body**, which wants `Commands`, `Look`, the models, the compiler and
+/// the species' file, and which no script can build.
 ///
-/// What the child *is* — the average of two genomes, mutated — is worked out in Ruby, by calling
-/// three methods on a Rust struct:
+/// It is `sprout_plants` for creatures, and the same sentence divides them: whether a child
+/// arrives is the rules', what a child is made of is the game's.
 ///
-/// ```ruby
-/// on(:mate) do |partner|
-///   child = my_genome.mix(genome_of(partner)).mutate(0.1)
-///   garden.spawn(species: species.to_s, genome: child.to_h, at: [...])
-/// end
-/// ```
-///
-/// so the division is: the rules are Rust, the arithmetic is Ruby, and the arithmetic is done by
-/// calling Rust. Neither side needed a line of glue for it — `Genome` is one struct with two
-/// derives on it (`garden/src/genome.rs`).
-fn court(
-    time: Res<Time>,
-    sky: Res<Sky>,
-    mut world: ResMut<ScriptWorld>,
-    births: Res<Births>,
-    mut test: Option<ResMut<SelfTest>>,
-    mut creatures: Query<(Entity, &Creature, &Hunger, &Collider, &Transform, &mut Breeding)>,
-) {
-    // **the world's clock, not the process's** (G9). `Breeding::ready_at` is a cooldown in the
-    // garden's own time, and the garden's time is what `P` holds still: with the process's clock
-    // a minute spent paused was a minute off every pair's wait, and the first frame after the
-    // pause had every creature in the garden ready to breed at once.
-    let now = world_now(&time, &sky);
-    // the cap is the rule's, and the children already asked for this frame count against it
-    let population = creatures.iter().count() + births.0.len();
-    if population >= POP_MAX {
-        return;
-    }
-    // one pass to look, because the publish and the bookkeeping both want `&mut`
-    let ready: Vec<(Entity, Species, Vec2)> = creatures
-        .iter()
-        .filter(|(_, _, hunger, _, _, breeding)| hunger.0 >= MATE_HUNGER && now >= breeding.ready_at)
-        .map(|(entity, creature, _, _, at, _)| {
-            (entity, creature.species, Vec2::new(at.translation.x, at.translation.z))
-        })
-        .collect();
-
-    let mut spoken: Vec<Entity> = Vec::new();
-    let mut room = POP_MAX - population;
-    for (i, (a, species, here)) in ready.iter().enumerate() {
-        for (b, other_species, there) in ready.iter().skip(i + 1) {
-            if room == 0 {
-                return;
-            }
-            if species != other_species || here.distance(*there) > MATE_REACH {
-                continue;
-            }
-            if spoken.contains(a) || spoken.contains(b) {
-                continue;
-            }
-            // the lower id is told, so that one meeting is one message: both of them computing a
-            // child would make two, of the same two parents, in the same frame
-            let (told, partner) = if a.to_bits() <= b.to_bits() { (*a, *b) } else { (*b, *a) };
-            world.publish(Some(told), "mate", Answer::Entity(partner));
-            spoken.push(*a);
-            spoken.push(*b);
-            room -= 1;
-            if let Some(test) = test.as_mut() {
-                test.courtings += 1;
-                let genome_of = |e: Entity| creatures.get(e).map(|c| c.1.genome).ok();
-                if let (Some(one), Some(two)) = (genome_of(told), genome_of(partner)) {
-                    test.matings.push((told, one, two, now));
-                }
-            }
-            for (who, mate) in [(told, partner), (partner, told)] {
-                if let Ok((.., mut breeding)) = creatures.get_mut(who) {
-                    breeding.ready_at = now + COURT_RETRY;
-                    breeding.partner = Some(mate);
-                }
-            }
-        }
-    }
-}
-
-/// The children a script asked for in this frame's `answer_garden`, made.
-///
-/// This is where the cost of one lands: both parents lose `MATE_COST` from their meter and may
-/// not be told about a partner again for `MATE_COOLDOWN`, so a garden's population is held down
-/// by the same thing that holds an individual down — having to eat. The child is an ordinary
-/// creature with an ordinary script; what is not ordinary about it is that its three numbers were
-/// worked out in Ruby.
-fn hatch(
+/// The two numbers it builds with are the rules' as well, handed over once by `garden.rules`
+/// ([`Births`]): how full a newborn is, and how many creatures the game will make at all.
+fn children_arrive(
     time: Res<Time>,
     sky: Res<Sky>,
     mut commands: Commands,
@@ -2890,17 +3423,17 @@ fn hatch(
     brains: Res<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut test: Option<ResMut<SelfTest>>,
-    mut parents: Query<(&mut Hunger, &mut Breeding)>,
 ) {
-    // the same clock `court` reads the cooldown against (G9)
+    // the garden's own clock, which is the one the rules write their cooldowns in (G9)
     let now = world_now(&time, &sky);
-    for birth in births.0.drain(..) {
+    let hunger = births.hunger;
+    for birth in std::mem::take(&mut births.waiting) {
         let at = Vec2::new(
             birth.at.x.clamp(-HALF_W + 1.0, HALF_W - 1.0),
             birth.at.y.clamp(-HALF_D + 1.0, HALF_D - 1.0),
         );
-        let child = spawn_creature(&mut commands, look.as_deref(), birth.species, at, CHILD_HUNGER, birth.genome);
-        commands.entity(child).insert(Breeding { ready_at: now + MATE_COOLDOWN, partner: None });
+        let child =
+            spawn_creature(&mut commands, look.as_deref(), birth.species, at, hunger, birth.genome, birth.parent);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, child, birth.species);
         info!(
             "a {} was born at {now:.1} s ({}) — {}",
@@ -2908,22 +3441,15 @@ fn hatch(
             child,
             birth.genome.describe()
         );
-
-        // the parents pay for it, now that it is here
-        let mother = birth.parent;
-        let father = mother.and_then(|m| parents.get(m).ok().and_then(|(_, b)| b.partner));
-        for who in [mother, father].into_iter().flatten() {
-            if let Ok((mut hunger, mut breeding)) = parents.get_mut(who) {
-                hunger.0 = (hunger.0 - MATE_COST).max(1.0);
-                breeding.ready_at = now + MATE_COOLDOWN;
-                breeding.partner = None;
-            }
-        }
+        // W2: what it costs its parents is `world.rb`'s, charged on the pass that first sees the
+        // child — there is nothing to do here but let it into the world.
 
         if let Some(test) = test.as_mut() {
             test.births += 1;
             if test.born_at.is_none() {
-                let mating = mother.and_then(|m| test.matings.iter().rev().find(|(e, ..)| *e == m).copied());
+                let mating = birth
+                    .parent
+                    .and_then(|m| test.matings.iter().rev().find(|(e, ..)| *e == m).copied());
                 let (says, ok) = match mating {
                     Some((_, one, two, _)) => judge_child(&birth.genome, &one, &two),
                     None => ("its parents' pairing was not recorded".into(), false),
@@ -2966,29 +3492,6 @@ fn judge_child(child: &Genome, one: &Genome, two: &Genome) -> (String, bool) {
     (format!("{} ({})", said.join("; "), if moved { "mutated off both parents" } else { "identical to a parent" }), ok && moved)
 }
 
-/// An empty meter is the end of it. Despawning takes the entity's `ScriptTask` with it, and
-/// rubevy's `on_remove` hook terminates the task and closes the queues anything of its was parked
-/// on (`docs/host-api.md`, "Events"). Nothing runs a script in G0; the path is here so that G1
-/// does not have to build it.
-fn starve(
-    time: Res<Time>,
-    mut commands: Commands,
-    mut test: Option<ResMut<SelfTest>>,
-    creatures: Query<(Entity, &Creature, &Hunger)>,
-) {
-    let now = time.elapsed_secs();
-    for (entity, creature, hunger) in &creatures {
-        if hunger.0 > 0.0 {
-            continue;
-        }
-        info!("{} {} starved at {now:.1} s (age {:.1} s)", creature.species.name(), entity, creature.age);
-        commands.entity(entity).despawn();
-        if let Some(test) = test.as_mut() && test.starved.is_none() {
-            test.starved = Some((entity, now));
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // The two questions the game answers (G1)
 // ---------------------------------------------------------------------------------------------
@@ -3026,7 +3529,7 @@ fn install_host_api(mut world: ResMut<ScriptWorld>) {
 ///
 /// It runs in `RubevySet::Answer`, so a question asked on this frame is answered on this frame
 /// and the script wakes with it on the next one.
-fn answer_garden(world: &mut World) {
+fn answer_garden(world: &mut bevy::ecs::world::World) {
     let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
     let registry = registry.read();
     // what `garden.spawn` was asked for, filled in below and handed to `Births` at the end: the
@@ -3035,10 +3538,12 @@ fn answer_garden(world: &mut World) {
     let mut newborn: Vec<Birth> = Vec::new();
     // and the first `garden.spawn` this frame that was refused, for the selftest's malformed Hash
     let mut refused: Option<String> = None;
+    // W2: the two parents of each child asked for, for the eighth check (`answer_spawn`)
+    let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
     // who asked, for the HUD's frames-per-decision (G4): a gap in a task's instruction count that
     // begins on this frame is a round trip and not a nap (`watch_minds`)
     let mut askers: Vec<Entity> = Vec::new();
-    world.resource_scope(|world: &mut World, mut scripts: Mut<ScriptWorld>| {
+    world.resource_scope(|world: &mut bevy::ecs::world::World, mut scripts: Mut<ScriptWorld>| {
         let world = &*world;
         for request in scripts.take_requests() {
             let of_kind = request
@@ -3083,11 +3588,7 @@ fn answer_garden(world: &mut World) {
                     }
                 }
                 "garden.count" => {
-                    let count = match of_kind {
-                        Some(rc) => world.iter_entities().filter(|e| rc.contains(*e)).count(),
-                        None => 0,
-                    };
-                    scripts.answer(&request, Answer::Num(count as f64));
+                    scripts.answer(&request, Answer::Num(count_of(world, of_kind) as f64));
                 }
                 // G2. The asker's own genome, as **the Rust value**: `answer_value` hands the
                 // host the `&mut Vm`, and `into_ruby` (written by `#[derive(RubyClass)]`) puts
@@ -3123,28 +3624,7 @@ fn answer_garden(world: &mut World) {
                 // already is. The population cap is checked here because the script answered a
                 // frame after the rule spoke, and a frame is long enough for the garden to fill.
                 "garden.spawn" => {
-                    let population =
-                        world.iter_entities().filter(|e| e.contains::<Creature>()).count() + newborn.len();
-                    let outcome = match request.value(0) {
-                        _ if population >= POP_MAX => Err(format!("the garden is full ({population} creatures)")),
-                        Some(asked) => sabiruby_serde::from_value::<CreatureSpec>(&mut scripts.vm, asked)
-                            .map_err(|e| scripts.vm.describe_error(&e)),
-                        None => Err("spawn wants a Hash: species:, genome:, at:".to_string()),
-                    };
-                    match outcome {
-                        Ok(spec) => {
-                            newborn.push(spec.into_birth(asker));
-                            scripts.answer(&request, Answer::Bool(true));
-                        }
-                        Err(why) => {
-                            // "missing field `sight`" and its like; "the garden is full" is a
-                            // rule, not a shape, and is not what the check is about
-                            if refused.is_none() && why.contains("field") {
-                                refused = Some(why.clone());
-                            }
-                            scripts.answer(&request, Answer::Text(why));
-                        }
-                    }
+                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings)
                 }
                 other => {
                     warn!("garden: nobody answers {other:?}");
@@ -3154,7 +3634,14 @@ fn answer_garden(world: &mut World) {
         }
     });
     if !newborn.is_empty() {
-        world.resource_mut::<Births>().0.extend(newborn);
+        world.resource_mut::<Births>().waiting.extend(newborn);
+    }
+    if !pairings.is_empty()
+        && let Some(sky) = world.get_resource::<Sky>().map(|sky| sky.shift)
+    {
+        let now = world.resource::<Time>().elapsed_secs() + sky;
+        let mut test = world.resource_mut::<SelfTest>();
+        test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
     }
     let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     for asker in askers {
@@ -3169,6 +3656,471 @@ fn answer_garden(world: &mut World) {
         && test.bad_spawn.is_none()
     {
         test.bad_spawn = Some(why);
+    }
+}
+
+/// `garden.count(:Plant)`, for whichever VM asked. Both of them may, and neither needed a line of
+/// per-component code: the kind was resolved through the type registry by the caller.
+fn count_of(
+    world: &bevy::ecs::world::World,
+    of_kind: Option<&bevy::ecs::reflect::ReflectComponent>,
+) -> usize {
+    match of_kind {
+        Some(rc) => world.iter_entities().filter(|e| rc.contains(*e)).count(),
+        None => 0,
+    }
+}
+
+/// `garden.spawn(species:, genome:, at:)`, for whichever VM asked (W1).
+///
+/// It was written into `answer_garden` and is a function now because the world's VM answers it
+/// too: in W2 the rule that makes a child is `world.rb`'s, and a rule that may not spawn what it
+/// decided on would not be the rule. The generic parameter is the name tag, so the one body serves
+/// `ScriptWorld` and `ScriptWorld<World>` — what it needs of either is the `Vm` (to read the Hash)
+/// and `answer`.
+///
+/// Everything it used to say is still true. The Hash arrives as `Arg::Value`, the Ruby value
+/// itself rather than a copy of it, and one line reads it: `from_value::<CreatureSpec>` walks it
+/// and fills a Rust struct, nested `Genome` and `Species` and all. The error is worth as much as
+/// the reading — a Hash with a gene missing raises a `TypeError` naming it, and the script hears
+/// that sentence as the answer to its question. The population cap is checked here because the
+/// script answers a frame after the rule spoke, and a frame is long enough for the garden to fill
+/// — it is the rules' own cap, handed over by `garden.rules(pop_max:)` (W2).
+///
+/// **`pairings` is the eighth check's, and it is taken here because there is nowhere else left**
+/// (W2). It used to be written by `court`, which knew both parents because it had just put them
+/// together; the rule is Ruby's now and says nothing to the game about it. What a spawn request
+/// still carries is the creature that asked — and that creature is carrying who it was told
+/// about, in the `Breeding` the rules wrote (`partner`). So the pair is still knowable at the
+/// moment a child is asked for, out of two components, without the rules having to report
+/// anything: the check watches the world rather than being told about it, exactly as
+/// `note_the_rules` came to watch for a meal.
+fn answer_spawn<M: 'static>(
+    world: &bevy::ecs::world::World,
+    scripts: &mut ScriptWorld<M>,
+    request: &rubevy::Request,
+    newborn: &mut Vec<Birth>,
+    refused: &mut Option<String>,
+    pairings: &mut Vec<(Entity, Genome, Genome)>,
+) {
+    let population =
+        world.iter_entities().filter(|e| e.contains::<Creature>()).count() + newborn.len();
+    let cap = world.get_resource::<Births>().map(|b| b.cap).unwrap_or(POP_MAX);
+    let outcome = match request.value(0) {
+        _ if population >= cap => Err(format!("the garden is full ({population} creatures)")),
+        Some(asked) => sabiruby_serde::from_value::<CreatureSpec>(&mut scripts.vm, asked)
+            .map_err(|e| scripts.vm.describe_error(&e)),
+        None => Err("spawn wants a Hash: species:, genome:, at:".to_string()),
+    };
+    match outcome {
+        Ok(spec) => {
+            if world.get_resource::<SelfTest>().is_some()
+                && let Some(asker) = request.entity
+                && let Some(one) = world.get::<Creature>(asker).map(|c| c.genome)
+                && let Some(other) = world.get::<Breeding>(asker).map(|b| b.partner)
+                && let Some(two) = world.get::<Creature>(other).map(|c| c.genome)
+            {
+                pairings.push((asker, one, two));
+            }
+            newborn.push(spec.into_birth(request.entity));
+            scripts.answer(request, Answer::Bool(true));
+        }
+        Err(why) => {
+            // "missing field `sight`" and its like; "the garden is full" is a rule, not a shape,
+            // and is not what the ninth check is about
+            if refused.is_none() && why.contains("field") {
+                *refused = Some(why.clone());
+            }
+            scripts.answer(request, Answer::Text(why));
+        }
+    }
+}
+
+/// What `world.rb` hands the game once, at the start: **the numbers a rule keeps but the game
+/// has to build or draw with**. There are three of them, and the test for whether one belongs
+/// here is whether the thing that needs it is Rust: the sun is drawn here, and a creature's body
+/// is made here.
+///
+/// Every field is an `Option` and `#[serde(default)]`, so a `world.rb` that says nothing about
+/// the sun, or about children, is not an error — it leaves the game on its own numbers
+/// ([`DAY_LENGTH`], [`CHILD_HUNGER`], [`POP_MAX`]), which is also what a `world.rb` that will not
+/// compile leaves it on.
+#[derive(Deserialize, Debug, Default)]
+struct RuleBook {
+    #[serde(default)]
+    day_length: Option<f32>,
+    #[serde(default)]
+    child_hunger: Option<f32>,
+    #[serde(default)]
+    pop_max: Option<f32>,
+}
+
+/// **The question the world's script asks that costs no frame at all** (W1): `garden.within`.
+///
+/// A rule that looks at every creature every frame cannot afford a round trip per creature, and it
+/// cannot do the walking itself either — 24 creatures against 90 plants is 2,160 distance tests,
+/// and in Ruby each candidate would be a component read on top. `ScriptWorld::answer_in_tick`
+/// registers a closure the tick calls between two runs of the VM, so the rows are there in the
+/// line that asked for them (rubevy `docs/host-api.md`, "Answering inside the tick").
+///
+/// **There is no per-component code here either.** The kind arrives as a string and is resolved
+/// through the type registry to a `ReflectComponent`, exactly as `garden.nearest` resolves it and
+/// as rubevy resolves `e[:Hunger]` — so `garden.within(c, 3.0, :Rock)` works, and so would a kind
+/// nothing has registered yet.
+///
+/// What it answers is an `Answer::Rows`: one row per thing, `[the entity's bits, how far away]`,
+/// **nearest first**. An entity inside a table of numbers is a number, which is what a table of
+/// them wants; `world.rb` turns a row back into something it can write to through the list it
+/// already took with `Rubevy.find` that frame.
+///
+/// The closure is handed `&World` and cannot change anything, which is the compiler saying what
+/// this is for: the world it sees is the world as it stands in `RubevySet::<World>::tick()` —
+/// after the Rust rules, which are ordered before it, and before anything the scripts write.
+fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>, dice: Res<Dice>) {
+    // **The world's share of the frame, measured** (W1, `docs/worklog/2026-09-17-garden-world.md`).
+    //
+    // The budgets are per VM and nothing caps them together: with two VMs at rubevy's defaults a
+    // frame's worst case is 16 ms, which is the whole of one at 60 Hz. So the second VM gets a
+    // number of its own, and the number is a measurement rather than a feeling.
+    //
+    // **What one pass of `each_frame` costs was measured at the garden's own caps** (W3). The
+    // rules cap themselves: `world.rb` holds the grass at 90 blades (`plant_cap`) and [`POP_MAX`]
+    // holds the creatures at 24, so there is a worst case and it can be sat in. A build rigged to
+    // start with more grass than the rules allow and a full population was run for a minute three
+    // times, and the 392 frames in which the field stood at 90 blades with 24 creatures on it say:
+    //
+    //     instructions   median 24,670   99th 25,782   worst 25,837
+    //     the tick       median 2.65 ms  99th 4.60 ms  worst 4.86 ms
+    //
+    // `45_000` is **1.74 times the worst of those**: the rules can be rewritten into half as much
+    // work again before the budget is anything a player meets, and a rule that has run away — a
+    // loop with no `sleep` in it — is stopped inside one frame either way. It is a little under a
+    // quarter of the creatures' VM's 200,000, which says in one number which of the two VMs is the
+    // guest here.
+    //
+    // W1 chose the same number a different way, and W3 had to take the reasoning back: it fitted
+    // `262 + 159 × plants + 280 × creatures` over a run (residual 0.9%) and read the law off at a
+    // garden of *twice* the caps. W2's rules are not that law any more — fitted the same way they
+    // give a residual of 5% and, read off at the caps, they are 22% under what the caps actually
+    // measure. Pairing is a search over the creatures that are full enough rather than a pass over
+    // all of them, and a cost that is not linear in the population cannot be extrapolated past
+    // one. **The number did not move; what it rests on did** — from a law read off the end of its
+    // range to a measurement taken where the rules stop.
+    //
+    // **`frame_time` is left at rubevy's 8 ms.** At the caps the rules take 2.65 ms at the median
+    // and 4.60 ms at the 99th frame in a hundred on the machine this was measured on, so 8 ms is a
+    // guard with room rather than a reservation. The two guards no longer name the same limit as
+    // they did in W1 — at the rate measured here (about 9,300 instructions per millisecond) 45,000
+    // is roughly 4.8 ms — which means **the instruction count is what bites first**, and that is
+    // the right way round: instructions are a fact about the rules and are the same number in a
+    // browser several times slower (`docs/web.md`), while milliseconds are a fact about whichever
+    // machine is running them.
+    scripts.budget = 45_000;
+
+    // **The world's dice, so that two runs are not the same run** (W2).
+    //
+    // sabiruby's generator starts from a constant and the VM has nothing of its own to mix in —
+    // `srand` with no argument would take `gc_clock`, which rubevy does not set — so every roll
+    // `world.rb` makes was the same roll on every run of W1: the grass came up at the same
+    // moments in every ninety seconds anybody ever watched. **Where a roll has to differ between
+    // runs it is the game's `Dice` that differs**, because that one is seeded from the clock
+    // (`platform::clock_seed`, `Dice` in `main`), so the seed handed over here is one of its
+    // numbers and the world's luck is the garden's luck.
+    //
+    // It is rolled from a **copy** of `Dice` rather than from the resource itself: taking
+    // `ResMut` here would spend one of the game's numbers and move every roll `spawn_world`
+    // makes along by one, which would be this line quietly rearranging the garden it is only
+    // supposed to be reading a seed out of. The copy is the same generator from the same state,
+    // so what comes out is a number nobody else will get, and nobody else's number moves.
+    //
+    // A million is sabibots' scale for the same handover (`sabibots/src/main.rs`, `"seed"`): a
+    // whole number a Float carries exactly, and twenty bits of it, which is a different sequence
+    // every run and not a different *quality* of sequence.
+    let seed = (Dice(dice.0).roll() * 1_000_000.0).floor() as f64;
+    scripts.answer_in_tick("garden.seed", Box::new(move |_, _| Answer::Num(seed)));
+
+    // **The garden's own clock** (W2), which is not the process's: `Sky::shift` carries a loaded
+    // world's age and `hold_the_clock` freezes it while the game is paused (G9). `court` and
+    // `hatch` read it through `world_now` for exactly the reason `world.rb` reads it now — a
+    // cooldown is a time in the garden's life, and a minute spent paused is not a minute of it.
+    scripts.answer_in_tick(
+        "garden.now",
+        Box::new(|world: &bevy::ecs::world::World, _: &rubevy::Request| {
+            match (world.get_resource::<Time>(), world.get_resource::<Sky>()) {
+                (Some(time), Some(sky)) => Answer::Num(world_now(time, sky) as f64),
+                _ => Answer::Nil,
+            }
+        }),
+    );
+
+    scripts.answer_in_tick(
+        "garden.within",
+        Box::new(|world: &bevy::ecs::world::World, request: &rubevy::Request| {
+            let Some(me) = request.entity_arg(0) else { return Answer::Nil };
+            let reach = request.num_or(1, 0.0) as f32;
+            let Some(at) = world.get::<Transform>(me) else { return Answer::Nil };
+            let here = Vec2::new(at.translation.x, at.translation.z);
+            let Some(registry) = world.get_resource::<AppTypeRegistry>() else { return Answer::Nil };
+            let registry = registry.read();
+            let of_kind = request
+                .text(2)
+                .and_then(|name| {
+                    registry.get_with_short_type_path(name).or_else(|| registry.get_with_type_path(name))
+                })
+                .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>());
+            let Some(rc) = of_kind else { return Answer::Rows(Vec::new()) };
+            let mut found: Vec<Vec<f64>> = Vec::new();
+            for other in world.iter_entities() {
+                let entity = other.id();
+                if entity == me || !rc.contains(other) {
+                    continue;
+                }
+                let Some(there) = other.get::<Transform>() else { continue };
+                let span = here.distance(Vec2::new(there.translation.x, there.translation.z));
+                if span > reach {
+                    continue;
+                }
+                found.push(vec![entity.to_bits() as f64, span as f64]);
+            }
+            // nearest first, so that a rule may take the first row it can use and stop
+            found.sort_by(|a, b| a[1].total_cmp(&b[1]));
+            Answer::Rows(found)
+        }),
+    );
+}
+
+/// **The questions the world's script asks that a system answers** (W1).
+///
+/// It is `answer_garden`'s twin, in the other VM's `RubevySet::answer()`, and the reason there are
+/// two of them rather than one generic one is the reason the second VM exists: the two VMs are
+/// asked different things by different people, and which VM asked is which resource the system
+/// reads. What they do share — `garden.spawn`, `garden.count` — is shared as a function.
+///
+/// `"frame"` is the smallest of them and the one the whole design rests on. It answers the frame
+/// number, and `run_world` waits on it once a pass: a question a *system* answers costs exactly one
+/// frame (rubevy `docs/host-api.md`, "Where the game's systems go in the frame"), so waiting on it
+/// once is what makes one pass of `each_frame` one frame — no `sleep` to keep in step and nothing
+/// to drift.
+fn answer_world(world: &mut bevy::ecs::world::World) {
+    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
+    let registry = registry.read();
+    let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
+    let mut newborn: Vec<Birth> = Vec::new();
+    let mut refused: Option<String> = None;
+    let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
+    let mut seeds = 0u32;
+    let mut day_length: Option<f32> = None;
+    let mut child_hunger: Option<f32> = None;
+    let mut pop_max: Option<usize> = None;
+    // W2: what the rules said this frame, carried out of the world's VM and into the creatures'
+    // below. It is collected rather than published on the spot because publishing needs the
+    // *other* `ScriptWorld`, and this scope is holding the world's.
+    let mut said: Vec<(Option<Entity>, String, Answer)> = Vec::new();
+    world.resource_scope(|world: &mut bevy::ecs::world::World, mut scripts: Mut<ScriptWorld<World>>| {
+        let world = &*world;
+        for request in scripts.take_requests() {
+            let of_kind = request
+                .text(0)
+                .and_then(|name| {
+                    registry.get_with_short_type_path(name).or_else(|| registry.get_with_type_path(name))
+                })
+                .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>());
+            match request.kind.as_str() {
+                "frame" => scripts.answer(&request, Answer::Num(frame as f64)),
+                // the numbers a rule keeps but the game has to build or draw with. Read with
+                // serde, like the spawn Hash and for the same reason: the message a bad one gets
+                // back is worth as much as the reading
+                "garden.rules" => {
+                    let asked = request
+                        .value(0)
+                        .ok_or_else(|| {
+                            "rules wants a Hash: day_length:, child_hunger:, pop_max:".to_string()
+                        })
+                        .and_then(|v| {
+                            sabiruby_serde::from_value::<RuleBook>(&mut scripts.vm, v)
+                                .map_err(|e| scripts.vm.describe_error(&e))
+                        });
+                    match asked {
+                        Ok(book) => {
+                            // a rule that asks for nonsense is refused rather than obeyed: a day
+                            // of no seconds is a division by it in `day_night`, a newborn with no
+                            // meter is one the rules would starve on the frame it arrived, and a
+                            // garden that holds nobody is one where nothing can be born at all
+                            let mut wrong = None;
+                            match book.day_length {
+                                Some(n) if n <= 0.0 => {
+                                    wrong = Some(format!("a day of {n} seconds is not a day"))
+                                }
+                                Some(n) => day_length = Some(n),
+                                None => {}
+                            }
+                            match book.child_hunger {
+                                Some(n) if n <= 0.0 => {
+                                    wrong = Some(format!("a newborn with a meter of {n} is stillborn"))
+                                }
+                                Some(n) => child_hunger = Some(n),
+                                None => {}
+                            }
+                            match book.pop_max {
+                                Some(n) if n < 1.0 => {
+                                    wrong = Some(format!("a garden that holds {n} creatures holds none"))
+                                }
+                                Some(n) => pop_max = Some(n as usize),
+                                None => {}
+                            }
+                            match wrong {
+                                Some(why) => scripts.answer(&request, Answer::Text(why)),
+                                None => scripts.answer(&request, Answer::Bool(true)),
+                            }
+                        }
+                        Err(why) => scripts.answer(&request, Answer::Text(why)),
+                    }
+                }
+                // a seed. The script does not wait for this one (`world_prelude.rb`, `sprout`), so
+                // what the answer says reaches nobody; it is answered all the same, because a
+                // request that is never answered is a queue the collector may not have.
+                "garden.sprout" => {
+                    seeds += 1;
+                    scripts.answer(&request, Answer::Bool(true));
+                }
+                "garden.count" => {
+                    scripts.answer(&request, Answer::Num(count_of(world, of_kind) as f64));
+                }
+                "garden.spawn" => {
+                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings)
+                }
+                // **What the world says to the creatures** (W2): `tell(who, name, payload)`.
+                //
+                // A script cannot publish — publishing is delivering a message into *another*
+                // VM's queues, which is a thing only the host holds both ends of — so the rule
+                // asks and the game carries. `who` is `:all` or one creature; `name` is what its
+                // `on(…)` is written against; `payload` is the one value the handler is given.
+                //
+                // Like `garden.sprout`, it is **a command and not a question**: `world.rb` does
+                // not `pop`, so a rule that speaks does not park its pass for a frame. It is
+                // answered all the same, because a request nobody answers is a queue the
+                // collector may not have.
+                "garden.tell" => {
+                    let name = request.text(1).unwrap_or_default().to_string();
+                    // nil, a number, a string, or a creature — which is every shape a handler's
+                    // one parameter takes (`prelude.rb`, `run_handler`)
+                    let payload = match request.args.get(2) {
+                        Some(Arg::Num(n)) => Answer::Num(*n),
+                        Some(Arg::Text(t)) => Answer::Text(t.clone()),
+                        Some(Arg::Entity(e)) => Answer::Entity(*e),
+                        _ => Answer::Nil,
+                    };
+                    let to = match (request.entity_arg(0), request.text(0)) {
+                        (Some(entity), _) => Ok(Some(entity)),
+                        (None, Some("all")) => Ok(None),
+                        _ => Err("tell wants :all or a creature, a name, and a payload"),
+                    };
+                    match to {
+                        Ok(_) if name.is_empty() => {
+                            scripts.answer(&request, Answer::Text("tell wants a name".into()))
+                        }
+                        Ok(to) => {
+                            said.push((to, name, payload));
+                            scripts.answer(&request, Answer::Bool(true));
+                        }
+                        Err(why) => scripts.answer(&request, Answer::Text(why.into())),
+                    }
+                }
+                other => {
+                    warn!("garden: nobody answers {other:?} for the world");
+                    scripts.answer(&request, Answer::Nil);
+                }
+            }
+        }
+    });
+    if !newborn.is_empty() {
+        world.resource_mut::<Births>().waiting.extend(newborn);
+    }
+    if seeds > 0 {
+        world.resource_mut::<Sprouts>().0 += seeds;
+    }
+    // W2. **The one place the two VMs touch.** What the rules said goes into the creatures'
+    // queues here — the same `publish` `startle` and `day_night` use, from the same side of the
+    // wall — and this set is ordered before the creatures' tick, so a creature hears about its
+    // meal in the frame the meal began.
+    if !said.is_empty() {
+        // the check counts what the rules said, which is the only thing this source still knows
+        // about the *names* of the messages: a `"mate"` is a pairing, and a `"season"` is what
+        // the thirteenth check waits for before it starts reading memories
+        if let Some(mut test) = world.get_resource_mut::<SelfTest>() {
+            test.courtings += said.iter().filter(|(_, name, _)| name == "mate").count() as u32;
+            test.season_told = test.season_told || said.iter().any(|(_, name, _)| name == "season");
+        }
+        let mut creatures = world.resource_mut::<ScriptWorld>();
+        for (to, name, payload) in said {
+            creatures.publish(to, &name, payload);
+        }
+    }
+    if !pairings.is_empty()
+        && let Some(sky) = world.get_resource::<Sky>().map(|sky| sky.shift)
+    {
+        let now = world.resource::<Time>().elapsed_secs() + sky;
+        let mut test = world.resource_mut::<SelfTest>();
+        test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
+    }
+    if let Some(seconds) = day_length {
+        let mut sky = world.resource_mut::<Sky>();
+        if sky.day_length != seconds {
+            info!("the world says a day is {seconds} seconds long");
+            sky.day_length = seconds;
+        }
+    }
+    if child_hunger.is_some() || pop_max.is_some() {
+        let mut births = world.resource_mut::<Births>();
+        if let Some(hunger) = child_hunger {
+            births.hunger = hunger;
+        }
+        if let Some(cap) = pop_max {
+            births.cap = cap;
+        }
+    }
+    if let Some(why) = refused
+        && let Some(mut test) = world.get_resource_mut::<SelfTest>()
+        && test.bad_spawn.is_none()
+    {
+        test.bad_spawn = Some(why);
+    }
+}
+
+/// What one pass of `world.rb` cost, measured round the set that runs it (W1).
+///
+/// The two halves are `VmClock`'s (`rubevy-arena`), which is the creatures' VM's and takes
+/// `ScriptWorld` by name; this one is the world's. Keeping them apart is the point of the
+/// measurement: the budgets are per VM and nothing caps them together, so what a frame can cost is
+/// the sum, and the only way to choose the second VM's share is to know what it spends.
+fn world_clock_start(mut meter: ResMut<WorldMeter>) {
+    meter.started = Some(bevy::platform::time::Instant::now());
+}
+
+fn world_clock_end(
+    mut meter: ResMut<WorldMeter>,
+    scripts: Res<ScriptWorld<World>>,
+    task: Query<&ScriptTask<World>>,
+) {
+    if let Some(started) = meter.started.take() {
+        let spent = started.elapsed().as_secs_f32() * 1000.0;
+        meter.spent_ms = spent;
+        // a fifth of the new reading, as the other clock smooths its own
+        meter.mean_ms = meter.mean_ms * 0.8 + spent * 0.2;
+        meter.most_ms = meter.most_ms.max(spent);
+        meter.times.push(spent);
+    }
+    let Ok(task) = task.single() else { return };
+    let ran = scripts.stats(task).instructions;
+    // `saturating_sub` is what a **restarted** script needs: the twelfth check swaps `world.rb`
+    // while the world runs, and the new task's count starts again at zero. That frame is not a
+    // pass and is not counted; the frames after it are.
+    let pass = ran.saturating_sub(meter.last_instructions);
+    meter.last_instructions = ran;
+    if pass > 0 {
+        meter.most = meter.most.max(pass);
+        meter.last_pass = pass;
+        meter.passes.push(pass);
     }
 }
 
@@ -3585,10 +4537,18 @@ fn load_world(
             Vec2::from(creature.at),
             creature.hunger,
             creature.genome,
+            // nothing read back from a file is a newborn: `parent` is what the rules look at to
+            // find one, and a creature that was saved has been in the world already
+            None,
         );
         // the age it had, not a newborn's: `spawn_creature` makes an ordinary creature and this is
         // the one field of it that a file can be older than
-        commands.entity(entity).insert(Creature { species: creature.species, age: creature.age, genome: creature.genome });
+        commands.entity(entity).insert(Creature {
+            species: creature.species,
+            age: creature.age,
+            genome: creature.genome,
+            parent: None,
+        });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, creature.species);
         if !creature.memory.is_null() {
             pending.push((entity, creature.memory.clone()));
@@ -4053,8 +5013,7 @@ fn stop_when_over(
     reload: Option<Res<ReloadAt>>,
     restoring: Option<Res<Restoring>>,
     file: Res<SaveFile>,
-    clock: Res<window::VmClock>,
-    world: Res<ScriptWorld>,
+    vms: VmReport,
     mut save: ResMut<SaveNow>,
     creatures: Query<(&Creature, &Hunger, &Velocity, &Transform, Option<&Mind>)>,
     panelled: Query<(Entity, &Creature, &Hunger, &Mind)>,
@@ -4109,9 +5068,9 @@ fn stop_when_over(
         plants.iter().count(),
         if sky.night { "night" } else { "day" },
         sky.phase,
-        clock.spent_ms,
-        clock.budget_ms,
-        clock.mean_ms,
+        vms.clock.spent_ms,
+        vms.clock.budget_ms,
+        vms.clock.mean_ms,
     );
     for row in window::hud_rows(&panelled) {
         info!(
@@ -4147,12 +5106,35 @@ fn stop_when_over(
             if decisions == 0 { f32::NAN } else { decision_instructions as f32 / decisions as f32 },
             mean(ask_frames, ask_trips),
         );
+        // W1: and the other VM's, which is one task running one pass a frame — so the
+        // instructions it ran between two frames *are* a pass, with no gap to interpret. The two
+        // budgets are not capped together (rubevy `docs/host-api.md`, "Two VMs in one app"), so
+        // what a frame can cost is `VM` above plus `world` here, and these are the numbers the
+        // world's own budget was chosen from.
+        info!(
+            "hud: the world's rules — {} passes of `each_frame`, {} instructions at the median and {} at the most (of {}); the world's tick {:.2} ms at the median, {:.2} at the 99th frame in a hundred, {:.2} at the most / {:.1} ms{}",
+            vms.meter.passes.len(),
+            match vms.meter.median() {
+                Some(n) => n.to_string(),
+                None => "–".into(),
+            },
+            vms.meter.most,
+            vms.world.budget,
+            vms.meter.milliseconds().0,
+            vms.meter.milliseconds().1,
+            vms.meter.most_ms,
+            vms.world.frame_time.map(|d| d.as_secs_f32() * 1000.0).unwrap_or(0.0),
+            match &vms.trouble.0 {
+                Some(why) => format!(" — and there are no rules: {why}"),
+                None => String::new(),
+            },
+        );
         let mut panel = VmInspector::default();
         for (mind, script) in &tasks {
             // the same two figures the window's panel is handed (`window::show_vm`)
             panel.spent = mind.spent;
             panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
-            panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
+            panel.fill(&vms.scripts, script.task(), mind.name.clone(), mind.prelude_lines);
             for line in panel.log_lines() {
                 info!("{line}");
             }
@@ -4264,6 +5246,55 @@ fn stop_when_over(
                 format!("a spawn Hash with a gene missing names the gene ({why})"),
             ),
             None => ok(false, "a spawn Hash with a gene missing names the gene (nothing was refused)".into()),
+        }
+        // --- W1: the rules are Ruby's ---------------------------------------
+        //
+        // Two checks, and between them they say the thing the stage is about: that the rules in
+        // `ruby/world.rb` really are what makes the garden move, and that they are still a script
+        // — a file that can be taken away and given back while the world runs, which no `const`
+        // in this source ever was.
+        ok(
+            test.grew_at.is_some_and(|t| t <= 2.0) && !vms.meter.passes.is_empty(),
+            match test.grew_at {
+                Some(t) => format!(
+                    "the rules in world.rb are running the world (the grass grew at {t:.2} s, over {} passes of `each_frame`)",
+                    vms.meter.passes.len()
+                ),
+                None => format!(
+                    "the rules in world.rb are running the world (nothing ever grew, over {} passes of `each_frame`)",
+                    vms.meter.passes.len()
+                ),
+            },
+        );
+        match test.frozen_at {
+            Some(at) => ok(
+                test.fell_while_frozen == 0 && test.fell_after_thaw,
+                format!(
+                    "the rules can be taken away and given back while the world runs (from {at:.2} s no meter fell for {FREEZE_WINDOW:.1} s; {} did, and afterwards hunger {})",
+                    test.fell_while_frozen,
+                    if test.fell_after_thaw { "came back" } else { "never came back" }
+                ),
+            ),
+            None => ok(
+                false,
+                "the rules can be taken away and given back while the world runs (the world's script never restarted on them)".into(),
+            ),
+        }
+        // --- W2: the world says something and the creatures hear it ----------
+        match &test.season_heard {
+            Some((who, season, at)) => ok(
+                true,
+                format!(
+                    "what the world declares reaches a creature's memory ({who} had \"{season}\" in its @memory at {at:.2} s)"
+                ),
+            ),
+            None => ok(
+                false,
+                format!(
+                    "what the world declares reaches a creature's memory (the rules {} and nobody's @memory had a season in it)",
+                    if test.season_told { "said it" } else { "never said it" }
+                ),
+            ),
         }
         // --- G5: the save's version -----------------------------------------
         match &test.version_refused {
@@ -4379,3 +5410,4 @@ mod tests {
         assert!(up < -0.999, "{up}");
     }
 }
+

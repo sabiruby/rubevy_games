@@ -349,7 +349,12 @@ class Creature
   # called from within a C function boundary". An ordinary call written out in Ruby is a frame
   # in this task, which can wait. So the names have to be in the source, and that is what fixes
   # the number of slots (rubevy_games `docs/worklog/2026-09-16-reflex.md`).
-  ON_SLOTS = 6
+  #
+  # Seven since W2, which is what the beetle has: `night`, `day`, `touched`, `bumped`, `ate`,
+  # `mate` and — now that the world can declare things — `season`. The number is not a budget
+  # anybody measured, it is how many names are written out in `run_handler` below, and it goes up
+  # by one when a creature in this repository needs one more.
+  ON_SLOTS = 7
 
   def self.handlers
     @handlers ||= []
@@ -375,6 +380,7 @@ class Creature
     when 3 then __handler_3(*args)
     when 4 then __handler_4(*args)
     when 5 then __handler_5(*args)
+    when 6 then __handler_6(*args)
     end
   end
 
