@@ -70,11 +70,23 @@ pub fn guide() -> Guide {
          ゲームを止めないまま、その種の全個体が新しい行動アルゴリズムに入れ替わります。\
          ディスク上のファイルは Ctrl+S を押すまで書き換わりません。",
     )
+    // W3. The rules of the world are a Ruby file too, and `F3` opens it. The paragraph is short
+    // on purpose: what it has to say is that `world.rb` exists and that editing it is the same
+    // gesture as editing a creature's file, which the paragraph above has just described.
+    .note(
+        "The rules of the world are Ruby as well. Press F3 and world.rb opens in the editor — how \
+         the grass grows, how fast hunger falls, when two creatures pair off. Rewrite it, press \
+         Ctrl+Enter, and the garden goes on running under the new rules without stopping.",
+        "世界の規則も Ruby です。F3 を押すと world.rb がエディタに開きます。\
+         草の育ち方、腹の減る速さ、つがいになる条件などが書かれています。\
+         書き換えて Ctrl+Enter を押すと、箱庭を止めないまま新しい規則で動き続けます。",
+    )
     .key("H  ?", "this panel", "この説明")
     .key("click", "look at a creature", "生き物を選ぶ")
     .key("Tab", "the next creature", "次の生き物")
     .key("F1", "the editor", "エディタ")
     .key("F2", "look inside the VM", "VM の状態を見る")
+    .key("F3", "the rules of the world (world.rb)", "世界の規則(world.rb)")
     .key("Ctrl+Enter", "apply the edited behaviour", "編集した行動アルゴリズムを適用")
     .key("Ctrl+S", "write the behaviour to its file", "行動アルゴリズムをファイルに保存")
     .key("P", "pause the world", "世界の一時停止")
