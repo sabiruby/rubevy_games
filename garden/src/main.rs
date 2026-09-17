@@ -1333,6 +1333,22 @@ fn main() {
                 .chain()
                 // G3: a garden that is being read back does not age while its minds are starting
                 .after(load_world)
+                // **The rules move the world before the scripts look at it.** Every component a
+                // script reads is written in this chain — `Transform` by `move_creatures`,
+                // `separate` and `grow_plants`, `Hunger` by `get_hungry` and `eat`, `Creature` by
+                // `get_hungry`, `eat` and `court` — and since 2026-09-17 a read is answered
+                // *inside* `RubevySet::Tick`, out of the world as it stands there (rubevy
+                // `docs/host-api.md`, "A read costs no frame"). So where this chain lands is no
+                // longer only a question of when the HUD sees a number: it decides whether
+                // `me[:Hunger]` is this frame's hunger or the last frame's.
+                //
+                // It was unordered against `RubevySet` until now, and measured, bevy's executor
+                // was splitting it around the tick and splitting it *differently every frame* —
+                // `day_night` before, `starve` after on some frames and before on others
+                // (`docs/worklog/2026-09-17-sync-reads.md`, §1). A script could therefore read
+                // this frame's world or the last one's depending on the frame, which is not a
+                // thing a garden should be deciding by luck.
+                .before(RubevySet::Tick)
                 .run_if(is_still),
         )
         // G3: `--load` before the first frame, F9 at any time. It is before the scripts are dealt
@@ -3888,6 +3904,23 @@ fn watch_turning(
         let b = now_going.0.normalize_or_zero();
         if b == Vec2::ZERO || a.dot(b) < 0.7 {
             turned += 1;
+        } else {
+            // **A miss says which one, and what it was doing.** A line reading `FAIL … (24/25)`
+            // names no beetle, and this check has been flaky twice now for reasons that were
+            // only findable from the two headings: G4's was a `@course` written by an `act` that
+            // never went out, and 2026-09-17's is a *second* `"touched"` landing inside the half
+            // second this one is being measured over, so that the beetle is fleeing at full
+            // speed from a heading newer than `was` (`docs/worklog/2026-09-17-sync-reads.md`).
+            // The length of `is` is half the evidence: `DASH` is a handler, `CRUISE` is the
+            // behaviour having taken the wheel back.
+            info!(
+                "selftest: miss  {beetle} touched at {at:.2}, looked at {now:.2}: dot {:.3}, was {:?} ({:.1}), is {:?} ({:.1})",
+                a.dot(b),
+                was,
+                was.length(),
+                now_going.0,
+                now_going.0.length()
+            );
         }
     }
     test.touched = still_waiting;
