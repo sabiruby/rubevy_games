@@ -2628,6 +2628,25 @@ fn ground_axes(yaw: f32) -> (Vec2, Vec2) {
 /// not look like a world — and, since G6, one seen from one fixed *place* does not either: the
 /// field is forty by thirty and a beetle in a corner was something you could turn towards but
 /// never go to.
+///
+/// **What the panels keep** (2026-09-18). The author scrolled the editor's listing and the garden
+/// zoomed out under it: the wheel was the one gesture that was never asked whether egui wanted it.
+/// The drag was (G4) and the keyboard was, so the hole was in one loop and not in the idea — a
+/// wheel message is read here whatever the pointer is over, and egui reads the same message for
+/// its `ScrollArea`, so both happened at once.
+///
+/// The question asked is `wants_pointer_input() || is_pointer_over_area()`, which is wider than
+/// the `wants_pointer_input()` the drag used alone. egui's own `wants_pointer_input` is
+/// `is_using_pointer() || (is_pointer_over_area() && no button is down)` — so a pointer resting on
+/// a panel with a button held is *not* wanted by egui, and a wheel turned there would have come
+/// back to the camera. Over an area is over an area, whatever the buttons are doing.
+///
+/// Widening it would have cost the drags something, though: a turn that begins on the grass and
+/// sweeps across the editor would stop dead half way. So a drag is decided **when the button goes
+/// down** ([`orbit_camera`]'s `grabbed`): one that began on the garden stays the camera's wherever
+/// the pointer goes, and one that began on a panel never becomes the camera's however far it is
+/// dragged out. That is what the old code did by accident, through the `any_down` in egui's own
+/// definition, and it is said here on purpose.
 #[allow(clippy::too_many_arguments)]
 fn orbit_camera(
     time: Res<Time>,
@@ -2640,14 +2659,25 @@ fn orbit_camera(
     mut cameras: Query<&mut Transform, With<Camera3d>>,
     watch: Option<Res<CameraLog>>,
     mut said_at: Local<f32>,
+    // whether the drag under way is the camera's: decided on the press, held until the buttons
+    // are all up again
+    mut grabbed: Local<bool>,
 ) {
     let was = *orbit;
     // G4: a drag inside a panel is the panel's, not the camera's; nor is a key typed into the
-    // editor the camera's, or `w` in a creature's brain would slide the garden about
-    let (mine, mine_keys) = match pointer {
-        Some(p) => (!p.wants_pointer_input(), !p.wants_keyboard_input()),
-        None => (true, true),
+    // editor the camera's, or `w` in a creature's brain would slide the garden about. The wheel
+    // joined the first of those in 2026-09-18 (see above).
+    let (egui_pointer, mine_keys) = match pointer {
+        Some(p) => (p.wants_pointer_input() || p.is_pointer_over_area(), !p.wants_keyboard_input()),
+        None => (false, true),
     };
+    let dragging = [MouseButton::Left, MouseButton::Right];
+    if !buttons.any_pressed(dragging) {
+        *grabbed = false;
+    } else if buttons.any_just_pressed(dragging) {
+        *grabbed = !egui_pointer;
+    }
+    let mine = *grabbed;
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     // left drag turns; right drag — or Shift and left, for a trackpad and for a browser that
     // keeps the right button for its own menu — slides
@@ -2668,6 +2698,11 @@ fn orbit_camera(
         }
     }
     for w in wheel.read() {
+        // read either way, so that a wheel turned over a panel is not still sitting in the reader
+        // when the pointer comes back off it
+        if egui_pointer {
+            continue;
+        }
         let notches = notches_of(w.unit, w.y);
         let was_at = orbit.distance;
         orbit.distance = zoom_by(orbit.distance, notches);

@@ -1033,6 +1033,71 @@ pub struct WindowTest {
     hunger: Vec<(Entity, f32)>,
     /// where the sun stood
     phase: f32,
+    /// how far back the camera stood before a wheel message was written (2026-09-18)
+    distance: f32,
+}
+
+/// **A pointer the checks can put where they like, and a wheel they can turn** (2026-09-18).
+///
+/// `window_selftest` was already at fourteen system parameters and Bevy's limit is sixteen, so
+/// the five the wheel check wants travel as one, the way [`crate::VmReport`] does for the two VMs.
+///
+/// The pointer is moved by writing the `WindowEvent::CursorMoved` that winit would have written:
+/// bevy_egui reads that message in `PreUpdate` and it is the only thing that tells egui where the
+/// pointer is (`bevy_egui::input::write_pointer_moved_and_button_messages_system`). Writing it is
+/// the same kind of forgery as `keys.press(KeyCode::F2)` above — the input the operating system
+/// would have delivered, delivered by the check instead — and it is the only one available: there
+/// is no way to ask egui "pretend the pointer is here", and warping the real cursor needs a
+/// desktop that will do it.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct FakePointer<'w, 's> {
+    windows: Query<'w, 's, (Entity, &'static Window)>,
+    orbit: Res<'w, crate::Orbit>,
+    wheel: MessageWriter<'w, bevy::input::mouse::MouseWheel>,
+    events: MessageWriter<'w, bevy::window::WindowEvent>,
+    egui: Option<Res<'w, bevy_egui::input::EguiWantsInput>>,
+}
+
+impl FakePointer<'_, '_> {
+    /// Whether egui is holding the pointer, as [`crate::orbit_camera`] asks it.
+    fn egui_has_it(&self) -> bool {
+        self.egui.as_ref().is_some_and(|e| e.wants_pointer_input() || e.is_pointer_over_area())
+    }
+
+    /// The middle of the editor panel, where it stands before anybody drags it
+    /// (`rubevy_arena::editor`'s own figures, so the check is not guessing the rectangle).
+    fn over_the_editor(&self) -> Option<Vec2> {
+        let (_, window) = self.windows.iter().next()?;
+        use rubevy_arena::editor::{HEIGHT, MARGIN, WIDTH};
+        Some(Vec2::new(window.width() - MARGIN - WIDTH * 0.5, MARGIN + HEIGHT * 0.5))
+    }
+
+    /// Which window the forged input is about: the primary one, which is the only one these
+    /// games open.
+    fn the_window(&self) -> Option<Entity> {
+        self.windows.iter().next().map(|(entity, _)| entity)
+    }
+
+    fn point_at(&mut self, at: Vec2) {
+        let Some(window) = self.the_window() else { return };
+        self.events.write(bevy::window::WindowEvent::CursorMoved(bevy::window::CursorMoved {
+            window,
+            position: at,
+            delta: None,
+        }));
+    }
+
+    /// One notch of a PC mouse wheel, towards the garden.
+    fn turn_the_wheel(&mut self) {
+        let Some(window) = self.the_window() else { return };
+        self.wheel.write(bevy::input::mouse::MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+    }
 }
 
 impl WindowTest {
@@ -1060,6 +1125,8 @@ pub fn window_selftest(
     // left in its meter
     bodies: Query<(Entity, &Transform, &Hunger), With<Creature>>,
     tasks: Query<&ScriptTask>,
+    // 2026-09-18: the pointer and the wheel, for the last two checks
+    mut pointing: FakePointer,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -1311,6 +1378,59 @@ pub fn window_selftest(
             ok(sky.day_length == 60.0, "Revert puts the file's rules back");
             ok(editor.text == test.world_original, "Revert shows world.rb again");
             ok(brains.world().is_none(), "and nothing is running a text of its own");
+            // --- and the wheel, which is the other thing a panel takes (2026-09-18) ---
+            //
+            // Last rather than first because it moves the pointer, and every check above is
+            // driven by keys and by `Editor::action` and would rather the pointer stayed where
+            // the player left it.
+            let at = pointing.over_the_editor().unwrap_or_default();
+            pointing.point_at(at);
+            test.step = 14;
+            test.at = now + 0.2;
+        }
+        14 => {
+            test.distance = pointing.orbit.distance;
+            pointing.turn_the_wheel();
+            test.step = 15;
+            test.at = now + 0.2;
+        }
+        15 => {
+            // the two halves are in one line on purpose: "the camera did not move" is only worth
+            // anything if the pointer really was over the panel, and a run where egui had let go
+            // of it would otherwise pass by doing nothing
+            let held = pointing.egui_has_it();
+            let moved = pointing.orbit.distance != test.distance;
+            ok(
+                held && !moved,
+                &format!(
+                    "the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                    test.distance, pointing.orbit.distance
+                ),
+            );
+            // the control: the same wheel, at the same place, with nothing drawn there. Only the
+            // editor has to go — the HUD is at the top left and the VM panel at the bottom left,
+            // and neither reaches the middle of the editor's rectangle.
+            editor.open = false;
+            test.step = 16;
+            test.at = now + 0.2;
+        }
+        16 => {
+            test.distance = pointing.orbit.distance;
+            pointing.turn_the_wheel();
+            test.step = 17;
+            test.at = now + 0.2;
+        }
+        17 => {
+            let held = pointing.egui_has_it();
+            let moved = pointing.orbit.distance != test.distance;
+            ok(
+                !held && moved,
+                &format!(
+                    "and with the panel closed the same wheel in the same place zooms (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                    test.distance, pointing.orbit.distance
+                ),
+            );
+            editor.open = true;
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
             // garden — and `AppExit` there does not end a run, it stops the canvas for good
@@ -1320,7 +1440,7 @@ pub fn window_selftest(
             } else {
                 info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
             }
-            test.step = 14;
+            test.step = 18;
         }
         _ => {}
     }
