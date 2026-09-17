@@ -537,9 +537,10 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
 
 * **Why the behaviour is waiting**, in a sentence: `waiting for the game to answer incoming`,
   `sleeping — it asked for time, not for an answer`, `waiting for an event — an on(:…) block,
-  parked on its queue`. (There was a fifth, `waiting for a component read — [:Hunger]`, until
-  2026-09-17: a read is answered inside the tick that asks it now, so the panel — which looks from
-  outside the tick — never finds a task standing on one.) How the panel knows is a table in
+  parked on its queue`. There is a fifth about component reads, which no robot here makes; since
+  2026-09-17 it says `waiting for a component read the tick ran out of budget before answering`,
+  because a read is answered inside the tick that asks it and being found on one means the tick
+  ran out of frame first. How the panel knows is a table in
   `docs/garden.md` (*The VM panel (F2), and what it is waiting on*): it reads the frames and
   nothing else — a parked task carries a `Task::Queue#pop` frame and the frame behind it says
   which queue, while `sleep` is a native and pushes no frame at all. The one guess is the last of

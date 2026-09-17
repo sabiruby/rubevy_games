@@ -85,20 +85,16 @@ pub struct RegRow {
 ///   `Rubevy::Subscription` is an `on(:…)` handler's ([`Waiting::Event`]), `Rubevy::Proxy` or any
 ///   other method is a `Rubevy.ask` the game owes an answer to ([`Waiting::Ask`]).
 ///
-///   There used to be a sixth reason here, and it was the commonest one in the Garden: a
-///   component read, `me[:Hunger]`, whose `pop` sat under `Rubevy::Entity#get`. Since 2026-09-17
-///   rubevy answers a read **inside the tick that asked it** — the tick runs the ready tasks,
-///   answers the reads they parked on, and runs them again (rubevy `docs/host-api.md`, "A read
-///   costs no frame") — so by the time this panel looks at the VM, no task is standing there.
-///   The read is still a `pop` while it lasts; it just never lasts as long as a frame.
-///
-///   One case is left where it could last that long, and the panel does not cover it: a tick
-///   that runs out of its budget of instructions or of its `frame_time` stops with the reads of
-///   that round unanswered, and rubevy answers them at the top of the next tick. A task caught
-///   there reads as [`Waiting::Ask`] on the method behind the `pop` (`get`), which is wrong in
-///   that it names the *game* as the one who owes the answer. Neither game has come near its
-///   budget — the Garden's ticks measure under 1 ms of the 8 ms it is given — so this has not
-///   been seen; it is written down because "unreachable" would be too strong a word for it.
+///   `Rubevy::Entity` is a component read, and finding one is now news ([`Waiting::Read`]). Until
+///   2026-09-17 it was the commonest reason in the Garden — every `me[:Hunger]` parked here for a
+///   frame. Now rubevy answers a read **inside the tick that asked it**: the tick runs the ready
+///   tasks, answers the reads they parked on, and runs them again (rubevy `docs/host-api.md`, "A
+///   read costs no frame"), so a read never outlives the tick it was made in and this panel —
+///   which looks from outside the tick — should never find one. The exception is the whole of
+///   what it means now: a tick that spends its instruction budget or its `frame_time` stops with
+///   that round's reads unanswered, and the next tick answers them before it runs anything else.
+///   So a task standing here is a task whose VM ran out of frame, which is worth a sentence of
+///   its own rather than being filed under "waiting for the game".
 /// * **It is not.** `sleep` is a native and pushes no frame, so a sleeping task's innermost
 ///   frame is the line that called it ([`Waiting::Sleep`]).
 ///
@@ -118,6 +114,14 @@ pub enum Waiting {
     /// Parked on a `Rubevy.ask` queue: the game has been asked something and has not answered
     /// yet. The string is the method that asked (`nearest(:Plant)`, `radar`).
     Ask(String),
+    /// Parked on a component read that the tick ran out of frame before answering — the one way
+    /// a read can still be seen from outside a tick (see above). The string is the component as
+    /// the script wrote it (`:Hunger`).
+    ///
+    /// It is not an error and nothing is lost: the next tick answers these before it runs
+    /// anything, so the task is a frame late rather than stuck. What it says is that the VM has
+    /// more to do in a frame than its budget allows.
+    Read(String),
     /// Parked on a queue the frames do not place.
     Queue,
     /// Not on a queue: a `sleep` (see the caveat above).
@@ -132,6 +136,14 @@ impl Waiting {
             Waiting::Event => "waiting for an event — an `on(:…)` block, parked on its queue".into(),
             Waiting::Ask(what) if what.is_empty() => "waiting for the game to answer a question".into(),
             Waiting::Ask(what) => format!("waiting for the game to answer `{what}`"),
+            Waiting::Read(name) if name.is_empty() => {
+                "waiting for a component read the tick ran out of budget before answering".into()
+            }
+            // `name` is the symbol as the script wrote it (`:Hunger`), so the brackets round it
+            // are the line the reader will find in their own file: `me[:Hunger]`
+            Waiting::Read(name) => {
+                format!("waiting for a component read the tick ran out of budget before answering — `[{name}]`")
+            }
             Waiting::Queue => "waiting on a queue".into(),
             Waiting::Sleep => "sleeping — it asked for time, not for an answer".into(),
         }
@@ -143,6 +155,7 @@ impl Waiting {
             Waiting::Nothing => "the task has no context: it has run to its end, or has not had its first frame",
             Waiting::Event => "the innermost frames are `Task::Queue#pop` under `Rubevy::Subscription#pop` — a queue `Rubevy.subscribe` handed out, which is what `on(:…)` waits on. Which event it is, is a local of the block that started the task and is not on this stack",
             Waiting::Ask(_) => "the innermost frame is `Task::Queue#pop`, and the frame behind it is the method that called `Rubevy.ask`: the question has gone out with this frame's commands and the answer comes back on the next one",
+            Waiting::Read(_) => "the innermost frame is `Task::Queue#pop` under `Rubevy::Entity#get` — a component read, which rubevy answers itself and normally answers *inside* the tick that asked it. Seeing one from out here means that tick stopped first, on its instruction budget or its `frame_time`, with this round's reads still out; the next tick answers them before it runs anything else. The game never sees the question either way",
             Waiting::Queue => "the innermost frame is `Task::Queue#pop`, and nothing behind it says which queue",
             Waiting::Sleep => "it is parked and *not* on a queue, and `sleep` is the only other thing that parks a task in this game's Ruby (`sleep` is a native and pushes no frame, so the line shown is the one that called it). A task that had used up its timeslice would look the same from here",
         }
@@ -402,6 +415,11 @@ fn why(frames: &[FrameRow]) -> Waiting {
         // `pop` goes through it and an answer's does not (rubevy `src/prelude.rb`)
         if f.class.contains("Rubevy::Subscription") {
             return Waiting::Event;
+        }
+        // `e[:Hunger]` → `Rubevy::Entity#[]` → `#get` → `Rubevy.ask("component.get", …).pop`.
+        // Answered inside the tick, so a task is only found here when the tick ran out of frame.
+        if f.class == "Rubevy::Entity" {
+            return Waiting::Read(f.local("name").map(clean).unwrap_or_default());
         }
         // `garden.nearest(:Plant)` → `Rubevy::Proxy#method_missing` → `Rubevy.ask(…).pop`
         if f.class.contains("Rubevy::Proxy") {
@@ -753,6 +771,23 @@ mod tests {
             frame("run", "#<Class:0x11ac0>", "beetle.rb:96", true, &[]),
         ];
         assert_eq!(why(&frames), Waiting::Sleep);
+    }
+
+    /// `me[:Hunger]` — `Rubevy::Entity#[]`, `#get`, `Rubevy.ask("component.get", …).pop`.
+    ///
+    /// Since 2026-09-17 a read is answered inside the tick that asked it, so this stack is only
+    /// seen when a tick ran out of its budget with the read still out (`Waiting::Read`). The
+    /// shape is the one it always was, and it is held here so that the panel keeps a sentence for
+    /// it rather than filing it under "waiting for the game".
+    #[test]
+    fn a_component_read_left_over_names_the_component() {
+        let frames = vec![
+            frame("pop", "Task::Queue", "(no debug info)", false, &[]),
+            frame("get", "Rubevy::Entity", "(no debug info)", false, &[("name", ":Hunger")]),
+            frame("[]", "Rubevy::Entity", "(no debug info)", false, &[]),
+            frame("hunger", "Creature", "prelude.rb:138", false, &[]),
+        ];
+        assert_eq!(why(&frames), Waiting::Read(":Hunger".into()));
     }
 
     /// `garden.nearest(:Plant)` — the proxy turns the name into a question, and the name and the

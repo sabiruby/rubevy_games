@@ -928,13 +928,15 @@ down, and the top of it is for a person** (G9):
 
 ![the VM panel: a rabbit, and what its behaviour is waiting for](garden-vm.png)
 
-*(The picture is from before 2026-09-17 and shows a sentence the panel can no longer say —
-`waiting for a component read`. A read is answered inside the tick that asks it now, so no task is
-ever found standing on one; the reason was deleted with it. The rest of the panel is as shown.)*
+*(The picture is from before 2026-09-17, when `waiting for a component read — [:Transform]` was
+the commonest thing the panel had to say. A read is answered inside the tick that asks it now, so
+that sentence has become a rare one and says something else: see the table below. The rest of the
+panel is as shown.)*
 
 * **why it is waiting**, in a sentence — `waiting for the game to answer nearest(:Plant)`,
   `sleeping — it asked for time, not for an answer`, `waiting for an event — an on(:…) block,
-  parked on its queue`;
+  parked on its queue`, `waiting for a component read the tick ran out of budget before
+  answering — [:Transform]`;
 * **the line of its own file** it is standing on, and the frames of that file and no others:
   `prelude.rb:47` and `(no debug info)` are true and are not what a reader of `rabbit.rb` came for;
 * insn/frame, how many tasks the VM is running, and the VM's share of the frame.
@@ -950,6 +952,7 @@ reads the frames, and the frames say it.
 | what the frames show | what the panel says |
 |---|---|
 | innermost `pop`, then `Rubevy::Subscription#pop` | an event: `on(:…)`, parked on the queue `Rubevy.subscribe` gave it |
+| innermost `pop`, then `Rubevy::Entity#get` | a component read the tick ran out of budget before answering; the component is that frame's `name` local |
 | innermost `pop`, then `Rubevy::Proxy#method_missing` | a question to the game, named from `name` and `args`: `nearest(:Plant)` |
 | innermost `pop`, then anything else | a question to the game, named by the method that asked (`radar`) |
 | no `pop` at all | a `sleep` — and the frames start at the line that called it |
@@ -959,18 +962,21 @@ a native and pushes none, so a task that is parked and not on a queue has nothin
 called `sleep` from. **The last row is the one guess in the table**, and the panel's hover says so:
 a task that had used up its timeslice — ready to run, not asleep — looks exactly the same from
 here, and the VM has no read-only way to ask a task which it is (`Task#status` is Ruby). In these
-two games nothing else parks a task. Five unit tests in `rubevy-arena` hold the four shapes, copied
+two games nothing else parks a task. Six unit tests in `rubevy-arena` hold the five shapes, copied
 out of a running garden.
 
-**There used to be a sixth row**, and in this garden it was the commonest one: `innermost pop, then
-Rubevy::Entity#get` — a component read, named by that frame's `name` local, which is how the
-picture above came to be captioned `[:Transform]`. It went when reads became synchronous, because
-the panel looks at the VM from outside the tick and a read never outlives one. One case is left
-where it could — a tick that spends its whole budget of instructions leaves that round's reads for
-the next tick to answer — and the panel does not cover it: a task caught there falls into the last
-row and is described as a question to the game, which is the wrong answerer. It is written down in
-`rubevy-arena`'s own docs rather than guarded against, because neither game comes near its budget
-(the garden's tick is under 1 ms of the 8 it is given).
+**The second row changed its meaning on 2026-09-17, and that is the most interesting thing the
+panel now says.** It used to be the commonest row in this garden — every `me[:Hunger]` parked
+there for a frame, which is how the picture above came to be captioned `[:Transform]`. rubevy
+answers a read inside the tick that asks it now, and this panel looks at the VM from outside the
+tick, so a read should never be found standing here at all. When one is, it means the tick it was
+made in **ran out of frame** — its instruction budget or its `frame_time` went first, and the next
+tick will answer that round's reads before it runs anything else. Nothing is lost and the task is
+a frame late rather than stuck; what it is evidence of is a VM with more to do in a frame than its
+budget allows. The row was briefly deleted as unreachable and put back with the new sentence,
+because "unreachable" was too strong a word for it: neither game comes near its budget (the
+garden's tick is under 1 ms of the 8 it is given), but a species applied in the editor can be
+given a loop that does.
 
 **A creature's handlers are tasks of their own and the panel does not follow them**: it is about
 the `ScriptTask` the entity carries, which is the behaviour. So the event row is what a creature
