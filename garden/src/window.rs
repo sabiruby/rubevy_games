@@ -402,8 +402,10 @@ pub fn reload_changed(
 /// with it, so a creature half way through a `sleep 0.2` is still half way through it when the
 /// budget comes back. The **world** stops because [`Paused::on`] is false in
 /// [`crate::is_still`], the run condition every rule of the garden already carried for the sake
-/// of loading a save — so `day_night`, `move_creatures`, `get_hungry`, `eat`, `court`, `starve`
-/// and the rest are simply not run, and `crate::hold_the_clock` walks `Sky::shift` back by the
+/// of loading a save — so `day_night`, `move_creatures`, `separate`, `startle` and, since W1,
+/// the world's own tick (which is where the grass, the hunger, the eating, the breeding and the
+/// starving are now: `ruby/world.rb`) are simply not run, and `crate::hold_the_clock` walks
+/// `Sky::shift` back by the
 /// frame's own length so that the garden's clock does not run on either.
 ///
 /// Stopping only the first half is what G4 did, and the author's third play is why it is not

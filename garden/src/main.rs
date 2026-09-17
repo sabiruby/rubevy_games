@@ -262,46 +262,23 @@ const NEWBORN_GRACE: f32 = 2.0;
 /// was already in its queue (a handler holds the wheel for half a second over each message).
 const TOUCH_SETTLE: f32 = 1.5;
 
-/// Breeding (G2). Two creatures of one species that meet while this full are told to make a
-/// child — the rule is Rust's, the arithmetic of the child is Ruby's.
+/// Breeding (W2). **Every number that was here is in `ruby/world.rb` now** — how full two
+/// creatures have to be, how close, how often the rules may say so, what a child costs its
+/// parents and how long they may not have another — on the lines named beside them there, with
+/// the values they had here. What is left in this source is the two the *game* builds with, and
+/// they are here because the game has to have an answer before `world.rb` has spoken (and when
+/// it never does, because it will not compile): they are [`DAY_LENGTH`]'s neighbours, not the
+/// rules'.
 ///
-/// Three quarters full, not nine tenths. The first number here was 85, and it made breeding a
-/// thing that happened twice in a ninety-second run and sometimes not at all: a creature is only
-/// over 85 for the nine seconds after a meal, and two of them have to be over it *at the same
-/// time and in the same place*. 75 is still well past the 55 at which a beetle's own script goes
-/// looking for grass, and it is above what a parent is left with afterwards.
-const MATE_HUNGER: f32 = 75.0;
-/// what it costs each parent, which is most of the reason the population does not run away: a
-/// parent is left under its own script's "go and find something to eat" line and has to eat its
-/// way back up past `MATE_HUNGER` before it can do this again
-const MATE_COST: f32 = 30.0;
-/// and how long it may not, whatever it eats. Both are charged when the **child arrives**, not
-/// when the rule speaks: whether a creature does anything at all with `"mate"` is its script's
-/// business, and a rule that charged for the message would be charging for a message the script
-/// may never have subscribed to.
-const MATE_COOLDOWN: f32 = 20.0;
-/// how often the rule may tell the same creature about a partner. A creature whose script does
-/// not listen (the rabbit has no `on(:mate)`) is told again and again and nothing whatever
-/// happens — that is what `publish` to nobody costs — and one whose script does listen answers
-/// within a frame or two. This is only what keeps one meeting from becoming sixty messages.
-const COURT_RETRY: f32 = 2.0;
-/// a newborn starts hungry — well under `MATE_HUNGER`, so nothing is born breeding
+/// a newborn's meter, until `world.rb` says otherwise with `garden.rules(child_hunger:)`. Well
+/// under the three quarters the rules breed at, so nothing is born breeding.
 const CHILD_HUNGER: f32 = 50.0;
-/// how many creatures the garden holds. The cap is the rule's, checked before `"mate"` goes out
-/// and again when the child is asked for, because a script answers a frame later.
+/// how many creatures the game will make, until `world.rb` says otherwise with
+/// `garden.rules(pop_max:)`. The rules hold the population down long before this — a pair is
+/// never told to breed when the garden is full — and this is the game refusing to *build* past
+/// what it was told, which is a different job: a script may ask for a creature without anybody
+/// having told it to.
 const POP_MAX: usize = 24;
-/// How close two creatures have to be to court: within about a body's length or two of each
-/// other, not overlapping.
-///
-/// "When they touch" was the first rule, and it almost never fires. Two creatures only overlap
-/// for the single frame it takes `separate` to push them apart, and the frame it does,
-/// `"bumped"` goes out and both scripts run from each other — so the sum of the radii (0.8 for
-/// two beetles) is a distance the world spends almost no time at. Measured over forty seconds
-/// with `GARDEN_DEBUG=1`: the nearest two *well-fed* beetles of the same species ever came was
-/// **1.24**, and the pair never once reached 1.05. What a meeting actually looks like here is two
-/// creatures eating at the same clump of grass, which `eat`'s own reach (1.1 plus half the
-/// plant) leaves about two units apart — so that is the number.
-const MATE_REACH: f32 = 2.0;
 
 /// Solid things. Circles on XZ, pushed apart after the move; no physics crate, because the rule
 /// is three lines and a physics crate is a megabyte of wasm and a second vocabulary.
@@ -387,6 +364,20 @@ pub struct Creature {
     pub species: Species,
     pub age: f32,
     pub genome: Genome,
+    /// **Who asked for it** (W2), where anybody did: the creature whose script called
+    /// `garden.spawn`. The world's first ten and everything read back from a save have none.
+    ///
+    /// It is here because the rules are Ruby's and a rule has to be able to *find* a newborn.
+    /// The cost of a child falls on its parents when the child is actually in the world, and the
+    /// only frame in which `world.rb` can tell that a creature is new is the frame it first sees
+    /// it — which is the frame whose `age` is still exactly zero, because the thing that ages a
+    /// creature is that same rule. So "age is zero and somebody asked for me" is a newborn, said
+    /// in two fields the rules already read.
+    ///
+    /// `Option<Entity>` rather than an `Entity` and a placeholder because Ruby has to tell the
+    /// two apart: an Option reads as `:None` or as `{Some: [creature]}` (rubevy `src/reflect.rs`)
+    /// and it is never written from there.
+    pub parent: Option<Entity>,
 }
 
 /// How full it is: `HUNGER_MAX` is stuffed, 0 is dead. (The name is the plan's; read it as "the
@@ -543,16 +534,34 @@ enum Gait {
     Eat,
 }
 
-/// When a creature may court again. Private, like `Mind` and `Eating`: a cooldown is the rule's
-/// bookkeeping, not something a creature knows about itself, and *not registering it* is the
-/// whole of saying so.
-#[derive(Component)]
+/// When a creature may court again, and who it was last told about.
+///
+/// **It is Ruby's now** (W2), and that is the whole of the change: it was a private component
+/// because the rule that kept it was `court`, in this file, and the rule is `ruby/world.rb`'s.
+/// A component is how a rule keeps something about a creature that has to outlive the rule's own
+/// script — the editor takes `world.rb` away and gives it back while the garden runs, and a
+/// cooldown held in an instance variable of the world object would be forgiven by every
+/// keystroke — and it is how the same fact dies with the creature it is about, without anybody
+/// sweeping a table of entities that are not there any more.
+///
+/// The alternative was a Hash in `world.rb` keyed by entity, and both of those are why it is not
+/// that (`docs/worklog/2026-09-17-garden-world.md`, W2).
+#[derive(Component, Reflect, Debug, Clone, Copy)]
+#[reflect(Component)]
 struct Breeding {
-    /// the earliest the rule may tell this creature about a partner again
+    /// the earliest the rules may tell this creature about a partner again — in the garden's own
+    /// clock, which is what `garden.now` answers and what `P` holds still
     ready_at: f32,
-    /// who it was last told about, so that the cost of the child can be charged to both parents
-    /// when the child actually arrives — a frame or two later, and from Ruby
-    partner: Option<Entity>,
+    /// who it was last told about, so that the cost of a child can be charged to **both** parents
+    /// when the child arrives, a frame or two later
+    ///
+    /// [`Entity::PLACEHOLDER`] where it has been told about nobody, and not an `Option<Entity>`,
+    /// because this one **is written from Ruby**: rubevy applies a Hash field by field, and a
+    /// `{Some: […]}` cannot turn a `None` into a `Some` (`src/reflect.rs`, `apply_enum` — the
+    /// fields of a variant are only written while the value is already that variant). A rule
+    /// that reads the placeholder gets a creature that does not exist, whose components all read
+    /// `nil`, which is the answer it wanted anyway.
+    partner: Entity,
 }
 
 /// **The one entity the world's script sits on** (W1).
@@ -857,14 +866,36 @@ impl WorldMeter {
 #[derive(Resource, Default)]
 pub struct WorldTrouble(pub Option<String>);
 
-/// The children a script has asked for this frame (`garden.spawn`), read out of the Ruby Hash in
-/// `answer_garden` and spawned by `hatch` a moment later.
+/// **The game's side of making a creature**: the children a script has asked for this frame
+/// (`garden.spawn`), read out of the Ruby Hash in `answer_garden`, and the two numbers the
+/// building of one needs.
 ///
-/// The two are separated because the answering system has the whole `World` and no `Commands`,
-/// while spawning a creature wants `Look`, `RubyDir` and `Assets<MrbAsset>` — which are three
-/// ordinary system parameters. Reading the Hash needs the VM; making the creature does not.
-#[derive(Resource, Default)]
-struct Births(Vec<Birth>);
+/// The asking and the making are separate because the answering system has the whole `World` and
+/// no `Commands`, while spawning a creature wants `Look`, `RubyDir` and `Assets<MrbAsset>` —
+/// three ordinary system parameters. Reading the Hash needs the VM; making the creature does not.
+///
+/// `hunger` and `cap` are `world.rb`'s, handed over once by `garden.rules` (W2) and living here
+/// rather than in a `Rules` resource of their own, **where they are used** — which is the same
+/// arrangement `day_length` has in [`Sky`], for the same reason (`docs/plans/garden-world-plan.md`
+/// §2, default 7). What the rules keep for themselves is who may breed with whom and what it
+/// costs them; what crosses is what the *builder* cannot do without.
+#[derive(Resource)]
+struct Births {
+    /// asked for, not yet made
+    waiting: Vec<Birth>,
+    /// what a newborn's meter says when it arrives (`world.rb`'s `child_hunger`)
+    hunger: f32,
+    /// how many creatures the game will make (`world.rb`'s `pop_max`)
+    cap: usize,
+}
+
+impl Default for Births {
+    /// The game's own answers, for the frames before `world.rb` has spoken — and for a garden
+    /// whose `world.rb` will not compile, which runs on them for ever.
+    fn default() -> Self {
+        Births { waiting: Vec::new(), hunger: CHILD_HUNGER, cap: POP_MAX }
+    }
+}
 
 /// **What the run has to say about its two VMs, as one system parameter.**
 ///
@@ -1131,9 +1162,18 @@ struct SelfTest {
     asleep_counted: u32,
 
     // --- G2: the genome ----------------------------------------------------
-    /// every `"mate"` the rule has published: who was told, its own genome, its partner's, when
+    /// every pairing a child was asked out of: who asked, its own genome, its partner's, when.
+    ///
+    /// W2 moved where this is written rather than what it says. `court` filled it, because
+    /// `court` was the rule and knew both parents; the rule is `ruby/world.rb`'s now and reports
+    /// nothing, so it is taken in `answer_spawn` out of the asker's `Creature` and the `Breeding`
+    /// the rules wrote on it — the check watches the world instead of being told.
     matings: Vec<(Entity, Genome, Genome, f32)>,
-    /// how many went out, and how many children came back
+    /// how many times the rules said `"mate"`, and how many children came back. The first is
+    /// counted where the message is carried across to the creatures' VM (`answer_world`), and it
+    /// is the only thing left in this source that knows that name — for the sake of the line the
+    /// eighth check prints when no child was born at all, which would otherwise not be able to
+    /// say whether the rules had been silent or the scripts had.
     courtings: u32,
     births: u32,
     /// the first child a script asked the game for: when it was asked for, and what the check
@@ -1175,15 +1215,6 @@ struct SelfTest {
     /// how many times a creature's meter fell while they were in force. It should be none: the
     /// rules that make a creature hungry are in the file that was taken away
     fell_while_frozen: u32,
-    /// the parents `hatch` charged `MATE_COST` on this frame, which `note_the_rules` takes off the
-    /// list of fallen meters.
-    ///
-    /// Breeding is the one thing left in Rust that lowers a meter, and while the frozen rules are
-    /// in force it happens *more* than usual — nobody is getting hungry, so everybody stays over
-    /// `MATE_HUNGER` and `court` keeps finding pairs. Measured, that is what the check saw: "2
-    /// meters fell", both of them a parent paying thirty points for a child. A check about the
-    /// rules has to leave out what the rules did not do.
-    paid: Vec<Entity>,
     // --- W2: the world says something and the creatures hear it --------------
     /// the rules have said `"season"` at least once, which is when it is worth reading anybody's
     /// memory (a `read_memory` per creature is two `ivar_get`s and a conversion, and doing it on
@@ -1234,7 +1265,6 @@ impl Default for SelfTest {
             freeze_asked: false,
             frozen_at: None,
             fell_while_frozen: 0,
-            paid: Vec::new(),
             season_told: false,
             season_heard: None,
             thaw_asked: false,
@@ -1247,10 +1277,17 @@ impl Default for SelfTest {
 ///
 /// It is the smallest thing that is still a world — it compiles, it defines an `each_frame`, and
 /// that `each_frame` is empty — so the garden it leaves behind is one where the grass does not
-/// grow, nobody gets hungry, nobody eats and nobody starves, while everything that is still Rust
-/// (the sun, the walking, the pushing apart, the courting) carries on exactly as before. That is
-/// what makes "no meter fell for five seconds" a statement about *these* rules and not about the
-/// world having stopped.
+/// grow, nobody gets hungry, nobody eats, nobody breeds and nobody starves, while everything
+/// that is still Rust (the sun, the walking, the pushing apart, a rabbit startling a beetle)
+/// carries on exactly as before. That is what makes "no meter fell for five seconds" a statement
+/// about *these* rules and not about the world having stopped.
+///
+/// W2 made that sentence simpler rather than harder. While breeding was Rust's, taking the rules
+/// away made it happen *more* — nobody was getting hungry, so everybody stayed over
+/// `MATE_HUNGER` — and every child charged its parents thirty points, which is a meter falling
+/// for a reason the check had to be told to ignore (`SelfTest::paid`, now gone). Breeding is in
+/// the file that is taken away, so there is nothing left in this build that can lower a meter
+/// while it is away.
 const FROZEN_WORLD: &str = r#"world do
   day_length 60.0
   each_frame do |dt|
@@ -1469,6 +1506,9 @@ fn main() {
         // to `Serde<CreatureSpec>` by name.
         .register_type::<Genome>()
         .register_type::<Hunger>()
+        // W2: the cooldown, because the rule that keeps it is `ruby/world.rb`'s now. This line
+        // and the two derives on `Breeding` are the whole of "Ruby can see it"
+        .register_type::<Breeding>()
         .register_type::<Velocity>()
         .register_type::<Sight>()
         .register_type::<Memory>()
@@ -1609,7 +1649,6 @@ fn main() {
                 move_creatures,
                 separate,
                 startle,
-                court,
             )
                 .chain()
                 // G3: a garden that is being read back does not age while its minds are starting
@@ -1635,9 +1674,9 @@ fn main() {
         // with, so a creature that was despawned here has lost its `ScriptTask` — and with it its
         // task in the VM and its queues — before rubevy looks at the world again.
         .add_systems(Update, load_world.run_if(resource_exists::<Loading>).before(RubevySet::Deliver))
-        // after the answers, because what it spawns was asked for in this frame's
-        // `answer_garden` and the request is answered there too
-        .add_systems(Update, hatch.after(RubevySet::Answer).run_if(is_still))
+        // after the answers, because what it makes was asked for in this frame's `answer_garden`
+        // and the request is answered there too
+        .add_systems(Update, children_arrive.after(RubevySet::Answer).run_if(is_still))
         // G3, in this order and after the scripts have had their frame: put the memories back
         // (which needs the object a script makes in its first frame), then write the file if
         // anybody asked for one, then — last — let a restored world start moving. A run that
@@ -1676,10 +1715,7 @@ fn main() {
             Update,
             (plants_wear_their_size, note_the_rules, sprout_plants)
                 .after(RubevySet::<World>::tick())
-                .after(RubevySet::Answer)
-                // `hatch` is the one thing left in Rust that lowers a meter, and
-                // `note_the_rules` has to see the charge on the same frame as the fall it caused
-                .after(hatch),
+                .after(RubevySet::Answer),
         )
         .add_systems(Update, watch_minds.after(RubevySet::Answer))
         // W1: what one pass of `world.rb` costs, round the set that runs it
@@ -2079,13 +2115,13 @@ fn spawn_world(
         let hunger = dice.between(45.0, 90.0);
         // no two creatures alike, so that `Genome#mix` has something to average
         let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
-        let entity = spawn_creature(&mut commands, look, species, at, hunger, genome);
+        let entity = spawn_creature(&mut commands, look, species, at, hunger, genome, None);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, species);
     }
 
     if keep_clear {
         let entity =
-            spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle));
+            spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle), None);
         commands.entity(entity).insert(Fasting);
         info!("selftest: a beetle with no behaviour and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
@@ -2095,7 +2131,7 @@ fn spawn_world(
         // the species' own genome, not a rolled one: the check below is written for a beetle
         // that sees exactly eight units, and a rolled `Sight` of 6.6 would be testing the dice
         let probe =
-            spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle));
+            spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle), None);
         commands.entity(probe).insert(Probe { dinner });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, probe, Species::Beetle);
         info!(
@@ -2117,7 +2153,8 @@ fn spawn_world(
             (Vec2::new(4.5, 0.0), Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }),
         ];
         for (offset, genome) in lovers {
-            let lover = spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome);
+            let lover =
+                spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome, None);
             give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
         }
         info!(
@@ -2218,9 +2255,10 @@ fn spawn_creature(
     at: Vec2,
     hunger: f32,
     genome: Genome,
+    parent: Option<Entity>,
 ) -> Entity {
     let mut entity = commands.spawn((
-        Creature { species, age: 0.0, genome },
+        Creature { species, age: 0.0, genome, parent },
         Hunger(hunger),
         Velocity(Vec2::ZERO),
         // G2: how far it sees is its genome's, not its species'. `Sight` stays a component of
@@ -2228,7 +2266,7 @@ fn spawn_creature(
         // may look, and what a script reads with `me[:Sight]`.
         Sight(genome.sight),
         Collider { radius: radius_of(species) },
-        Breeding { ready_at: 0.0, partner: None },
+        Breeding { ready_at: 0.0, partner: Entity::PLACEHOLDER },
         Memory,
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
@@ -2988,7 +3026,7 @@ fn plants_wear_their_size(mut plants: Query<(&Plant, &mut Transform), Changed<Pl
 /// a new blade starts at and whether it is a tuft or a bush — none of which a rule has an opinion
 /// about and all of which want `Look`, `Dice` and `Commands`.
 ///
-/// It is the same split as `garden.spawn` and `hatch`, and it has the same reason: the system that
+/// It is the same split as `garden.spawn` and `children_arrive`, and it has the same reason: the system that
 /// answers a script has the whole world and no `Commands`.
 fn sprout_plants(
     mut commands: Commands,
@@ -3034,15 +3072,19 @@ fn note_the_rules(
     let now = time.elapsed_secs();
     let mut meters: Vec<(Entity, f32)> = Vec::with_capacity(creatures.iter().len());
     let mut alive: Vec<(Entity, Species, f32)> = Vec::with_capacity(creatures.iter().len());
-    // what the meters said last frame, who was here to have one, and who has just paid for a child
-    // — which is a meter falling for a reason that is not a rule
+    // what the meters said last frame, and who was here to have one
+    //
+    // **W2 took a list away from here.** While breeding was Rust's, `hatch` charged a parent
+    // thirty points for a child and told this system which parents it had charged, because a
+    // meter that fell for *that* reason was not the rules getting anybody hungry — and the
+    // twelfth check, which is exactly "no meter fell while the rules were away", counted two of
+    // them. Breeding is a rule now and the rule is in the file the check takes away, so a fall
+    // while the rules are gone is once again impossible rather than accounted for.
     let mut was: Vec<(Entity, f32)> = Vec::new();
     let mut were: Vec<(Entity, Species, f32)> = Vec::new();
-    let mut paid: Vec<Entity> = Vec::new();
     if let Some(test) = test.as_mut() {
         was = std::mem::take(&mut test.meters);
         were = std::mem::take(&mut test.alive);
-        paid = std::mem::take(&mut test.paid);
     }
     let mut first_meal: Option<f32> = None;
     let mut fell = 0u32;
@@ -3055,13 +3097,13 @@ fn note_the_rules(
             // from one blade of grass to the next does not flicker between two clips
             commands.entity(entity).insert(Eating { until: now + 0.35 });
             first_meal.get_or_insert(now);
-        } else if hunger.0 < *before && !paid.contains(&entity) {
+        } else if hunger.0 < *before {
             fell += 1;
         }
     }
-    // and who went. In W1 the only thing that despawns a creature is `world.rb`'s own
-    // `Rubevy.despawn` on an empty meter, so a creature that was here and is not is one that
-    // starved; W2 will have to say which when there is a second way to go.
+    // and who went. The only thing that despawns a creature is `world.rb`'s own `Rubevy.despawn`
+    // on an empty meter — W2 added a way to be *born* and none to go — so a creature that was
+    // here and is not is one that starved.
     let gone: Vec<(Entity, Species, f32)> =
         were.into_iter().filter(|(e, ..)| !meters.iter().any(|(a, _)| a == e)).collect();
     for (entity, species, age) in &gone {
@@ -3300,99 +3342,20 @@ fn startle(
     contacts.0 = touching;
 }
 
-/// **Breeding (G2): the rule is Rust's, the child is Ruby's.**
+/// **The children a script asked for, made** (G2, and W2's leftover of `hatch`).
 ///
-/// Two creatures of one species that are touching and both this full are a pair, and the game
-/// publishes `"mate"` to **one** of them — the one with the lower entity id, so that a meeting is
-/// one message and not two, and one child and not two — with the other as a `Rubevy::Entity`.
-/// That is the whole of what Rust decides: who may breed with whom, how often, and how many
-/// creatures the garden holds.
+/// There were two systems here. `court` looked for a pair, published `"mate"` and kept the
+/// cooldown; `hatch` made the child and charged its parents. Both are `ruby/world.rb` now —
+/// which two of them mattered is what W2 is about — and what is left is the part that was never
+/// a rule: a creature's **body**, which wants `Commands`, `Look`, the models, the compiler and
+/// the species' file, and which no script can build.
 ///
-/// What the child *is* — the average of two genomes, mutated — is worked out in Ruby, by calling
-/// three methods on a Rust struct:
+/// It is `sprout_plants` for creatures, and the same sentence divides them: whether a child
+/// arrives is the rules', what a child is made of is the game's.
 ///
-/// ```ruby
-/// on(:mate) do |partner|
-///   child = my_genome.mix(genome_of(partner)).mutate(0.1)
-///   garden.spawn(species: species.to_s, genome: child.to_h, at: [...])
-/// end
-/// ```
-///
-/// so the division is: the rules are Rust, the arithmetic is Ruby, and the arithmetic is done by
-/// calling Rust. Neither side needed a line of glue for it — `Genome` is one struct with two
-/// derives on it (`garden/src/genome.rs`).
-fn court(
-    time: Res<Time>,
-    sky: Res<Sky>,
-    mut world: ResMut<ScriptWorld>,
-    births: Res<Births>,
-    mut test: Option<ResMut<SelfTest>>,
-    mut creatures: Query<(Entity, &Creature, &Hunger, &Collider, &Transform, &mut Breeding)>,
-) {
-    // **the world's clock, not the process's** (G9). `Breeding::ready_at` is a cooldown in the
-    // garden's own time, and the garden's time is what `P` holds still: with the process's clock
-    // a minute spent paused was a minute off every pair's wait, and the first frame after the
-    // pause had every creature in the garden ready to breed at once.
-    let now = world_now(&time, &sky);
-    // the cap is the rule's, and the children already asked for this frame count against it
-    let population = creatures.iter().count() + births.0.len();
-    if population >= POP_MAX {
-        return;
-    }
-    // one pass to look, because the publish and the bookkeeping both want `&mut`
-    let ready: Vec<(Entity, Species, Vec2)> = creatures
-        .iter()
-        .filter(|(_, _, hunger, _, _, breeding)| hunger.0 >= MATE_HUNGER && now >= breeding.ready_at)
-        .map(|(entity, creature, _, _, at, _)| {
-            (entity, creature.species, Vec2::new(at.translation.x, at.translation.z))
-        })
-        .collect();
-
-    let mut spoken: Vec<Entity> = Vec::new();
-    let mut room = POP_MAX - population;
-    for (i, (a, species, here)) in ready.iter().enumerate() {
-        for (b, other_species, there) in ready.iter().skip(i + 1) {
-            if room == 0 {
-                return;
-            }
-            if species != other_species || here.distance(*there) > MATE_REACH {
-                continue;
-            }
-            if spoken.contains(a) || spoken.contains(b) {
-                continue;
-            }
-            // the lower id is told, so that one meeting is one message: both of them computing a
-            // child would make two, of the same two parents, in the same frame
-            let (told, partner) = if a.to_bits() <= b.to_bits() { (*a, *b) } else { (*b, *a) };
-            world.publish(Some(told), "mate", Answer::Entity(partner));
-            spoken.push(*a);
-            spoken.push(*b);
-            room -= 1;
-            if let Some(test) = test.as_mut() {
-                test.courtings += 1;
-                let genome_of = |e: Entity| creatures.get(e).map(|c| c.1.genome).ok();
-                if let (Some(one), Some(two)) = (genome_of(told), genome_of(partner)) {
-                    test.matings.push((told, one, two, now));
-                }
-            }
-            for (who, mate) in [(told, partner), (partner, told)] {
-                if let Ok((.., mut breeding)) = creatures.get_mut(who) {
-                    breeding.ready_at = now + COURT_RETRY;
-                    breeding.partner = Some(mate);
-                }
-            }
-        }
-    }
-}
-
-/// The children a script asked for in this frame's `answer_garden`, made.
-///
-/// This is where the cost of one lands: both parents lose `MATE_COST` from their meter and may
-/// not be told about a partner again for `MATE_COOLDOWN`, so a garden's population is held down
-/// by the same thing that holds an individual down — having to eat. The child is an ordinary
-/// creature with an ordinary script; what is not ordinary about it is that its three numbers were
-/// worked out in Ruby.
-fn hatch(
+/// The two numbers it builds with are the rules' as well, handed over once by `garden.rules`
+/// ([`Births`]): how full a newborn is, and how many creatures the game will make at all.
+fn children_arrive(
     time: Res<Time>,
     sky: Res<Sky>,
     mut commands: Commands,
@@ -3402,17 +3365,17 @@ fn hatch(
     brains: Res<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut test: Option<ResMut<SelfTest>>,
-    mut parents: Query<(&mut Hunger, &mut Breeding)>,
 ) {
-    // the same clock `court` reads the cooldown against (G9)
+    // the garden's own clock, which is the one the rules write their cooldowns in (G9)
     let now = world_now(&time, &sky);
-    for birth in births.0.drain(..) {
+    let hunger = births.hunger;
+    for birth in std::mem::take(&mut births.waiting) {
         let at = Vec2::new(
             birth.at.x.clamp(-HALF_W + 1.0, HALF_W - 1.0),
             birth.at.y.clamp(-HALF_D + 1.0, HALF_D - 1.0),
         );
-        let child = spawn_creature(&mut commands, look.as_deref(), birth.species, at, CHILD_HUNGER, birth.genome);
-        commands.entity(child).insert(Breeding { ready_at: now + MATE_COOLDOWN, partner: None });
+        let child =
+            spawn_creature(&mut commands, look.as_deref(), birth.species, at, hunger, birth.genome, birth.parent);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, child, birth.species);
         info!(
             "a {} was born at {now:.1} s ({}) — {}",
@@ -3420,27 +3383,15 @@ fn hatch(
             child,
             birth.genome.describe()
         );
-
-        // the parents pay for it, now that it is here
-        let mother = birth.parent;
-        let father = mother.and_then(|m| parents.get(m).ok().and_then(|(_, b)| b.partner));
-        for who in [mother, father].into_iter().flatten() {
-            if let Ok((mut hunger, mut breeding)) = parents.get_mut(who) {
-                hunger.0 = (hunger.0 - MATE_COST).max(1.0);
-                breeding.ready_at = now + MATE_COOLDOWN;
-                breeding.partner = None;
-                // W1: a meter that falls here fell for a reason that is not a rule of
-                // `world.rb`'s, and the twelfth check has to know (`SelfTest::paid`)
-                if let Some(test) = test.as_mut() {
-                    test.paid.push(who);
-                }
-            }
-        }
+        // W2: what it costs its parents is `world.rb`'s, charged on the pass that first sees the
+        // child — there is nothing to do here but let it into the world.
 
         if let Some(test) = test.as_mut() {
             test.births += 1;
             if test.born_at.is_none() {
-                let mating = mother.and_then(|m| test.matings.iter().rev().find(|(e, ..)| *e == m).copied());
+                let mating = birth
+                    .parent
+                    .and_then(|m| test.matings.iter().rev().find(|(e, ..)| *e == m).copied());
                 let (says, ok) = match mating {
                     Some((_, one, two, _)) => judge_child(&birth.genome, &one, &two),
                     None => ("its parents' pairing was not recorded".into(), false),
@@ -3529,6 +3480,8 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
     let mut newborn: Vec<Birth> = Vec::new();
     // and the first `garden.spawn` this frame that was refused, for the selftest's malformed Hash
     let mut refused: Option<String> = None;
+    // W2: the two parents of each child asked for, for the eighth check (`answer_spawn`)
+    let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
     // who asked, for the HUD's frames-per-decision (G4): a gap in a task's instruction count that
     // begins on this frame is a round trip and not a nap (`watch_minds`)
     let mut askers: Vec<Entity> = Vec::new();
@@ -3613,7 +3566,7 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
                 // already is. The population cap is checked here because the script answered a
                 // frame after the rule spoke, and a frame is long enough for the garden to fill.
                 "garden.spawn" => {
-                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused)
+                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings)
                 }
                 other => {
                     warn!("garden: nobody answers {other:?}");
@@ -3623,7 +3576,14 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
         }
     });
     if !newborn.is_empty() {
-        world.resource_mut::<Births>().0.extend(newborn);
+        world.resource_mut::<Births>().waiting.extend(newborn);
+    }
+    if !pairings.is_empty()
+        && let Some(sky) = world.get_resource::<Sky>().map(|sky| sky.shift)
+    {
+        let now = world.resource::<Time>().elapsed_secs() + sky;
+        let mut test = world.resource_mut::<SelfTest>();
+        test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
     }
     let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     for asker in askers {
@@ -3666,24 +3626,44 @@ fn count_of(
 /// and fills a Rust struct, nested `Genome` and `Species` and all. The error is worth as much as
 /// the reading — a Hash with a gene missing raises a `TypeError` naming it, and the script hears
 /// that sentence as the answer to its question. The population cap is checked here because the
-/// script answers a frame after the rule spoke, and a frame is long enough for the garden to fill.
+/// script answers a frame after the rule spoke, and a frame is long enough for the garden to fill
+/// — it is the rules' own cap, handed over by `garden.rules(pop_max:)` (W2).
+///
+/// **`pairings` is the eighth check's, and it is taken here because there is nowhere else left**
+/// (W2). It used to be written by `court`, which knew both parents because it had just put them
+/// together; the rule is Ruby's now and says nothing to the game about it. What a spawn request
+/// still carries is the creature that asked — and that creature is carrying who it was told
+/// about, in the `Breeding` the rules wrote (`partner`). So the pair is still knowable at the
+/// moment a child is asked for, out of two components, without the rules having to report
+/// anything: the check watches the world rather than being told about it, exactly as
+/// `note_the_rules` came to watch for a meal.
 fn answer_spawn<M: 'static>(
     world: &bevy::ecs::world::World,
     scripts: &mut ScriptWorld<M>,
     request: &rubevy::Request,
     newborn: &mut Vec<Birth>,
     refused: &mut Option<String>,
+    pairings: &mut Vec<(Entity, Genome, Genome)>,
 ) {
     let population =
         world.iter_entities().filter(|e| e.contains::<Creature>()).count() + newborn.len();
+    let cap = world.get_resource::<Births>().map(|b| b.cap).unwrap_or(POP_MAX);
     let outcome = match request.value(0) {
-        _ if population >= POP_MAX => Err(format!("the garden is full ({population} creatures)")),
+        _ if population >= cap => Err(format!("the garden is full ({population} creatures)")),
         Some(asked) => sabiruby_serde::from_value::<CreatureSpec>(&mut scripts.vm, asked)
             .map_err(|e| scripts.vm.describe_error(&e)),
         None => Err("spawn wants a Hash: species:, genome:, at:".to_string()),
     };
     match outcome {
         Ok(spec) => {
+            if world.get_resource::<SelfTest>().is_some()
+                && let Some(asker) = request.entity
+                && let Some(one) = world.get::<Creature>(asker).map(|c| c.genome)
+                && let Some(other) = world.get::<Breeding>(asker).map(|b| b.partner)
+                && let Some(two) = world.get::<Creature>(other).map(|c| c.genome)
+            {
+                pairings.push((asker, one, two));
+            }
             newborn.push(spec.into_birth(request.entity));
             scripts.answer(request, Answer::Bool(true));
         }
@@ -3698,15 +3678,23 @@ fn answer_spawn<M: 'static>(
     }
 }
 
-/// What `world.rb` hands the game once, at the start: the numbers a rule keeps but the game has to
-/// draw. There is one of them.
+/// What `world.rb` hands the game once, at the start: **the numbers a rule keeps but the game
+/// has to build or draw with**. There are three of them, and the test for whether one belongs
+/// here is whether the thing that needs it is Rust: the sun is drawn here, and a creature's body
+/// is made here.
 ///
-/// `day_length` is `Option` and the field is `#[serde(default)]` so that a `world.rb` which says
-/// nothing about the sun is not an error — it simply leaves the sun turning at [`DAY_LENGTH`].
+/// Every field is an `Option` and `#[serde(default)]`, so a `world.rb` that says nothing about
+/// the sun, or about children, is not an error — it leaves the game on its own numbers
+/// ([`DAY_LENGTH`], [`CHILD_HUNGER`], [`POP_MAX`]), which is also what a `world.rb` that will not
+/// compile leaves it on.
 #[derive(Deserialize, Debug, Default)]
 struct RuleBook {
     #[serde(default)]
     day_length: Option<f32>,
+    #[serde(default)]
+    child_hunger: Option<f32>,
+    #[serde(default)]
+    pop_max: Option<f32>,
 }
 
 /// **The question the world's script asks that costs no frame at all** (W1): `garden.within`.
@@ -3852,8 +3840,11 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     let mut newborn: Vec<Birth> = Vec::new();
     let mut refused: Option<String> = None;
+    let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
     let mut seeds = 0u32;
     let mut day_length: Option<f32> = None;
+    let mut child_hunger: Option<f32> = None;
+    let mut pop_max: Option<usize> = None;
     // W2: what the rules said this frame, carried out of the world's VM and into the creatures'
     // below. It is collected rather than published on the spot because publishing needs the
     // *other* `ScriptWorld`, and this scope is holding the world's.
@@ -3869,30 +3860,49 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                 .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>());
             match request.kind.as_str() {
                 "frame" => scripts.answer(&request, Answer::Num(frame as f64)),
-                // the numbers a rule keeps but the game has to draw. Read with serde, like the
-                // spawn Hash and for the same reason: the message a bad one gets back is worth as
-                // much as the reading
+                // the numbers a rule keeps but the game has to build or draw with. Read with
+                // serde, like the spawn Hash and for the same reason: the message a bad one gets
+                // back is worth as much as the reading
                 "garden.rules" => {
                     let asked = request
                         .value(0)
-                        .ok_or_else(|| "rules wants a Hash: day_length:".to_string())
+                        .ok_or_else(|| {
+                            "rules wants a Hash: day_length:, child_hunger:, pop_max:".to_string()
+                        })
                         .and_then(|v| {
                             sabiruby_serde::from_value::<RuleBook>(&mut scripts.vm, v)
                                 .map_err(|e| scripts.vm.describe_error(&e))
                         });
                     match asked {
                         Ok(book) => {
-                            // a day of zero seconds would be a division by it in `day_night`, so a
-                            // rule that asks for nonsense is refused rather than obeyed
+                            // a rule that asks for nonsense is refused rather than obeyed: a day
+                            // of no seconds is a division by it in `day_night`, a newborn with no
+                            // meter is one the rules would starve on the frame it arrived, and a
+                            // garden that holds nobody is one where nothing can be born at all
+                            let mut wrong = None;
                             match book.day_length {
-                                Some(n) if n > 0.0 => {
-                                    day_length = Some(n);
-                                    scripts.answer(&request, Answer::Bool(true));
+                                Some(n) if n <= 0.0 => {
+                                    wrong = Some(format!("a day of {n} seconds is not a day"))
                                 }
-                                Some(n) => scripts.answer(
-                                    &request,
-                                    Answer::Text(format!("a day of {n} seconds is not a day")),
-                                ),
+                                Some(n) => day_length = Some(n),
+                                None => {}
+                            }
+                            match book.child_hunger {
+                                Some(n) if n <= 0.0 => {
+                                    wrong = Some(format!("a newborn with a meter of {n} is stillborn"))
+                                }
+                                Some(n) => child_hunger = Some(n),
+                                None => {}
+                            }
+                            match book.pop_max {
+                                Some(n) if n < 1.0 => {
+                                    wrong = Some(format!("a garden that holds {n} creatures holds none"))
+                                }
+                                Some(n) => pop_max = Some(n as usize),
+                                None => {}
+                            }
+                            match wrong {
+                                Some(why) => scripts.answer(&request, Answer::Text(why)),
                                 None => scripts.answer(&request, Answer::Bool(true)),
                             }
                         }
@@ -3910,7 +3920,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                     scripts.answer(&request, Answer::Num(count_of(world, of_kind) as f64));
                 }
                 "garden.spawn" => {
-                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused)
+                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings)
                 }
                 // **What the world says to the creatures** (W2): `tell(who, name, payload)`.
                 //
@@ -3957,7 +3967,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
         }
     });
     if !newborn.is_empty() {
-        world.resource_mut::<Births>().0.extend(newborn);
+        world.resource_mut::<Births>().waiting.extend(newborn);
     }
     if seeds > 0 {
         world.resource_mut::<Sprouts>().0 += seeds;
@@ -3979,11 +3989,27 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
             creatures.publish(to, &name, payload);
         }
     }
+    if !pairings.is_empty()
+        && let Some(sky) = world.get_resource::<Sky>().map(|sky| sky.shift)
+    {
+        let now = world.resource::<Time>().elapsed_secs() + sky;
+        let mut test = world.resource_mut::<SelfTest>();
+        test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
+    }
     if let Some(seconds) = day_length {
         let mut sky = world.resource_mut::<Sky>();
         if sky.day_length != seconds {
             info!("the world says a day is {seconds} seconds long");
             sky.day_length = seconds;
+        }
+    }
+    if child_hunger.is_some() || pop_max.is_some() {
+        let mut births = world.resource_mut::<Births>();
+        if let Some(hunger) = child_hunger {
+            births.hunger = hunger;
+        }
+        if let Some(cap) = pop_max {
+            births.cap = cap;
         }
     }
     if let Some(why) = refused
@@ -4443,10 +4469,18 @@ fn load_world(
             Vec2::from(creature.at),
             creature.hunger,
             creature.genome,
+            // nothing read back from a file is a newborn: `parent` is what the rules look at to
+            // find one, and a creature that was saved has been in the world already
+            None,
         );
         // the age it had, not a newborn's: `spawn_creature` makes an ordinary creature and this is
         // the one field of it that a file can be older than
-        commands.entity(entity).insert(Creature { species: creature.species, age: creature.age, genome: creature.genome });
+        commands.entity(entity).insert(Creature {
+            species: creature.species,
+            age: creature.age,
+            genome: creature.genome,
+            parent: None,
+        });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, creature.species);
         if !creature.memory.is_null() {
             pending.push((entity, creature.memory.clone()));

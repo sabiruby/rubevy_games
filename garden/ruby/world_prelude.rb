@@ -67,22 +67,16 @@ class World
   # The questions the game answers: `garden.rules`, `garden.sprout`, `garden.tell`,
   # `garden.count`, `garden.spawn`, and — on the no-frame road — `garden.within`, `garden.now`
   # and `garden.seed`.
+  #
+  # **`garden.now` is the garden's own clock, in seconds**, and not the process's: it stands still
+  # while the game is paused and goes on from where it was when a save is read back (`Sky::shift`,
+  # `hold_the_clock`). A rule that writes a time into a *component* — which is what a breeding
+  # cooldown is — has to write it in a clock that outlives this script, because the component
+  # does: `world.rb` can be edited and restarted under a garden that is still running, and an
+  # `@elapsed` of this object's own would start again at zero with every edit while the cooldowns
+  # it had already written would not.
   def garden
     @garden ||= Rubevy::Proxy.new("garden")
-  end
-
-  # **The garden's own clock, in seconds** (W2).
-  #
-  # Not the process's: this one stands still while the game is paused and goes on from where it
-  # was when a save is read back (`Sky::shift`, `hold_the_clock`). A rule that writes a time into
-  # a component — which is what a breeding cooldown is — has to write it in a clock that outlives
-  # this script, because the component does: `world.rb` can be edited and restarted under a
-  # garden that is still running, and an `@elapsed` of this object's own would start again at
-  # zero with every edit while the cooldowns it had already written would not.
-  #
-  # It costs no frame (`answer_in_tick`), which is why it may be read at the head of every pass.
-  def now
-    garden.now
   end
 
   # This frame's number, as the game answered it.
@@ -159,6 +153,12 @@ class World
   def log(text)
     Rubevy.log "world: #{text}"
   end
+
+  # The two numbers the **game** builds a creature with, where `world.rb` does not say what they
+  # are: nothing, which leaves the game on its own (`CHILD_HUNGER`, `POP_MAX` in `main.rs`). A
+  # world that has breeding rules defines them beside the rest of its breeding numbers.
+  def child_hunger = nil
+  def pop_max = nil
 
   # What the rules are where `world.rb` did not say. A world that defines no `each_frame` is a
   # world that stands still, which is also what a `world.rb` that will not compile leaves behind
@@ -288,8 +288,21 @@ def run_world
   $world_being = being
   srand(being.garden.seed.to_i)
 
-  seconds = klass.day_length
-  being.garden.rules(day_length: seconds) unless seconds.nil?
+  # **What the rules keep but the game has to build or draw with**, handed over once.
+  #
+  # The sun is drawn in Rust and a creature's body is made in Rust, so those three numbers have
+  # to cross: how long a day is, what a newborn's meter says, and how many creatures the game
+  # will make at all. Everything else in `world.rb` is read in `world.rb`. A world that says
+  # nothing about one of them sends `nil` and the game keeps its own (`main.rs`, `RuleBook`).
+  #
+  # It is the one question in this file that is asked for its answer's sake: a number the game
+  # will not take (a day of no seconds) comes back as the sentence saying why, in the log.
+  answer = being.garden.rules(
+    day_length: klass.day_length,
+    child_hunger: being.child_hunger,
+    pop_max: being.pop_max,
+  )
+  Rubevy.log "world: #{answer}" unless answer == true
 
   # One task per `every`, started before the first frame — the shape `start_handlers` gives a
   # creature's `on` (`prelude.rb`), with a `sleep` where that one has a queue.
