@@ -371,3 +371,50 @@ hud: insn/decision — 4283〜4701 passes, 181.7〜218.1 instructions each;
    どこかに無駄があるのではなく**300 回近い往復と 120 回の書き込みの素の値段**。
    速くする余地（`Rubevy.find` が毎フレーム 110 個の `Rubevy::Entity` を作る、
    `garden.within` が毎回 `iter_entities` を舐める）はあるが、W1 の範囲ではないので触っていない。
+
+## 8. 追記: `world.rb` が壊れているときを実際に試した（計画書 §2 既定 9）
+
+指示は「起動時: `panic` ではなく世界の規則が止まったまま走って HUD に 1 行」。2 通り試した。
+
+**構文エラー**（`each_frame` の中に Ruby でない行を入れた版）:
+
+```
+the world has no rules: world.rb: world.rb:214:3: syntax error, unexpected 'end', assuming it is closing the parent 'do'..'end' block
+10 creatures, 42 plants, day at phase 0.21
+hud: the world's rules — 0 passes of `each_frame`, – instructions at the median and 0 at the most (of 45000)
+```
+
+**ファイルが無い**:
+
+```
+the world has no rules: …/garden/ruby/world.rb: No such file or directory (os error 2)
+```
+
+どちらも 8 秒／5 秒走り切って、太陽は回り、生き物は歩き、草は育たず誰も腹が減らない。
+`WorldTrouble` が HUD に出す 1 行は窓ビルドにあるが、**窓は実行していない**ので目で見ていない。
+（行番号の 214 は prelude と 1 本にコンパイルしているため prelude ぶんのずれが乗っている。
+生き物側の `Mind::prelude_lines` に相当するオフセットは世界にはまだ無い——W3 のエディタの仕事。）
+
+なお、規則が無いときに草が 55 ではなく 42 なのは W1 と関係ない: `spawn_world` は木と岩の
+1.2 以内には草を置かない（`main.rs` の `for _ in 0..PLANTS_AT_START`）ので、最初から 55 未満になる。
+
+## 9. 追記: `garden.within` 単体の値段
+
+「総当たりは Rust」が W1 の要なので、その Rust がいくらなのかを単体で測った
+（閉包の中で `Instant` を取り、`AtomicU64` 2 本に足して終わりに出す使い捨て。`unsafe` は無い）。
+60 秒 ×2、生き物 11〜12 匹:
+
+```
+probe: garden.within called 38076 times, 3063 ns each on average
+probe: garden.within called 38230 times, 3097 ns each on average
+```
+
+**1 回 3.06〜3.10 µs、1 フレームあたり 10.6 回**（腹が満ちている個体と眠っている個体は呼ばない）。
+つまり `within` は 1 フレームで **約 34 µs** ——世界 VM の tick 1.62 ms の **2%** にすぎない。
+
+これが言っているのは、規則を Ruby にした値段は**空間の問いではない**ということ。
+1 回 3 µs は `world.iter_entities()`（headless で約 145 エンティティ）と型レジストリの読みロックと
+距離の並べ替えを全部含んだ値で、Ruby で同じことをやれば 1 匹あたり 90 回の読み × 約 75 命令 = 6,750 命令、
+24 匹で 1 フレーム 162,000 命令になる（計画書 §3.2 の見積もりの実測版）。
+残りの 98% は**往復そのもの**——1 パスで約 300 回の読みと 120 回の書き——で、
+そこを軽くしたければ減らすのは問いの数ではなく読み書きの数。W1 の範囲ではないので触っていない。
