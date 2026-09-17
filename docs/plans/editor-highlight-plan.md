@@ -109,7 +109,7 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 
 1. **Prism の版**: family-mruby の `syntax_highlight.c` が書かれた Prism と `sabiruby/compiler/vendor/prism` の版が違えばトークン名が変わっている。`vendor/prism/include/prism/ast.h` の `pm_token_type_t` を見て合わせる。
 2. **式展開**: Prism は `"a #{b} c"` を `STRING_BEGIN` / `STRING_CONTENT` / `EMBEXPR_BEGIN` / `IDENTIFIER` / `EMBEXPR_END` / `STRING_CONTENT` / `STRING_END` と刻む。中の `b` は 0（既定）で正しい。family-mruby の分類表がどうしていたかを見て揃える。
-3. **メソッド名（分類 8）は字句だけでは決まらない**: family-mruby は「直前のトークンが `def` か `.`」で判定している（字句コールバックの中で前のトークンを覚える）。同じ形にする。
+3. **メソッド名（分類 8）は字句だけでは決まらない**: family-mruby は字句の後に**構文木をもう一度歩く第 2 段**（`pm_visit_node`: `PM_CALL_NODE.message_loc` → 8、`PM_DEF_NODE.name_loc` → 8、`PM_SYMBOL_NODE` 全体 → 5）を持っている。`tell :all` / `sleep 0.5` / `every 60 do` のように `.` も `def` も付かない呼び出しはこれでしか塗れない。同じ形にする（初版の「直前のトークンで判定」は事実誤認。H0 の担当が見つけた）。
 4. **UTF-8**: 分類表はバイト単位、egui の `append` は `&str` を取る。日本語のコメント（箱庭の脚本に多い）で**文字の途中で区切らない**こと。行を `char_indices` で歩き、分類が変わるバイト位置が文字境界であることを確かめる（Prism のトークン境界は文字境界なので合うはずだが、テストで日本語コメントを 1 行入れる）。
 5. **ブラウザの橋が無いとき**: `window.gardenHighlight` が未定義（古い playground の `sabi.js` や別のページ）でも落ちない（`catch` して全部 0）。黒画面の再発を避ける（`2026-09-18-web-black-screen.md`）。
 6. **毎フレーム解析しない**（既定 5）。`layouter` は毎フレーム呼ばれる。
