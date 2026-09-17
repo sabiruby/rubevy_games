@@ -774,12 +774,22 @@ pub struct RubyDir(pub PathBuf);
 /// to the species, every beetle restarts on it, and a beetle born an hour later is born running
 /// it. Nothing reaches the disk until Save (`platform::write`), so trying something on the
 /// beetles does not rewrite the project.
+///
+/// **W3 gave it a third slot, and it is not a species.** `ruby/world.rb` is the rules, it is
+/// edited in the same panel by the same three buttons, and what "applied, not saved" means about
+/// it is word for word what it means about `beetle.rb` — so it is the same resource with one more
+/// place in the array rather than a second one beside it. The two indices a species answers are
+/// [`Species::index`]; the third is [`Brains::WORLD`], and nothing else may be there.
 #[derive(Resource, Default)]
 pub struct Brains {
-    applied: [Option<String>; 2],
+    applied: [Option<String>; 3],
 }
 
 impl Brains {
+    /// Where the world's rules sit in `applied`: after the two species, whose slots are their own
+    /// `index()`. It is also the id the editor's third button carries (`window::show_code`).
+    pub const WORLD: usize = Species::ALL.len();
+
     pub fn text(&self, species: Species) -> Option<&String> {
         self.applied[species.index()].as_ref()
     }
@@ -792,7 +802,25 @@ impl Brains {
     pub fn path(&self, ruby: &Path, species: Species) -> PathBuf {
         ruby.join("creatures").join(species.file())
     }
+
+    /// The rules as the editor has them: `None` is "whatever `ruby/world.rb` says" (W3).
+    pub fn world(&self) -> Option<&String> {
+        self.applied[Brains::WORLD].as_ref()
+    }
+
+    pub fn set_world(&mut self, text: Option<String>) {
+        self.applied[Brains::WORLD] = text;
+    }
+
+    /// Where the rules live. They are not under `creatures/`: a creature's file is one of a kind
+    /// the game has two of, and this one is the garden's own.
+    pub fn world_path(&self, ruby: &Path) -> PathBuf {
+        ruby.join(WORLD_FILE)
+    }
 }
+
+/// The rules' file name, in the one place both the loader and the editor read it from (W3).
+pub const WORLD_FILE: &str = "world.rb";
 
 /// How many seeds `world.rb` asked for this frame (`garden.sprout`), read in `answer_world` and
 /// put in the ground by `sprout_plants` a moment later.
@@ -818,6 +846,10 @@ struct WorldMeter {
     last_instructions: u64,
     /// what a pass cost, one entry per frame in which the script ran at all
     passes: Vec<u64>,
+    /// the last of them, which is the figure the HUD draws (W3). The list above is for choosing a
+    /// budget after the run; this is what the rules cost *now*, beside what the creatures cost
+    /// now, which is the comparison the panel is for.
+    last_pass: u64,
     /// the biggest of them, kept here rather than worked out twice
     most: u64,
     /// milliseconds `RubevySet::<World>::tick()` took, this frame and smoothed
@@ -1742,8 +1774,14 @@ fn main() {
         // G6: and the camera, which is the one thing a browser check has no other way to read
         app.insert_resource(CameraLog);
         // the editor's buttons and the two keys, which no headless run can press
-        app.insert_resource(window::WindowTest::after(3.0))
-            .add_systems(Update, window::window_selftest.before(window::inspect_keys));
+        // before both of the systems whose keys it presses: `inspect_keys` reads `F2` and `P`, and
+        // `choose_watched` reads `F3` and `Tab`. A key pressed into `ButtonInput` after the system
+        // that reads it has run in that frame is a key nobody ever sees — `just_pressed` is
+        // cleared in the next frame's `PreUpdate`.
+        app.insert_resource(window::WindowTest::after(3.0)).add_systems(
+            Update,
+            window::window_selftest.before(window::inspect_keys).before(window::choose_watched),
+        );
     }
     if selftest {
         // after `separate`, so what it measures is the world as the frame leaves it
@@ -2464,8 +2502,32 @@ fn give_the_world_its_rules(
 
 /// `ruby/world.rb`, as the file says it.
 fn compile_world(ruby: &Path, mrb: &mut Assets<MrbAsset>) -> Result<Handle<MrbAsset>, String> {
-    let body = platform::read(&ruby.join("world.rb"))?;
+    let body = platform::read(&ruby.join(WORLD_FILE))?;
     compile_world_source(ruby, &body, mrb)
+}
+
+/// **Put a compiled `world.rb` on the world's entity in place of the one it is wearing.**
+///
+/// It is `window::restart_species` for a garden that has one of the thing rather than a dozen,
+/// and it is the road W1's twelfth check already drove (`swap_the_rules`); W3 made it a function
+/// because the editor's `F3` drives the same one. Dropping the `ScriptTask<World>` is what ends
+/// the old rules: rubevy terminates the task and closes the queues it was subscribed to, and the
+/// timer tasks `every` made — which are asleep and have no subscription to lose — stop themselves
+/// the next time they wake, because `run_world` wrote a new `$world_being` over theirs
+/// (`ruby/world_prelude.rb`). The new `Script` becomes a task on the next frame.
+///
+/// **What does not come back is the world's state.** `@season` is an instance variable of the
+/// object the old script made, and the new script makes a new one — so a garden whose rules are
+/// replaced opens in the wet season again, exactly as a beetle handed a new behaviour has
+/// forgotten what it ate. What *is* kept is everything the rules wrote into components: a
+/// `Breeding` cooldown outlives the rule that set it, which is most of why it is a component
+/// (W2).
+fn wear_the_rules(commands: &mut Commands, entity: Entity, handle: Handle<MrbAsset>) {
+    commands
+        .entity(entity)
+        .remove::<ScriptTask<World>>()
+        .remove::<rubevy::ScriptDone<World>>()
+        .insert(Script::<World>::for_vm(handle).with_name("world"));
 }
 
 /// `world_prelude.rb` and one world, compiled as one program — which is why neither needs a
@@ -3226,11 +3288,7 @@ fn swap_the_rules(
         };
         match compiled {
             Ok(handle) => {
-                commands
-                    .entity(entity)
-                    .remove::<ScriptTask<World>>()
-                    .remove::<rubevy::ScriptDone<World>>()
-                    .insert(Script::<World>::for_vm(handle).with_name("world"));
+                wear_the_rules(commands, entity, handle);
                 Ok(())
             }
             Err(why) => Err(why),
@@ -4052,6 +4110,7 @@ fn world_clock_end(
     meter.last_instructions = ran;
     if pass > 0 {
         meter.most = meter.most.max(pass);
+        meter.last_pass = pass;
         meter.passes.push(pass);
     }
 }
@@ -5342,3 +5401,4 @@ mod tests {
         assert!(up < -0.999, "{up}");
     }
 }
+
