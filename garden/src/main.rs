@@ -953,6 +953,14 @@ impl Default for Births {
 /// So each newborn waits here for its two frames and is then told what the sky is doing, on its
 /// own. It is a list rather than a component because what is waited for is frames of the
 /// creatures' VM, which is the thing the list is counted in.
+///
+/// **A creature read out of a save file is one of these too** (2026-09-18). `load_world` builds a
+/// body and calls `give_mind`, exactly as `children_arrive` does, and the script it hangs there
+/// is exactly as deaf — so a garden saved at night and opened again had every creature walking
+/// about until morning. It goes on the same list and is told by the same system; it is not a
+/// newborn in the world's terms (`Creature::age` is the age it was saved with, and the rules do
+/// not treat it as a child) but it is a newborn in the only sense this list means: a script that
+/// has not heard anything yet.
 #[derive(Resource, Default)]
 struct Newborns {
     /// the creature, and how many frames it has waited
@@ -3600,6 +3608,9 @@ fn children_arrive(
 /// five frames clear of the night, and five frames is all the room there is
 /// (`docs/worklog/2026-09-17-selftest-flakes.md` §4).
 ///
+/// The same is true of a creature built out of a save file, which has a body and a fresh script
+/// and has heard nothing either — see [`Newborns`] and `load_world`.
+///
 /// The cure is not a wider window in the check but the missing letter: the sky is said again, to
 /// each newborn on its own, as soon as it can hear it. There is no way for the game to ask rubevy
 /// whether a task has subscribed yet — `subscriptions` lives inside its `HostState` — so what it
@@ -4679,12 +4690,28 @@ fn write_a_save_from_another_version() -> String {
 /// so a loaded garden has no minds left over from the one before it. Then the same three spawn
 /// functions the world was built with the first time, and `give_mind` again: a creature read out
 /// of a file is not a special kind of creature.
+///
+/// **And it is told what the sky is doing** (2026-09-18). A creature made here is exactly as deaf
+/// as a creature made by `children_arrive`: its script has not subscribed to anything yet, and
+/// `"night"` and `"day"` are said once each, at the turn. A garden saved in the dark and opened
+/// again therefore used to come back with every creature walking about until morning — the same
+/// hole the newborns had, found from the other end (`docs/worklog/2026-09-18-selftest-fixes.md`,
+/// §5). So every creature the file makes goes on [`Newborns`] and hears the sky two frames later,
+/// by the same road and with the same wait.
+///
+/// It is told **whatever the sky is**, not only when it is night. "Only if `sky.night`" would be
+/// a second copy of `day_night`'s list of what the sky can say, kept in step by hand, and it
+/// would buy one publish per creature on a daytime load — a `"day"` to a creature that is already
+/// awake, which is what `on(:day)` does with it anyway. The duplicate is cheaper than the flag,
+/// which is the same trade `tell_newborns_the_sky` already makes for a birth on the turning
+/// frame.
 fn load_world(
     mut commands: Commands,
     time: Res<Time>,
     loading: Res<Loading>,
     mut sky: ResMut<Sky>,
     mut note: ResMut<SaveNote>,
+    mut newborns: ResMut<Newborns>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
@@ -4699,6 +4726,10 @@ fn load_world(
         commands.entity(entity).despawn();
         gone += 1;
     }
+    // whatever was still waiting for its word belonged to the garden that has just been thrown
+    // away (F9 over a running world): those entities are gone, and `tell_newborns_the_sky` would
+    // drop them anyway for having no `Mind`
+    newborns.waiting.clear();
 
     for plant in &save.plants {
         // whether a plant is a bush or a tuft is the model's business, so it is rolled again
@@ -4733,6 +4764,8 @@ fn load_world(
             parent: None,
         });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, creature.species);
+        // it has a body and no ears yet, which is the whole of what a newborn is here
+        newborns.waiting.push((entity, 0));
         if !creature.memory.is_null() {
             pending.push((entity, creature.memory.clone()));
         }
