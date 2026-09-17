@@ -3783,29 +3783,38 @@ fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>, dice: Res<Dice
     // frame's worst case is 16 ms, which is the whole of one at 60 Hz. So the second VM gets a
     // number of its own, and the number is a measurement rather than a feeling.
     //
-    // What one pass of `each_frame` costs was fitted over 5,369 frames of a ninety-second run:
+    // **What one pass of `each_frame` costs was measured at the garden's own caps** (W3). The
+    // rules cap themselves: `world.rb` holds the grass at 90 blades (`plant_cap`) and [`POP_MAX`]
+    // holds the creatures at 24, so there is a worst case and it can be sat in. A build rigged to
+    // start with more grass than the rules allow and a full population was run for a minute three
+    // times, and the 392 frames in which the field stood at 90 blades with 24 creatures on it say:
     //
-    //     instructions ≈ 262 + 159 × plants + 280 × creatures        (rms 86 on about 10,000)
+    //     instructions   median 24,670   99th 25,782   worst 25,837
+    //     the tick       median 2.65 ms  99th 4.60 ms  worst 4.86 ms
     //
-    // The rules cannot outgrow that, because the garden's size is itself one of them: `world.rb`
-    // holds the grass at 90 blades and `POP_MAX` holds the creatures at 24, which the law puts at
-    // 21,300 — and a run rigged to sit at the caps measured **20,128 at its worst**, so the law
-    // holds where it matters. `45_000` is what the same law gives for a garden **twice** the caps
-    // (180 blades and 48 creatures: 42,300), rounded up: a `world.rb` of this shape can never
-    // reach it, and one rewritten to be twice the work still cannot. It is a little under a
-    // quarter of the creatures' VM's 200,000, which says in one number which of the two is the
+    // `45_000` is **1.74 times the worst of those**: the rules can be rewritten into half as much
+    // work again before the budget is anything a player meets, and a rule that has run away — a
+    // loop with no `sleep` in it — is stopped inside one frame either way. It is a little under a
+    // quarter of the creatures' VM's 200,000, which says in one number which of the two VMs is the
     // guest here.
     //
-    // **`frame_time` is left at rubevy's 8 ms, and that is also a decision the measurement made.**
-    // At the caps the rules take 2.67 ms at the median and 4.45 ms at the 99th frame in a hundred
-    // on the machine this was measured on, so 8 ms is already a guard with room rather than a
-    // reservation — and, at the rate measured here (0.19 ms per thousand instructions), 8 ms *is*
-    // about 41,000 instructions. The two numbers name almost the same limit, which is the point:
-    // whichever bites, it bites in the same place. Lowering the time as well would be choosing a
-    // number from this machine's clock for a game that also runs in a browser several times
-    // slower (`docs/web.md`), where the instruction count is the same and the milliseconds are
-    // not. The budget is the guard that is a fact about the rules; the frame time is a fact about
-    // a machine, and it is the one left alone.
+    // W1 chose the same number a different way, and W3 had to take the reasoning back: it fitted
+    // `262 + 159 × plants + 280 × creatures` over a run (residual 0.9%) and read the law off at a
+    // garden of *twice* the caps. W2's rules are not that law any more — fitted the same way they
+    // give a residual of 5% and, read off at the caps, they are 22% under what the caps actually
+    // measure. Pairing is a search over the creatures that are full enough rather than a pass over
+    // all of them, and a cost that is not linear in the population cannot be extrapolated past
+    // one. **The number did not move; what it rests on did** — from a law read off the end of its
+    // range to a measurement taken where the rules stop.
+    //
+    // **`frame_time` is left at rubevy's 8 ms.** At the caps the rules take 2.65 ms at the median
+    // and 4.60 ms at the 99th frame in a hundred on the machine this was measured on, so 8 ms is a
+    // guard with room rather than a reservation. The two guards no longer name the same limit as
+    // they did in W1 — at the rate measured here (about 9,300 instructions per millisecond) 45,000
+    // is roughly 4.8 ms — which means **the instruction count is what bites first**, and that is
+    // the right way round: instructions are a fact about the rules and are the same number in a
+    // browser several times slower (`docs/web.md`), while milliseconds are a fact about whichever
+    // machine is running them.
     scripts.budget = 45_000;
 
     // **The world's dice, so that two runs are not the same run** (W2).

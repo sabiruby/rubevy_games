@@ -12,19 +12,22 @@ below.
 
 ![the garden at 22 seconds: evening, long shadows over a green field that runs on past the wall and fades into the sky, a line of trees along the far edge, Kenney tufts and bushes of grass, scattered rocks, cream rabbits and blue-green beetles walking about](garden.png)
 
-**This file describes stages G0 to G9** (`docs/plans/garden-plan.md`): the
+**This file describes stages G0 to G9 and W1 to W3** (`docs/plans/garden-plan.md`,
+`docs/plans/garden-world-plan.md`): the
 world, the models in it, the two kinds of behaviour — a Ruby task per creature and a task per handler —
 the `Genome`, a Rust struct that is also a Ruby class, which the creatures mix and mutate to
 breed, the save file, which is the world and every creature's own memory as JSON, the window —
 a creature's file rewritten while the garden runs, the whole world stopped with `P` and the VM
 looked into while it stands still, and a
 HUD that says what a decision costs — and the browser build, which is the same game at
-<https://sabiruby.github.io/rubevy_games/garden/>.
+<https://sabiruby.github.io/rubevy_games/garden/> — and, since W1, **the rules themselves**: the
+grass, hunger, eating, pairing and starving are `ruby/world.rb` in a second VM, edited with `F3`
+and `Ctrl+Enter` like a creature's file and swapped without stopping the garden.
 
 ```
 cargo run -p garden                                     # a window
 cargo run -p garden -- --headless 90                    # no window, 90 seconds, the result on stdout
-GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the ten checks
+GARDEN_SELFTEST=1 cargo run -p garden -- --headless 90  # and the thirteen checks
 GARDEN_SELFTEST=1 cargo run -p garden                   # a window, and the editor's and the keys'
 cargo run -p garden -- --headless 30 --save g.json      # and write the garden down at the end
 cargo run -p garden -- --load g.json                    # and pick it up again
@@ -57,9 +60,10 @@ hand against volumes of its own.
 | H, or ? | the in-game guide, in English or Japanese — the buttons at its top switch (G6, G6b) |
 | F1 | the editor |
 | F2 | the VM panel — **closed until it is asked for** (G9) |
+| F3 | the rules of the world — `ruby/world.rb` in the editor (W3) |
 | P | **stop the world** (G9): every rule of the garden and the VM both; the garden keeps drawing |
-| Ctrl+Enter | Apply: run the edited text in every creature of that species |
-| Ctrl+S | Save: write it to `beetle.rb` / `rabbit.rb` |
+| Ctrl+Enter | Apply: run the edited text in every creature of that species — or, on `world.rb`, in the world |
+| Ctrl+S | Save: write it to `beetle.rb` / `rabbit.rb` / `world.rb` |
 | F5 | write the garden to `garden.save.json` (G3) — the HUD has a button for it too |
 | F9 | read it back (likewise) |
 
@@ -249,16 +253,17 @@ line, the registration — is the number the plan asks for.
 
 | component | fields | as Ruby sees it | what the rules do with it |
 |---|---|---|---|
-| `Plant` | `size: f32` | `{size: 0.42}` | grass: grows by 0.06/s up to 1.4, is eaten down, and the entity goes when there is nothing left. No `Collider` — walking into grass is how it is eaten |
+| `Plant` | `size: f32` | `{size: 0.42}` | grass. `ruby/world.rb` grows it by 0.06/s up to 1.4, takes a bite out of it and despawns what is left under 0.02. No `Collider` — walking into grass is how it is eaten |
 | `Tree` | — (unit) | `{}` | an obstacle, not food. Fixed, with a `Collider` |
 | `Rock` | — (unit) | `{}` | the same, lower down |
 | `Collider` | `radius: f32` | `{radius: 0.4}` | how much room a solid thing takes on the ground. Creatures, trees and rocks have one |
-| `Creature` | `species: Species`, `age: f32`, `genome: Genome` | `{species: :Beetle, age: 12.5, genome: {speed: 2.31, sight: 8.4, appetite: 0.97}}` | `age` counts up; `genome` is what the rules read for the top speed, the sight radius and the hunger rate (G2, below) |
-| `Hunger` | `f32` (tuple) | `[62.3]` | 100 is full, 0 is dead. Falls by 1.6/s, rises by eating |
+| `Creature` | `species: Species`, `age: f32`, `genome: Genome`, `parent: Option<Entity>` | `{species: :Beetle, age: 12.5, genome: {…}, parent: {Some: [<Entity>]}}` | `age` is counted up by the rules themselves, which is what makes `age == 0.0` mean "no pass has touched this one yet"; `parent` is who asked for it, and the two together are how `world.rb` finds a creature that has just been born (W2). `genome` is what the rules read for the top speed, the sight radius and the hunger rate (G2, below) |
+| `Hunger` | `f32` (tuple) | `[62.3]` | 100 is full, 0 is dead. `world.rb` empties it at 1.6/s × the creature's `appetite`, fills it by eating, charges 30 of it for a child, and despawns the creature at 0 |
 | `Velocity` | `Vec2` (tuple) | `[[1.2, -0.7]]` | integrated into `Transform` on XZ, clipped to the creature's top speed, stopped by the walls |
 | `Sight` | `f32` (tuple) | `[8.0]` | how far `garden.nearest(:Plant)` looks for the creature that asked. It is set at birth from the creature's own `genome.sight`, which starts near 8 for a beetle and 12 for a rabbit |
 | `Memory` | — (unit) | `{}` | that this creature remembers things. It stayed a marker at G3, which is the finding rather than an omission: what it remembers is a Ruby Hash in the VM, and the save file reads it from there (below) rather than keeping a second copy here |
-| `Transform` | Bevy's | `{translation: [x, y, z], rotation: [...], scale: [...]}` | position, facing and — for a plant — its size again, as `scale` |
+| `Breeding` | `ready_at: f32`, `partner: Entity` | `{ready_at: 41.2, partner: <Entity>}` | **written from Ruby** (W2): the earliest the rules may tell this creature about a partner again, in the garden's own clock (`garden.now`), and who it was last told about, so that a child can be charged to both parents. "Nobody" is `Entity::PLACEHOLDER` rather than `None`, because a Hash cannot turn a `None` into a `Some` (below) |
+| `Transform` | Bevy's | `{translation: [x, y, z], rotation: [...], scale: [...]}` | position, facing and — for a plant — its size again, as `scale`, written by `plants_wear_their_size` from the number `world.rb` set |
 
 `Species` is a field-less enum and is registered too, so it reads as a Symbol: `:Beetle`,
 `:Rabbit`. `Genome` is a struct nested inside `Creature`, and reflection walks into it without
@@ -266,7 +271,7 @@ being asked — which is how the same three numbers that a Ruby object has metho
 plain Hash (see **The genome** below). `Transform` is registered by hand because `MinimalPlugins` (the headless run) does not
 register it and `DefaultPlugins` does.
 
-**What is deliberately *not* in the table.** `Sun`, `Mind`, `Eating`, `Animated`, `Fasting` and
+**What is deliberately *not* in the table.** `Sun`, `Mind`, `Eating`, `Animated`, `Fasting`, `WorldScript` and
 `Probe` are components of the game that derive neither `Reflect` nor anything else, and are not
 registered. A type nobody registered reads as `nil` from Ruby, answers `false` to `has?` and is
 absent from `components` — so *not registering* is the whole of the access control there is, and
@@ -276,37 +281,146 @@ it has a model at all.
 
 ## The rules
 
-Every rule is a Rust system in `garden/src/main.rs`, in this order each frame:
+**Every rule is Ruby** (W1, W2). `garden/ruby/world.rb` is the grass, hunger, eating, starving,
+pairing and the child; the numbers are in it too, and it is edited in the same panel a creature's
+file is edited in, with `F3` and `Ctrl+Enter`, while the garden goes on running. It was five Rust
+systems and a dozen `const`s nobody outside the source could reach; what is left in Rust is the
+*mechanics*, and the line between the two is the whole of this stage:
 
-| system | what it does | what it publishes |
-|---|---|---|
-| `day_night` | turns the sun, recolours it, the ambient light and the sky | `"night"` / `"day"` to everyone, at the moment it flips |
-| `move_creatures` | `Velocity` into `Transform` on XZ, top speed, walls, facing | |
-| `separate` | nothing walks through anything solid (below) | `"bumped"` to each creature pushed, with the other thing |
-| `grow_plants` | `Plant.size` up, and into `Transform.scale` | |
-| `sprout_plants` | a new plant now and then, up to 90, not on top of another | |
-| `get_hungry` | `Hunger` down, `age` up | |
-| `eat` | a distance test; a bite out of the plant, the same into `Hunger` | `"ate"` to that creature when a meal *begins*, with the size of the plant it has sat down to |
-| `startle` | a rabbit within 1.3 of a beetle | `"touched"` to the beetle, with the rabbit as a `Rubevy::Entity` — once per contact, not once per frame |
-| `court` | two creatures of one species within 2.0 of each other, both over 75 full, neither on a cooldown, and fewer than 24 creatures alive | `"mate"` to **one** of the two, with the other as a `Rubevy::Entity` |
-| `starve` | `Hunger` at 0 → `despawn` | |
-| `answer_garden` | the four questions a script may ask (below) — in `RubevySet::Answer` | |
-| `hatch` | the children `garden.spawn` asked for this frame, and what they cost their parents | |
-| `watch_minds` | reads each script's instruction count and the line it stands on | |
+| Ruby — `ruby/world.rb`, one pass per frame | Rust — `garden/src/main.rs`, each frame |
+|---|---|
+| the grass: grows, is capped, sprouts (and how often depends on the season) | `day_night` — turns the sun, recolours it, the ambient light and the sky, on the `day_length` the rules handed over. Publishes `"night"` / `"day"` |
+| hunger: falls by the creature's `appetite`, rises by eating, kills at 0 | `move_creatures` — `Velocity` into `Transform` on XZ, top speed, walls, facing |
+| eating: what is in reach, how big a bite is, what it is worth | `separate` — nothing walks through anything solid; publishes `"bumped"` |
+| pairing: how full, how near, how long a cooldown, what a child costs | `startle` — a rabbit within 1.3 of a beetle; publishes `"touched"` |
+| the seasons (`every 60`), and what the world says out loud (`tell`) | `answer_world` / `answer_garden` — the questions either VM may ask |
+| `day_length`, `child_hunger` and `pop_max`, handed to the game once by `garden.rules` | `sprout_plants`, `children_arrive` — the **bodies** the rules asked for: where a seed lands, what a newborn is made of |
+| | `plants_wear_their_size`, `note_the_rules` — the drawing of a number the rules wrote, and what a rule *did* to the world, read from outside |
+| | `watch_minds` — each script's instruction count and the line it stands on |
 
 and one system runs at `Startup` and never again: `install_genome`, which is
 `Genome::register(&mut world.vm)` — the whole of putting a class of the game's own in the VM.
 
-`starve` despawns the entity, and that is all it does about the script that was on it: removing an
-entity removes its `ScriptTask`, and rubevy's `on_remove` hook terminates the task in the VM and
-closes the queues anything of its was parked on, which raises `Rubevy::Unsubscribed` in a handler
-task instead of leaving it standing for ever (rubevy `docs/host-api.md`, "Events"). A creature
-that starves therefore takes its behaviour and its four or five handler tasks with it, and nothing in
-this file says a word about that.
+The rules despawn a creature with `Rubevy.despawn`, and that is all anything does about the script
+that was on it: removing an entity removes its `ScriptTask`, and rubevy's `on_remove` hook
+terminates the task in the VM and closes the queues anything of its was parked on, which raises
+`Rubevy::Unsubscribed` in a handler task instead of leaving it standing for ever (rubevy
+`docs/host-api.md`, "Events"). A creature that starves therefore takes its behaviour and its
+handler tasks with it, and nothing in either file says a word about that.
 
 `publish` to a name nobody has subscribed to does nothing at all, which is why the game may
-publish freely — all five of these were already wired up in G0, when nothing in the world was
+publish freely — all of these were already wired up in G0, when nothing in the world was
 listening, and G1 added no `publish` call at all.
+
+**Three of the numbers above are in two places on purpose.** `DAY_LENGTH`, `CHILD_HUNGER` and
+`POP_MAX` are still `const`s in `main.rs`, because the game has to have an answer before
+`world.rb` has spoken — and for ever, in a garden whose `world.rb` will not compile. `PLANT_MAX`
+and `HUNGER_MAX` are in both files saying two different things: here they are what the world is
+*built* with and what a bar draws as full, there they are what a rule stops at.
+
+## The world's own VM (W1, W2)
+
+There are **two SabiRuby VMs in the binary**, and the second one is the rules. rubevy takes a type
+as a name tag — `RubevyPlugin::<World>::for_vm(dir)`, `ScriptWorld<World>`, `RubevySet::<World>::tick()`
+— and the tag implements nothing, holds nothing and costs nothing at run time (rubevy
+`docs/host-api.md`, "Two VMs in one app"). The creatures' VM is the app's first and is spelled
+exactly as it always was.
+
+It is two rather than one more task in the first because the rules and the creatures are **two
+pieces of somebody else's writing and the editor swaps either without the other**: a `world.rb`
+that runs away must not be able to spend the beetles' frame, and a constant one of them defines
+must not be able to reach the other. What it costs is that a message published in one does not
+reach the other, which is why `tell` goes through Rust.
+
+### The order of the two ticks is the whole arrangement
+
+Nothing in rubevy orders two VMs against each other; each plugin chains its own three sets and no
+more. Three lines in `main` do it, and the garden depends on every one:
+
+```
+the Rust mechanics  →  the world's tick  →  the world's answers  →  the creatures' tick
+```
+
+* the mechanics are `.before(RubevySet::<World>::tick())`, because a `Transform` they have just
+  written is the `Transform` `garden.within` measures from, in the same frame;
+* the world's tick is `.before(RubevySet::Tick)`, so a `Hunger` the rules worked out this frame is
+  the `Hunger` a beetle reads in the *same* frame's tick — a read is answered inside the tick that
+  asks it (`docs/worklog/2026-09-17-sync-reads.md`);
+* the world's **answers** are `.before(RubevySet::Tick)` too, and that is what makes `tell` arrive
+  in the frame it was said rather than the one after.
+
+The world's tick also carries the `is_still` run condition the deleted rule chain used to carry,
+so `P` and a save being read back stop the rules the way they stopped the systems.
+
+### One pass is one frame
+
+```ruby
+each_frame do |dt|   # every blade, every creature, once
+```
+
+is a loop that waits on `Rubevy.ask("frame")`, and one round trip is one frame. It works because
+that is the **only** thing the rules ask that costs a frame (the table under **The questions**),
+so the count comes out exact: over a ninety-second run, 5,373 frames and 5,372 passes, the two
+missing ones being the script starting up.
+
+`every 60 do |n| … end` is a second task in the same VM that only sleeps; the scheduler already
+has "a task asleep until a time", and it is the same clock that makes a creature's `sleep 0.2`
+mean something — so a pause stops the seasons too, and eleven seconds left of a season is eleven
+seconds left after the pause. A timer has no subscription to lose, so ending the world's task does
+not end it: `run_world` writes `$world_being`, and a timer that wakes to find somebody else's
+there stops itself. That is one line, and without it a `world.rb` replaced in the editor leaves
+its seasons ticking behind it.
+
+`tell :all, "season", "wet"` is a question `answer_world` turns into `ScriptWorld::publish` on the
+creatures' VM. What arrives is indistinguishable from what `startle` or `day_night` publishes,
+because it is the same function — so `on(:season)` in `beetle.rb` needed no new machinery at all.
+
+### The budget, and where the number comes from
+
+The budgets are **per VM and nothing caps them together**: two VMs at rubevy's defaults would
+allow 16 ms in one frame, which is the whole of one at 60 Hz. So the second VM has a number of its
+own, and it is a measurement.
+
+The rules cap their own world — `world.rb` holds the grass at 90 blades and `pop_max` holds the
+creatures at 24 — so there is a worst case and it can be sat in. A build rigged to start with more
+grass than the rules allow and a full population, three runs of a minute, 392 frames with the
+field at 90 blades and 24 creatures on it:
+
+| | median | 99th frame in a hundred | worst |
+|---|---|---|---|
+| instructions in one pass | 24,670 | 25,782 | 25,837 |
+| the world's tick | 2.65 ms | 4.60 ms | 4.86 ms |
+
+`budget = 45_000` is **1.74× the worst of those**, and a little under a quarter of the creatures'
+200,000 — which says in one number which of the two VMs is the guest. `frame_time` is left at
+rubevy's 8 ms: at about 9,300 instructions to the millisecond, 45,000 is roughly 4.8 ms, so **the
+instruction count is what bites first**, and that is the right way round. Instructions are a fact
+about the rules and are the same number in a browser several times slower; milliseconds are a fact
+about whichever machine is running them.
+
+(W1 chose the same number from a straight-line fit of cost against population, read off at a
+garden of twice the caps. W2's pairing is a search over the creatures that are full enough rather
+than a pass over all of them, and the fit stopped describing it — 5% residual where it had been
+0.9%, and 22% under the truth at the caps. The number did not move; what it rests on did.)
+
+### What the rules do not keep
+
+**The world's state is not in the save file.** `@season` is an instance variable of the object
+`world.rb` made, and the game writes down the garden — plants, creatures, genomes, each creature's
+own `@memory` — and not the rules' bookkeeping. So `F9` opens a garden whose season is whatever
+the rules start in, and `Ctrl+Enter` does the same, for the same reason a beetle handed a new
+behaviour has forgotten what it ate. What *is* kept is everything the rules wrote into components:
+a `Breeding` cooldown outlives the rule that set it, which is most of why it is a component.
+
+**A `world.rb` that will not compile is not a reason to refuse to start.** It is a file the player
+is invited to edit. The garden runs: the sun turns, the creatures walk and push each other about,
+the grass does not grow and nobody gets hungry — and the HUD says so in one line. Measured, with a
+syntax error in it and with the file missing:
+
+```
+the world has no rules: world.rb: world.rb:214:3: syntax error, unexpected 'end', …
+the world has no rules: …/garden/ruby/world.rb: No such file or directory (os error 2)
+```
 
 ## Solid things
 
@@ -468,6 +582,34 @@ garden.spawn(species: name, genome: child.to_h, at: [x, z])  # => true, or a str
 that the answer can be an **object** rather than one of `Answer`'s flat shapes. `garden.spawn` is
 the other direction: its argument is a Hash, which arrives as `Arg::Value` — the Ruby value
 itself, not a copy — and the game reads it with `Vm::hash_entries` and `FromRuby`. Both are below.
+
+### And the ones the *rules* ask (W1, W2)
+
+`world.rb` runs in a VM of its own and has a proxy of its own, answered by `answer_world` and by
+two closures registered with `ScriptWorld::answer_in_tick`. The important column is the last one:
+
+| the rules say | what it is | frames |
+|---|---|---|
+| `Rubevy.ask("frame").pop` | `answer_world`, a system. One round trip is one frame, which is what makes `each_frame` run **exactly once** a frame | **1** |
+| `garden.within(c, 1.1, :Plant)` | `answer_in_tick`: a closure the tick calls between two runs of the VM, walking the world in Rust and answering `Answer::Rows` — `[the entity's bits, how far]`, nearest first | 0 |
+| `garden.now` | `answer_in_tick`: the garden's own clock, the one `P` holds and a save carries | 0 |
+| `garden.seed` | `answer_in_tick`: one roll of the game's `Dice`, which is seeded from the wall clock, so the rules' own dice differ between runs | 0 |
+| `garden.rules(day_length:, child_hunger:, pop_max:)` | said once, at the start: the three numbers a rule keeps but the game has to build or draw with | 0 |
+| `tell who, "name", payload` | `answer_world` publishes it to the **creatures'** VM. A script cannot publish, and one VM's publish does not cross to the other, so the host carries it | 0 |
+| `sprout` / `garden.spawn` | a seed, a child. Commands rather than questions: nothing `pop`s them, so nothing waits | 0 |
+
+Only the first of them costs a frame, and that is the design: if any of the others did, the frame
+it was asked in would be a frame in which the grass did not grow and nobody got hungry. `within`
+is the one that had to be a closure rather than a system — a rule that looks at every creature
+every frame cannot afford a round trip per creature, and 24 creatures against 90 plants is not a
+loop Ruby should be writing sixty times a second. Measured, it costs **3.1 µs a call and about
+34 µs a frame, 2% of the world's tick**; the other 98% is the round trips themselves — some three
+hundred component reads and a hundred and twenty writes in a pass.
+
+`garden.within` has no per-component code either. The kind arrives as a string and is resolved
+through the type registry to a `ReflectComponent`, exactly as `garden.nearest` and `e[:Hunger]`
+resolve theirs, so `garden.within(c, 3.0, :Rock)` works and so would a kind nothing has registered
+yet.
 
 ## The genome (G2)
 
@@ -857,14 +999,33 @@ the window is not what somebody who came to look at a garden asked for. `F2` ope
 
 Click a creature (or `Tab`) and the editor on the right shows **the file that creature runs**,
 with a band behind the line its behaviour is standing on and the rest of the listing shaded by where
-it keeps coming back to. There are two files in the whole game and two buttons along the top:
-`beetle.rb` and `rabbit.rb`.
+it keeps coming back to. There are three files in the whole game and three buttons along the top:
+`beetle.rb`, `rabbit.rb` and — since W3 — `world.rb`, which `F3` opens.
 
 | button | key | what it does |
 |---|---|---|
 | **▶ Apply to every Beetle** | Ctrl+Enter | compiles the text and restarts **every beetle** on it, in memory; the file is untouched |
 | **Save to file** | Ctrl+S | writes the text to `beetle.rb`; the creatures go back to running their file |
 | **Revert** | | forgets the edits and puts the species back on its file |
+
+**`F3` is the same four buttons about `ruby/world.rb`** (W3), and that turned out to be the whole
+of it: applying a text to a running script, keeping it in memory until Save, writing the file and
+going back to it are facts about *a script the game is showing*, and none of them was ever about
+creatures. What differs is the count — a species restarts a dozen creatures, the rules restart one
+entity — and the sentence each button leaves behind. `Brains` grew a third slot rather than a
+second resource, for the same reason. The rules' button is drawn in the editor's own grey, not a
+species' colour: the two species wear the colour of the model standing in the grass (G8), and the
+rules are not a thing in the grass. It goes dim when `world.rb` will not compile, which is the
+same thing `dim` says about a species with nothing alive running it.
+
+The rules get no band and no shading. Those come from `watch_minds`, which reads the line a
+*creature's* task stands on; the world's script has no `Mind`, and a pass that runs top to bottom
+once a frame has no line it keeps coming back to. What it has instead is the HUD's line —
+`the rules 12,937 / 45000 insn/frame · 0.90 ms` — which is one pass of `each_frame` against the
+budget the measurement above chose.
+
+Nothing about the rules is saved to disk until `Ctrl+S`, exactly as with a creature; in a browser
+that is the `localStorage` key `garden:ruby/world.rb`, beside the two the creatures use.
 
 That is one Apply where Battle has two, and the reason is the whole difference between the two
 games. A robot **has** a file: `3 blue/scout` is one robot running `scout.rb`, and "apply to this
@@ -996,10 +1157,18 @@ clock did not move, no `"night"` or `"day"` can have been published and missed.
 The panel at the top left is one line for the garden and one line per creature:
 
 ```
-15 creatures · 30 plants · day 0.50            VM 1.30 / 8.0 ms
+10 creatures · 43 plants · day 0.25            VM 0.20 / 8.0 ms
+the rules 12937 / 45000 insn/frame · 0.90 ms
 ▸ Beetle 99v0    [=========  ] 92.1     13 insn/f    163 i/dec  beetle.rb:125
   Rabbit 103v0   [=======    ] 75.7     29 insn/f    447 i/dec  rabbit.rb:86
 ```
+
+* **the rules** (W3) — one pass of `ruby/world.rb`'s `each_frame`, against the world VM's own
+  budget, and the wall time its tick took. It is a plainer number than the column below it: the
+  world's script waits on one thing that costs a frame, so the instructions it ran between two
+  frames *are* one pass. It is a line of its own rather than part of `VM … ms` because the budgets
+  are per VM and nothing caps them together — rules rewritten into something expensive should be
+  able to say so without the creatures' figure moving.
 
 * **hunger** — 100 is stuffed, 0 is dead; amber under 55, which is where a beetle's own script
   goes looking for grass.
@@ -1069,10 +1238,10 @@ many tasks the VM holds. The rest is what the window folds under **details**.
 ### The window's own checks
 
 `GARDEN_SELFTEST=1` with a window drives the editor the way a click would (by setting
-`Editor::action`) and presses the two keys, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
-for Battle. Save is left out on purpose, since it writes to the repository. **Twenty-nine lines**
-(twenty-one until G9), all `ok` (through `docker`, lavapipe — and all of them in a browser too, at
-`garden/?selftest`):
+`Editor::action`) and presses the keys for real, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
+for Battle. Save is left out on purpose, since it writes to the repository. **Forty lines**
+(twenty-nine until W3, twenty-one until G9), all `ok` (through `docker`, lavapipe — and all but the
+W3 eleven in a browser too, at `garden/?selftest`):
 
 ```
 selftest: ok   the VM panel starts closed
@@ -1084,7 +1253,7 @@ selftest: ok   2 s paused: nobody got hungrier
 selftest: ok   2 s paused: the day did not turn
 selftest: ok   the VM panel has the creature's frames
 selftest: ok   the panel has the heap counters
-selftest: ok   nothing that was sleeping woke on the resume frame: the next one is due in 16 ticks, as it was two seconds ago
+selftest: ok   nothing that was sleeping woke on the resume frame: the next one is due in 17 ticks, as it was two seconds ago
 selftest: ok   P again gives the budget back
 selftest: ok   the creatures are thinking again
 selftest: ok   and the garden moves again: somebody has walked
@@ -1104,13 +1273,31 @@ selftest: ok   the whole VM is still running afterwards
 selftest: ok   Revert puts every beetle back on the file
 selftest: ok   Revert shows the file again
 selftest: ok   nothing was written
-selftest: Rabbit 400v0 — 21 ask round trips, … decisions, … insn/decision
+selftest: ok   F3 opens the rules of the world
+selftest: ok   the editor has a third file, and it is not a creature
+selftest: ok   the day is what world.rb says it is
+selftest: ok   typing in the rules marks them edited
+selftest: ok   Ctrl+Enter: the garden is running the edited rules, without stopping
+selftest: ok   the rules the editor applied are the ones in memory
+selftest: ok   Apply does not touch world.rb
+selftest: ok   after Apply the text is what the world runs
+selftest: ok   Revert puts the file's rules back
+selftest: ok   Revert shows world.rb again
+selftest: ok   and nothing is running a text of its own
+selftest: Rabbit 415v0 — 34 ask round trips, 32 decisions, 472 insn/decision
 ```
 
-(The last line's shape changed on 2026-09-17 — `component reads` and `frames/decision` became
-`decisions` and `insn/decision` — and its figures have not been taken again, because these are the
-checks that need a window and this machine runs the headless ones. The `21` is from the run the
-rest of this block came from; the two after it are left blank rather than guessed.)
+(The block above is one run of W3's build, through `docker` and lavapipe. The last line is the
+one whose shape changed on 2026-09-17 — `component reads` and `frames/decision` became `decisions`
+and `insn/decision` — and these are its figures in a window, on a machine drawing with software
+Vulkan, which is why they are four times the headless ones the HUD section quotes.)
+
+**The last eleven are W3's**, and they are the window's half of the twelfth headless check: `F3`
+opens `world.rb`, `day_length 60.0` is typed into `30.0`, `Ctrl+Enter` is pressed as a key, and the
+sun's own period has to be thirty seconds a moment later. `Sky::day_length` is watched because it
+is the one rule that crosses the boundary **as a number** — the sun is drawn in Rust, and only a
+world script that has just started hands it over — so "these rules are the ones running" needs no
+window, no threshold and no statistics. Then Revert, and the day is a minute again.
 
 **They end by asking the app to exit, and only where there is something to exit to.**
 `platform::CHECKS_EXIT_WHEN_DONE` is `true` on a PC — the checks were asked for on a command line
@@ -1518,7 +1705,7 @@ sometimes 49 into a mesh; `tint_species` is an observer that runs once per model
 times in a run. Neither touches the VM, and the headless build — which is where every check lives
 — does not have either of them.
 
-## Running without a window, and the ten checks
+## Running without a window, and the thirteen checks
 
 `--headless N` runs exactly the same systems for N seconds with no renderer and prints every
 creature — where it is, what it has cost its script, and the line of its own file that script is
@@ -1585,8 +1772,9 @@ its components, does not get its answers, or does not hear an event:
 
 and one is about the genome (G2), which is the whole round trip in a single line of the log:
 
-8. **a child was born whose genome is its parents', mixed and mutated.** The rule records both
-   parents' genomes when it publishes `"mate"`; when the child arrives, every one of its three
+8. **a child was born whose genome is its parents', mixed and mutated.** Both parents' genomes
+   are read off the creature that asked for the child and its `Breeding.partner`, in
+   `answer_spawn`; when the child arrives, every one of its three
    genes has to lie within the mutation rate (a tenth) of the parents' mean, and at least one has
    to differ from both parents — a child exactly on the mean would mean `mutate` did nothing, and
    a child on a parent would mean `mix` did nothing. It fails if the class did not register, if
@@ -1620,6 +1808,29 @@ and two are about the save file (G3 and G5):
     and the check would fail rather than pass by luck. (A run given a `--load` of its own keeps it,
     and then this check says it did not run.)
 
+and three are about the rules being Ruby (W1 and W2), which is to say they fail if `world.rb` is
+not what is running the garden:
+
+11. **the rules in `world.rb` are running the world.** Some plant is bigger than it was, within two
+    seconds of the start. Nothing in Rust grows grass any more, so the one thing that can have
+    made a `Plant.size` go up is a pass of `each_frame`; the line also reports how many passes the
+    whole run took, which is where "one pass is one frame" is checked against the frame count.
+
+12. **the rules can be taken away and given back while the world runs.** At 20 s the world's
+    script is swapped for one whose `each_frame` is empty — by exactly the road `F3` and
+    `Ctrl+Enter` drive — and for five seconds afterwards no creature's meter may fall. Then the
+    real rules go back and one has to fall again. It is the check that says the rules are a *file*
+    and not a copy of a file: everything still in Rust (the sun, the walking, the pushing apart)
+    carries on through those five seconds, so what stopped is these rules and not the world. The
+    window's own checks (below) do the same thing through the panel, and watch `day_length`.
+
+13. **what the world declares reaches a creature's memory.** `world.rb` opens with
+    `tell :all, "season", "wet"`; a beetle's `on(:season)` writes it into `@memory`, and the check
+    reads that Hash out of the VM the way the save file does. It fails if `tell` did not become a
+    `publish`, if the world's answers were scheduled after the creatures' tick, or if the payload
+    lost its shape on the way across. Measured at 0.03 s — the first frame in which both scripts
+    are running.
+
 ```
 $ GARDEN_SELFTEST=1 ./target/release/garden --headless 90
 selftest: a beetle with no behaviour and nothing to eat stands at (-17.0, -12.0)
@@ -1645,15 +1856,18 @@ Rabbit 106v0   hunger  54.8  age  90.0  at (  -0.8,    1.5)  v (  0.0,   0.0)   
 19 creatures, 40 plants, night at phase 0.58
 15 × Beetle: mean genome speed 2.13, sight 8.0, appetite 0.96 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
 4 × Rabbit: mean genome speed 3.29, sight 10.5, appetite 1.04 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
-selftest: ok   somebody ate within 10 s (first at 1.08 s)
+selftest: ok   somebody ate within 10 s (first at 0.43 s)
 selftest: ok   night arrived by 60 s (at 25.21 s)
-selftest: ok   the starved creature's entity is gone (109v0 starved at 1.89 s)
-selftest: ok   nothing walked through anything over 5358 frames (closest pair 0.956 of the radii, 0 frames under 0.9)
-selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.84 s)
-selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (42/42)
-selftest: ok   the creatures were asleep a second after night fell (15 of them, fastest 0.000 at 26.22 s)
-selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 5.39 s: speed 2.166 vs 2.184/2.069, mean 2.127; sight 8.124 vs 8.757/8.667, mean 8.712; appetite 0.985 vs 0.966/1.107, mean 1.037 (mutated off both parents)) [8 pairings, 7 children]
+selftest: ok   the starved creature's entity is gone (120v0 starved at 1.90 s)
+selftest: ok   nothing walked through anything over 5375 frames (closest pair 0.975 of the radii, 0 frames under 0.9)
+selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.78 s)
+selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (19/19)
+selftest: ok   the creatures were asleep a second after night fell (14 of them, fastest 0.000 at 26.22 s)
+selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 5.23 s: speed 2.405 vs 2.400/2.000, mean 2.200; sight 8.456 vs 9.000/7.000, mean 8.000; appetite 0.903 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [9 pairings, 5 children]
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
+selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5373 passes of `each_frame`)
+selftest: ok   the rules can be taken away and given back while the world runs (from 20.03 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
+selftest: ok   what the world declares reaches a creature's memory (Beetle 122v0 had "wet" in its @memory at 0.03 s)
 selftest: ok   a save with the wrong version is refused (/tmp/garden-from-another-version.json: saved with version 99, this garden reads 1)
 ```
 
