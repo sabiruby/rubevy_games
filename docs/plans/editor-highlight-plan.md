@@ -122,6 +122,6 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 
 | 段階 | 状態 |
 |---|---|
-| H0 | 未着手 |
+| H0 | **済み**（sabiruby `4e1e1c8` + `1ef2d36`、2026-09-18、main にマージ済み）。2 パス（字句 + 木）。上限は置かない（箱庭のソース全体 64 KB、`world.rb` 16 KB の解析 147 µs）。**H2 の色選びへの申し送り**: 演算子（`=~` `+`）と `me[:Hunger]` の `[` `]` も分類 8（Ruby では呼び出し。family-mruby と同じ）なので、8 の色は演算子に付いても読める控えめなものに。`%i[c]` は外枠 2・中身 5。`:Plant` はシンボル全体が 5 |
 | H1 | 未着手 |
 | H2 | 未着手（残件の枝 `leftovers` のマージ後） |
