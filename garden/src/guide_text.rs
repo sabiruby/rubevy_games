@@ -24,70 +24,64 @@ use rubevy_arena::Guide;
 /// What the `H` panel says about the garden.
 pub fn guide() -> Guide {
     Guide::new(
-        "Garden — what you are looking at",
-        "箱庭 — いま画面で起きていること",
+        "Garden — how to play",
+        "箱庭 — 遊び方の説明",
     )
     .note(
         "Grass grows by itself and the creatures eat it. A beetle or a rabbit that finds nothing \
-         starves; one that has eaten enough goes looking for a mate, and a pair passes a mixture \
-         of both genomes — speed, sight, appetite — to its young.",
-        "草はひとりでに育ち、生き物がそれを食べます。何も食べられなかった甲虫やウサギは餓死し、\
-         十分に食べた個体は相手を探します。つがいになると、速さ・視野・食欲を混ぜた遺伝子が子に渡ります。",
+         to eat starves. One that has eaten enough goes looking for a mate, and a pair passes its \
+         genes — speed, sight, appetite — to its young.",
+        "草は自動で育ち、生き物がそれを食べます。何も食べられなかった虫やウサギは餓死してしまいます。\
+         十分に食べた個体はつがいになる相手を探します。つがいになると、速さ・視野・食欲の遺伝子が子に渡ります。",
     )
     .note(
-        "The sun goes round once a minute. When it sets the creatures stop and sleep — each one \
-         is a Ruby task waiting for the world to publish \"night\" — and the moon is left to show \
-         their outlines.",
-        "太陽は 1 分で 1 周します。日が沈むと生き物は動きを止めて眠ります。\
-         これは Ruby のタスクが世界からの「夜」の知らせを待っているからで、あとは月明かりが輪郭を見せます。",
+        "The sun goes round once a minute. When it sets, the creatures stop and sleep. How a \
+         creature's behaviour changes with its surroundings is written in its behaviour script.",
+        "太陽は 1 分で 1 周します。日が沈むと、生き物は動きを止めて眠ります。\
+         生き物の行動アルゴリズムのスクリプトで、環境の変化による挙動の変化が実装されています。",
     )
     .note(
-        "Every creature's behaviour is a Ruby script running in SabiRuby, a VM written in Rust. It \
-         reads the world through the game's ECS components by name — me[:Hunger], me[:Velocity] \
-         — and the game has no glue code per component at all.",
-        "生き物の行動アルゴリズムは Ruby のスクリプトで、Rust で書かれた VM(SabiRuby)の上で動いています。\
-         世界は ECS のコンポーネントを名前で読みます(me[:Hunger]、me[:Velocity])。\
-         コンポーネントごとの接着コードはゲーム側に 1 行もありません。",
+        "Every creature's behaviour is a Ruby script. It runs on SabiRuby, a VM written in Rust, \
+         and it can read the game's Bevy ECS components — me[:Hunger], me[:Velocity].",
+        "生き物の行動アルゴリズムは Ruby のスクリプトです。Rust で書かれた VM(SabiRuby)の上で動いています。\
+         bevyのECS のコンポーネントを読むことができます(me[:Hunger]、me[:Velocity])。",
     )
     // G6b. The one paragraph added after the author's second play: the panel described what a
     // creature does and never named the thing that makes it answer at once. `on` is the
     // construct a reader will meet first in `beetle.rb`, and `docs/garden.md` explains it at
     // length; this is the sentence that says it is there at all. G7 gave it the three points the
-    // plan asks for: a task of its own beside `run`, `sleep` in it not stopping `run`, and the
-    // controls being held while it acts.
+    // plan asks for; the author's rewrite (2026-09-17) kept two — a task of its own beside `run`,
+    // and `sleep` in it not stopping `run` — and dropped the one about holding the controls.
     .note(
-        "Besides that loop, a creature has handlers. on(:touched) { ... } is a block with a task \
-         of its own, beside the behaviour's run: it waits for one thing to happen to it — a \
-         rabbit walking over it, night falling, a meal starting — and fires the moment that \
-         arrives, while run goes on thinking. A sleep inside the block does not stop run. \
-         Whichever task writes to the body last is what the body does, so a handler holds the \
-         controls for as long as it is acting.",
-        "その繰り返しとは別に、生き物はイベントの処理も走らせています。on(:touched) { ... } は、\
-         自分の身に起きる出来事 — ウサギに触られた、夜になった、食事が始まった — を待ち受けるブロックで、\
-         行動アルゴリズムの run とは別のタスクとして、出来事が届いた瞬間に走ります。\
-         中で sleep しても run は止まりません。\
-         体に最後に書き込んだタスクが勝つので、動いている間は操作を預かります。",
+        "A creature handles events as well. on(:touched) { ... } is a block that waits for an \
+         event — being touched by another creature, night falling, a meal starting — and it runs \
+         as a task of its own, apart from the behaviour's run. Because it is a separate task, a \
+         sleep inside on does not stop run.",
+        "生き物はイベントの処理も実行しています。on(:touched) { ... } は、\
+         他の生き物に触られた、夜になった、食事が始まった、というイベントを待ち受けるブロックで、\
+         行動アルゴリズムの run とは別のタスクとして、実行されます。\
+         別のタスクなので、onの中で sleep を実行しても run は止まりません。",
     )
     .note(
-        "Click a creature and the editor opens on its species' file. Change the text and press \
-         Ctrl+Enter: every creature of that species is handed the new behaviour while the garden keeps \
-         running, and the file on disk is left alone until you press Ctrl+S.",
-        "生き物をクリックすると、その種のファイルがエディタに出ます。書き換えて Ctrl+Enter を押すと、\
-         庭を止めないまま、その種の全個体が新しい行動アルゴリズムに入れ替わります。\
-         ディスクのファイルは Ctrl+S を押すまで書き換わりません。",
+        "Click a creature and its program opens in the editor. Change the text and press \
+         Ctrl+Enter: every creature of that species is handed the new behaviour while the game keeps \
+         running. The file on disk is left alone until you press Ctrl+S.",
+        "生き物をクリックすると、そのプログラムがエディタに表示されます。内容を書き換えて Ctrl+Enter を押すと、\
+         ゲームを止めないまま、その種の全個体が新しい行動アルゴリズムに入れ替わります。\
+         ディスク上のファイルは Ctrl+S を押すまで書き換わりません。",
     )
     .key("H  ?", "this panel", "この説明")
     .key("click", "look at a creature", "生き物を選ぶ")
     .key("Tab", "the next creature", "次の生き物")
     .key("F1", "the editor", "エディタ")
-    .key("F2", "look inside the VM — which line each behaviour is waiting on", "VM の中を見る(どの行で何を待っているか)")
+    .key("F2", "look inside the VM", "VM の状態を見る")
     .key("Ctrl+Enter", "apply the edited behaviour", "編集した行動アルゴリズムを適用")
     .key("Ctrl+S", "write the behaviour to its file", "行動アルゴリズムをファイルに保存")
-    .key("P", "stop the world — the rules too; it goes on being drawn", "世界ごと一時停止(規則も止まる。描画は続く)")
-    .key("F5  F9", "save the garden / read it back", "庭を保存 / 読み込み")
+    .key("P", "pause the world", "世界の一時停止")
+    .key("F5  F9", "save the state / read it back", "状態を保存 / 読み込み")
     .key("drag", "turn the camera round the garden", "視点を回す")
     .key("right-drag  Shift+drag", "slide the view over the field", "視点をスライド")
     .key("W A S D  arrows", "slide the view", "視点をスライド")
-    .key("wheel", "closer / further away, a tenth at a notch", "ズーム(1 ノッチで 10%)")
+    .key("wheel", "zoom in / out", "ズームイン / アウト")
     .key("Home", "put the camera back where it started", "視点を最初の位置に戻す")
 }
