@@ -931,6 +931,29 @@ fn zoom_by(distance: f32, notches: f32) -> f32 {
     (distance * ZOOM_PER_NOTCH.powf(-notches)).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
+/// One `"touched"` the sixth check is watching, and what the half second after it has shown.
+///
+/// The check used to need three fields and one look; it needs these because it now watches the
+/// **whole window** rather than its far end (`watch_turning`).
+#[derive(Debug, Clone, Copy)]
+struct Touch {
+    beetle: Entity,
+    /// when the game published `"touched"` to it
+    at: f32,
+    /// the heading it had at that moment
+    was: Vec2,
+    /// whether any frame since has shown a heading a quarter turn or more off `was`
+    turned: bool,
+    /// the closest any frame came to that, and when — a miss has to be able to say how close it
+    /// got, or "it never turned" is a claim with no size to it
+    closest: f32,
+    closest_at: f32,
+    /// frames inside the window where the beetle was there and readable (not against a wall)
+    looked: u32,
+    /// what it was doing at the last readable frame, for the miss line
+    last: Vec2,
+}
+
 /// `GARDEN_SELFTEST=1`: what the plan asks the world to prove about itself — G0's four things
 /// about the rules, and G1's three about the minds.
 #[derive(Resource)]
@@ -954,8 +977,8 @@ struct SelfTest {
     probe_closest: f32,
     /// when it got there, if it did
     probe_reached: Option<f32>,
-    /// beetles that were touched by a rabbit while walking: when, and which way they were going
-    touched: Vec<(Entity, f32, Vec2)>,
+    /// beetles that were touched by a rabbit while walking, and what has been seen of each since
+    touched: Vec<Touch>,
     /// when each beetle was last put on that list, so that a beetle a rabbit keeps walking into
     /// is looked at once rather than five times: the handler takes half a second to run and the
     /// second message waits in the queue behind the first, so the answer to "did it turn?" for
@@ -2746,7 +2769,16 @@ fn startle(
                             && !by_a_wall(at)
                             && creature.age > NEWBORN_GRACE
                         {
-                            test.touched.push((beetle, now, velocity.0));
+                            test.touched.push(Touch {
+                                beetle,
+                                at: now,
+                                was: velocity.0,
+                                turned: false,
+                                closest: f32::INFINITY,
+                                closest_at: now,
+                                looked: 0,
+                                last: velocity.0,
+                            });
                         }
                     }
                 }
@@ -3872,54 +3904,107 @@ fn watch_probe(
 }
 
 /// **A beetle touched by a rabbit changes heading within 0.5 s.** `startle` notes the beetle and
-/// the way it was going at the moment the game published `"touched"`; half a second later this
-/// looks again. Only a beetle that was actually walking is counted, because "it turned" means
-/// nothing about one that was standing still or asleep.
+/// the way it was going at the moment the game published `"touched"`; this watches the half
+/// second that follows. Only a beetle that was actually walking is counted, because "it turned"
+/// means nothing about one that was standing still or asleep.
+///
+/// **It looks at the whole window, not at the far end of it** (2026-09-17). It used to take one
+/// sample, at `at + 0.5`, and ask whether the heading there was a quarter turn off the one at
+/// `at`. That is a different question from the one the check's own sentence asks — *changed
+/// heading within 0.5 s* — and the difference is not academic: a turn that happened and was over
+/// before the sample read as a turn that never happened. Two ways of it being over:
+///
+/// * **a second `"touched"` inside the window.** The first handler turned the beetle 99°, then a
+///   second message arrived and its handler chose its swerve from the *new* heading, landing 38°
+///   from the one this check remembers. Both handlers did their job; the sample saw the sum.
+///   `TOUCH_SETTLE` keeps a touch from being counted when a message came in the 1.5 s *before*
+///   it, and nothing ever excluded one arriving after.
+/// * **the wheel coming back.** A handler holds it for `sleep 0.5` and this looked at 0.502 s —
+///   the same number on both sides — so the behaviour's next `act` could land inside the sample.
+///   Making the reads synchronous moved the reflex a frame earlier and that was enough to put it
+///   there (`docs/worklog/2026-09-17-sync-reads.md`, sections 8 and 9).
+///
+/// Measured over ten ninety-second runs, the old way missed 7 of 248 counted touches and failed
+/// the check in 4 runs; in 6 of those 7 the beetle was at `DASH` speed at the sample — *still
+/// fleeing*, from a heading newer than `was`.
+///
+/// **No threshold moved.** The window is still 0.5 s and a turn is still `dot < 0.7`; what
+/// changed is that the window is read every frame in it rather than once at its end. Nor did the
+/// rule for what counts as turned: `b == Vec2::ZERO || a.dot(b) < 0.7`, the same expression,
+/// evaluated more often.
+///
+/// What it costs: a frame of the window that turns for a reason of its own now counts. The
+/// behaviour's `wander` rerolls its course with probability 0.25 a pass and a pass is `sleep 0.2`,
+/// so a beetle whose handler never fired has roughly a 38% chance of drifting past a quarter turn
+/// on its own inside half a second. That is the check's sensitivity per touch, not its verdict:
+/// the verdict is over every counted touch in a run (25 or so), and a handler that never fired
+/// would miss most of them. A handler that fires takes the wheel for the whole window, so nothing
+/// else can be what turned it.
 fn watch_turning(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
     creatures: Query<(&Velocity, &Transform)>,
 ) {
     let now = time.elapsed_secs();
-    let mut still_waiting: Vec<(Entity, f32, Vec2)> = Vec::new();
+    let mut still_waiting: Vec<Touch> = Vec::new();
     let mut checked = 0u32;
     let mut turned = 0u32;
-    for (beetle, at, was) in std::mem::take(&mut test.touched) {
-        if now - at < 0.5 {
-            still_waiting.push((beetle, at, was));
-            continue;
-        }
-        let Ok((now_going, place)) = creatures.get(beetle) else { continue }; // starved meanwhile
+    for mut touch in std::mem::take(&mut test.touched) {
+        // starved meanwhile: there is nothing to ask about it
+        let Ok((going, place)) = creatures.get(touch.beetle) else { continue };
         // and not against a wall: `move_creatures` zeroes the component of `Velocity` that would
         // take a creature through one, so a beetle in the corner reads as going due west both
-        // before the handler and after it however it turned. The handler is not what failed there,
-        // and a check that says it did would be a check about the walls.
-        if by_a_wall(place) {
+        // before the handler and after it however it turned. The handler is not what failed
+        // there, and a check that says it did would be a check about the walls. A frame like that
+        // is skipped rather than judged; a touch whose whole window was like that is not counted.
+        if !by_a_wall(place) {
+            // the angle between the two headings: a flee is roughly a reversal, and anything past
+            // a quarter turn is a different course than the one it was on. A beetle that stopped
+            // has changed what it is doing as surely as one that turned, so it counts too — which
+            // is what the `Vec2::ZERO` arm of the old one-shot test said, in the same words.
+            let a = touch.was.normalize_or_zero();
+            let b = going.0.normalize_or_zero();
+            let dot = if b == Vec2::ZERO { -1.0 } else { a.dot(b) };
+            touch.looked += 1;
+            touch.last = going.0;
+            if dot < touch.closest {
+                touch.closest = dot;
+                touch.closest_at = now;
+            }
+            if dot < 0.7 {
+                touch.turned = true;
+            }
+        }
+        if now - touch.at < 0.5 {
+            still_waiting.push(touch);
+            continue;
+        }
+        // the window has closed. A touch nobody could read for the whole of it proves nothing
+        if touch.looked == 0 {
             continue;
         }
         checked += 1;
-        // the angle between the two headings: a flee is roughly a reversal, and anything past a
-        // quarter turn is a different course than the one it was on
-        let a = was.normalize_or_zero();
-        let b = now_going.0.normalize_or_zero();
-        if b == Vec2::ZERO || a.dot(b) < 0.7 {
+        if touch.turned {
             turned += 1;
         } else {
             // **A miss says which one, and what it was doing.** A line reading `FAIL … (24/25)`
-            // names no beetle, and this check has been flaky twice now for reasons that were
-            // only findable from the two headings: G4's was a `@course` written by an `act` that
-            // never went out, and 2026-09-17's is a *second* `"touched"` landing inside the half
-            // second this one is being measured over, so that the beetle is fleeing at full
-            // speed from a heading newer than `was` (`docs/worklog/2026-09-17-sync-reads.md`).
-            // The length of `is` is half the evidence: `DASH` is a handler, `CRUISE` is the
-            // behaviour having taken the wheel back.
+            // names no beetle, and this check has been flaky twice now for reasons that were only
+            // findable from the headings: G4's was a `@course` written by an `act` that never went
+            // out, and 2026-09-17's were the two in this function's doc comment. The length of
+            // `is` is half the evidence — `DASH` is a handler, `CRUISE` is the behaviour having
+            // taken the wheel back — and `closest` says whether it nearly turned or never moved.
             info!(
-                "selftest: miss  {beetle} touched at {at:.2}, looked at {now:.2}: dot {:.3}, was {:?} ({:.1}), is {:?} ({:.1})",
-                a.dot(b),
-                was,
-                was.length(),
-                now_going.0,
-                now_going.0.length()
+                "selftest: miss  {} touched at {:.2}, watched to {:.2} over {} frames: closest dot {:.3} at {:.2}, was {:?} ({:.1}), is {:?} ({:.1})",
+                touch.beetle,
+                touch.at,
+                now,
+                touch.looked,
+                touch.closest,
+                touch.closest_at,
+                touch.was,
+                touch.was.length(),
+                touch.last,
+                touch.last.length()
             );
         }
     }
