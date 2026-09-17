@@ -465,20 +465,23 @@ pub struct Mind {
     /// The frame this task last ran an instruction in.
     ran_frame: u32,
     /// The frame `answer_garden` last answered one of the game's own questions for it. A gap that
-    /// starts on that frame is a `Rubevy.ask` round trip and is known to be one; a short gap that
-    /// does not is a component read, which rubevy answers itself and the game never sees.
+    /// starts on that frame is a `Rubevy.ask` round trip and is known to be one.
     asked_frame: Option<u32>,
-    /// round trips waited out, and the frames they took, split by which of the two they were
+    /// round trips the *game* answered, and the frames they took. Component reads used to be
+    /// counted beside these and are not any more: since 2026-09-17 rubevy answers a read inside
+    /// the tick that asked it, so a read leaves no gap to count (see `watch_minds`).
     pub ask_trips: u32,
     pub ask_frames: u32,
-    pub read_trips: u32,
-    pub read_frames: u32,
+    /// passes of the behaviour's loop this creature has finished, and what they cost it
+    pub decisions: u32,
+    pub decision_instructions: u64,
+    /// `ScriptStats::instructions` as the pass now under way began. `None` until the first `sleep`
+    /// this has seen the end of: a pass that was already half done when the counting started
+    /// would be counted short.
+    pass_start: Option<u64>,
 }
 
 impl Mind {
-    /// The HUD's **frames/decision**: the mean number of frames this creature's task waits
-    /// between asking the world something and running again with the answer, over both kinds of
-    /// question. `None` until it has waited for one.
     /// The script is being replaced: what a round trip cost the old one says nothing about the
     /// new one (G4's editor).
     pub fn restart(&mut self) {
@@ -486,13 +489,24 @@ impl Mind {
         self.asked_frame = None;
         self.ask_trips = 0;
         self.ask_frames = 0;
-        self.read_trips = 0;
-        self.read_frames = 0;
+        self.decisions = 0;
+        self.decision_instructions = 0;
+        self.pass_start = None;
     }
 
-    pub fn frames_per_decision(&self) -> Option<f32> {
-        let trips = self.ask_trips + self.read_trips;
-        (trips > 0).then(|| (self.ask_frames + self.read_frames) as f32 / trips as f32)
+    /// The HUD's **insn/decision**: the mean number of VM instructions this creature spends on
+    /// one pass of its behaviour's loop. `None` until it has finished one.
+    ///
+    /// This stands where G4's **frames/decision** stood. That number was the frames a task waited
+    /// between asking the world something and running again with the answer, and it worked
+    /// because a component read *parked* the task: the gap it left was the thing being measured.
+    /// From 2026-09-17 rubevy answers a read inside the tick that asked it (rubevy
+    /// `docs/host-api.md`, "A read costs no frame"), so there is no gap, and the old number went
+    /// from counting 2352 reads a run to counting three or four gaps that were never reads at all
+    /// (`docs/worklog/2026-09-17-sync-reads.md`). What a read costs now is instructions, not
+    /// frames, so that is what this counts.
+    pub fn instructions_per_decision(&self) -> Option<f32> {
+        (self.decisions > 0).then(|| self.decision_instructions as f32 / self.decisions as f32)
     }
 }
 
@@ -917,6 +931,29 @@ fn zoom_by(distance: f32, notches: f32) -> f32 {
     (distance * ZOOM_PER_NOTCH.powf(-notches)).clamp(ZOOM_MIN, ZOOM_MAX)
 }
 
+/// One `"touched"` the sixth check is watching, and what the half second after it has shown.
+///
+/// The check used to need three fields and one look; it needs these because it now watches the
+/// **whole window** rather than its far end (`watch_turning`).
+#[derive(Debug, Clone, Copy)]
+struct Touch {
+    beetle: Entity,
+    /// when the game published `"touched"` to it
+    at: f32,
+    /// the heading it had at that moment
+    was: Vec2,
+    /// whether any frame since has shown a heading a quarter turn or more off `was`
+    turned: bool,
+    /// the closest any frame came to that, and when — a miss has to be able to say how close it
+    /// got, or "it never turned" is a claim with no size to it
+    closest: f32,
+    closest_at: f32,
+    /// frames inside the window where the beetle was there and readable (not against a wall)
+    looked: u32,
+    /// what it was doing at the last readable frame, for the miss line
+    last: Vec2,
+}
+
 /// `GARDEN_SELFTEST=1`: what the plan asks the world to prove about itself — G0's four things
 /// about the rules, and G1's three about the minds.
 #[derive(Resource)]
@@ -940,8 +977,8 @@ struct SelfTest {
     probe_closest: f32,
     /// when it got there, if it did
     probe_reached: Option<f32>,
-    /// beetles that were touched by a rabbit while walking: when, and which way they were going
-    touched: Vec<(Entity, f32, Vec2)>,
+    /// beetles that were touched by a rabbit while walking, and what has been seen of each since
+    touched: Vec<Touch>,
     /// when each beetle was last put on that list, so that a beetle a rabbit keeps walking into
     /// is looked at once rather than five times: the handler takes half a second to run and the
     /// second message waits in the queue behind the first, so the answer to "did it turn?" for
@@ -1319,6 +1356,22 @@ fn main() {
                 .chain()
                 // G3: a garden that is being read back does not age while its minds are starting
                 .after(load_world)
+                // **The rules move the world before the scripts look at it.** Every component a
+                // script reads is written in this chain — `Transform` by `move_creatures`,
+                // `separate` and `grow_plants`, `Hunger` by `get_hungry` and `eat`, `Creature` by
+                // `get_hungry`, `eat` and `court` — and since 2026-09-17 a read is answered
+                // *inside* `RubevySet::Tick`, out of the world as it stands there (rubevy
+                // `docs/host-api.md`, "A read costs no frame"). So where this chain lands is no
+                // longer only a question of when the HUD sees a number: it decides whether
+                // `me[:Hunger]` is this frame's hunger or the last frame's.
+                //
+                // It was unordered against `RubevySet` until now, and measured, bevy's executor
+                // was splitting it around the tick and splitting it *differently every frame* —
+                // `day_night` before, `starve` after on some frames and before on others
+                // (`docs/worklog/2026-09-17-sync-reads.md`, §1). A script could therefore read
+                // this frame's world or the last one's depending on the frame, which is not a
+                // thing a garden should be deciding by luck.
+                .before(RubevySet::Tick)
                 .run_if(is_still),
         )
         // G3: `--load` before the first frame, F9 at any time. It is before the scripts are dealt
@@ -1996,8 +2049,9 @@ fn give_mind(
             asked_frame: None,
             ask_trips: 0,
             ask_frames: 0,
-            read_trips: 0,
-            read_frames: 0,
+            decisions: 0,
+            decision_instructions: 0,
+            pass_start: None,
         },
     ));
 }
@@ -2715,7 +2769,16 @@ fn startle(
                             && !by_a_wall(at)
                             && creature.age > NEWBORN_GRACE
                         {
-                            test.touched.push((beetle, now, velocity.0));
+                            test.touched.push(Touch {
+                                beetle,
+                                at: now,
+                                was: velocity.0,
+                                turned: false,
+                                closest: f32::INFINITY,
+                                closest_at: now,
+                                looked: 0,
+                                last: velocity.0,
+                            });
                         }
                     }
                 }
@@ -3112,34 +3175,54 @@ fn answer_garden(world: &mut World) {
 /// The shortest `sleep` any script in `ruby/` takes: one line of `run_creature`, before a
 /// creature's first thought. Everything else sleeps for 0.1 s or more.
 ///
-/// It is the only number the frames-per-decision measurement below rests on, and it is a fact
-/// about the scripts in this repository rather than a tolerance: a gap between two bursts of a
-/// task that is shorter than the shortest nap it could be taking is a gap spent waiting for the
-/// game.
+/// It is the only number the measurement below rests on, and it is a fact about the scripts in
+/// this repository rather than a tolerance: a gap between two bursts of a task that is at least
+/// this long cannot be anything but a `sleep`.
+///
+/// The line it names is not going anywhere, and it is worth saying why, because everything else
+/// about waiting moved on 2026-09-17. That `sleep 0.05` is not there to space out reads: it is
+/// there because a creature loaded from a save is handed its `@memory` by `restore_memory` at the
+/// *end* of its first frame, and a `run` that started reading `memory` on the line below would
+/// read the empty Hash (`ruby/prelude.rb`, `run_creature`). Writes still land at the end of the
+/// frame, so that reason is untouched by reads becoming synchronous.
+///
+/// What did change is which half of this is usable. "At least this long, so it slept" is still
+/// true. Its converse — "shorter than this, so it was waiting for the host" — used to identify a
+/// component read and now identifies nothing: a read parks for no frames at all, so the short
+/// gaps that are left are timeslices and scheduling, not questions.
 const SHORTEST_SLEEP: f32 = 0.05;
 
-/// What a script has cost, where it is standing, and **how long it waits for an answer** — the
-/// three numbers the HUD draws and the headless run prints.
+/// What a script has cost, where it is standing, and **what a decision costs it** — the three
+/// numbers the HUD draws and the headless run prints.
 ///
 /// The last of them is what G4 added, and it is worth being exact about, because the whole shape
 /// of the scripts follows from it. A creature's task runs in short bursts and is parked between
-/// them. A burst ends either because the script asked the world something — a component read
-/// (`me[:Hunger]`) or one of the game's two questions (`garden.nearest`) — or because it went to
-/// sleep. Both kinds of question are answered in `RubevySet::Answer` of the same frame, so the
-/// task is ready again on the next one.
+/// them. G4 measured the *gaps*: a burst ended because the script had asked the world something,
+/// and **frames/decision** was how many frames went by before the answer arrived. Two kinds of
+/// question left a gap and they were told apart by which — a gap starting on the frame
+/// `answer_garden` answered something for this creature was a `Rubevy.ask` round trip
+/// ([`Mind::asked_frame`]), and a shorter one was a component read.
 ///
-/// So **frames/decision is the number of frames between the burst that asked and the burst that
-/// got the answer**, and the two kinds are told apart like this:
+/// **Since 2026-09-17 a component read leaves no gap at all**: rubevy answers it inside the tick
+/// that asked it, between two runs of the scheduler, so the task never reaches the next frame
+/// waiting (rubevy `docs/host-api.md`, "A read costs no frame"). Measured here before anything
+/// else was changed, the old rule went from counting 2352 reads in a ninety-second run to
+/// counting three or four — and those three or four are not reads, they are gaps that were
+/// never reads and used to be lost among the real ones. A measurement that cannot be zero when
+/// the thing it counts is gone is not measuring it (`docs/worklog/2026-09-17-sync-reads.md`).
 ///
-/// * a gap that *starts* on the frame `answer_garden` answered a question for this creature is a
-///   `Rubevy.ask` round trip, and is known to be one ([`Mind::asked_frame`]);
-/// * any other gap shorter than [`SHORTEST_SLEEP`] is a component read, which rubevy answers
-///   itself in `answer_components` and which the game therefore never sees as a `Request`;
-/// * anything longer is a `sleep`, and is not a decision at all.
+/// So the gap this now measures is the one the scripts still make on purpose — the `sleep` at the
+/// foot of every behaviour's loop — and what it measures across it is **instructions**:
 ///
-/// Both come out at 1 (`docs/garden.md`, "The window (G4)"), which is what the placement of
-/// `answer_garden` in `RubevySet::Answer` buys: answered anywhere later and every one of these
-/// would read 2.
+/// * a gap of at least [`SHORTEST_SLEEP`]'s worth of frames is a `sleep`, and a `sleep` ends one
+///   pass of the loop and begins the next. Everything between two of them is **one decision**:
+///   the reads, the question the game answers, the arithmetic and the `act`;
+/// * `ScriptStats::instructions` is a running total, so a pass costs the difference between the
+///   totals at its two ends ([`Mind::instructions_per_decision`]);
+/// * the round trips the *game* answers are still counted as they were, and still cost one frame
+///   each. That number did not break, and it is now the only one of the two kinds of question
+///   that costs a frame — which is the whole of what synchronous reads changed, in one line of
+///   the log.
 fn watch_minds(
     time: Res<Time>,
     frame: Res<bevy::diagnostic::FrameCount>,
@@ -3147,14 +3230,17 @@ fn watch_minds(
     mut minds: Query<(&mut Mind, Option<&ScriptTask>)>,
 ) {
     let now = frame.0;
-    // how few frames a gap has to be to be too short for the shortest nap in `ruby/`
+    // how many frames a gap has to be before it is too long to be anything but a nap
     let dt = time.delta_secs().max(1.0 / 1000.0);
     let sleep_floor = (SHORTEST_SLEEP / dt).ceil().max(2.0) as u32;
     for (mut mind, script) in &mut minds {
         let Some(script) = script else { continue };
         let stats = world.stats(script);
-        let ran = stats.instructions > mind.last_instructions;
-        mind.spent = stats.instructions.saturating_sub(mind.last_instructions);
+        // what the task had run when it last stopped: the total at the end of the pass that is
+        // finishing, and the total at the start of the one beginning, are the same number
+        let before = mind.last_instructions;
+        let ran = stats.instructions > before;
+        mind.spent = stats.instructions.saturating_sub(before);
         mind.last_instructions = stats.instructions;
         mind.frames += 1;
         if ran {
@@ -3164,9 +3250,16 @@ fn watch_minds(
                 if mind.asked_frame == Some(was) {
                     mind.ask_trips += 1;
                     mind.ask_frames += gap;
-                } else if gap < sleep_floor {
-                    mind.read_trips += 1;
-                    mind.read_frames += gap;
+                }
+                if gap >= sleep_floor {
+                    // it has woken from a `sleep`: close the pass that was under way and open
+                    // the next. The first `sleep` only opens one — a pass that was already
+                    // half run when this creature was first looked at would be counted short.
+                    if let Some(start) = mind.pass_start {
+                        mind.decisions += 1;
+                        mind.decision_instructions += before.saturating_sub(start);
+                    }
+                    mind.pass_start = Some(before);
                 }
             }
             mind.ran_frame = now;
@@ -3811,38 +3904,108 @@ fn watch_probe(
 }
 
 /// **A beetle touched by a rabbit changes heading within 0.5 s.** `startle` notes the beetle and
-/// the way it was going at the moment the game published `"touched"`; half a second later this
-/// looks again. Only a beetle that was actually walking is counted, because "it turned" means
-/// nothing about one that was standing still or asleep.
+/// the way it was going at the moment the game published `"touched"`; this watches the half
+/// second that follows. Only a beetle that was actually walking is counted, because "it turned"
+/// means nothing about one that was standing still or asleep.
+///
+/// **It looks at the whole window, not at the far end of it** (2026-09-17). It used to take one
+/// sample, at `at + 0.5`, and ask whether the heading there was a quarter turn off the one at
+/// `at`. That is a different question from the one the check's own sentence asks — *changed
+/// heading within 0.5 s* — and the difference is not academic: a turn that happened and was over
+/// before the sample read as a turn that never happened. Two ways of it being over:
+///
+/// * **a second `"touched"` inside the window.** The first handler turned the beetle 99°, then a
+///   second message arrived and its handler chose its swerve from the *new* heading, landing 38°
+///   from the one this check remembers. Both handlers did their job; the sample saw the sum.
+///   `TOUCH_SETTLE` keeps a touch from being counted when a message came in the 1.5 s *before*
+///   it, and nothing ever excluded one arriving after.
+/// * **the wheel coming back.** A handler holds it for `sleep 0.5` and this looked at 0.502 s —
+///   the same number on both sides — so the behaviour's next `act` could land inside the sample.
+///   Making the reads synchronous moved the reflex a frame earlier and that was enough to put it
+///   there (`docs/worklog/2026-09-17-sync-reads.md`, sections 8 and 9).
+///
+/// Measured over ten ninety-second runs, the old way missed 7 of 248 counted touches and failed
+/// the check in 4 runs; in 6 of those 7 the beetle was at `DASH` speed at the sample — *still
+/// fleeing*, from a heading newer than `was`.
+///
+/// **No threshold moved.** The window is still 0.5 s and a turn is still `dot < 0.7`; what
+/// changed is that the window is read every frame in it rather than once at its end. Nor did the
+/// rule for what counts as turned: `b == Vec2::ZERO || a.dot(b) < 0.7`, the same expression,
+/// evaluated more often.
+///
+/// What it costs: a frame of the window that turns for a reason of its own now counts. The
+/// behaviour's `wander` rerolls its course with probability 0.25 a pass and a pass is `sleep 0.2`,
+/// so a beetle whose handler never fired has roughly a 38% chance of drifting past a quarter turn
+/// on its own inside half a second. That is the check's sensitivity per touch, not its verdict:
+/// the verdict is over every counted touch in a run (25 or so), and a handler that never fired
+/// would miss most of them. A handler that fires takes the wheel for the whole window, so nothing
+/// else can be what turned it.
 fn watch_turning(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
     creatures: Query<(&Velocity, &Transform)>,
 ) {
     let now = time.elapsed_secs();
-    let mut still_waiting: Vec<(Entity, f32, Vec2)> = Vec::new();
+    let mut still_waiting: Vec<Touch> = Vec::new();
     let mut checked = 0u32;
     let mut turned = 0u32;
-    for (beetle, at, was) in std::mem::take(&mut test.touched) {
-        if now - at < 0.5 {
-            still_waiting.push((beetle, at, was));
-            continue;
-        }
-        let Ok((now_going, place)) = creatures.get(beetle) else { continue }; // starved meanwhile
+    for mut touch in std::mem::take(&mut test.touched) {
+        // starved meanwhile: there is nothing to ask about it
+        let Ok((going, place)) = creatures.get(touch.beetle) else { continue };
         // and not against a wall: `move_creatures` zeroes the component of `Velocity` that would
         // take a creature through one, so a beetle in the corner reads as going due west both
-        // before the handler and after it however it turned. The handler is not what failed there,
-        // and a check that says it did would be a check about the walls.
-        if by_a_wall(place) {
+        // before the handler and after it however it turned. The handler is not what failed
+        // there, and a check that says it did would be a check about the walls. A frame like that
+        // is skipped rather than judged; a touch whose whole window was like that is not counted.
+        if !by_a_wall(place) {
+            // the angle between the two headings: a flee is roughly a reversal, and anything past
+            // a quarter turn is a different course than the one it was on. A beetle that stopped
+            // has changed what it is doing as surely as one that turned, so it counts too — which
+            // is what the `Vec2::ZERO` arm of the old one-shot test said, in the same words.
+            let a = touch.was.normalize_or_zero();
+            let b = going.0.normalize_or_zero();
+            let dot = if b == Vec2::ZERO { -1.0 } else { a.dot(b) };
+            touch.looked += 1;
+            touch.last = going.0;
+            if dot < touch.closest {
+                touch.closest = dot;
+                touch.closest_at = now;
+            }
+            if dot < 0.7 {
+                touch.turned = true;
+            }
+        }
+        if now - touch.at < 0.5 {
+            still_waiting.push(touch);
+            continue;
+        }
+        // the window has closed. A touch nobody could read for the whole of it proves nothing
+        if touch.looked == 0 {
             continue;
         }
         checked += 1;
-        // the angle between the two headings: a flee is roughly a reversal, and anything past a
-        // quarter turn is a different course than the one it was on
-        let a = was.normalize_or_zero();
-        let b = now_going.0.normalize_or_zero();
-        if b == Vec2::ZERO || a.dot(b) < 0.7 {
+        if touch.turned {
             turned += 1;
+        } else {
+            // **A miss says which one, and what it was doing.** A line reading `FAIL … (24/25)`
+            // names no beetle, and this check has been flaky twice now for reasons that were only
+            // findable from the headings: G4's was a `@course` written by an `act` that never went
+            // out, and 2026-09-17's were the two in this function's doc comment. The length of
+            // `is` is half the evidence — `DASH` is a handler, `CRUISE` is the behaviour having
+            // taken the wheel back — and `closest` says whether it nearly turned or never moved.
+            info!(
+                "selftest: miss  {} touched at {:.2}, watched to {:.2} over {} frames: closest dot {:.3} at {:.2}, was {:?} ({:.1}), is {:?} ({:.1})",
+                touch.beetle,
+                touch.at,
+                now,
+                touch.looked,
+                touch.closest,
+                touch.closest_at,
+                touch.was,
+                touch.was.length(),
+                touch.last,
+                touch.last.length()
+            );
         }
     }
     test.touched = still_waiting;
@@ -3952,33 +4115,37 @@ fn stop_when_over(
     );
     for row in window::hud_rows(&panelled) {
         info!(
-            "hud:   {:<14}{} hunger {:>5.1}  {:>6} insn/frame  {} frames/decision  {}",
+            "hud:   {:<14}{} hunger {:>5.1}  {:>6} insn/frame  {} insn/decision  {}",
             row.name,
             if row.in_memory { "*" } else { " " },
             row.hunger,
             row.insn_per_frame,
             match row.per_decision {
-                Some(n) => format!("{n:>4.1}"),
-                None => "   –".into(),
+                Some(n) => format!("{n:>6.0}"),
+                None => "     –".into(),
             },
             row.at,
         );
     }
     {
-        // and what a round trip cost over the whole run, both kinds of question apart — the
-        // number the HUD's `frames/decision` column is the per-creature form of
-        let (mut ask_trips, mut ask_frames, mut read_trips, mut read_frames) = (0u32, 0u32, 0u32, 0u32);
+        // what a pass of a behaviour's loop cost over the whole run — the number the HUD's
+        // `insn/decision` column is the per-creature form of — and, beside it, the one kind of
+        // question that still costs a frame. The component reads that used to stand here are
+        // gone from the line because they are gone from the frame: rubevy answers them inside
+        // the tick that asked them, so there is nothing left to count in frames.
+        let (mut ask_trips, mut ask_frames) = (0u32, 0u32);
+        let (mut decisions, mut decision_instructions) = (0u32, 0u64);
         for (_, _, _, mind) in &panelled {
             ask_trips += mind.ask_trips;
             ask_frames += mind.ask_frames;
-            read_trips += mind.read_trips;
-            read_frames += mind.read_frames;
+            decisions += mind.decisions;
+            decision_instructions += mind.decision_instructions;
         }
         let mean = |f: u32, n: u32| if n == 0 { f32::NAN } else { f as f32 / n as f32 };
         info!(
-            "hud: frames/decision — {ask_trips} questions the game answered, {:.3} frames each; {read_trips} component reads, {:.3} frames each",
+            "hud: insn/decision — {decisions} passes of a behaviour's loop, {:.1} instructions each; and {ask_trips} questions the game answered, {:.3} frames each (a component read costs no frame at all)",
+            if decisions == 0 { f32::NAN } else { decision_instructions as f32 / decisions as f32 },
             mean(ask_frames, ask_trips),
-            mean(read_frames, read_trips),
         );
         let mut panel = VmInspector::default();
         for (mind, script) in &tasks {

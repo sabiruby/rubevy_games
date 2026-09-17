@@ -388,9 +388,17 @@ end
 
 `hunger` is `me[:Hunger][0]`, `here` is `me[:Transform][:translation]`, `head_to` reads the
 plant's `[:Transform]` — every one of them a component read, answered by rubevy out of Bevy's type
-registry, and the game never sees the question. Each costs one frame: the task is parked and the
-other creatures keep running, which is why a pass reads three or four things and then sleeps
-rather than reading the same thing sixty times a second.
+registry, and the game never sees the question. **None of them costs a frame** (since 2026-09-17):
+the tick runs the ready tasks, answers the reads they parked on out of the `&World` it is holding,
+and runs them again, so the value is there in the line that asked for it (rubevy
+`docs/host-api.md`, "A read costs no frame"). What a read costs is about 2.2 µs and ~75
+instructions — rubevy's measurement, on its machine — rather than a frame of waiting, which at
+60 Hz was 16.7 ms.
+
+A pass still reads three or four things and then sleeps, and that is now a choice rather than a
+toll: `garden.nearest` — the one question the *game* answers — does still cost a frame, and
+`Rubevy.find` still walks every entity in the world however quickly it comes back. What got cheap
+is the waiting, not the walking.
 
 **The handlers are tasks of their own.** `on(:touched) { … }` becomes an ordinary method
 (`define_method`) and a `Task.new` that waits on `Rubevy.subscribe(:touched)`; `run_creature`
@@ -403,11 +411,12 @@ five and the beetle used all five, so G2 made it six, which is one `when` in `ru
 `__handler_5`.
 
 **The wheel.** Both tasks are the same object's, so they share instance variables — and they share
-the body, which is the problem. A component write is last-writer-wins, a handler acts in a frame or
-two, and the behaviour takes four or five (read hunger, ask for the nearest plant, read *its*
-transform, act). A handler that fires in the middle of one of the behaviour's passes is therefore
-undone by the `act` at the end of it, which looks exactly like a handler that never fired. So
-`act` has a holder:
+the body, which is the problem. **A component write is still last-writer-wins and still lands at
+the end of the frame** — only reads became synchronous — so the wheel is exactly as necessary as
+it was. What changed is how long a pass takes: reading hunger and reading the plant's transform
+cost no frames now, so a pass is the one frame `garden.nearest` waits rather than four or five. A
+handler that fires in the middle of one is still undone by the `act` at the end of it, which still
+looks exactly like a handler that never fired. So `act` has a holder:
 
 ```ruby
 def act(vx, vz)
@@ -917,11 +926,17 @@ it is `None` here), and what one of the things being edited is called, for the h
 The same `VmInspector` Battle has, about the selected creature's *behaviour* task. **It reads top
 down, and the top of it is for a person** (G9):
 
-![the VM panel: a rabbit waiting for a component read](garden-vm.png)
+![the VM panel: a rabbit, and what its behaviour is waiting for](garden-vm.png)
 
-* **why it is waiting**, in a sentence — `waiting for a component read — [:Transform]`,
-  `waiting for the game to answer nearest(:Plant)`, `sleeping — it asked for time, not for an
-  answer`, `waiting for an event — an on(:…) block, parked on its queue`;
+*(The picture is from before 2026-09-17, when `waiting for a component read — [:Transform]` was
+the commonest thing the panel had to say. A read is answered inside the tick that asks it now, so
+that sentence has become a rare one and says something else: see the table below. The rest of the
+panel is as shown.)*
+
+* **why it is waiting**, in a sentence — `waiting for the game to answer nearest(:Plant)`,
+  `sleeping — it asked for time, not for an answer`, `waiting for an event — an on(:…) block,
+  parked on its queue`, `waiting for a component read the tick ran out of budget before
+  answering — [:Transform]`;
 * **the line of its own file** it is standing on, and the frames of that file and no others:
   `prelude.rb:47` and `(no debug info)` are true and are not what a reader of `rabbit.rb` came for;
 * insn/frame, how many tasks the VM is running, and the VM's share of the frame.
@@ -937,7 +952,7 @@ reads the frames, and the frames say it.
 | what the frames show | what the panel says |
 |---|---|
 | innermost `pop`, then `Rubevy::Subscription#pop` | an event: `on(:…)`, parked on the queue `Rubevy.subscribe` gave it |
-| innermost `pop`, then `Rubevy::Entity#get` | a component read; the component is that frame's `name` local |
+| innermost `pop`, then `Rubevy::Entity#get` | a component read the tick ran out of budget before answering; the component is that frame's `name` local |
 | innermost `pop`, then `Rubevy::Proxy#method_missing` | a question to the game, named from `name` and `args`: `nearest(:Plant)` |
 | innermost `pop`, then anything else | a question to the game, named by the method that asked (`radar`) |
 | no `pop` at all | a `sleep` — and the frames start at the line that called it |
@@ -949,6 +964,19 @@ a task that had used up its timeslice — ready to run, not asleep — looks exa
 here, and the VM has no read-only way to ask a task which it is (`Task#status` is Ruby). In these
 two games nothing else parks a task. Six unit tests in `rubevy-arena` hold the five shapes, copied
 out of a running garden.
+
+**The second row changed its meaning on 2026-09-17, and that is the most interesting thing the
+panel now says.** It used to be the commonest row in this garden — every `me[:Hunger]` parked
+there for a frame, which is how the picture above came to be captioned `[:Transform]`. rubevy
+answers a read inside the tick that asks it now, and this panel looks at the VM from outside the
+tick, so a read should never be found standing here at all. When one is, it means the tick it was
+made in **ran out of frame** — its instruction budget or its `frame_time` went first, and the next
+tick will answer that round's reads before it runs anything else. Nothing is lost and the task is
+a frame late rather than stuck; what it is evidence of is a VM with more to do in a frame than its
+budget allows. The row was briefly deleted as unreachable and put back with the new sentence,
+because "unreachable" was too strong a word for it: neither game comes near its budget (the
+garden's tick is under 1 ms of the 8 it is given), but a species applied in the editor can be
+given a loop that does.
 
 **A creature's handlers are tasks of their own and the panel does not follow them**: it is about
 the `ScriptTask` the entity carries, which is the behaviour. So the event row is what a creature
@@ -963,47 +991,60 @@ The scheduler's clock stops with the budget (rubevy `fa37eaa`), so a creature ha
 `sleep 0.2` is still half way through it when the world starts again — and since the garden's
 clock did not move, no `"night"` or `"day"` can have been published and missed.
 
-### The HUD, and what "frames per decision" means
+### The HUD, and what "instructions per decision" means
 
 The panel at the top left is one line for the garden and one line per creature:
 
 ```
 15 creatures · 30 plants · day 0.50            VM 1.30 / 8.0 ms
-▸ Beetle 99v0    [=========  ] 92.1     13 insn/f   1.0 f/dec  beetle.rb:125
-  Rabbit 103v0   [=======    ] 75.7     29 insn/f   1.0 f/dec  rabbit.rb:80
+▸ Beetle 99v0    [=========  ] 92.1     13 insn/f    163 i/dec  beetle.rb:125
+  Rabbit 103v0   [=======    ] 75.7     29 insn/f    447 i/dec  rabbit.rb:86
 ```
 
 * **hunger** — 100 is stuffed, 0 is dead; amber under 55, which is where a beetle's own script
   goes looking for grass.
 * **insn/f** — what that script has run divided by the frames it has lived. It is an average
   because one frame's figure is nearly always zero: a creature spends nearly every frame *parked*.
-  A beetle is 10 to 15, a rabbit 24 to 29, because a rabbit asks two questions a pass.
+  A beetle is 12 to 17, a rabbit 24 to 46, because a rabbit asks two questions a pass.
 * **the line it is waiting on** — the innermost frame in the creature's *own* file
   (`ScriptStats::frames`, walked back past the prelude). This is the thing a VM that parks tasks
   can tell a HUD and an engine's usual scripting cannot: the creature is not in a callback that
   has lost its place, it is standing on line 125 of `beetle.rb` waiting for an answer.
-* **f/dec — frames per decision.** Defined exactly, because the number is only worth having if it
-  is: **the frames between the burst in which a creature's task asked the world something and the
-  burst in which it ran again with the answer.** A burst ends for one of two reasons, and the game
-  tells them apart without guessing:
-  * `answer_garden` — the system that answers `garden.nearest`, `garden.count`, `genome` and
-    `garden.spawn` — writes the frame number onto the asker (`Mind::asked_frame`). A gap that
-    *starts* on that frame is a `Rubevy.ask` round trip and is known to be one.
-  * Any other gap shorter than the shortest `sleep` in `ruby/` (0.05 s, one line of
-    `run_creature`; three frames at 60 Hz) is a **component read** — `me[:Hunger]`,
-    `plant[:Transform]` — which rubevy answers itself in `answer_components` and which the game
-    never sees as a `Request`. That floor is a fact about the scripts in this repository, not a
-    tolerance, and it is recomputed from the frame time each frame.
-  * Anything longer is a `sleep`, and is not a decision.
+* **i/dec — instructions per decision.** Defined exactly, because the number is only worth having
+  if it is: **a decision is one pass of the behaviour's loop, `sleep` to `sleep`, and its cost is
+  the VM instructions spent inside it** — the reads, the question the game answers, the arithmetic
+  and the `act`. `ScriptStats::instructions` is a running total, so a pass costs the difference
+  between the totals at its two ends. A gap of at least the shortest `sleep` in `ruby/` (0.05 s,
+  one line of `run_creature`; three frames at 60 Hz) is the mark of a pass ending — that floor is
+  a fact about the scripts in this repository, not a tolerance, and it is recomputed from the
+  frame time each frame.
 
-  Measured over twenty-five seconds of a headless run: **403 questions the game answered, 1.000
-  frames each; 2352 component reads, 1.000 frames each.** Both are 1, and that is what the
-  placement of `answer_garden` in `RubevySet::Answer` buys — answered anywhere later in the frame
-  and every one of them would read 2.
+  Measured over twenty-five seconds of a headless run: **1392 passes, 246.3 instructions each** —
+  a beetle's pass is 111 to 196 and a rabbit's 377 to 714, and the difference is the three extra
+  things a rabbit's pass does (read its own place, read the other creature's `[:Creature]`, walk
+  round the trees it remembers).
+
+  **This stands where G4's `f/dec` — frames per decision — stood, and why it had to is the point
+  of the whole change.** That number measured the *gap* a question left: a component read parked
+  the task, and the frames until it ran again were what was counted. Two kinds of question left a
+  gap and the game told them apart without guessing — one by the frame `answer_garden` wrote onto
+  the asker, the other by being shorter than the shortest `sleep`. Both came out at exactly 1.
+  Since 2026-09-17 a component read leaves **no gap at all** (rubevy `docs/host-api.md`, "A read
+  costs no frame"), and the rule that used to find 2352 reads in twenty-five seconds found three
+  or four in ninety — gaps that were never reads, and that used to be lost among the real ones. A
+  measurement that cannot go to zero when the thing it counts is gone is not measuring it
+  (`docs/worklog/2026-09-17-sync-reads.md`). What a read costs now is instructions, so that is
+  what the column counts.
+
+  The round trips the *game* answers are still counted beside it and still cost **1.000 frames**
+  each (407 of them in the same twenty-five seconds), which is what the placement of
+  `answer_garden` in `RubevySet::Answer` buys — answered anywhere later in the frame and every one
+  of them would read 2. They are now the only questions in the garden that cost a frame, and the
+  log says so in one line.
 * **VM x / 8.0 ms** — the wall time this frame's scripts took, measured round `RubevySet::Tick`
-  (`tick_scripts`, then the commands they left and the component writes), against
-  `ScriptWorld::frame_time`, which is what the scheduler cuts a timeslice short at. Fifteen
-  creatures, a hundred tasks: **1.3 ms of 8.**
+  (`tick_scripts`, which now answers the reads between two runs of the scheduler, then the
+  commands they left and the component writes), against `ScriptWorld::frame_time`, which is what
+  the scheduler cuts a timeslice short at. Twelve creatures, seventy-seven tasks: **1.1 ms of 8.**
 
 ### The same panels with no window
 
@@ -1011,15 +1052,15 @@ The panel at the top left is one line for the garden and one line per creature:
 VM panel is `vm:` lines from the same `VmInspector::log_lines()` the window draws from:
 
 ```
-hud: 12 creatures · 41 plants · day 0.50 · VM 0.35 / 8.0 ms this frame (0.35 ms smoothed)
-hud:   Beetle 109v0    hunger  65.2      13 insn/frame   1.0 frames/decision  beetle.rb:125
-hud: frames/decision — 403 questions the game answered, 1.000 frames each; 2352 component reads, 1.000 frames each
-vm: Rabbit 117v0 — waiting for a component read — `[:Creature]` — rabbit.rb:78 — 30 insn/frame, 45564 in all — 63 tasks
-vm:   details: context 8  Suspended — contexts 63 live of 63 — heap live 5325 of 5886 (561 free, …
-vm:   #0 (no debug info)        pop              pc 133   non_block=false  timeout_ms=nil  deadline=nil …
-vm:   #1 (no debug info)        get              pc 25    name=:Creature
-vm:   #2 (no debug info)        []               pc 11    name=:Creature
-vm:   #3 rabbit.rb:78           run              pc 155   spot=[9.1, 0.0, -10.6]  plant=nil  other=#<Data …
+hud: 12 creatures · 33 plants · day 0.50 · VM 2.02 / 8.0 ms this frame (1.08 ms smoothed)
+hud:   Beetle 113v0    hunger  78.5      16 insn/frame     184 insn/decision  beetle.rb:125
+hud: insn/decision — 1392 passes of a behaviour's loop, 246.3 instructions each; and 407 questions the game answered, 1.000 frames each (a component read costs no frame at all)
+vm: Rabbit 118v0 — sleeping — it asked for time, not for an answer — rabbit.rb:86 — 28 insn/frame, 42038 in all — 77 tasks
+vm:   details: context 8  Suspended — contexts 77 live of 77 — heap live 5600 of 6107 (507 free, …
+vm:   #0 rabbit.rb:86           run              pc 280   spot=[2.69, 0.0, 14.5]  plant=nil  other=nil  kind=nil …
+vm:   #1 (no debug info)        loop             pc 31    block=#<Proc irep=1007 env=#2621>  e=nil
+vm:   #2 rabbit.rb:54           run              pc 144   trees=[[9.51, 0.0, -8.67], [-11.11, 0.0, 2.81], …
+vm:   #3 prelude.rb:423         run_creature     pc 91    tasks=[#<Task 2103 ctx=51>, …]  being=#<…> …
 ```
 
 The first `vm:` line is the panel's top half, in one line: who, why, where, what it spends and how
@@ -1063,8 +1104,13 @@ selftest: ok   the whole VM is still running afterwards
 selftest: ok   Revert puts every beetle back on the file
 selftest: ok   Revert shows the file again
 selftest: ok   nothing was written
-selftest: Rabbit 400v0 — 21 ask round trips, 83 component reads, 1.00 frames/decision
+selftest: Rabbit 400v0 — 21 ask round trips, … decisions, … insn/decision
 ```
+
+(The last line's shape changed on 2026-09-17 — `component reads` and `frames/decision` became
+`decisions` and `insn/decision` — and its figures have not been taken again, because these are the
+checks that need a window and this machine runs the headless ones. The `21` is from the run the
+rest of this block came from; the two after it are left blank rather than guessed.)
 
 **They end by asking the app to exit, and only where there is something to exit to.**
 `platform::CHECKS_EXIT_WHEN_DONE` is `true` on a PC — the checks were asked for on a command line
@@ -1094,9 +1140,9 @@ not that the garden went one particular way.
 | Rust glue per component made visible to Ruby | — (the ECS is never mentioned) | **0 lines** — the `register_type::<T>()` line, and nothing else |
 | Rust for one type made into a Ruby class | — (none) | **61 lines** with the macros, **113** by hand |
 | the scripts a player writes | `robots/scout.rb` 62 lines (43 without comments and blanks), `robots/hunter.rb` 22 (18) | `creatures/beetle.rb` 128 (68), `creatures/rabbit.rb` 89 (57) |
-| the DSL in front of them | `ruby/prelude.rb` 288 (165) | `ruby/prelude.rb` 464 (221) |
+| the DSL in front of them | `ruby/prelude.rb` 295 (165) | `ruby/prelude.rb` 472 (221) |
 | what the window cost the game (G4) | `src/main.rs`, spread through it | `src/window.rs` **one file**, plus four fields in `rubevy-arena`'s `Editor` and one line in sabibots |
-| a round trip, measured (G4) | one frame (`docs/worklog/2026-09-17-battle-followups.md`) | one frame, both kinds: 403 questions and 2352 component reads, 1.000 frames each |
+| a round trip, measured (G4) | one frame (`docs/worklog/2026-09-17-battle-followups.md`) | one frame for the 407 questions the *game* answers (1.000 frames each); **none at all** for a component read, since 2026-09-17 |
 | reading one structured argument out of Ruby | — | **72 lines** by hand (G2), **7** with serde (G3) |
 
 The six kinds in Battle are what a *robot* asks; the match script asks eight more (`board`,
@@ -1461,6 +1507,9 @@ run with a window and a player has a wheel.
 | `garden/assets` | 322,924 in 10 files | **unchanged** — nothing new ships |
 | the HUD's `VM x / 8.0 ms` | 0.45–0.50 | 0.45–0.56 |
 | frames per decision (windowed selftest) | 1.00 | **1.00** |
+
+(The last row is G8's measurement and is left as it was taken. The number it names no longer
+exists: a component read costs no frame, and the HUD counts instructions per decision instead.)
 
 The VM reading is one frame's, and it moves with how many creatures happen to be thinking in it;
 what can be said flatly is that **nothing G8 added is on the scripts' path**. `horizon_look` is a
