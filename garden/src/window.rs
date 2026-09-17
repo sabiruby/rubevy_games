@@ -44,6 +44,11 @@ pub struct Watched {
 #[derive(Resource, Default)]
 pub struct Paused {
     was: Option<u64>,
+    /// the same, for the world's VM (W1). The rules stop because `is_still` is the run condition
+    /// on `RubevySet::<World>::tick()`, exactly as it was on the rule chain they replaced; this is
+    /// the other half, so that the VM panel and a script that looks at its own budget see the two
+    /// VMs saying the same thing about whether the world is stopped.
+    was_world: Option<u64>,
 }
 
 impl Paused {
@@ -59,7 +64,7 @@ impl Paused {
 /// `VmInspectorPlugin` measures it in the windowed build and the headless one adds the two
 /// systems itself (`main`). The names are re-exported because the callers here, the HUD and
 /// `crate::stop_when_over`, are the garden's own.
-pub use rubevy_arena::inspect::{vm_clock_end, vm_clock_start, VmClock};
+pub use rubevy_arena::inspect::{vm_clock_end, vm_clock_start, VmClock, VmClockSet};
 
 // ---------------------------------------------------------------------------------------------
 // Picking a creature
@@ -413,6 +418,7 @@ pub fn inspect_keys(
     typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
     mut panel: ResMut<VmInspector>,
     mut world: ResMut<ScriptWorld>,
+    mut rules: ResMut<ScriptWorld<crate::World>>,
     mut paused: ResMut<Paused>,
 ) {
     if typing.is_some_and(|t| t.wants_keyboard_input()) {
@@ -425,11 +431,14 @@ pub fn inspect_keys(
         match paused.was.take() {
             Some(budget) => {
                 world.budget = budget;
+                rules.budget = paused.was_world.take().unwrap_or(rules.budget);
                 panel.paused = false;
             }
             None => {
                 paused.was = Some(world.budget);
+                paused.was_world = Some(rules.budget);
                 world.budget = 0;
+                rules.budget = 0;
                 panel.paused = true;
             }
         }
@@ -520,6 +529,7 @@ pub fn draw_hud(
     mut editor: ResMut<Editor>,
     mut dial: ResMut<crate::NightDial>,
     mut settings: Option<ResMut<rubevy_arena::Settings>>,
+    trouble: Res<crate::WorldTrouble>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let rows = hud_rows(&creatures);
@@ -560,6 +570,19 @@ pub fn draw_hud(
                     ui.label(egui::RichText::new("paused (P)").color(amber).strong());
                 }
             });
+            // **W1: a garden whose rules will not compile runs anyway, and says so.**
+            //
+            // `ruby/world.rb` is the rules — the grass, hunger, eating, starving — and it is a
+            // file a player is invited to edit. A typo in it leaves a world where the sun still
+            // turns and the creatures still walk and nothing else happens, which is a strange
+            // thing to be left to work out for oneself. One line, in the colour the panel uses for
+            // "something is not right".
+            if let Some(why) = &trouble.0 {
+                ui.label(
+                    egui::RichText::new(format!("world.rb: {why} — nothing grows and nobody gets hungry"))
+                        .color(amber),
+                );
+            }
             night_dial(ui, &mut dial, &mut settings);
             // The garden's own save, as two buttons (G5), **above** the list of creatures rather
             // than below it. The first version had them at the foot, beside the key hint, where
