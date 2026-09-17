@@ -1177,6 +1177,9 @@ struct SelfTest {
     probe_closest: f32,
     /// when it got there, if it did
     probe_reached: Option<f32>,
+    /// when a rabbit first walked into the probe while it was still on its way, if one did. A
+    /// run where that happened has not measured this check either way (`watch_probe`)
+    probe_disturbed: Option<f32>,
     /// beetles that were touched by a rabbit while walking, and what has been seen of each since
     touched: Vec<Touch>,
     /// when each beetle was last put on that list, so that a beetle a rabbit keeps walking into
@@ -1275,6 +1278,7 @@ impl Default for SelfTest {
             probe_from: 0.0,
             probe_closest: f32::INFINITY,
             probe_reached: None,
+            probe_disturbed: None,
             touched: Vec::new(),
             last_touch: Vec::new(),
             turn_checked: 0,
@@ -4878,14 +4882,38 @@ fn animate_creatures(
 /// its own script's threshold of fifty-five. Nothing in Rust moves it; if it gets there, a Ruby
 /// task read `me[:Hunger]`, asked `garden.nearest(:Plant)`, read the answer's
 /// `[:Transform][:translation]` and wrote `me[:Velocity]`.
+///
+/// **A run where something walked into the probe on the way has not measured this** (2026-09-18).
+/// The corner is only kept clear at spawn time (`clear_of_fixtures`), and nothing stops a rabbit
+/// walking into it an hour later. When one does, the game publishes `"touched"` and the beetle's
+/// own `on(:touched)` turns it away from the plant at `DASH` and holds the wheel for half a
+/// second — and if the rabbit stays, it is touched again every half second and never walks
+/// anywhere of its own again. The distance of that frame (1.8 to 2.3 over the three runs that
+/// were taken apart) is then what `probe_closest` keeps, and the check prints it as a failure
+/// that has nothing to do with whether a script can read a component, ask a question and steer
+/// (`docs/worklog/2026-09-17-selftest-flakes.md` §3).
+///
+/// So a touch before the plant is reached makes the run say *it could not be measured* — neither
+/// ok nor FAIL. It is the shape the sixth check already has for a touch it could not read
+/// (`looked == 0`, `watch_turning`), and it reads the same `test.last_touch` that `startle`
+/// keeps, so nothing new is watched. The difference from the sixth is that there are twenty-odd
+/// touches in a run and only ever one probe: a disturbed run loses this check entirely rather
+/// than one sample of it. No threshold moved — `REACH + 0.5` is where it was.
 fn watch_probe(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
-    probes: Query<(&Transform, &Probe)>,
+    probes: Query<(Entity, &Transform, &Probe)>,
     plants: Query<&Transform, With<Plant>>,
 ) {
     let now = time.elapsed_secs();
-    for (at, probe) in &probes {
+    for (beetle, at, probe) in &probes {
+        // a rabbit that came before it got there: the run is out, and the moment is kept for the
+        // line the check prints. `startle` writes this for every `"touched"` it publishes,
+        // before any of the sixth check's own guards
+        let touched = test.last_touch.iter().find(|(e, _)| *e == beetle).map(|(_, at)| *at);
+        if test.probe_reached.is_none() && test.probe_disturbed.is_none() {
+            test.probe_disturbed = touched;
+        }
         let here = Vec2::new(at.translation.x, at.translation.z);
         let Ok(dinner) = plants.get(probe.dinner) else {
             // the plant is gone, which happens when it has been eaten: it was reached
@@ -5204,6 +5232,10 @@ fn stop_when_over(
 
     if let Some(test) = test {
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
+        // and the third verdict: a check the run put itself in no position to answer. It is not
+        // a pass — nothing was proved — and it is not a failure either, and a line that said
+        // either of those would be a lie about what the run saw (2026-09-18)
+        let unmeasured = |what: String| info!("selftest: n/a  {what}");
         ok(
             test.ate_at.is_some_and(|t| t <= 10.0),
             match test.ate_at {
@@ -5233,15 +5265,21 @@ fn stop_when_over(
             ),
         );
         // --- G1: the minds -------------------------------------------------
-        match test.probe_reached {
-            Some(at) => ok(
+        match (test.probe_reached, test.probe_disturbed) {
+            (Some(at), _) => ok(
                 true,
                 format!(
                     "a hungry creature with a plant in sight reached it (from {:.1} away, at {at:.2} s)",
                     test.probe_from
                 ),
             ),
-            None => ok(
+            // a rabbit walked into the probe before it got there and took the wheel off it: what
+            // the beetle would have done on its own is not in this run (`watch_probe`)
+            (None, Some(touched)) => unmeasured(format!(
+                "a hungry creature with a plant in sight reached it (not measured: a rabbit walked into the probe at {touched:.2} s; it started {:.1} away and got no closer than {:.1})",
+                test.probe_from, test.probe_closest
+            )),
+            (None, None) => ok(
                 false,
                 format!(
                     "a hungry creature with a plant in sight reached it (it started {:.1} away and got no closer than {:.1})",
