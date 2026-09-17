@@ -2914,9 +2914,25 @@ fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocit
     }
 }
 
+/// Where the walls let a creature stand: the same half unit off the edge that `move_creatures`
+/// keeps, said once so that [`separate`] and the wall can be talked about in the same terms.
+fn inside_the_walls(at: Vec2) -> Vec2 {
+    Vec2::new(at.x.clamp(-HALF_W + 0.5, HALF_W - 0.5), at.y.clamp(-HALF_D + 0.5, HALF_D - 0.5))
+}
+
+/// The part of a step that the walls will not allow — zero in the middle of the garden, and what
+/// is left over at the edge of it. It is what an immovable thing refuses to give, measured, so
+/// that [`separate`] can hand it to whoever else is in the pair.
+fn refused_by_the_walls(from: Vec2, step: Vec2) -> Vec2 {
+    let want = from + step;
+    want - inside_the_walls(want)
+}
+
 /// Nothing walks through anything solid. Circles on XZ, pushed apart until they only touch: two
-/// creatures give half each, a tree or a rock gives nothing. This is the whole of the physics in
-/// the game, and it is deliberately not a physics crate — avian or rapier would be a megabyte of
+/// creatures give half each, a tree or a rock gives nothing — and so does a wall, which is the
+/// same rule said of the edge of the world: what the wall will not let one of a pair have, the
+/// other takes. This is the whole of the physics in the game, and it is deliberately not a
+/// physics crate — avian or rapier would be a megabyte of
 /// wasm and a second vocabulary for a rule that fits on a screen.
 ///
 /// Neighbours come from a grid of `CELL`-sided squares (`HashMap<(i32, i32), Vec<usize>>`), so the
@@ -2936,7 +2952,11 @@ fn separate(
     let mut radius: Vec<f32> = Vec::new();
     let mut who: Vec<Entity> = Vec::new();
     for (entity, collider, transform) in &movers {
-        at.push(Vec2::new(transform.translation.x, transform.translation.z));
+        // inside the walls before anything is pushed, so that "everything that can move is inside
+        // the walls" holds over the whole of this function and the write-back has nothing to
+        // correct. It is where the write-back's clamp went (below); a creature that arrived from
+        // outside — a hand-edited save is the only way — is still brought in, as it was before.
+        at.push(inside_the_walls(Vec2::new(transform.translation.x, transform.translation.z)));
         radius.push(collider.radius);
         who.push(entity);
     }
@@ -2985,11 +3005,33 @@ fn separate(
                         let push = sum - distance;
                         match (i < mover_count, j < mover_count) {
                             (true, true) => {
-                                at[i] -= dir * push * 0.5;
-                                at[j] += dir * push * 0.5;
+                                // Half each — **unless the wall is in the way** (2026-09-18).
+                                //
+                                // A wall is an immovable thing like a tree or a rock, and the
+                                // rule for those is the one written at the top of this function:
+                                // an immovable thing gives nothing, and the creature takes the
+                                // whole of the push. Said of the wall, that is this: what the
+                                // wall refuses one of the pair is handed to the other, so the
+                                // pair still settles the whole of `push` between them.
+                                //
+                                // Before, the halves were taken without asking the wall, and the
+                                // write-back's `clamp` pulled the one that had gone through it
+                                // back — straight into the other creature. That is the whole of
+                                // the fourth check's flakiness: 23 events out of 23 were a pair
+                                // the passes had pushed exactly apart (`preclamp` 1.000) and the
+                                // clamp had put back together
+                                // (`docs/worklog/2026-09-17-selftest-flakes.md` §2).
+                                let half = dir * push * 0.5;
+                                let refused_i = refused_by_the_walls(at[i], -half);
+                                let refused_j = refused_by_the_walls(at[j], half);
+                                at[i] = inside_the_walls(at[i] - half - refused_j);
+                                at[j] = inside_the_walls(at[j] + half - refused_i);
                             }
-                            (true, false) => at[i] -= dir * push,
-                            (false, true) => at[j] += dir * push,
+                            // and the same for a push off something fixed: it may press a
+                            // creature against a wall, and a creature pressed against a wall
+                            // stays where the wall is — there is nobody to hand the rest to
+                            (true, false) => at[i] = inside_the_walls(at[i] - dir * push),
+                            (false, true) => at[j] = inside_the_walls(at[j] + dir * push),
                             (false, false) => {}
                         }
                     }
@@ -2998,11 +3040,13 @@ fn separate(
         }
     }
 
-    // back into the world, and back inside the walls: a push can put a creature through one
+    // Back into the world. The walls are the pushing's business now (above) and every write into
+    // `at` went through `inside_the_walls`, so there is nothing left here for a clamp to move:
+    // what comes out is what the passes agreed on, and the check that runs after this sees it.
     let mut i = 0;
     for (_, _, mut transform) in &mut movers {
-        transform.translation.x = at[i].x.clamp(-HALF_W + 0.5, HALF_W - 0.5);
-        transform.translation.z = at[i].y.clamp(-HALF_D + 0.5, HALF_D - 0.5);
+        transform.translation.x = at[i].x;
+        transform.translation.z = at[i].y;
         i += 1;
     }
 
