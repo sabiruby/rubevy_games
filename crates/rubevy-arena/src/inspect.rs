@@ -479,6 +479,22 @@ pub struct VmClock {
     pub budget_ms: f32,
 }
 
+/// **Where the clock's two systems stand**, so that a game with a *second* VM can keep the two
+/// ticks apart.
+///
+/// [`VmClock`] measures `ScriptWorld` — the app's first VM — by starting before
+/// `RubevySet::Tick` and stopping after it. With one VM that is the whole of the frame's Ruby and
+/// nothing can land in between. With two, the other VM's tick is ordered against `RubevySet::Tick`
+/// and **not** against these two systems, so Bevy is free to put it inside the window and the
+/// number quietly becomes the sum of both ticks measured against one VM's `frame_time` — which is
+/// what the garden saw when it grew a world VM (rubevy_games,
+/// `docs/worklog/2026-09-17-garden-world.md`): 0.9 ms became 2.1.
+///
+/// Naming the pair is what lets that game say `RubevySet::<Other>::tick().before(VmClockSet)`. A
+/// game with one VM need never write it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VmClockSet;
+
 pub fn vm_clock_start(mut clock: ResMut<VmClock>) {
     clock.started = Some(bevy::platform::time::Instant::now());
 }
@@ -501,8 +517,11 @@ impl Plugin for VmInspectorPlugin {
         }
         app.init_resource::<VmInspector>()
             .init_resource::<VmClock>()
-            .add_systems(Update, vm_clock_start.before(RubevySet::Tick))
-            .add_systems(Update, vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer))
+            .add_systems(Update, vm_clock_start.before(RubevySet::Tick).in_set(VmClockSet))
+            .add_systems(
+                Update,
+                vm_clock_end.after(RubevySet::Tick).before(RubevySet::Answer).in_set(VmClockSet),
+            )
             .add_systems(EguiPrimaryContextPass, draw_inspector);
     }
 }
