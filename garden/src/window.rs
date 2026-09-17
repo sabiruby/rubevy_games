@@ -473,6 +473,9 @@ pub struct HudRow {
     pub species: Species,
     pub hunger: f32,
     pub insn_per_frame: u64,
+    /// **insn/decision**: what one pass of this creature's behaviour loop costs it in VM
+    /// instructions. It stands where G4's *frames* per decision stood, which stopped meaning
+    /// anything when a component read stopped costing a frame (`Mind::instructions_per_decision`).
     pub per_decision: Option<f32>,
     pub at: String,
     pub in_memory: bool,
@@ -493,7 +496,7 @@ pub fn hud_rows(creatures: &Query<(Entity, &Creature, &Hunger, &Mind)>) -> Vec<H
             species: creature.species,
             hunger: hunger.0,
             insn_per_frame: mind.last_instructions / mind.frames.max(1),
-            per_decision: mind.frames_per_decision(),
+            per_decision: mind.instructions_per_decision(),
             at: mind.at.clone(),
             in_memory: mind.in_memory,
         })
@@ -592,7 +595,7 @@ pub fn draw_hud(
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "click a creature, or Tab · hunger · insn/frame · frames/decision · the line it is waiting on",
+                    "click a creature, or Tab · hunger · insn/frame · insn/decision · the line it is waiting on",
                 )
                 .weak(),
             );
@@ -635,14 +638,14 @@ pub fn draw_hud(
                         );
                         ui.label(
                             egui::RichText::new(match row.per_decision {
-                                Some(n) => format!("{n:>4.1} f/dec"),
-                                None => "   – f/dec".into(),
+                                Some(n) => format!("{n:>5.0} i/dec"),
+                                None => "    – i/dec".into(),
                             })
                             .monospace()
                             .color(egui::Color32::from_gray(170)),
                         )
                         .on_hover_text(
-                            "frames between this creature asking the world something — a component read or one of the game's two questions — and its task running again with the answer",
+                            "VM instructions this creature spends on one pass of its behaviour's loop — everything between one `sleep` and the next: the component reads, the question the game answers, and the `act`. It used to be the frames a decision waited for; a component read is answered inside the tick that asks it now, so a decision costs instructions rather than frames",
                         );
                         ui.label(
                             egui::RichText::new(&row.at)
@@ -963,16 +966,19 @@ pub fn window_selftest(
                 platform::read(&brains.path(&ruby.0, Species::Beetle)).unwrap_or_default() == test.original,
                 "nothing was written",
             );
-            // what the HUD's frames/decision says, with a window and whatever frame rate this
-            // machine gives: the number the doc quotes is the headless one, at a steady 60 Hz
+            // what the HUD's insn/decision says, with a window and whatever frame rate this
+            // machine gives: the number the doc quotes is the headless one, at a steady 60 Hz.
+            // The component reads that used to be counted beside the ask round trips are not
+            // here any more — rubevy answers a read inside the tick that asks it, so there is no
+            // wait to count (`Mind::instructions_per_decision`).
             for (_, mind, _) in minds.iter().take(3) {
                 info!(
-                    "selftest: {} — {} ask round trips, {} component reads, {} frames/decision",
+                    "selftest: {} — {} ask round trips, {} decisions, {} insn/decision",
                     mind.name,
                     mind.ask_trips,
-                    mind.read_trips,
-                    match mind.frames_per_decision() {
-                        Some(n) => format!("{n:.2}"),
+                    mind.decisions,
+                    match mind.instructions_per_decision() {
+                        Some(n) => format!("{n:.0}"),
                         None => "–".into(),
                     }
                 );

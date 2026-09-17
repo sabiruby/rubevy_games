@@ -215,4 +215,118 @@ probe: miss beetle  96v0 at 62.827 sampled 63.329 (gap 0.502) dot 0.858 was Vec2
 
 ## 3. 「1 判断あたりのフレーム数」を「1 判断あたりの命令数」に
 
-（§3 以降は下に書き足す）
+### 3.1 何が壊れていたのか（G4 の測り方）
+
+G4 の `frames/decision` は**空白を測っていた**。タスクは短いバーストで走って park し、
+バーストが終わる理由は「世界に何か訊いた」か「寝た」のどちらか。
+訊いた場合、答えが来るまでの空白のフレーム数が `frames/decision` で、2 種類の質問を
+こう見分けていた（`watch_minds` の元のコード）:
+
+* `answer_garden` がこの生き物に答えたフレームから始まる空白 → `Rubevy.ask` の往復（`Mind::asked_frame`）
+* それ以外で `SHORTEST_SLEEP` より短い空白 → コンポーネント読み
+* それより長い空白 → `sleep`。判断ではない
+
+**読みが park しなくなったので、2 番目が拾うものが無くなった。** 拾うものが無くなったのに
+0 にはならず、3〜4 になる（§0.1）。残っているのは**読みではない短い空白**（タイムスライス切れ、
+ゲーム側のフレームの揺れ）で、前はそれが 2352 件の本物の読みに紛れて見えなかっただけ。
+**消えたものを数えて 0 にならない測り方は、それを測っていない。**
+
+### 3.2 代わりに何を測るか
+
+読みが park しないなら、スクリプトが残す空白は**自分で開けた `sleep`** だけになる。
+そして garden の行動アルゴリズムは全部「`loop do … sleep 0.2 end`」の形をしている
+（`beetle.rb:96-127`、`rabbit.rb:54-93`、ハンドラも同じ）。だから
+
+> **1 判断 = `sleep` から次の `sleep` までの 1 周。その間に使った命令数が、その判断の値段。**
+
+`ScriptStats::instructions` は累計なので、1 周の値段は両端の差。`Mind` に 3 つ足した:
+
+```rust
+pub decisions: u32,              // 終わった周の数
+pub decision_instructions: u64,  // その周たちが使った命令の合計
+pass_start: Option<u64>,         // 今の周が始まったときの累計。最初の sleep まで None
+```
+
+`pass_start` が `Option` なのは、**数え始めたときに途中だった周を数えないため**。
+`watch_minds` が最初に見たときの周は、頭の分だけ短く出る。
+
+`SHORTEST_SLEEP`（0.05）は**残した**。この定数が言っているのは
+「`ruby/` の中で一番短い `sleep`」で、判定に使うのは**「これ以上の空白は `sleep` でしかありえない」**
+という向きだけ。逆向き（「これより短い空白はホスト待ち」）が壊れた方で、そちらは使わなくなった。
+定数のコメントにそう書いた。ついでに、調査 §7-G が確かめたこと
+——この `sleep 0.05` の理由は読みではなく `restore_memory`（書き戻しがフレームの末尾なので、
+次の行で `memory` を読むと空の Hash）——も書いた。**書きは同期になっていないので、この理由は動いていない。**
+
+### 3.3 ゲームが答える往復の方は残した
+
+計画書は `Mind::asked_frame` ごと置き換えると書いているが、**ask の側は残した**。
+理由は 3 つ:
+
+1. 壊れていない。`asked_frame` は `answer_garden` が実際に答えたフレームを記録していて、
+   推測が 1 つも入っていない。実測で今も 1.000 フレーム。
+2. それが今や「フレームを食う質問」の**唯一の**例になった。同じ 1 行に
+   「判断 1 回 = N 命令」と「ゲームが答える質問 1 回 = 1 フレーム、読みは 0 フレーム」が並ぶと、
+   同期化が何を変えたのかが 1 行で読める。rubevy 側も同じ選び方をしている
+   （`tests/scheduling.rs` に 0 と 1 の両方を残して「誰が答えるかで値段が違う」を 1 ファイルで読ませる）。
+3. `docs/garden.md:1099` の表がこの数を引用している。消すと根拠の無い行になる。
+
+消したのは `read_trips` / `read_frames` だけ。
+
+### 3.4 出てきた数
+
+`--headless 90` を 3 回:
+
+```
+hud: insn/decision — 4281 passes of a behaviour's loop, 208.2 instructions each; and 967 questions the game answered, 1.000 frames each (a component read costs no frame at all)
+hud: insn/decision — 4443 passes of a behaviour's loop, 209.2 instructions each; and 893 questions the game answered, 1.000 frames each
+hud: insn/decision — 5334 passes of a behaviour's loop, 196.6 instructions each; and 927 questions the game answered, 1.000 frames each
+```
+
+1 頭ずつ（HUD の列）はこうなる:
+
+```
+hud:   Beetle 98v0     hunger  92.6       6 insn/frame      81 insn/decision  beetle.rb:102
+hud:   Beetle 95v0     hunger  61.1      11 insn/frame     169 insn/decision  beetle.rb:102
+hud:   Rabbit 100v0    hunger  50.8      24 insn/frame     405 insn/decision  rabbit.rb:60
+```
+
+**ビートルが 81〜169、ウサギが 346〜410。** 差はそのまま脚本の差で、ウサギの 1 周は
+`here` を読み、`garden.nearest(:Plant)` か `garden.nearest(:Creature)` を訊き、
+相手の `[:Creature]` を読み、`wander(avoid: memory["trees"])` で木を避ける
+——ビートルの 1 周より 3 つ多い。同じ数字が「空腹でないビートル」（`wander` だけ）で 81 まで下がるのも、
+この数がちゃんと周の中身を見ていることの傍証になっている。
+
+HUD の列は `f/dec` → `i/dec`、headless の行は `frames/decision` → `insn/decision`、
+窓ありセルフテストの行は `component reads` → `decisions` に置き換えた。
+
+---
+
+## 4. VM パネル: 待つ理由が 6 つから 5 つに
+
+`crates/rubevy-arena/src/inspect.rs` の `Waiting::Component` を消した
+（enum の枝、`text()`、`how()`、`why()` の `Rubevy::Entity` の分岐、
+単体テスト `a_component_read_names_the_component`）。パネルは tick の**外**（`show_vm` は
+`Update` の後ろ）から VM を覗くので、tick の中で答え終わっている読みは見えない。
+`rubevy-arena` の単体テストは 7 本から 6 本になり、残り 6 本は無変更で通る。
+
+### 4.1 これは garden にしか無かった枝
+
+Battle の Ruby はコンポーネントを読まない（§0.2）ので、この枝は garden の
+`me[:Hunger]` 専用だった。`docs/garden.md` のスクショ（`garden-vm.png`）が
+`waiting for a component read — [:Transform]` を写しているのはそのため。
+
+### 4.2 「到達不能」は少し言い過ぎ
+
+計画書は「到達不能になるので削除」と書いているが、**厳密には 1 つ残っている**。
+tick が命令数の予算か `frame_time` を使い切って終わると、その周の読みは答えられないまま残り、
+次の tick の頭で答えられる（rubevy 側 worklog §1.5）。その間にパネルが覗くと、
+タスクは `Task::Queue#pop` の下に `Rubevy::Entity#get` を積んだまま立っている。
+
+枝を消した今、そこは `why()` の最後の受け皿に落ちて **`Waiting::Ask("get")`**
+——「ゲームが `get` を答えるのを待っている」——になる。ゲームは答えないので、この文は嘘になる。
+
+指示どおり消したうえで、`Waiting` の rustdoc にこの 1 ケースを書いた。
+実際に起きる気配は無い（garden の tick は 8 ms の予算に対して 1 ms を切っている。
+着手前の HUD 行が `VM 0.20 / 8.0 ms`、`0.92 / 8.0`、`0.35 / 8.0`）が、
+**「到達不能」と書くには強すぎる**ので、そう書かずに残した。
+編集画面で `loop { me[:Hunger] }` を Apply した人が F2 を押すと、これが最初に出る画面になる。

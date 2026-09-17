@@ -82,9 +82,23 @@ pub struct RegRow {
 ///
 /// * **It is on a queue.** `Task::Queue#pop` is Ruby, in mrblib, so a parked task carries a
 ///   frame whose method is `pop` — and the frame *behind* it says which kind of queue:
-///   `Rubevy::Subscription` is an `on(:…)` handler's ([`Waiting::Event`]), `Rubevy::Entity` is a
-///   component read ([`Waiting::Component`]), `Rubevy::Proxy` or any other method is a
-///   `Rubevy.ask` the game owes an answer to ([`Waiting::Ask`]).
+///   `Rubevy::Subscription` is an `on(:…)` handler's ([`Waiting::Event`]), `Rubevy::Proxy` or any
+///   other method is a `Rubevy.ask` the game owes an answer to ([`Waiting::Ask`]).
+///
+///   There used to be a sixth reason here, and it was the commonest one in the Garden: a
+///   component read, `me[:Hunger]`, whose `pop` sat under `Rubevy::Entity#get`. Since 2026-09-17
+///   rubevy answers a read **inside the tick that asked it** — the tick runs the ready tasks,
+///   answers the reads they parked on, and runs them again (rubevy `docs/host-api.md`, "A read
+///   costs no frame") — so by the time this panel looks at the VM, no task is standing there.
+///   The read is still a `pop` while it lasts; it just never lasts as long as a frame.
+///
+///   One case is left where it could last that long, and the panel does not cover it: a tick
+///   that runs out of its budget of instructions or of its `frame_time` stops with the reads of
+///   that round unanswered, and rubevy answers them at the top of the next tick. A task caught
+///   there reads as [`Waiting::Ask`] on the method behind the `pop` (`get`), which is wrong in
+///   that it names the *game* as the one who owes the answer. Neither game has come near its
+///   budget — the Garden's ticks measure under 1 ms of the 8 ms it is given — so this has not
+///   been seen; it is written down because "unreachable" would be too strong a word for it.
 /// * **It is not.** `sleep` is a native and pushes no frame, so a sleeping task's innermost
 ///   frame is the line that called it ([`Waiting::Sleep`]).
 ///
@@ -104,8 +118,6 @@ pub enum Waiting {
     /// Parked on a `Rubevy.ask` queue: the game has been asked something and has not answered
     /// yet. The string is the method that asked (`nearest(:Plant)`, `radar`).
     Ask(String),
-    /// Parked on a component read — `me[:Hunger]`, which rubevy answers itself.
-    Component(String),
     /// Parked on a queue the frames do not place.
     Queue,
     /// Not on a queue: a `sleep` (see the caveat above).
@@ -120,10 +132,6 @@ impl Waiting {
             Waiting::Event => "waiting for an event — an `on(:…)` block, parked on its queue".into(),
             Waiting::Ask(what) if what.is_empty() => "waiting for the game to answer a question".into(),
             Waiting::Ask(what) => format!("waiting for the game to answer `{what}`"),
-            Waiting::Component(name) if name.is_empty() => "waiting for a component read".into(),
-            // `name` is the symbol as the script wrote it (`:Hunger`), so the brackets round it
-            // are the line the reader will find in their own file: `me[:Hunger]`
-            Waiting::Component(name) => format!("waiting for a component read — `[{name}]`"),
             Waiting::Queue => "waiting on a queue".into(),
             Waiting::Sleep => "sleeping — it asked for time, not for an answer".into(),
         }
@@ -135,7 +143,6 @@ impl Waiting {
             Waiting::Nothing => "the task has no context: it has run to its end, or has not had its first frame",
             Waiting::Event => "the innermost frames are `Task::Queue#pop` under `Rubevy::Subscription#pop` — a queue `Rubevy.subscribe` handed out, which is what `on(:…)` waits on. Which event it is, is a local of the block that started the task and is not on this stack",
             Waiting::Ask(_) => "the innermost frame is `Task::Queue#pop`, and the frame behind it is the method that called `Rubevy.ask`: the question has gone out with this frame's commands and the answer comes back on the next one",
-            Waiting::Component(_) => "the innermost frame is `Task::Queue#pop` under `Rubevy::Entity#get` — a component read, which rubevy answers itself in `answer_components`; the game never sees it",
             Waiting::Queue => "the innermost frame is `Task::Queue#pop`, and nothing behind it says which queue",
             Waiting::Sleep => "it is parked and *not* on a queue, and `sleep` is the only other thing that parks a task in this game's Ruby (`sleep` is a native and pushes no frame, so the line shown is the one that called it). A task that had used up its timeslice would look the same from here",
         }
@@ -395,12 +402,6 @@ fn why(frames: &[FrameRow]) -> Waiting {
         // `pop` goes through it and an answer's does not (rubevy `src/prelude.rb`)
         if f.class.contains("Rubevy::Subscription") {
             return Waiting::Event;
-        }
-        // `e[:Hunger]` → `Rubevy::Entity#[]` → `#get` → `Rubevy.ask("component.get", …).pop`
-        if f.class == "Rubevy::Entity" {
-            return Waiting::Component(
-                f.local("name").map(clean).unwrap_or_default(),
-            );
         }
         // `garden.nearest(:Plant)` → `Rubevy::Proxy#method_missing` → `Rubevy.ask(…).pop`
         if f.class.contains("Rubevy::Proxy") {
@@ -752,18 +753,6 @@ mod tests {
             frame("run", "#<Class:0x11ac0>", "beetle.rb:96", true, &[]),
         ];
         assert_eq!(why(&frames), Waiting::Sleep);
-    }
-
-    /// `me[:Hunger]` — `Rubevy::Entity#[]`, `#get`, `Rubevy.ask("component.get", …).pop`.
-    #[test]
-    fn a_component_read_names_the_component() {
-        let frames = vec![
-            frame("pop", "Task::Queue", "(no debug info)", false, &[]),
-            frame("get", "Rubevy::Entity", "(no debug info)", false, &[("name", ":Hunger")]),
-            frame("[]", "Rubevy::Entity", "(no debug info)", false, &[]),
-            frame("hunger", "Creature", "prelude.rb:138", false, &[]),
-        ];
-        assert_eq!(why(&frames), Waiting::Component(":Hunger".into()));
     }
 
     /// `garden.nearest(:Plant)` — the proxy turns the name into a question, and the name and the

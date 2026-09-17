@@ -465,20 +465,23 @@ pub struct Mind {
     /// The frame this task last ran an instruction in.
     ran_frame: u32,
     /// The frame `answer_garden` last answered one of the game's own questions for it. A gap that
-    /// starts on that frame is a `Rubevy.ask` round trip and is known to be one; a short gap that
-    /// does not is a component read, which rubevy answers itself and the game never sees.
+    /// starts on that frame is a `Rubevy.ask` round trip and is known to be one.
     asked_frame: Option<u32>,
-    /// round trips waited out, and the frames they took, split by which of the two they were
+    /// round trips the *game* answered, and the frames they took. Component reads used to be
+    /// counted beside these and are not any more: since 2026-09-17 rubevy answers a read inside
+    /// the tick that asked it, so a read leaves no gap to count (see `watch_minds`).
     pub ask_trips: u32,
     pub ask_frames: u32,
-    pub read_trips: u32,
-    pub read_frames: u32,
+    /// passes of the behaviour's loop this creature has finished, and what they cost it
+    pub decisions: u32,
+    pub decision_instructions: u64,
+    /// `ScriptStats::instructions` as the pass now under way began. `None` until the first `sleep`
+    /// this has seen the end of: a pass that was already half done when the counting started
+    /// would be counted short.
+    pass_start: Option<u64>,
 }
 
 impl Mind {
-    /// The HUD's **frames/decision**: the mean number of frames this creature's task waits
-    /// between asking the world something and running again with the answer, over both kinds of
-    /// question. `None` until it has waited for one.
     /// The script is being replaced: what a round trip cost the old one says nothing about the
     /// new one (G4's editor).
     pub fn restart(&mut self) {
@@ -486,13 +489,24 @@ impl Mind {
         self.asked_frame = None;
         self.ask_trips = 0;
         self.ask_frames = 0;
-        self.read_trips = 0;
-        self.read_frames = 0;
+        self.decisions = 0;
+        self.decision_instructions = 0;
+        self.pass_start = None;
     }
 
-    pub fn frames_per_decision(&self) -> Option<f32> {
-        let trips = self.ask_trips + self.read_trips;
-        (trips > 0).then(|| (self.ask_frames + self.read_frames) as f32 / trips as f32)
+    /// The HUD's **insn/decision**: the mean number of VM instructions this creature spends on
+    /// one pass of its behaviour's loop. `None` until it has finished one.
+    ///
+    /// This stands where G4's **frames/decision** stood. That number was the frames a task waited
+    /// between asking the world something and running again with the answer, and it worked
+    /// because a component read *parked* the task: the gap it left was the thing being measured.
+    /// From 2026-09-17 rubevy answers a read inside the tick that asked it (rubevy
+    /// `docs/host-api.md`, "A read costs no frame"), so there is no gap, and the old number went
+    /// from counting 2352 reads a run to counting three or four gaps that were never reads at all
+    /// (`docs/worklog/2026-09-17-sync-reads.md`). What a read costs now is instructions, not
+    /// frames, so that is what this counts.
+    pub fn instructions_per_decision(&self) -> Option<f32> {
+        (self.decisions > 0).then(|| self.decision_instructions as f32 / self.decisions as f32)
     }
 }
 
@@ -1996,8 +2010,9 @@ fn give_mind(
             asked_frame: None,
             ask_trips: 0,
             ask_frames: 0,
-            read_trips: 0,
-            read_frames: 0,
+            decisions: 0,
+            decision_instructions: 0,
+            pass_start: None,
         },
     ));
 }
@@ -3112,34 +3127,54 @@ fn answer_garden(world: &mut World) {
 /// The shortest `sleep` any script in `ruby/` takes: one line of `run_creature`, before a
 /// creature's first thought. Everything else sleeps for 0.1 s or more.
 ///
-/// It is the only number the frames-per-decision measurement below rests on, and it is a fact
-/// about the scripts in this repository rather than a tolerance: a gap between two bursts of a
-/// task that is shorter than the shortest nap it could be taking is a gap spent waiting for the
-/// game.
+/// It is the only number the measurement below rests on, and it is a fact about the scripts in
+/// this repository rather than a tolerance: a gap between two bursts of a task that is at least
+/// this long cannot be anything but a `sleep`.
+///
+/// The line it names is not going anywhere, and it is worth saying why, because everything else
+/// about waiting moved on 2026-09-17. That `sleep 0.05` is not there to space out reads: it is
+/// there because a creature loaded from a save is handed its `@memory` by `restore_memory` at the
+/// *end* of its first frame, and a `run` that started reading `memory` on the line below would
+/// read the empty Hash (`ruby/prelude.rb`, `run_creature`). Writes still land at the end of the
+/// frame, so that reason is untouched by reads becoming synchronous.
+///
+/// What did change is which half of this is usable. "At least this long, so it slept" is still
+/// true. Its converse — "shorter than this, so it was waiting for the host" — used to identify a
+/// component read and now identifies nothing: a read parks for no frames at all, so the short
+/// gaps that are left are timeslices and scheduling, not questions.
 const SHORTEST_SLEEP: f32 = 0.05;
 
-/// What a script has cost, where it is standing, and **how long it waits for an answer** — the
-/// three numbers the HUD draws and the headless run prints.
+/// What a script has cost, where it is standing, and **what a decision costs it** — the three
+/// numbers the HUD draws and the headless run prints.
 ///
 /// The last of them is what G4 added, and it is worth being exact about, because the whole shape
 /// of the scripts follows from it. A creature's task runs in short bursts and is parked between
-/// them. A burst ends either because the script asked the world something — a component read
-/// (`me[:Hunger]`) or one of the game's two questions (`garden.nearest`) — or because it went to
-/// sleep. Both kinds of question are answered in `RubevySet::Answer` of the same frame, so the
-/// task is ready again on the next one.
+/// them. G4 measured the *gaps*: a burst ended because the script had asked the world something,
+/// and **frames/decision** was how many frames went by before the answer arrived. Two kinds of
+/// question left a gap and they were told apart by which — a gap starting on the frame
+/// `answer_garden` answered something for this creature was a `Rubevy.ask` round trip
+/// ([`Mind::asked_frame`]), and a shorter one was a component read.
 ///
-/// So **frames/decision is the number of frames between the burst that asked and the burst that
-/// got the answer**, and the two kinds are told apart like this:
+/// **Since 2026-09-17 a component read leaves no gap at all**: rubevy answers it inside the tick
+/// that asked it, between two runs of the scheduler, so the task never reaches the next frame
+/// waiting (rubevy `docs/host-api.md`, "A read costs no frame"). Measured here before anything
+/// else was changed, the old rule went from counting 2352 reads in a ninety-second run to
+/// counting three or four — and those three or four are not reads, they are gaps that were
+/// never reads and used to be lost among the real ones. A measurement that cannot be zero when
+/// the thing it counts is gone is not measuring it (`docs/worklog/2026-09-17-sync-reads.md`).
 ///
-/// * a gap that *starts* on the frame `answer_garden` answered a question for this creature is a
-///   `Rubevy.ask` round trip, and is known to be one ([`Mind::asked_frame`]);
-/// * any other gap shorter than [`SHORTEST_SLEEP`] is a component read, which rubevy answers
-///   itself in `answer_components` and which the game therefore never sees as a `Request`;
-/// * anything longer is a `sleep`, and is not a decision at all.
+/// So the gap this now measures is the one the scripts still make on purpose — the `sleep` at the
+/// foot of every behaviour's loop — and what it measures across it is **instructions**:
 ///
-/// Both come out at 1 (`docs/garden.md`, "The window (G4)"), which is what the placement of
-/// `answer_garden` in `RubevySet::Answer` buys: answered anywhere later and every one of these
-/// would read 2.
+/// * a gap of at least [`SHORTEST_SLEEP`]'s worth of frames is a `sleep`, and a `sleep` ends one
+///   pass of the loop and begins the next. Everything between two of them is **one decision**:
+///   the reads, the question the game answers, the arithmetic and the `act`;
+/// * `ScriptStats::instructions` is a running total, so a pass costs the difference between the
+///   totals at its two ends ([`Mind::instructions_per_decision`]);
+/// * the round trips the *game* answers are still counted as they were, and still cost one frame
+///   each. That number did not break, and it is now the only one of the two kinds of question
+///   that costs a frame — which is the whole of what synchronous reads changed, in one line of
+///   the log.
 fn watch_minds(
     time: Res<Time>,
     frame: Res<bevy::diagnostic::FrameCount>,
@@ -3147,14 +3182,17 @@ fn watch_minds(
     mut minds: Query<(&mut Mind, Option<&ScriptTask>)>,
 ) {
     let now = frame.0;
-    // how few frames a gap has to be to be too short for the shortest nap in `ruby/`
+    // how many frames a gap has to be before it is too long to be anything but a nap
     let dt = time.delta_secs().max(1.0 / 1000.0);
     let sleep_floor = (SHORTEST_SLEEP / dt).ceil().max(2.0) as u32;
     for (mut mind, script) in &mut minds {
         let Some(script) = script else { continue };
         let stats = world.stats(script);
-        let ran = stats.instructions > mind.last_instructions;
-        mind.spent = stats.instructions.saturating_sub(mind.last_instructions);
+        // what the task had run when it last stopped: the total at the end of the pass that is
+        // finishing, and the total at the start of the one beginning, are the same number
+        let before = mind.last_instructions;
+        let ran = stats.instructions > before;
+        mind.spent = stats.instructions.saturating_sub(before);
         mind.last_instructions = stats.instructions;
         mind.frames += 1;
         if ran {
@@ -3164,9 +3202,16 @@ fn watch_minds(
                 if mind.asked_frame == Some(was) {
                     mind.ask_trips += 1;
                     mind.ask_frames += gap;
-                } else if gap < sleep_floor {
-                    mind.read_trips += 1;
-                    mind.read_frames += gap;
+                }
+                if gap >= sleep_floor {
+                    // it has woken from a `sleep`: close the pass that was under way and open
+                    // the next. The first `sleep` only opens one — a pass that was already
+                    // half run when this creature was first looked at would be counted short.
+                    if let Some(start) = mind.pass_start {
+                        mind.decisions += 1;
+                        mind.decision_instructions += before.saturating_sub(start);
+                    }
+                    mind.pass_start = Some(before);
                 }
             }
             mind.ran_frame = now;
@@ -3952,33 +3997,37 @@ fn stop_when_over(
     );
     for row in window::hud_rows(&panelled) {
         info!(
-            "hud:   {:<14}{} hunger {:>5.1}  {:>6} insn/frame  {} frames/decision  {}",
+            "hud:   {:<14}{} hunger {:>5.1}  {:>6} insn/frame  {} insn/decision  {}",
             row.name,
             if row.in_memory { "*" } else { " " },
             row.hunger,
             row.insn_per_frame,
             match row.per_decision {
-                Some(n) => format!("{n:>4.1}"),
-                None => "   –".into(),
+                Some(n) => format!("{n:>6.0}"),
+                None => "     –".into(),
             },
             row.at,
         );
     }
     {
-        // and what a round trip cost over the whole run, both kinds of question apart — the
-        // number the HUD's `frames/decision` column is the per-creature form of
-        let (mut ask_trips, mut ask_frames, mut read_trips, mut read_frames) = (0u32, 0u32, 0u32, 0u32);
+        // what a pass of a behaviour's loop cost over the whole run — the number the HUD's
+        // `insn/decision` column is the per-creature form of — and, beside it, the one kind of
+        // question that still costs a frame. The component reads that used to stand here are
+        // gone from the line because they are gone from the frame: rubevy answers them inside
+        // the tick that asked them, so there is nothing left to count in frames.
+        let (mut ask_trips, mut ask_frames) = (0u32, 0u32);
+        let (mut decisions, mut decision_instructions) = (0u32, 0u64);
         for (_, _, _, mind) in &panelled {
             ask_trips += mind.ask_trips;
             ask_frames += mind.ask_frames;
-            read_trips += mind.read_trips;
-            read_frames += mind.read_frames;
+            decisions += mind.decisions;
+            decision_instructions += mind.decision_instructions;
         }
         let mean = |f: u32, n: u32| if n == 0 { f32::NAN } else { f as f32 / n as f32 };
         info!(
-            "hud: frames/decision — {ask_trips} questions the game answered, {:.3} frames each; {read_trips} component reads, {:.3} frames each",
+            "hud: insn/decision — {decisions} passes of a behaviour's loop, {:.1} instructions each; and {ask_trips} questions the game answered, {:.3} frames each (a component read costs no frame at all)",
+            if decisions == 0 { f32::NAN } else { decision_instructions as f32 / decisions as f32 },
             mean(ask_frames, ask_trips),
-            mean(read_frames, read_trips),
         );
         let mut panel = VmInspector::default();
         for (mind, script) in &tasks {
