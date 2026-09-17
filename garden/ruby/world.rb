@@ -51,13 +51,18 @@ world do
     #   `who`   — the entity that size belongs to. `garden.within` answers with the raw bits of an
     #             entity (a row of an `Answer::Rows` is numbers), and this is how a row becomes
     #             something that can be written to.
-    #   `eaten` — the plants that have been bitten this frame, and the ones whose size has to be
-    #             written back at the end. One list does both jobs, because a plant that changed
-    #             is a plant that grew or was bitten.
+    #   `changed` — the plants whose size has to be written back at the end: the ones that grew
+    #             and the ones that were bitten. One list does both jobs, because a plant that
+    #             changed is a plant that grew or was bitten.
+    #
+    # There used to be a fourth, `bitten`, so that one blade fed one mouth per frame (the plan's
+    # §2, default 5). Its reason was that two writes to one plant in one frame would be the
+    # second one only — and that stopped being true the moment the sizes were worked out in these
+    # tables and written once at the foot of the pass: two mouths at one blade now take two bites
+    # out of the same number, which is what Rust's `eat` did (W2, `docs/worklog/…-garden-world.md`).
     size = (@size ||= {}).clear
     who = (@who ||= {}).clear
     changed = (@changed ||= {}).clear
-    bitten = (@bitten ||= {}).clear
 
     # --- the grass grows, up to a point -------------------------------------
     cap = plant_max
@@ -96,15 +101,14 @@ world do
         garden.within(c, arm, :Plant).each do |row|
           bits = row[0].to_i
           s = size[bits]
-          # gone, eaten down to nothing, or already feeding another mouth this frame
-          next if s.nil? || s <= crumb || bitten[bits]
+          # gone, or eaten down to nothing
+          next if s.nil? || s <= crumb
           # and in reach of *this* plant, which is wider the bigger the plant is
           next if row[1] > reach + s * 0.5
           bite = mouthful
           bite = s if s < bite
           size[bits] = s - bite
           changed[bits] = true
-          bitten[bits] = true
           h += bite * food_value
           h = full if h > full
           break # one plant at a time

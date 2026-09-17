@@ -3681,7 +3681,7 @@ struct RuleBook {
 /// The closure is handed `&World` and cannot change anything, which is the compiler saying what
 /// this is for: the world it sees is the world as it stands in `RubevySet::<World>::tick()` —
 /// after the Rust rules, which are ordered before it, and before anything the scripts write.
-fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>) {
+fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>, dice: Res<Dice>) {
     // **The world's share of the frame, measured** (W1, `docs/worklog/2026-09-17-garden-world.md`).
     //
     // The budgets are per VM and nothing caps them together: with two VMs at rubevy's defaults a
@@ -3712,6 +3712,28 @@ fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>) {
     // not. The budget is the guard that is a fact about the rules; the frame time is a fact about
     // a machine, and it is the one left alone.
     scripts.budget = 45_000;
+
+    // **The world's dice, so that two runs are not the same run** (W2).
+    //
+    // sabiruby's generator starts from a constant and the VM has nothing of its own to mix in —
+    // `srand` with no argument would take `gc_clock`, which rubevy does not set — so every roll
+    // `world.rb` makes was the same roll on every run of W1: the grass came up at the same
+    // moments in every ninety seconds anybody ever watched. **Where a roll has to differ between
+    // runs it is the game's `Dice` that differs**, because that one is seeded from the clock
+    // (`platform::clock_seed`, `Dice` in `main`), so the seed handed over here is one of its
+    // numbers and the world's luck is the garden's luck.
+    //
+    // It is rolled from a **copy** of `Dice` rather than from the resource itself: taking
+    // `ResMut` here would spend one of the game's numbers and move every roll `spawn_world`
+    // makes along by one, which would be this line quietly rearranging the garden it is only
+    // supposed to be reading a seed out of. The copy is the same generator from the same state,
+    // so what comes out is a number nobody else will get, and nobody else's number moves.
+    //
+    // A million is sabibots' scale for the same handover (`sabibots/src/main.rs`, `"seed"`): a
+    // whole number a Float carries exactly, and twenty bits of it, which is a different sequence
+    // every run and not a different *quality* of sequence.
+    let seed = (Dice(dice.0).roll() * 1_000_000.0).floor() as f64;
+    scripts.answer_in_tick("garden.seed", Box::new(move |_, _| Answer::Num(seed)));
 
     scripts.answer_in_tick(
         "garden.within",

@@ -171,12 +171,14 @@ end
 # Called by the game after `world.rb` has been read; the two are compiled as one program, which is
 # why neither needs a `require`.
 #
-# The dice are **not** seeded here. sabiruby's default generator starts from a constant and the VM
-# has no clock to mix in (`srand` with no argument would mix `gc_clock`, which rubevy does not
-# set), so every seeding available from inside the VM gives the same sequence on every run. Where
-# a roll has to differ between runs it is the game's `Dice` that rolls it — which is the case for
-# *where* a seed lands (`garden.sprout`); what is rolled here is only *when*, and the frame times
-# a run happens to get are what make two runs differ in that.
+# **The dice are seeded from the game's** (W2). sabiruby's default generator starts from a
+# constant and the VM has no clock to mix in — `srand` with no argument would mix `gc_clock`,
+# which rubevy does not set — so every seeding available from *inside* the VM gives the same
+# sequence on every run, and W1 ran a world whose grass came up at the same moments every time.
+# The one generator in this game that differs between runs is the game's own `Dice`, seeded from
+# the clock (`platform::clock_seed`), so the number `garden.seed` answers is one of its rolls and
+# the world's luck is the garden's luck. It costs no frame: the game registered it with
+# `answer_in_tick`, like `garden.within`.
 def run_world
   klass = $world_class
   raise "this file defines no world" if klass.nil?
@@ -186,6 +188,7 @@ def run_world
   # (`docs/plans/garden-world-plan.md` §2), so nothing reads this yet; it costs one line and it is
   # the line that would have to be there.
   Task.current.instance_variable_set(:@being, being)
+  srand(being.garden.seed.to_i)
 
   seconds = klass.day_length
   being.garden.rules(day_length: seconds) unless seconds.nil?
