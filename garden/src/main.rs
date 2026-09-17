@@ -257,6 +257,19 @@ const TOUCH_REACH: f32 = 1.3;
 /// creature in the world was as old as the world.
 const NEWBORN_GRACE: f32 = 2.0;
 
+/// How many frames a newborn is deaf for, which is how long the game waits before repeating the
+/// sky to it ([`tell_newborns_the_sky`]).
+///
+/// **Measured, not chosen.** `children_arrive` puts the `Script` on the child in frame N, after
+/// that frame's tick; rubevy turns it into a task and runs it for the first time in frame N+1's
+/// `RubevySet::Tick`, and the first thing that task does is `start_handlers`, which is where
+/// `Rubevy.subscribe` is called; rubevy's `publish_value` only reaches queues that exist when it
+/// is called. So the first publish a child can hear is one made in frame N+2. Creatures spawned
+/// one frame apart around nightfall said exactly that: one born two frames before the `"night"`
+/// heard it, one born one frame before did not — while being already counted among the
+/// addressees (`docs/worklog/2026-09-17-selftest-flakes.md` §4.2).
+const NEWBORN_DEAF_FRAMES: u32 = 2;
+
 /// How long a beetle has to have been left alone before a `"touched"` sent to it is one the sixth
 /// check can ask a question about: long enough for its handler task to have finished anything that
 /// was already in its queue (a handler holds the wheel for half a second over each message).
@@ -929,6 +942,23 @@ impl Default for Births {
     }
 }
 
+/// **The creatures that have been born and cannot hear yet** (2026-09-18).
+///
+/// A child's body exists from the frame `children_arrive` makes it, and its script cannot hear
+/// anything for two more frames ([`NEWBORN_DEAF_FRAMES`]). Anything the world said in between is
+/// lost to it — and the world says `"night"` and `"day"` once each, at the turn, so a creature
+/// born into the night was awake until the next morning and one born in the frame of the publish
+/// was counted among its addressees without having subscribed.
+///
+/// So each newborn waits here for its two frames and is then told what the sky is doing, on its
+/// own. It is a list rather than a component because what is waited for is frames of the
+/// creatures' VM, which is the thing the list is counted in.
+#[derive(Resource, Default)]
+struct Newborns {
+    /// the creature, and how many frames it has waited
+    waiting: Vec<(Entity, u32)>,
+}
+
 /// **What the run has to say about its two VMs, as one system parameter.**
 ///
 /// `stop_when_over` was at Bevy's limit of sixteen system parameters before W1 added a second VM
@@ -1177,6 +1207,9 @@ struct SelfTest {
     probe_closest: f32,
     /// when it got there, if it did
     probe_reached: Option<f32>,
+    /// when a rabbit first walked into the probe while it was still on its way, if one did. A
+    /// run where that happened has not measured this check either way (`watch_probe`)
+    probe_disturbed: Option<f32>,
     /// beetles that were touched by a rabbit while walking, and what has been seen of each since
     touched: Vec<Touch>,
     /// when each beetle was last put on that list, so that a beetle a rabbit keeps walking into
@@ -1275,6 +1308,7 @@ impl Default for SelfTest {
             probe_from: 0.0,
             probe_closest: f32::INFINITY,
             probe_reached: None,
+            probe_disturbed: None,
             touched: Vec::new(),
             last_touch: Vec::new(),
             turn_checked: 0,
@@ -1609,6 +1643,7 @@ fn main() {
         .init_resource::<Contacts>()
         .init_resource::<Bumps>()
         .init_resource::<Births>()
+        .init_resource::<Newborns>()
         // W1: the seeds `world.rb` asked for, the cost of its pass, and why it has no rules where
         // it has none
         .init_resource::<Sprouts>()
@@ -1709,6 +1744,13 @@ fn main() {
         // after the answers, because what it makes was asked for in this frame's `answer_garden`
         // and the request is answered there too
         .add_systems(Update, children_arrive.after(RubevySet::Answer).run_if(is_still))
+        // and the word the newborn of two frames ago is owed: after `day_night`, so that a child
+        // told the sky in the frame the sky turns over is told the new one, and before the
+        // creatures' tick, so that the word is in its queue on the first frame it can read one
+        .add_systems(
+            Update,
+            tell_newborns_the_sky.after(day_night).before(RubevySet::Tick).run_if(is_still),
+        )
         // G3, in this order and after the scripts have had their frame: put the memories back
         // (which needs the object a script makes in its first frame), then write the file if
         // anybody asked for one, then — last — let a restored world start moving. A run that
@@ -2914,9 +2956,25 @@ fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocit
     }
 }
 
+/// Where the walls let a creature stand: the same half unit off the edge that `move_creatures`
+/// keeps, said once so that [`separate`] and the wall can be talked about in the same terms.
+fn inside_the_walls(at: Vec2) -> Vec2 {
+    Vec2::new(at.x.clamp(-HALF_W + 0.5, HALF_W - 0.5), at.y.clamp(-HALF_D + 0.5, HALF_D - 0.5))
+}
+
+/// The part of a step that the walls will not allow — zero in the middle of the garden, and what
+/// is left over at the edge of it. It is what an immovable thing refuses to give, measured, so
+/// that [`separate`] can hand it to whoever else is in the pair.
+fn refused_by_the_walls(from: Vec2, step: Vec2) -> Vec2 {
+    let want = from + step;
+    want - inside_the_walls(want)
+}
+
 /// Nothing walks through anything solid. Circles on XZ, pushed apart until they only touch: two
-/// creatures give half each, a tree or a rock gives nothing. This is the whole of the physics in
-/// the game, and it is deliberately not a physics crate — avian or rapier would be a megabyte of
+/// creatures give half each, a tree or a rock gives nothing — and so does a wall, which is the
+/// same rule said of the edge of the world: what the wall will not let one of a pair have, the
+/// other takes. This is the whole of the physics in the game, and it is deliberately not a
+/// physics crate — avian or rapier would be a megabyte of
 /// wasm and a second vocabulary for a rule that fits on a screen.
 ///
 /// Neighbours come from a grid of `CELL`-sided squares (`HashMap<(i32, i32), Vec<usize>>`), so the
@@ -2936,7 +2994,11 @@ fn separate(
     let mut radius: Vec<f32> = Vec::new();
     let mut who: Vec<Entity> = Vec::new();
     for (entity, collider, transform) in &movers {
-        at.push(Vec2::new(transform.translation.x, transform.translation.z));
+        // inside the walls before anything is pushed, so that "everything that can move is inside
+        // the walls" holds over the whole of this function and the write-back has nothing to
+        // correct. It is where the write-back's clamp went (below); a creature that arrived from
+        // outside — a hand-edited save is the only way — is still brought in, as it was before.
+        at.push(inside_the_walls(Vec2::new(transform.translation.x, transform.translation.z)));
         radius.push(collider.radius);
         who.push(entity);
     }
@@ -2985,11 +3047,33 @@ fn separate(
                         let push = sum - distance;
                         match (i < mover_count, j < mover_count) {
                             (true, true) => {
-                                at[i] -= dir * push * 0.5;
-                                at[j] += dir * push * 0.5;
+                                // Half each — **unless the wall is in the way** (2026-09-18).
+                                //
+                                // A wall is an immovable thing like a tree or a rock, and the
+                                // rule for those is the one written at the top of this function:
+                                // an immovable thing gives nothing, and the creature takes the
+                                // whole of the push. Said of the wall, that is this: what the
+                                // wall refuses one of the pair is handed to the other, so the
+                                // pair still settles the whole of `push` between them.
+                                //
+                                // Before, the halves were taken without asking the wall, and the
+                                // write-back's `clamp` pulled the one that had gone through it
+                                // back — straight into the other creature. That is the whole of
+                                // the fourth check's flakiness: 23 events out of 23 were a pair
+                                // the passes had pushed exactly apart (`preclamp` 1.000) and the
+                                // clamp had put back together
+                                // (`docs/worklog/2026-09-17-selftest-flakes.md` §2).
+                                let half = dir * push * 0.5;
+                                let refused_i = refused_by_the_walls(at[i], -half);
+                                let refused_j = refused_by_the_walls(at[j], half);
+                                at[i] = inside_the_walls(at[i] - half - refused_j);
+                                at[j] = inside_the_walls(at[j] + half - refused_i);
                             }
-                            (true, false) => at[i] -= dir * push,
-                            (false, true) => at[j] += dir * push,
+                            // and the same for a push off something fixed: it may press a
+                            // creature against a wall, and a creature pressed against a wall
+                            // stays where the wall is — there is nobody to hand the rest to
+                            (true, false) => at[i] = inside_the_walls(at[i] - dir * push),
+                            (false, true) => at[j] = inside_the_walls(at[j] + dir * push),
                             (false, false) => {}
                         }
                     }
@@ -2998,11 +3082,13 @@ fn separate(
         }
     }
 
-    // back into the world, and back inside the walls: a push can put a creature through one
+    // Back into the world. The walls are the pushing's business now (above) and every write into
+    // `at` went through `inside_the_walls`, so there is nothing left here for a clamp to move:
+    // what comes out is what the passes agreed on, and the check that runs after this sees it.
     let mut i = 0;
     for (_, _, mut transform) in &mut movers {
-        transform.translation.x = at[i].x.clamp(-HALF_W + 0.5, HALF_W - 0.5);
-        transform.translation.z = at[i].y.clamp(-HALF_D + 0.5, HALF_D - 0.5);
+        transform.translation.x = at[i].x;
+        transform.translation.z = at[i].y;
         i += 1;
     }
 
@@ -3418,6 +3504,7 @@ fn children_arrive(
     sky: Res<Sky>,
     mut commands: Commands,
     mut births: ResMut<Births>,
+    mut newborns: ResMut<Newborns>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
@@ -3444,6 +3531,11 @@ fn children_arrive(
         // W2: what it costs its parents is `world.rb`'s, charged on the pass that first sees the
         // child — there is nothing to do here but let it into the world.
 
+        // …except to tell it, in two frames' time, what the sky is doing: it cannot hear
+        // anything until then, and what was said before it was born was said once
+        // ([`tell_newborns_the_sky`]).
+        newborns.waiting.push((child, 0));
+
         if let Some(test) = test.as_mut() {
             test.births += 1;
             if test.born_at.is_none() {
@@ -3460,6 +3552,62 @@ fn children_arrive(
             }
         }
     }
+}
+
+/// **A creature born into the night is told that it is night** (2026-09-18).
+///
+/// `"night"` and `"day"` are published once each, at the turn (`day_night`), to whoever is
+/// subscribed at that moment. A creature born afterwards has never heard either — it walks
+/// through the dark until morning, because `@asleep` is only ever set by the handler — and a
+/// creature born in the frame of the publish, or the frame before it, is already counted among
+/// the addressees and has not subscribed yet. That second one is the seventh check's flakiness,
+/// and the reason it almost never fires is luck: the twelfth check's thaw pins a burst of births
+/// five frames clear of the night, and five frames is all the room there is
+/// (`docs/worklog/2026-09-17-selftest-flakes.md` §4).
+///
+/// The cure is not a wider window in the check but the missing letter: the sky is said again, to
+/// each newborn on its own, as soon as it can hear it. There is no way for the game to ask rubevy
+/// whether a task has subscribed yet — `subscriptions` lives inside its `HostState` — so what it
+/// waits is frames, and the number of them is measured ([`NEWBORN_DEAF_FRAMES`]).
+///
+/// It runs before `RubevySet::Tick`, so the word is in the queue on the frame the creature is
+/// first able to read it, and under `is_still` for the same reason `children_arrive` is: a
+/// paused world runs no tasks, and a frame in which nobody subscribed to anything is not one of
+/// the two frames being counted.
+fn tell_newborns_the_sky(
+    time: Res<Time>,
+    sky: Res<Sky>,
+    mut world: ResMut<ScriptWorld>,
+    mut newborns: ResMut<Newborns>,
+    minds: Query<(), With<Mind>>,
+) {
+    if newborns.waiting.is_empty() {
+        return;
+    }
+    // the same payload `day_night` publishes: the world's hour, which is what `on(:night) { |at| }`
+    // is handed
+    let now = world_now(&time, &sky);
+    let name = if sky.night { "night" } else { "day" };
+    let mut still_waiting = Vec::with_capacity(newborns.waiting.len());
+    for (child, waited) in std::mem::take(&mut newborns.waiting) {
+        // starved or never given a behaviour (a species whose file will not compile): there is
+        // nothing to tell
+        if !minds.contains(child) {
+            continue;
+        }
+        let waited = waited + 1;
+        if waited < NEWBORN_DEAF_FRAMES {
+            still_waiting.push((child, waited));
+            continue;
+        }
+        // If the sky happens to turn over on this very frame, the creature is subscribed in time
+        // to hear `day_night`'s publish as well and gets the word twice. A handler that sets
+        // `@asleep` twice has done what a handler that sets it once did, and the alternative —
+        // asking whether the sky moved this frame — would be a second way of saying the same
+        // thing, kept in step by hand.
+        world.publish(Some(child), name, Answer::Num(now as f64));
+    }
+    newborns.waiting = still_waiting;
 }
 
 /// Is this child the mutated average of those two parents? Every gene has to lie within the
@@ -4834,14 +4982,38 @@ fn animate_creatures(
 /// its own script's threshold of fifty-five. Nothing in Rust moves it; if it gets there, a Ruby
 /// task read `me[:Hunger]`, asked `garden.nearest(:Plant)`, read the answer's
 /// `[:Transform][:translation]` and wrote `me[:Velocity]`.
+///
+/// **A run where something walked into the probe on the way has not measured this** (2026-09-18).
+/// The corner is only kept clear at spawn time (`clear_of_fixtures`), and nothing stops a rabbit
+/// walking into it an hour later. When one does, the game publishes `"touched"` and the beetle's
+/// own `on(:touched)` turns it away from the plant at `DASH` and holds the wheel for half a
+/// second — and if the rabbit stays, it is touched again every half second and never walks
+/// anywhere of its own again. The distance of that frame (1.8 to 2.3 over the three runs that
+/// were taken apart) is then what `probe_closest` keeps, and the check prints it as a failure
+/// that has nothing to do with whether a script can read a component, ask a question and steer
+/// (`docs/worklog/2026-09-17-selftest-flakes.md` §3).
+///
+/// So a touch before the plant is reached makes the run say *it could not be measured* — neither
+/// ok nor FAIL. It is the shape the sixth check already has for a touch it could not read
+/// (`looked == 0`, `watch_turning`), and it reads the same `test.last_touch` that `startle`
+/// keeps, so nothing new is watched. The difference from the sixth is that there are twenty-odd
+/// touches in a run and only ever one probe: a disturbed run loses this check entirely rather
+/// than one sample of it. No threshold moved — `REACH + 0.5` is where it was.
 fn watch_probe(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
-    probes: Query<(&Transform, &Probe)>,
+    probes: Query<(Entity, &Transform, &Probe)>,
     plants: Query<&Transform, With<Plant>>,
 ) {
     let now = time.elapsed_secs();
-    for (at, probe) in &probes {
+    for (beetle, at, probe) in &probes {
+        // a rabbit that came before it got there: the run is out, and the moment is kept for the
+        // line the check prints. `startle` writes this for every `"touched"` it publishes,
+        // before any of the sixth check's own guards
+        let touched = test.last_touch.iter().find(|(e, _)| *e == beetle).map(|(_, at)| *at);
+        if test.probe_reached.is_none() && test.probe_disturbed.is_none() {
+            test.probe_disturbed = touched;
+        }
         let here = Vec2::new(at.translation.x, at.translation.z);
         let Ok(dinner) = plants.get(probe.dinner) else {
             // the plant is gone, which happens when it has been eaten: it was reached
@@ -4984,7 +5156,20 @@ fn by_a_wall(at: &Transform) -> bool {
 /// and their run loops keep it that way. The fasting beetle has no script and is standing still
 /// anyway, so it proves nothing and is not counted — `Mind` is the mark of a creature that has
 /// a brain to fall asleep with.
-fn watch_sleep(time: Res<Time>, mut test: ResMut<SelfTest>, creatures: Query<&Velocity, With<Mind>>) {
+///
+/// **A creature younger than [`NEWBORN_GRACE`] is not counted** (2026-09-18), which is the same
+/// exclusion `startle` makes for the sixth check and for the same reason: a creature spends its
+/// first frames with no handlers subscribed, and "did the handler put it to sleep?" cannot be
+/// asked of a creature that had no handlers when the word went out. The word does reach it now —
+/// `tell_newborns_the_sky` says the sky again to each newborn — and that is what closes the hole;
+/// this is only the check saying what it is able to see. Two seconds is [`NEWBORN_GRACE`]'s own
+/// number, already in this source, and it is a good deal more than the two frames a newborn is
+/// actually deaf for.
+fn watch_sleep(
+    time: Res<Time>,
+    mut test: ResMut<SelfTest>,
+    creatures: Query<(&Creature, &Velocity), With<Mind>>,
+) {
     let Some(night) = test.night_at else { return };
     if test.asleep_at.is_some() {
         return;
@@ -4994,7 +5179,10 @@ fn watch_sleep(time: Res<Time>, mut test: ResMut<SelfTest>, creatures: Query<&Ve
         return;
     }
     test.asleep_at = Some(now);
-    for velocity in &creatures {
+    for (creature, velocity) in &creatures {
+        if creature.age <= NEWBORN_GRACE {
+            continue;
+        }
         test.awake_speed = test.awake_speed.max(velocity.0.length());
         test.asleep_counted += 1;
     }
@@ -5160,6 +5348,10 @@ fn stop_when_over(
 
     if let Some(test) = test {
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
+        // and the third verdict: a check the run put itself in no position to answer. It is not
+        // a pass — nothing was proved — and it is not a failure either, and a line that said
+        // either of those would be a lie about what the run saw (2026-09-18)
+        let unmeasured = |what: String| info!("selftest: n/a  {what}");
         ok(
             test.ate_at.is_some_and(|t| t <= 10.0),
             match test.ate_at {
@@ -5189,15 +5381,21 @@ fn stop_when_over(
             ),
         );
         // --- G1: the minds -------------------------------------------------
-        match test.probe_reached {
-            Some(at) => ok(
+        match (test.probe_reached, test.probe_disturbed) {
+            (Some(at), _) => ok(
                 true,
                 format!(
                     "a hungry creature with a plant in sight reached it (from {:.1} away, at {at:.2} s)",
                     test.probe_from
                 ),
             ),
-            None => ok(
+            // a rabbit walked into the probe before it got there and took the wheel off it: what
+            // the beetle would have done on its own is not in this run (`watch_probe`)
+            (None, Some(touched)) => unmeasured(format!(
+                "a hungry creature with a plant in sight reached it (not measured: a rabbit walked into the probe at {touched:.2} s; it started {:.1} away and got no closer than {:.1})",
+                test.probe_from, test.probe_closest
+            )),
+            (None, None) => ok(
                 false,
                 format!(
                     "a hungry creature with a plant in sight reached it (it started {:.1} away and got no closer than {:.1})",
@@ -5216,7 +5414,7 @@ fn stop_when_over(
             Some(at) => ok(
                 test.asleep_counted > 0 && test.awake_speed < 0.05,
                 format!(
-                    "the creatures were asleep a second after night fell ({} of them, fastest {:.3} at {at:.2} s)",
+                    "the creatures were asleep a second after night fell ({} of them, newborns aside, fastest {:.3} at {at:.2} s)",
                     test.asleep_counted, test.awake_speed
                 ),
             ),

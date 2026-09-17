@@ -435,8 +435,18 @@ runs after the move:
 * a pair whose centres are closer than the sum of their radii is pushed apart until they only
   touch — **half each between two creatures, all of it on the creature when the other thing is a
   tree or a rock**, which is what makes an obstacle an obstacle;
-* four passes a frame, because a huddle of three or four takes more than one;
-* and then the walls again, since a push can send a creature through one.
+* **and a wall is an immovable thing too**: what the wall will not let one of a pair have is
+  handed to the other, so the pair still settles the whole of the push between them. That is the
+  same sentence as the tree's, said of the edge of the world. It was not always: until
+  2026-09-18 the halves were taken without asking the wall and the write-back clamped whoever had
+  gone through one back inside — straight into the other creature, which is exactly what the
+  fourth check kept catching (`docs/worklog/2026-09-17-selftest-flakes.md` §2 found it, 23 events
+  out of 23, and `docs/worklog/2026-09-18-selftest-fixes.md` §1 closed it);
+* four passes a frame, because a huddle of three or four takes more than one.
+
+Every write of a position goes through the walls on its way, so when the pushing is over there is
+nothing left to clamp: what the passes agreed on is what the world gets, and the check that runs
+after it sees that and not a correction of it.
 
 Grass has no collider on purpose: walking into grass is eating it.
 
@@ -1717,6 +1727,10 @@ standing on. `GARDEN_SELFTEST=1` adds the checks the plan asks for, printed as `
 3. **the starved creature's entity is gone** — the despawn path.
 4. **nothing walked through anything** — over every frame of the run, no two colliders' centres
    came closer than 90% of the sum of their radii, where at least one of the two is a creature.
+   It fired about once in twenty-five runs until 2026-09-18, and never for the reason it looked
+   like: the four separation passes were pushing the pair exactly apart and the write-back's
+   clamp was putting the one that had gone through a wall back into the other. The wall is part
+   of the pushing now (above), so the clamp has nothing left to do.
 
 and three are about the behaviours (G1), which means they fail if the Ruby does not run, does not read
 its components, does not get its answers, or does not hear an event:
@@ -1726,6 +1740,17 @@ its components, does not get its answers, or does not hear an event:
    units away, inside a beetle's `Sight` of eight and with nothing else within seven. Nothing in
    Rust moves it. If it arrives, a Ruby task read `me[:Hunger]`, asked `garden.nearest(:Plant)`,
    read the answer's `[:Transform][:translation]` and wrote `me[:Velocity]`.
+
+   **A run in which a rabbit walked into the probe before it got there says so and measures
+   nothing** — a third verdict, `selftest: n/a`, which is neither ok nor FAIL. The corner is only
+   kept clear when the world is laid out, and nothing keeps a rabbit out of it later; when one
+   arrives, the beetle's own `on(:touched)` turns it away from the plant at `DASH` and holds the
+   wheel for half a second, and a rabbit that stays touches it again every half second so that it
+   never walks anywhere of its own again. The distance of that frame is what the check would
+   otherwise have printed as a failure of the script (1.8 to 2.3 in the three runs that were taken
+   apart, `docs/worklog/2026-09-17-selftest-flakes.md` §3). It is the shape check 6 already has
+   for a touch it could not read, with one difference: there are twenty-odd touches in a run and
+   only ever one probe, so a disturbed run loses this check rather than one sample of it.
 6. **a beetle touched by a rabbit changes heading within 0.5 s.** `startle` notes which way the
    beetle was going at the moment it published `"touched"`; half a second later the heading must
    be more than 45° off it. Four sorts of touch are not counted, and each of them says something:
@@ -1768,7 +1793,18 @@ its components, does not get its answers, or does not hear an event:
    disagreement).
 7. **creatures sleep at night.** One second after `"night"` is published, nothing that has a
    script may still be moving. The fasting beetle has no script and proves nothing, so it is not
-   counted.
+   counted, and neither is a creature younger than two seconds — the same `NEWBORN_GRACE` check 6
+   excludes, for the same reason.
+
+   **A newborn is told what the sky is doing** (2026-09-18). `"night"` and `"day"` are published
+   once each, at the turn, to whoever is subscribed at that moment, and a creature's script
+   subscribes two frames after its body exists — so a creature born into the night used to walk
+   about until morning, and one born in the frame of the publish or the frame before it was
+   already counted among the addressees without having subscribed. The game now repeats the sky to
+   each newborn on its own, in the frame it becomes able to hear it; the two frames are measured
+   rather than chosen (`docs/worklog/2026-09-18-selftest-fixes.md` §3). That is a hole in the
+   garden rather than in the check — the check was right — and the exclusion above is only the
+   check saying what it is able to see.
 
 and one is about the genome (G2), which is the whole round trip in a single line of the log:
 
@@ -1837,39 +1873,46 @@ selftest: a beetle with no behaviour and nothing to eat stands at (-17.0, -12.0)
 selftest: a hungry beetle at (17.0, 12.0) with one plant 5.0 away
 selftest: two hungry beetles 9.0 apart, with four plants between them at (-14.0, 9.0)
 selftest: a tester script will ask for a creature with a gene missing
+[script] world: the wet season
+selftest: the grass grew at 0.03 s — `world.rb` is running
+selftest: Beetle 102v0 knows it is the wet season at 0.03 s
+[script] Rabbit: 7 trees, and 37 plants to start with
 [script] Tester: a genome with no sight: missing field `sight` (TypeError)
-[script] Rabbit: 7 trees, and 41 plants to start with
-selftest: first meal at 1.08 s
-selftest: the hungry beetle reached its plant at 1.84 s
-Beetle 109v0 starved at 1.9 s (age 1.9 s)
-[script] Beetle: {"meals":1,"favorite":{"at":[-13.300000190734863,9.199999809265137],"size":1.3832240104675293}}
-a Beetle was born at 5.4 s (121v0) — speed 2.17, sight 8.1, appetite 0.98
+selftest: first meal at 0.83 s
+selftest: the hungry beetle reached its plant at 1.78 s
+Beetle 112v0 starved at 1.9 s (age 1.9 s)
+a Beetle was born at 1.9 s (124v0) — speed 2.09, sight 7.7, appetite 1.08
+[script] Beetle: {"season":"wet","meals":1,"favorite":{"at":[-13.300000190734863,9.199999809265137],"size":1.3832914862781762}}
+selftest: the rules were taken away at 20.02 s
+selftest: the rules go back at 25.03 s (0 meters fell while they were away)
 night at 25.2 s
 day at 55.2 s
-a Beetle was born at 60.4 s (153v0) — speed 1.97, sight 7.9, appetite 0.96
-Beetle 117v0 starved at 66.8 s (age 66.8 s)
-a Beetle was born at 83.9 s (169v0) — speed 1.98, sight 7.8, appetite 1.03
+a Beetle was born at 58.1 s (162v0) — speed 2.12, sight 8.0, appetite 1.03
 night at 85.2 s
-Beetle 153v0   hunger  62.6  age  29.6  at (  10.6,   -5.7)  v (  0.0,   0.0)      10 insn/frame  beetle.rb:102
-Rabbit 106v0   hunger  54.8  age  90.0  at (  -0.8,    1.5)  v (  0.0,   0.0)      16 insn/frame  rabbit.rb:60
+Beetle 162v0   hunger  89.5  age  31.9  at (   3.6,   -3.5)  v (  0.0,   0.0)      13 insn/frame  beetle.rb:109
+Rabbit 110v0   hunger  73.6  age  84.9  at (   5.6,  -11.8)  v (  0.0,   0.0)      20 insn/frame  rabbit.rb:66
 …
-19 creatures, 40 plants, night at phase 0.58
-15 × Beetle: mean genome speed 2.13, sight 8.0, appetite 0.96 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
-4 × Rabbit: mean genome speed 3.29, sight 10.5, appetite 1.04 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
-selftest: ok   somebody ate within 10 s (first at 0.43 s)
+15 creatures, 48 plants, night at phase 0.58
+12 × Beetle: mean genome speed 2.22, sight 8.3, appetite 1.03 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
+3 × Rabbit: mean genome speed 3.82, sight 11.7, appetite 1.00 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
+selftest: ok   somebody ate within 10 s (first at 0.83 s)
 selftest: ok   night arrived by 60 s (at 25.21 s)
-selftest: ok   the starved creature's entity is gone (120v0 starved at 1.90 s)
-selftest: ok   nothing walked through anything over 5375 frames (closest pair 0.975 of the radii, 0 frames under 0.9)
+selftest: ok   the starved creature's entity is gone (112v0 starved at 1.90 s)
+selftest: ok   nothing walked through anything over 5392 frames (closest pair 1.000 of the radii, 0 frames under 0.9)
 selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.78 s)
-selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (19/19)
-selftest: ok   the creatures were asleep a second after night fell (14 of them, fastest 0.000 at 26.22 s)
-selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 5.23 s: speed 2.405 vs 2.400/2.000, mean 2.200; sight 8.456 vs 9.000/7.000, mean 8.000; appetite 0.903 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [9 pairings, 5 children]
+selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (22/22)
+selftest: ok   the creatures were asleep a second after night fell (14 of them, newborns aside, fastest 0.000 at 26.21 s)
+selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.91 s: speed 2.094 vs 2.400/2.000, mean 2.200; sight 7.680 vs 9.000/7.000, mean 8.000; appetite 1.078 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [4 pairings, 4 children]
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
-selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5373 passes of `each_frame`)
-selftest: ok   the rules can be taken away and given back while the world runs (from 20.03 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
-selftest: ok   what the world declares reaches a creature's memory (Beetle 122v0 had "wet" in its @memory at 0.03 s)
-selftest: ok   a save with the wrong version is refused (/tmp/garden-from-another-version.json: saved with version 99, this garden reads 1)
+selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5390 passes of `each_frame`)
+selftest: ok   the rules can be taken away and given back while the world runs (from 20.02 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
+selftest: ok   what the world declares reaches a creature's memory (Beetle 102v0 had "wet" in its @memory at 0.03 s)
+selftest: ok   a save with the wrong version is refused (garden-from-another-version.json: saved with version 99, this garden reads 1)
 ```
+
+(That is one run of the build of 2026-09-18, printed as it came, with lines left out rather than
+changed: the creature table is cut to two of fifteen, one `@memory` is shown of the many, and the
+timestamps and the log target are stripped as they are everywhere else in this file.)
 
 Eight runs of that at G2, and four more at G3. The genome check has passed every time — the first
 child arrives between 1.95 and 16.47 seconds, with three to seven born in ninety seconds — and so
@@ -1877,6 +1920,15 @@ has everything else except check 6, which failed twice in the eight and once in 
 the pre-existing flake described above (the same binary from `main`, with none of G2 or G3 in it,
 fails once in four). The G3 check has not failed: all four runs were told the same sentence,
 naming the gene that was not there.
+
+**Forty ninety-second runs of the build of 2026-09-18**, eight at a time, after checks 4, 5 and 7
+were mended: **no FAIL of any kind**, and one run out of the forty printed the fifth check as
+`n/a` because a rabbit really did walk into the probe (at 1.63 s, and it never got closer than
+1.9 — the shape the survey measured). The closest any two colliders came was between 0.981 and
+1.000 of the sum of their radii, with 0.998 at the median and no frame under 0.9 in any run; the
+fastest anything moved a second after nightfall was 0.000 in all forty.
+`docs/worklog/2026-09-18-selftest-fixes.md` has the table and what each of the three fixes was
+measured against.
 
 The starvation needs a creature that certainly starves, and a creature with a behaviour in a garden of
 fifty-five plants usually does not. So `GARDEN_SELFTEST=1` puts one beetle in the far corner with
