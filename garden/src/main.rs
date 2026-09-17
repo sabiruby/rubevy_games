@@ -5591,6 +5591,28 @@ fn stop_when_over(
             None => ok(false, "the creatures were asleep a second after night fell (night never came)".into()),
         }
         // --- G2: the genome ------------------------------------------------
+        //
+        // **A run in which the rules paired nobody has measured nothing here** (2026-09-18).
+        // `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no
+        // `"mate"` in it never asked the thing this check is about a question — the same shape
+        // the fifth check took for a probe a rabbit walked into, and the same reason.
+        //
+        // What makes it happen at all is the meadow corner (`spawn_world`): two hungry beetles
+        // 4.5 units either side of a clump of four plants, which walk in, eat, pass
+        // `mate_hunger` and are told about each other. It is not the certainty the comment there
+        // claims. A creature eats a plant from `reach` — `1.1` plus half the plant's size, so
+        // 1.8 at `plant_max` — and stops walking the moment its meter passes `hungry_below`, so
+        // **two beetles eating one clump from opposite sides stand up to 3.6 apart** while
+        // `mate_reach` is 2.0. They are paired when their wandering happens to bring them
+        // together afterwards, which is most of the time and not all of it: over 64 twenty-second
+        // runs the corner produced a pairing in 62, and the two it missed had the pair 2.8 and
+        // 4.1 apart at the frame they both passed `mate_hunger`.
+        //
+        // The corner is left as it is. Making it certain means putting the two where the rules'
+        // own `reach` and `mate_reach` say they will end up, and those two numbers live in
+        // `ruby/world.rb` — where a player may edit them — and cannot be read from here. A
+        // geometry worked out in Rust from copies of them would be right until somebody changed
+        // the file. So what is fixed is the sentence: a run that paired nobody says so.
         match test.born_at {
             Some(at) => ok(
                 test.born_ok,
@@ -5599,6 +5621,13 @@ fn stop_when_over(
                     test.born_says, test.courtings, test.births
                 ),
             ),
+            None if test.courtings == 0 => unmeasured(
+                "a child was born whose genome is its parents' mixed and mutated
+         (not measured: the rules paired nobody in the whole run, so nothing asked `Genome#mix` anything)"
+                    .into(),
+            ),
+            // a pairing was made and no child came of it: that is the road from `on(:mate)` to
+            // `garden.spawn`, and it is this check's to report
             None => ok(
                 false,
                 format!(
