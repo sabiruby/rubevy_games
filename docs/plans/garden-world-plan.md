@@ -149,6 +149,7 @@ end
 2. **接触の開始検出は Rust のまま**（`Contacts` / `Bumps`）。`Eaters` だけ Ruby に。
 3. **selftest 6・7 は publish の瞬間を Rust が記録**（`startle` の `test.touched`、`day_night` の `test.night_at`）。発火点は Rust のままなので触らない。
 4. **selftest 4 番・5 番は今も揺れる**（S3 の記録: 4 番は順序と無関係に 1/24〜1/26、5 番は順序を入れてから 3/26）。規則が Ruby に移ると 5 番の筋道（最初のパスが見る世界）が変わりうる。落ちたら閾値を動かさず、`miss` 行の証拠を出して報告。
+   → **直した**（2026-09-18、ブランチ `selftest-fixes`、`18c7559` `8769fde` `d8d113e`）。4 番は `separate` の壁のクランプ、5 番はプローブの隅に入ってくるウサギ、7 番は新生児の 2 フレームの購読待ち。閾値は 1 つも動かしていない。90 秒 ×40 回で FAIL 0。`docs/worklog/2026-09-17-selftest-flakes.md`（原因）と `docs/worklog/2026-09-18-selftest-fixes.md`（直し）。
 5. **書きは末尾反映**: 世界が同じフレームで自分の書きを読み返せない。規則は `dt` 積分にする。食べる判定で「同じ草を 2 匹が同じフレームに齧る」は両方の書きが最後の者勝ちになるので、Ruby 側で草ごとに 1 フレーム 1 口にする（`@bitten` の集合）。
 6. **`Rubevy.find` は全エンティティ走査**（窓ありではモデルの子も数に入る）。`plants` / `creatures` は 1 フレーム 1 回にキャッシュし、`each_frame` の外では使わない。
 7. **世界 VM のロードパスは `ruby/`** だが `require` は使わない（`compile_source` で 1 本）。
