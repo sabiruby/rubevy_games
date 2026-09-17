@@ -309,6 +309,17 @@ pub fn show_code(
     editor.elsewhere = None;
 }
 
+/// **What the editor says when a text will not compile** (2026-09-18).
+///
+/// It used to be `not applied: beetle.rb would not compile (see the log)`, and the log had a line
+/// number that was the prelude's length out — 600 where the author's file has 118. The number is
+/// right now (`crate::in_the_authors_lines`), so the status can carry it: the first error, whole,
+/// in the panel the typing was done in. The rest of them, if there were several, are still in the
+/// log, and the caller logs the whole thing either way.
+fn first_trouble(why: &str) -> &str {
+    why.lines().next().unwrap_or(why)
+}
+
 /// What the editor's buttons asked for. Nothing here writes a file except Save.
 #[allow(clippy::too_many_arguments)]
 pub fn do_editor_actions(
@@ -336,10 +347,13 @@ pub fn do_editor_actions(
     match action {
         // there is one of these in this game (`apply_all_label` is None), and it is the species
         EditorAction::Apply | EditorAction::ApplyAll => {
-            let Some((handle, lines)) = compile_source(&ruby.0, species.file(), &text, &mut mrb)
-            else {
-                editor.message = format!("not applied: {} would not compile (see the log)", species.file());
-                return;
+            let (handle, lines) = match compile_source(&ruby.0, species.file(), &text, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message = format!("not applied — {}", first_trouble(&why));
+                    return;
+                }
             };
             brains.set(species, Some(text));
             let n = restart_species(&mut commands, &mut minds, species, handle, lines, true);
@@ -355,9 +369,14 @@ pub fn do_editor_actions(
             }
             // the file says this now, so nothing is running a text of its own any more
             brains.set(species, None);
-            let Some((handle, lines)) = compile(&ruby.0, &path, &mut mrb) else {
-                editor.message = format!("saved {}, but it would not compile", species.file());
-                return;
+            let (handle, lines) = match compile(&ruby.0, &path, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message =
+                        format!("saved {}, but it would not compile — {}", species.file(), first_trouble(&why));
+                    return;
+                }
             };
             restart_species(&mut commands, &mut minds, species, handle, lines, false);
             editor.applied(format!("saved to {}", species.file()));
@@ -367,9 +386,13 @@ pub fn do_editor_actions(
                 editor.message = format!("could not read {}", species.file());
                 return;
             };
-            let Some((handle, lines)) = compile(&ruby.0, &path, &mut mrb) else {
-                editor.message = format!("{} does not compile", species.file());
-                return;
+            let (handle, lines) = match compile(&ruby.0, &path, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message = format!("{} does not compile — {}", species.file(), first_trouble(&why));
+                    return;
+                }
             };
             brains.set(species, None);
             restart_species(&mut commands, &mut minds, species, handle, lines, false);
@@ -416,7 +439,7 @@ fn do_world_actions(
     match action {
         EditorAction::Apply | EditorAction::ApplyAll => {
             match crate::compile_world_source(&ruby.0, &text, mrb) {
-                Ok(handle) => {
+                Ok((handle, _)) => {
                     brains.set_world(Some(text));
                     wear(handle);
                     editor.applied(
@@ -426,8 +449,7 @@ fn do_world_actions(
                 }
                 Err(why) => {
                     error!("{why}");
-                    editor.message =
-                        format!("not applied: {} would not compile (see the log)", crate::WORLD_FILE);
+                    editor.message = format!("not applied — {}", first_trouble(&why));
                 }
             }
         }
@@ -439,14 +461,17 @@ fn do_world_actions(
             // the file says this now, so nothing is running a text of its own any more
             brains.set_world(None);
             match crate::compile_world(&ruby.0, mrb) {
-                Ok(handle) => {
+                Ok((handle, _)) => {
                     wear(handle);
                     editor.applied(format!("saved to {}", crate::WORLD_FILE));
                 }
                 Err(why) => {
                     error!("{why}");
-                    editor.message =
-                        format!("saved {}, but it would not compile", crate::WORLD_FILE);
+                    editor.message = format!(
+                        "saved {}, but it would not compile — {}",
+                        crate::WORLD_FILE,
+                        first_trouble(&why)
+                    );
                 }
             }
         }
@@ -456,14 +481,15 @@ fn do_world_actions(
                 return;
             };
             match crate::compile_world(&ruby.0, mrb) {
-                Ok(handle) => {
+                Ok((handle, _)) => {
                     brains.set_world(None);
                     wear(handle);
                     editor.reset_to(source, format!("back to {}", crate::WORLD_FILE));
                 }
                 Err(why) => {
                     error!("{why}");
-                    editor.message = format!("{} does not compile", crate::WORLD_FILE);
+                    editor.message =
+                        format!("{} does not compile — {}", crate::WORLD_FILE, first_trouble(&why));
                 }
             }
         }
@@ -547,7 +573,8 @@ pub fn reload_changed(
         // below — so saving it restarted every beetle and every rabbit and left the rules it
         // actually belongs to running the old text. Both tests name the file exactly now.
         let is_world = path.file_name().is_some_and(|f| {
-            f == std::ffi::OsStr::new(crate::WORLD_FILE) || f == std::ffi::OsStr::new("world_prelude.rb")
+            f == std::ffi::OsStr::new(crate::WORLD_FILE)
+                || f == std::ffi::OsStr::new(crate::WORLD_PRELUDE_FILE)
         });
         if is_world {
             // rules applied in the editor keep their text until Save or Revert, as a species does
@@ -555,7 +582,7 @@ pub fn reload_changed(
                 && let Ok(entity) = rules.single()
             {
                 match crate::compile_world(&ruby.0, &mut mrb) {
-                    Ok(handle) => {
+                    Ok((handle, _)) => {
                         crate::wear_the_rules(&mut commands, entity, handle);
                         trouble.0 = None;
                         if editor.key == Some(crate::Brains::WORLD as u64)
@@ -568,8 +595,7 @@ pub fn reload_changed(
                     }
                     Err(why) => {
                         error!("{why}");
-                        editor.message =
-                            format!("{}: compile error (see the log)", crate::WORLD_FILE);
+                        editor.message = first_trouble(&why).to_string();
                     }
                 }
             }
@@ -577,16 +603,20 @@ pub fn reload_changed(
         }
         for species in Species::ALL {
             let mine = brains.path(&ruby.0, species);
-            if path != mine && path.file_name() != Some(std::ffi::OsStr::new("prelude.rb")) {
+            if path != mine && path.file_name() != Some(std::ffi::OsStr::new(crate::PRELUDE_FILE)) {
                 continue;
             }
             // a species running a text applied in the editor keeps it until Save or Revert
             if brains.text(species).is_some() {
                 continue;
             }
-            let Some((handle, lines)) = compile(&ruby.0, &mine, &mut mrb) else {
-                editor.message = format!("{}: compile error (see the log)", species.file());
-                continue;
+            let (handle, lines) = match compile(&ruby.0, &mine, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message = first_trouble(&why).to_string();
+                    continue;
+                }
             };
             if editor.key == Some(species.index() as u64)
                 && !editor.changed()

@@ -835,6 +835,12 @@ impl Brains {
 /// The rules' file name, in the one place both the loader and the editor read it from (W3).
 pub const WORLD_FILE: &str = "world.rb";
 
+/// What goes in front of a creature's file, and in front of the world's, in the one program each
+/// is compiled as. They are named because the compiler's line numbers have to be told about them
+/// ([`in_the_authors_lines`]) as well as read from them.
+pub const PRELUDE_FILE: &str = "prelude.rb";
+pub const WORLD_PRELUDE_FILE: &str = "world_prelude.rb";
+
 /// How many seeds `world.rb` asked for this frame (`garden.sprout`), read in `answer_world` and
 /// put in the ground by `sprout_plants` a moment later.
 ///
@@ -2254,7 +2260,7 @@ fn spawn_world(
         // game for a creature whose genome has no `sight` and reports what it is told. The point
         // is the message — a Hash of the wrong shape has to say what is wrong with it, in the
         // script's own terms, and with serde doing the reading that message is written by nobody.
-        if let Some((handle, _)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb) {
+        if let Ok((handle, _)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb) {
             commands.spawn(Script::new(handle).with_name("Tester").with_priority(120));
             info!("selftest: a tester script will ask for a creature with a gene missing");
         }
@@ -2450,7 +2456,13 @@ fn give_mind(
         Some(text) => compile_source(ruby, species.file(), text, mrb),
         None => compile(ruby, &brains.path(ruby, species), mrb),
     };
-    let Some((handle, prelude_lines)) = compiled else { return };
+    let (handle, prelude_lines) = match compiled {
+        Ok(it) => it,
+        Err(why) => {
+            error!("{why}");
+            return;
+        }
+    };
     let name = format!("{} {}", species.name(), entity);
     commands.entity(entity).insert((
         Script::new(handle).with_name(&name).with_priority(100),
@@ -2480,14 +2492,15 @@ fn give_mind(
 /// so the game reads `.rb` and nothing has to be built ahead of time. The two are compiled as one
 /// program, which is why neither needs a `require`; the answer says how many lines the prelude
 /// added, so a line can be reported in the author's own terms.
-fn compile(ruby: &Path, creature: &Path, mrb: &mut Assets<MrbAsset>) -> Option<(Handle<MrbAsset>, u32)> {
-    let body = match platform::read(creature) {
-        Ok(b) => b,
-        Err(e) => {
-            error!("{e}");
-            return None;
-        }
-    };
+///
+/// The error is the compiler's, already put back into those terms ([`in_the_authors_lines`]) —
+/// the caller logs it and shows it, and there is nothing left for either of them to work out.
+fn compile(
+    ruby: &Path,
+    creature: &Path,
+    mrb: &mut Assets<MrbAsset>,
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let body = platform::read(creature)?;
     let name = creature.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     compile_source(ruby, &name, &body, mrb)
 }
@@ -2499,23 +2512,69 @@ fn compile_source(
     name: &str,
     body: &str,
     mrb: &mut Assets<MrbAsset>,
-) -> Option<(Handle<MrbAsset>, u32)> {
-    let prelude = match platform::read(&ruby.join("prelude.rb")) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("{e}");
-            return None;
-        }
-    };
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let prelude = platform::read(&ruby.join(PRELUDE_FILE))?;
     let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_creature\n");
     let prelude_lines = prelude.lines().count() as u32 + 2;
     match platform::compile(&src, name) {
-        Ok(bytes) => Some((mrb.add(MrbAsset { bytes }), prelude_lines)),
-        Err(e) => {
-            error!("{e}");
-            None
-        }
+        Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), prelude_lines)),
+        Err(e) => Err(in_the_authors_lines(&e, prelude_lines, PRELUDE_FILE)),
     }
+}
+
+/// **Take the prelude off the line numbers a compiler reports** (2026-09-18).
+///
+/// A creature's file and the world's are each handed to the compiler with their prelude in front,
+/// as one program (`compile_source`, `compile_world_source`), so every line the compiler names is
+/// a line of *that* program: the beetle's `if hunger < < hungry_below`, which is line 118 of
+/// `beetle.rb`, was reported as line 600. The VM panel has always taken the prelude off the
+/// frames it shows (`VmInspector::fill`'s `prelude_lines`); the editor's status line and the log
+/// did not, and those are the two places somebody who has just mistyped is looking.
+///
+/// It is done on the **text** rather than by asking the compiler for a better answer, because in
+/// a browser there is no compiler to ask: `window.gardenCompile(source)` takes a source and
+/// nothing else (`platform.rs`) and throws whatever the playground's module says. Both builds
+/// report `FILE:LINE:COL: message`, one diagnostic to a line — the shape `mrbc` prints and the
+/// shape `sabiruby_compiler::Diagnostic` renders — so the one thing that has to be found in the
+/// string is the `:LINE:COL:` in it, and the first one on a line is the only one that can be it.
+///
+/// A line at or below the prelude's own length is an error **in the prelude**, which is not the
+/// author's file at all: it is said so by name, with the line it really is, rather than by a
+/// number the author cannot find (and rather than a negative one).
+fn in_the_authors_lines(message: &str, prelude_lines: u32, prelude: &str) -> String {
+    message.lines().map(|line| one_diagnostic(line, prelude_lines, prelude)).collect::<Vec<_>>().join("\n")
+}
+
+/// One line of a compiler's message, with its line number moved. Anything that does not look like
+/// `…:LINE:COL:…` is handed back untouched — a message the compiler wrote without a place in it
+/// ("compile error") is still the whole of what it said.
+fn one_diagnostic(line: &str, prelude_lines: u32, prelude: &str) -> String {
+    let bytes = line.as_bytes();
+    // a run of digits from `at`, and where it ends
+    let digits = |at: usize| -> (Option<u32>, usize) {
+        let end = at + bytes[at..].iter().take_while(|b| b.is_ascii_digit()).count();
+        (line[at..end].parse().ok(), end)
+    };
+    for colon in 0..line.len() {
+        if bytes[colon] != b':' {
+            continue;
+        }
+        let (Some(number), after_line) = digits(colon + 1) else { continue };
+        if bytes.get(after_line) != Some(&b':') {
+            continue;
+        }
+        let (Some(_), after_col) = digits(after_line + 1) else { continue };
+        if bytes.get(after_col) != Some(&b':') {
+            continue;
+        }
+        if number > prelude_lines {
+            return format!("{}:{}{}", &line[..colon], number - prelude_lines, &line[after_line..]);
+        }
+        // the file's name is the word in front of that colon; the prelude's goes in its place
+        let name_at = line[..colon].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+        return format!("{}{prelude}:{number}{}", &line[..name_at], &line[after_line..]);
+    }
+    line.to_string()
 }
 
 /// **The world's rules, compiled and hung on an entity of their own** (W1).
@@ -2537,7 +2596,7 @@ fn give_the_world_its_rules(
 ) {
     let entity = commands.spawn(WorldScript).id();
     match compile_world(&ruby.0, &mut mrb) {
-        Ok(handle) => {
+        Ok((handle, _)) => {
             // the priority rubevy gives a script by default. A creature's is set because a
             // creature has handlers that must be looked at before its behaviour (`give_mind`);
             // the world has one task and nothing to be ahead of.
@@ -2551,7 +2610,10 @@ fn give_the_world_its_rules(
 }
 
 /// `ruby/world.rb`, as the file says it.
-fn compile_world(ruby: &Path, mrb: &mut Assets<MrbAsset>) -> Result<Handle<MrbAsset>, String> {
+fn compile_world(
+    ruby: &Path,
+    mrb: &mut Assets<MrbAsset>,
+) -> Result<(Handle<MrbAsset>, u32), String> {
     let body = platform::read(&ruby.join(WORLD_FILE))?;
     compile_world_source(ruby, &body, mrb)
 }
@@ -2583,18 +2645,21 @@ fn wear_the_rules(commands: &mut Commands, entity: Entity, handle: Handle<MrbAss
 /// `world_prelude.rb` and one world, compiled as one program — which is why neither needs a
 /// `require` — with `run_world` on the end, exactly as a creature's file gets `run_creature`.
 ///
-/// It answers no line offset, where `compile_source` does: that number is for the editor's band
-/// and the HUD's line column, which are a creature's, and W3 is where the world gets a panel of
-/// its own.
+/// It answers the same pair `compile_source` does. The line offset used to be left out here,
+/// because the only readers of it were a creature's editor band and the HUD's line column; a
+/// compiler's error is the third reader and it belongs to both files
+/// ([`in_the_authors_lines`]).
 fn compile_world_source(
     ruby: &Path,
     body: &str,
     mrb: &mut Assets<MrbAsset>,
-) -> Result<Handle<MrbAsset>, String> {
-    let prelude = platform::read(&ruby.join("world_prelude.rb"))?;
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let prelude = platform::read(&ruby.join(WORLD_PRELUDE_FILE))?;
     let src = format!("{prelude}\n# ---- world.rb ----\n{body}\nrun_world\n");
-    let bytes = platform::compile(&src, "world.rb")?;
-    Ok(mrb.add(MrbAsset { bytes }))
+    let prelude_lines = prelude.lines().count() as u32 + 2;
+    let bytes = platform::compile(&src, WORLD_FILE)
+        .map_err(|e| in_the_authors_lines(&e, prelude_lines, WORLD_PRELUDE_FILE))?;
+    Ok((mrb.add(MrbAsset { bytes }), prelude_lines))
 }
 
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
@@ -3416,7 +3481,7 @@ fn swap_the_rules(
             None => compile_world(&ruby.0, &mut mrb),
         };
         match compiled {
-            Ok(handle) => {
+            Ok((handle, _)) => {
                 wear_the_rules(commands, entity, handle);
                 Ok(())
             }
@@ -5613,6 +5678,47 @@ fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mu
 mod tests {
     use super::*;
     use bevy::input::mouse::MouseScrollUnit;
+
+    /// **The compiler's line numbers, put back into the author's file** (2026-09-18).
+    ///
+    /// The three cases are the three a person meets: an error in the file being edited, an error
+    /// in the prelude in front of it, and a message with no place in it at all. The input is the
+    /// real thing — `beetle.rb` with `if hunger < < hungry_below` on its line 118, compiled with
+    /// a 482-line prelude in front of it, which is what the game printed before this was written.
+    #[test]
+    fn a_compiler_line_is_reported_in_the_authors_own_file() {
+        let real = "beetle.rb: beetle.rb:600:19: syntax error, unexpected '<'; expected an expression after the operator";
+        assert_eq!(
+            in_the_authors_lines(real, 482, PRELUDE_FILE),
+            "beetle.rb: beetle.rb:118:19: syntax error, unexpected '<'; expected an expression after the operator"
+        );
+        // a line inside the prelude is not the author's file: it is said by name, with the line
+        // it really is, rather than as a number nobody can find or a negative one
+        assert_eq!(
+            in_the_authors_lines("beetle.rb: beetle.rb:47:3: syntax error", 482, PRELUDE_FILE),
+            "beetle.rb: prelude.rb:47:3: syntax error"
+        );
+        // the boundary: the prelude's last line is the prelude's, the first line after it is the
+        // author's line 1
+        assert_eq!(in_the_authors_lines("f:482:1: x", 482, PRELUDE_FILE), "prelude.rb:482:1: x");
+        assert_eq!(in_the_authors_lines("f:483:1: x", 482, PRELUDE_FILE), "f:1:1: x");
+        // the world's file is the same machinery with the other prelude
+        assert_eq!(
+            in_the_authors_lines("world.rb: world.rb:20:1: syntax error", 120, WORLD_PRELUDE_FILE),
+            "world.rb: world_prelude.rb:20:1: syntax error"
+        );
+        // several diagnostics, one to a line, each moved
+        assert_eq!(
+            in_the_authors_lines("a.rb:600:1: one\na.rb:610:2: two", 482, PRELUDE_FILE),
+            "a.rb:118:1: one\na.rb:128:2: two"
+        );
+        // and a message with no place in it is handed back whole: `CompileError` renders
+        // "compile error" when the compiler gave it no diagnostics, and a missing file's message
+        // is `platform::read`'s, which has a path with colons in it and no line
+        assert_eq!(in_the_authors_lines("beetle.rb: compile error", 482, PRELUDE_FILE), "beetle.rb: compile error");
+        let missing = "/home/x/garden/ruby/creatures/beetle.rb: No such file or directory (os error 2)";
+        assert_eq!(in_the_authors_lines(missing, 482, PRELUDE_FILE), missing);
+    }
 
     #[test]
     fn a_notch_is_a_notch_in_either_unit() {
