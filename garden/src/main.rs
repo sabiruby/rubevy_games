@@ -586,6 +586,17 @@ struct Breeding {
 #[derive(Component)]
 struct WorldScript;
 
+/// **How many lines stand in front of `world.rb` in the program the world's task runs** (W3+).
+///
+/// A creature keeps this in its `Mind` and the VM panel takes it off every frame it draws
+/// (`VmInspector::fill`). The world has no `Mind` — its script is one task and there is nothing
+/// to tell it apart from — so until the panel could be pointed at the world's VM nobody needed
+/// the number anywhere but inside `compile_world_source`. It is a resource because there is one
+/// set of rules, and it is written wherever they are put on, so that editing `world_prelude.rb`
+/// and saving it moves the panel's line numbers with it.
+#[derive(Resource, Default)]
+pub struct WorldPrelude(pub u32);
+
 /// The selftest's fasting beetle: no script, almost no hunger left.
 #[derive(Component)]
 struct Fasting;
@@ -988,6 +999,8 @@ struct VmReport<'w> {
     meter: Res<'w, WorldMeter>,
     trouble: Res<'w, WorldTrouble>,
     world: Res<'w, ScriptWorld<World>>,
+    /// and what the world's own program has in front of it, so the panel's lines are `world.rb`'s
+    prelude: Res<'w, WorldPrelude>,
 }
 
 /// `--headless N`: how long the world may run.
@@ -1663,6 +1676,7 @@ fn main() {
         .init_resource::<Sprouts>()
         .init_resource::<WorldMeter>()
         .init_resource::<WorldTrouble>()
+        .init_resource::<WorldPrelude>()
         // The one thing this game puts in the VM (G2): the `Genome` class and its seven methods.
         // `ScriptWorld::vm` is public and the resource exists as soon as `RubevyPlugin` is added,
         // while no script runs before the first `Update` — so `Startup` is the place and rubevy
@@ -2596,7 +2610,8 @@ fn give_the_world_its_rules(
 ) {
     let entity = commands.spawn(WorldScript).id();
     match compile_world(&ruby.0, &mut mrb) {
-        Ok((handle, _)) => {
+        Ok((handle, prelude_lines)) => {
+            commands.insert_resource(WorldPrelude(prelude_lines));
             // the priority rubevy gives a script by default. A creature's is set because a
             // creature has handlers that must be looked at before its behaviour (`give_mind`);
             // the world has one task and nothing to be ahead of.
@@ -2634,12 +2649,20 @@ fn compile_world(
 /// forgotten what it ate. What *is* kept is everything the rules wrote into components: a
 /// `Breeding` cooldown outlives the rule that set it, which is most of why it is a component
 /// (W2).
-fn wear_the_rules(commands: &mut Commands, entity: Entity, handle: Handle<MrbAsset>) {
+fn wear_the_rules(
+    commands: &mut Commands,
+    entity: Entity,
+    handle: Handle<MrbAsset>,
+    prelude_lines: u32,
+) {
     commands
         .entity(entity)
         .remove::<ScriptTask<World>>()
         .remove::<rubevy::ScriptDone<World>>()
         .insert(Script::<World>::for_vm(handle).with_name("world"));
+    // the new program may have a prelude of a different length (`world_prelude.rb` saved), and
+    // the panel's line numbers are worked out from it every frame
+    commands.insert_resource(WorldPrelude(prelude_lines));
 }
 
 /// `world_prelude.rb` and one world, compiled as one program — which is why neither needs a
@@ -3481,8 +3504,8 @@ fn swap_the_rules(
             None => compile_world(&ruby.0, &mut mrb),
         };
         match compiled {
-            Ok((handle, _)) => {
-                wear_the_rules(commands, entity, handle);
+            Ok((handle, prelude_lines)) => {
+                wear_the_rules(commands, entity, handle, prelude_lines);
                 Ok(())
             }
             Err(why) => Err(why),
@@ -5339,6 +5362,7 @@ fn stop_when_over(
     creatures: Query<(&Creature, &Hunger, &Velocity, &Transform, Option<&Mind>)>,
     panelled: Query<(Entity, &Creature, &Hunger, &Mind)>,
     tasks: Query<(&Mind, &ScriptTask)>,
+    world_task: Query<&ScriptTask<World>, With<WorldScript>>,
     plants: Query<&Plant>,
     everything: Query<Entity>,
     mut exit: MessageWriter<AppExit>,
@@ -5456,6 +5480,19 @@ fn stop_when_over(
             panel.spent = mind.spent;
             panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
             panel.fill(&vms.scripts, script.task(), mind.name.clone(), mind.prelude_lines);
+            for line in panel.log_lines() {
+                info!("{line}");
+            }
+        }
+        // and the rules, which are the other VM's one task (2026-09-18). `F2` shows this in a
+        // window when `F3` has the editor on `world.rb` (`window::show_vm`); here it is the same
+        // panel filled from the same VM, printed, so a run with no screen says what the rules are
+        // waiting for as well as what a beetle is.
+        if let Ok(task) = world_task.single() {
+            panel.spent = vms.meter.last_pass;
+            panel.per_frame = vms.meter.median();
+            panel.prelude_file = Some(WORLD_PRELUDE_FILE.into());
+            panel.fill(&vms.world, task.task(), format!("the rules  {WORLD_FILE}"), vms.prelude.0);
             for line in panel.log_lines() {
                 info!("{line}");
             }

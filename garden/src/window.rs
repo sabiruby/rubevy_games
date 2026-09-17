@@ -431,17 +431,17 @@ fn do_world_actions(
     let path = brains.world_path(&ruby.0);
     // the one entity's script is replaced by the road W1's twelfth check drives
     // (`crate::wear_the_rules`), and a garden that had no rules at all has them from this moment
-    let mut wear = |handle| {
-        crate::wear_the_rules(commands, entity, handle);
+    let mut wear = |handle, prelude_lines| {
+        crate::wear_the_rules(commands, entity, handle, prelude_lines);
         trouble.0 = None;
     };
 
     match action {
         EditorAction::Apply | EditorAction::ApplyAll => {
             match crate::compile_world_source(&ruby.0, &text, mrb) {
-                Ok((handle, _)) => {
+                Ok((handle, lines)) => {
                     brains.set_world(Some(text));
-                    wear(handle);
+                    wear(handle, lines);
                     editor.applied(
                         "the garden is running these rules now — in memory. Save to keep them."
                             .to_string(),
@@ -461,8 +461,8 @@ fn do_world_actions(
             // the file says this now, so nothing is running a text of its own any more
             brains.set_world(None);
             match crate::compile_world(&ruby.0, mrb) {
-                Ok((handle, _)) => {
-                    wear(handle);
+                Ok((handle, lines)) => {
+                    wear(handle, lines);
                     editor.applied(format!("saved to {}", crate::WORLD_FILE));
                 }
                 Err(why) => {
@@ -481,9 +481,9 @@ fn do_world_actions(
                 return;
             };
             match crate::compile_world(&ruby.0, mrb) {
-                Ok((handle, _)) => {
+                Ok((handle, lines)) => {
                     brains.set_world(None);
-                    wear(handle);
+                    wear(handle, lines);
                     editor.reset_to(source, format!("back to {}", crate::WORLD_FILE));
                 }
                 Err(why) => {
@@ -582,8 +582,8 @@ pub fn reload_changed(
                 && let Ok(entity) = rules.single()
             {
                 match crate::compile_world(&ruby.0, &mut mrb) {
-                    Ok((handle, _)) => {
-                        crate::wear_the_rules(&mut commands, entity, handle);
+                    Ok((handle, lines)) => {
+                        crate::wear_the_rules(&mut commands, entity, handle, lines);
                         trouble.0 = None;
                         if editor.key == Some(crate::Brains::WORLD as u64)
                             && !editor.changed()
@@ -687,14 +687,55 @@ pub fn inspect_keys(
     }
 }
 
-/// The VM panel follows the creature being looked at, as the editor follows its file.
+/// The VM panel follows the creature being looked at, as the editor follows its file — **or the
+/// rules, when the editor is on them** (`F3`, 2026-09-18).
+///
+/// Until now `F2` could only ever show a creature. The reason was in `rubevy-arena`: the panel's
+/// `fill` named `ScriptWorld` by its default marker, so the second VM — the one `world.rb` runs
+/// in — was not a thing it could be handed (`docs/worklog/2026-09-17-garden-world.md` §24.1). It
+/// takes either now, and this is where the garden decides which: `Watched::world` is the same
+/// flag the editor reads, so the two panels stay on the same file and `Tab` or a click brings
+/// both back to the creature.
+///
+/// Everything the panel says about a creature it can say about the rules, because none of it was
+/// ever about creatures: **what it is waiting for** is worked out from the frames alone
+/// (`rubevy_arena::inspect::why`), and the world's task waits for exactly two things — one pass
+/// of `each_frame` ends on `Rubevy.ask("frame")`, which is a `Rubevy::Proxy` ask like any other,
+/// and a timer task made by `every` is asleep. **Where it is waiting** is the innermost frame of
+/// `world.rb` itself, once the world's prelude has been taken off it (`crate::WorldPrelude`, the
+/// world's half of what a creature keeps in its `Mind`). The two numbers are `WorldMeter`'s — the
+/// last pass and the middle one — where a creature's are its `Mind`'s.
+#[allow(clippy::too_many_arguments)]
 pub fn show_vm(
     watched: Res<Watched>,
     world: Res<ScriptWorld>,
+    rules: Res<ScriptWorld<crate::World>>,
+    meter: Res<crate::WorldMeter>,
+    trouble: Res<crate::WorldTrouble>,
+    prelude: Res<crate::WorldPrelude>,
     mut panel: ResMut<VmInspector>,
     minds: Query<(&Mind, Option<&ScriptTask>)>,
+    world_task: Query<Option<&ScriptTask<crate::World>>, With<crate::WorldScript>>,
 ) {
     if !panel.open {
+        return;
+    }
+    if watched.world {
+        panel.title = format!("the rules  {}", crate::WORLD_FILE);
+        let Ok(Some(task)) = world_task.single() else {
+            panel.clear(match &trouble.0 {
+                Some(why) => format!("the world has no rules: {why}"),
+                None => "the rules have no task yet".into(),
+            });
+            return;
+        };
+        panel.spent = meter.last_pass;
+        panel.per_frame = meter.median();
+        // the world's program is `world_prelude.rb` in front of `world.rb`, not `prelude.rb` in
+        // front of a creature's, and the panel names the frames that fall in the prelude
+        panel.prelude_file = Some(crate::WORLD_PRELUDE_FILE.into());
+        let title = panel.title.clone();
+        panel.fill(&rules, task.task(), title, prelude.0);
         return;
     }
     let Some(entity) = watched.entity else { return };
@@ -710,6 +751,7 @@ pub fn show_vm(
     panel.spent = mind.spent;
     // G9: the panel's top half says insn/frame, and this is the same average the HUD's column is
     panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
+    panel.prelude_file = None;
     panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
 }
 

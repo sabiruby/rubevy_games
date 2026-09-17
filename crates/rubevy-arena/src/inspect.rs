@@ -210,12 +210,37 @@ pub struct VmInspector {
     pub contexts: usize,
     /// Why there is nothing to show, when there is nothing.
     pub note: String,
+    /// **What the prelude in front of the author's file is called**, for the frames that fall
+    /// inside it. `None` is `prelude.rb`, which is what a creature and a robot have; the garden
+    /// sets it to `world_prelude.rb` when the panel is pointed at the world's VM, whose program
+    /// is a different file in front of a different file (2026-09-18).
+    pub prelude_file: Option<String>,
 }
 
 impl VmInspector {
     /// Reads one script's task out of the VM. `prelude_lines` is what the game put in front of
     /// the author's file, so the panel can report the author's own line numbers.
-    pub fn fill(&mut self, world: &ScriptWorld, task: ObjId, title: String, prelude_lines: u32) {
+    ///
+    /// **Whose VM it is, is the caller's** (2026-09-18). rubevy's `ScriptWorld<M>` carries a
+    /// marker so that an app can hold two of them — the garden holds the creatures' and the
+    /// world's (`ScriptWorld<World>`, `docs/host-api.md`, "Two VMs in one app") — and this used
+    /// to name the first by its default, which is why the garden's `F2` could show a beetle and
+    /// not the rules it lives under.
+    ///
+    /// The parameter is on the **method** and not on the panel. A `VmInspector<M>` would be a
+    /// resource per VM, a `VmInspectorPlugin<M>` per VM, and two egui windows both called "VM"
+    /// (egui takes a window's title as its id), for a panel that shows one thing at a time by
+    /// construction: `F2` opens *the* panel, and what it is looking at is a question the game
+    /// answers every frame. Nothing in what is read here is about the marker — a snapshot, a
+    /// task's frames, a heap — so the method is where the marker belongs. A game with one VM
+    /// writes `fill(&world, …)` exactly as before and never spells it.
+    pub fn fill<M: Send + Sync + 'static>(
+        &mut self,
+        world: &ScriptWorld<M>,
+        task: ObjId,
+        title: String,
+        prelude_lines: u32,
+    ) {
         self.title = title;
         self.note.clear();
         let vm = &world.vm;
@@ -266,6 +291,7 @@ impl VmInspector {
         // the files line up with the frames that have a line.
         let files = vm.task_frames(task);
         let mut file = files.iter();
+        let prelude_file = self.prelude_file.clone().unwrap_or_else(|| "prelude.rb".into());
         self.frames = context
             .frames
             .iter()
@@ -280,7 +306,7 @@ impl VmInspector {
                             own = true;
                             format!("{name}:{}", line - prelude_lines)
                         } else {
-                            format!("prelude.rb:{line}")
+                            format!("{prelude_file}:{line}")
                         }
                     }
                     None => "(no debug info)".to_string(),
