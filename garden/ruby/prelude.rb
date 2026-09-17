@@ -18,11 +18,17 @@
 # What a creature remembers (`memory`, G3) is the other way round again: a plain Ruby Hash that
 # the ECS knows nothing about, which the game reads out of the VM when the garden is saved.
 #
-# Every read costs one frame: the question goes out with the frame's commands, the game answers
-# it in `RubevySet::Answer`, and the task wakes in the next frame with the answer. The task is
-# parked meanwhile and costs nothing, which is why this reads as plain sequential Ruby — but it
-# is also why a pass of `run` reads three or four things and then sleeps, rather than reading
-# the same thing sixty times a second.
+# A read costs no frame (rubevy, 2026-09-17): the task is parked on the answer for a moment, but
+# the tick that is running it answers the read itself — run the ready tasks, answer the reads they
+# parked on, run them again — so the value is there in the line that asked for it. The two
+# questions the *game* answers still cost a frame each: they leave with the frame's commands, the
+# game answers them in `RubevySet::Answer`, and the task wakes in the next frame. Being parked
+# costs nothing either way, which is why this reads as plain sequential Ruby.
+#
+# A **write** still lands at the end of the frame, so a value written here is not readable here.
+# A pass of `run` still reads three or four things and then sleeps — not because reading is dear
+# any more, but because a creature that thinks five times a second is a creature, and one that
+# thinks sixty times a second is a physics system with opinions.
 
 # ---------------------------------------------------------------------------------------------
 # `Rubevy::Proxy`, copied from rubevy's `assets/scripts/proxy.rb`.
@@ -96,9 +102,11 @@ class Creature
   #
   # The write is deferred like every component write — it lands after this frame's scripts have
   # run — so two tasks of the same creature that both call `act` are last-writer-wins. **That is
-  # why there is a wheel.** A handler acts in a frame or two; the brain takes four or five, because
-  # it reads `me[:Hunger]`, asks `garden.nearest`, reads that plant's `[:Transform]` and only then
-  # acts. A handler that fires in the middle of one of the brain's passes is therefore undone by
+  # why there is a wheel.** (Reads stopped waiting on 2026-09-17; writes did not, and the wheel is
+  # about writes.) Both passes got shorter and the gap between them did not close: a handler acts
+  # in the frame it wakes, since everything it reads comes back in the line that asked; the brain
+  # still has the one frame `garden.nearest` waits in the middle of its pass — that question is
+  # the game's, not rubevy's. A handler that fires inside one of those passes is still undone by
   # the `act` at the end of it, a moment later — which looks exactly like a handler that did not
   # fire. So a handler takes the wheel, and `act` from anybody else does nothing while it has it.
   #
@@ -133,7 +141,8 @@ class Creature
     act(0.0, 0.0)
   end
 
-  # Each of these is one frame.
+  # Each of these is a component read. It is answered inside this tick, so none of them costs a
+  # frame; rubevy measured one at about 2.2 µs (its `docs/worklog/2026-09-17-sync-reads.md`).
   def hunger
     me[:Hunger][0]
   end
@@ -222,11 +231,12 @@ class Creature
   # Arithmetic is not a rule, so it lives here rather than in Rust. A creature file may use
   # these, copy and change them, or do its own sums.
 
-  # Where a thing is: a position is already `[x, y, z]`, an entity has to be asked (one frame).
+  # Where a thing is: a position is already `[x, y, z]`, an entity has to be read (no frame).
   #
-  # nil where the entity is gone. That is not a rare case: `garden.nearest` answered a frame ago,
-  # and in between a rabbit may have eaten the plant or the creature may have starved — the read
-  # of a component on an entity that is no longer there answers nil, and so does this.
+  # nil where the entity is gone. That is not a rare case, and it did not stop being one when the
+  # read became free: `garden.nearest` is a question the *game* answers, so its answer is still a
+  # frame old, and in between a rabbit may have eaten the plant or the creature may have starved.
+  # The read of a component on an entity that is no longer there answers nil, and so does this.
   def place_of(thing)
     return thing if thing.is_a?(Array)
     return nil if thing.nil?

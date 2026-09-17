@@ -6,6 +6,13 @@
 # reads as plain sequential Ruby with no callbacks in it — and why `act` sets every control in
 # one question rather than one question each.
 #
+# **None of it is a component read.** rubevy answers four kinds of question itself — `e[:Hp]` and
+# its relatives — and since 2026-09-17 it answers them inside the tick that asks, for no frame at
+# all. No robot here asks one: what a tank can know is a *reading*, with the noise the match's
+# rules put on it, and that is the game's to answer (docs/sabiruby-battle.md, *Why the robots do
+# not use `Entity#[]`*). So the frame a question costs, and the last-writer-wins the controls have,
+# are exactly what they were.
+#
 # The file has two halves. The first is what the game offers, and it is raw on purpose: a tank's
 # controls and noisy readings. The second is a library of helpers written on top of it in plain
 # Ruby — leading a target, steering, dodging. A robot can use them, copy and change them, or

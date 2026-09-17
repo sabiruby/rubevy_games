@@ -330,3 +330,118 @@ tick が命令数の予算か `frame_time` を使い切って終わると、そ�
 着手前の HUD 行が `VM 0.20 / 8.0 ms`、`0.92 / 8.0`、`0.35 / 8.0`）が、
 **「到達不能」と書くには強すぎる**ので、そう書かずに残した。
 編集画面で `loop { me[:Hunger] }` を Apply した人が F2 を押すと、これが最初に出る画面になる。
+
+---
+
+## 5. 文書
+
+直した場所と、**わざと直さなかった**場所。
+
+### 5.1 `docs/garden.md`
+
+* 「The components」の少し下、生き物の脚本の説明——「`hunger` も `here` も `head_to` も
+  コンポーネント読み。**それぞれ 1 フレームかかる**」→「**1 フレームもかからない**」に。
+  数字は rubevy 側の実測（2.2 µs、約 75 命令）だけを使った。そのうえで
+  「1 パスが 3〜4 個読んで寝るのは変わらない。ただし今は**通行料ではなく選択**だ」と書いた:
+  `garden.nearest` はゲームが答えるので今も 1 フレーム、`Rubevy.find` は今も世界を全部舐める。
+* **The wheel** の段落。ここが一番気を使った。「書きは last-writer-wins のまま、
+  **だから wheel は前とまったく同じだけ必要**」を先に言い、そのうえで
+  「1 パスの長さが 4〜5 フレームから `garden.nearest` の 1 フレームに縮んだ」を言う形にした。
+  調査 §7-C の［推測］（「脳の 1 パスが同一フレーム内で閉じると力学が変わる」）は**まだ起きていない**
+  ——1 パスには `garden.nearest` の 1 フレームが残っているから、同一フレーム内には閉じない。
+* **The VM panel**。表から `Rubevy::Entity#get` の行を消し、消えた 6 行目のことを段落で書いた
+  （なぜ消えたか、1 ケースだけ残っていること、そこでは最後の行に落ちて「ゲームが答える質問」と
+  誤って書かれること）。スクショ `garden-vm.png` は**撮り直していない**（窓が要る）ので、
+  絵の下に「これは 2026-09-17 より前の絵で、パネルはもうこの文を言わない」と注を付けた。
+* **The HUD** の節を丸ごと書き直し。見出しも `"frames per decision"` → `"instructions per decision"`。
+  新しい数は `--headless 25` を 1 回走らせて取った実測（1392 パス、246.3 命令、ビートル 111〜196、
+  ウサギ 377〜714、ゲームが答えた質問 407 件が 1.000 フレーム）。
+  **古い数（403 と 2352）は「これは G4 のときの測り方で、今は測れない」という説明の中にだけ残した。**
+  headless の出力例と `vm:` の例も、今の実物を貼り直した（前の例は
+  `waiting for a component read — [:Creature]` で、もう出ない画面だった）。
+* 比較表の「a round trip, measured (G4)」の行と、G8 の表の「frames per decision」の行。
+  G8 の行は**測り直していない**ので数字はそのままにして、下に「この行が名指している数はもう存在しない」
+  と 1 行付けた。勝手に書き換えるより、いつ取られた数かが分かる方がよいと判断した。
+* `prelude.rb` の行数（464 → 472）。コメントを足したので。
+
+### 5.2 `docs/sabiruby-battle.md`
+
+VM パネルの文（`:525`）から「`waiting for a component read — [:Hunger]`」を外した。
+
+もう 1 か所、指示に無いが**嘘になっていた**ところがある。
+「Why the robots do not use `Entity#[]`」の中の
+「**A component read is no quicker than a question any more** — both are one frame」。
+読みが 0 フレームになったので、これは逆になった。ここは Battle の設計判断の根拠なので、
+書き換えるのではなく**経緯を残す**形にした（「この項目は 2 度動いた: 2 フレーム対 1 → 1 対 1 →
+今は 1 対 0」）。そのうえで「**下の箇条書きは覆らない**」と明記した——
+1 事実 1 質問なのも、読みにはノイズが乗せられないのも、`Rubevy.find` が世界を舐めるのも変わらない。
+変わったのはレイテンシの議論だけ。
+
+同じ節の表（`questions per decision` / `frames`）は、下 2 行の `frames` が古くなった。
+**書き換えていない**: 5 と 10 の内訳（`Entity#[]` が何回、`Proxy` が何回）がどこにも書かれていないので、
+正しい数を出すには測り直しが要る。表の下に「下 2 行の frames は古い。測り直していないので
+直った数はここに無い」と書いた。**根拠の無い数を書かない**（`/home/kishima/book/CLAUDE.md`）。
+
+### 5.3 `ruby/prelude.rb` ×2
+
+garden の方は 4 か所:
+
+* 冒頭の「Every read costs one frame: …」→ 読みは 0 フレーム、ゲームが答える 2 つの質問は 1 フレーム、
+  **書きは今もフレームの末尾**（だから同じフレームで書いた値は読めない）。
+  「1 パスが 3〜4 個読んで寝る」の理由も書き換えた:
+  「読みが高いから」ではなく「**1 秒に 5 回考えるのが生き物で、60 回考えるのは意見を持った物理演算だから**」。
+* `act` の上の **wheel** のコメント（`:97-107`）。指示どおり
+  「書きは末尾反映のまま＝ wheel は変わらない」を残し、パスの長さだけ直した。
+* `hunger` / `sight` / `here` / `body` の上の「Each of these is one frame.」→
+  「この tick の中で答えが返る: フレームは食わない、2.2 µs くらい」。
+* `place_of` の「an entity has to be asked (one frame)」→「読むだけ（フレームは食わない）」。
+  ただし**「答えが nil になることは減っていない」**を足した:
+  `garden.nearest` の答えは今も 1 フレーム古いので、その間に草は食べられる。
+
+sabibots の方は `:104-107` も `:250-254` も**直すところが無かった**（どちらも `act` ＝
+ゲームが答える質問と、その last-writer-wins の話で、どちらも変わっていない）。
+代わりに冒頭に 1 段落足して、**なぜここには直すところが無いのか**を書いた——
+Battle はコンポーネントを 1 つも読まない、タンクが知れるのは規則がノイズを乗せた「読み取り値」であって
+真値ではないから、と。
+
+### 5.4 `docs/plans/garden-plan.md` と `docs/README.md`
+
+garden-plan の状況表に G10 を 1 行（済みの分と、**順序は戻して著者判断待ち**であること）。
+README の目次に worklog を 1 行と、`garden.md` の説明文の「frames per decision」を差し替え。
+rubevy 側の `sync-access-plan.md` §6 の状況表は**触っていない**（本体が更新する）。
+
+---
+
+## 6. 確認（すべて実際に走らせた）
+
+| 何を | 結果 |
+|---|---|
+| `cargo build --release`（両ゲーム） | 通る |
+| `cargo build -p garden -p sabibots`（窓あり、dev プロファイル。実行はしていない） | 通る（2 分 58 秒） |
+| `cargo test -p rubevy-arena` | **6 件通過**（消した 1 本ぶん、7 → 6）。失敗 0 |
+| `cargo clippy -p garden -p sabibots -p rubevy-arena` | garden 13・sabibots 12・rubevy-arena 2。**着手前と同じ**（`git stash` して同じコマンドで取り直して比べた） |
+| `GARDEN_SELFTEST=1 ./target/release/garden --headless 90` ×3 | **10 判定すべて ok、3 回とも** |
+| `SABIBOTS_SELFTEST=1 ./target/release/sabibots --headless 25` ×3 | **すべて ok、3 回とも** |
+| `web/build.sh garden` | 通る（`web` プロファイル 3 分 15 秒、`garden/game_bg.wasm` 39,426,931 バイト / gzip 10,115,524）。**`wasm-opt` がこの機械に無い**ので「shrunk されていない」と出る。サイズの比較はしていない |
+| 文書の相対リンク | 変えた 5 つの文書から拾って全部存在を確かめた。切れ 0 |
+
+窓ありの**実行**はしていない（指示どおり）。なので `docs/garden.md` の
+「The window's own checks」のログ例の最後の行は、新しい列名だけ書いて数字は空けてある（§5.1）。
+スクリーンショット `garden-vm.png` も撮り直していない。
+
+閾値は 1 つも動かしていない: `SHORTEST_SLEEP = 0.05`、`TOUCH_SETTLE = 1.5`、`NEWBORN_GRACE = 2.0`、
+`watch_turning` の 0.5 秒と `dot < 0.7`、`ScriptWorld::frame_time = 8 ms`。
+新しく置いた数も 1 つも無い（`decisions` と `decision_instructions` は数えるだけで、閾値を持たない）。
+
+---
+
+## 7. 置いていくもの
+
+1. **順序（§2）。** ブランチには入っていない。著者の判断が要る。
+2. **`garden-vm.png`。** パネルがもう言わない文（`waiting for a component read — [:Transform]`）を
+   写している。窓が要るので撮り直せない。絵の下に注を書いた。
+3. **窓ありセルフテストのログ例の数字**（`docs/garden.md`）。同じ理由。
+4. **`docs/sabiruby-battle.md` の「questions per decision / frames」の表の下 2 行。**
+   読みが 0 フレームになったので `frames` が古いが、5 と 10 の内訳が書かれていないので直せない。
+   測り直せば直せる（Battle の robots を `Entity#[]` で書き直す実験が要る）。
+5. **`wasm-opt`。** この機械に無いので、wasm のサイズが前と比べてどうなったかは言えない。

@@ -128,21 +128,35 @@ robot.act(1.0, turn, angle, 0.3)           # 1 frame — a proxy call *is* `Rube
 One decision of the scout, three other robots on the field. The per-question costs are measured;
 the rows are their sums:
 
-| | questions per decision | frames |
+| | questions per decision | frames (as measured, 2026-09-16) |
 |---|---|---|
 | `ask("radar")` / `incoming` / `act` (today) | 3 | 3 |
 | `Entity#[]` + `Proxy`, positions only | 5 | 5 |
 | `Entity#[]` + `Proxy`, everything the scout uses | 10 | 10 |
 
+**The frames column is out of date on its last two rows and has not been retaken.** Since
+2026-09-17 rubevy answers a component read inside the tick that asked it, so the reads in those
+rows cost **no frames at all** — only the `Proxy` calls in them still cost one each (rubevy
+`docs/host-api.md`, "A read costs no frame"). How many of the 5 and the 10 are which was never
+written down here, so the corrected numbers are not in this table: they would have to be measured
+again. What has not changed is the **questions** column, which is what the rest of this section is
+about.
+
 * **A component read is a round trip, and there is one per component per entity.** A question can
   carry a whole table back (`radar` answers every contact with its position, velocity, heading,
   distance and bearing in one `Answer::Rows`); `e[:Transform]` answers one component of one
   entity. What the boundary costs is questions, and the component form asks one per fact.
-* **A component read is no quicker than a question any more** — both are one frame. It used to
-  be one against two, because rubevy answers the four kinds it reserves itself
-  (`component.get`, `component.has`, `components`, `entities.with`) in a system of its own and
-  the game's answers were arriving a frame late. The difference was never the mechanism, only
-  where in the frame the answering ran; both now run in `RubevySet::Answer`.
+* **A component read is quicker than a question again, and by more than it ever was.** This
+  entry has moved twice. It began as "one frame against two", because the game's answers were
+  arriving a frame late; that was fixed by putting `answer_requests` in `RubevySet::Answer`, and
+  for a day the two were level at one frame each. Since 2026-09-17 a read costs **no frame**:
+  rubevy answers the four kinds it reserves itself (`component.get`, `component.has`,
+  `components`, `entities.with`) inside the tick, between two runs of the scheduler, while a
+  question the *game* answers still waits for `RubevySet::Answer` and the next tick. **That does
+  not overturn the bullets below it** — a read still asks one question per fact, still cannot
+  carry the noise a radar reading has, and `Rubevy.find` still walks the world — but it does take
+  the latency argument off the table, and it is the reason this section would be worth taking
+  again if the robots were ever rewritten over `Entity#[]`.
 * **`Rubevy.find` walks the world.** In this game it answers 345 entities (every crate of the
   wall, every shot, every nameplate) unless the game registers a component that means "a robot" —
   and `radar` already answers "the robots within 45 units, as this robot can see them".
@@ -522,8 +536,10 @@ playground's "VM の状態" pane in the game's own window, about the robot the e
 **The top of it is four things for a person** (G9):
 
 * **Why the behaviour is waiting**, in a sentence: `waiting for the game to answer incoming`,
-  `sleeping — it asked for time, not for an answer`, `waiting for a component read — [:Hunger]`,
-  `waiting for an event — an on(:…) block, parked on its queue`. How the panel knows is a table in
+  `sleeping — it asked for time, not for an answer`, `waiting for an event — an on(:…) block,
+  parked on its queue`. (There was a fifth, `waiting for a component read — [:Hunger]`, until
+  2026-09-17: a read is answered inside the tick that asks it now, so the panel — which looks from
+  outside the tick — never finds a task standing on one.) How the panel knows is a table in
   `docs/garden.md` (*The VM panel (F2), and what it is waiting on*): it reads the frames and
   nothing else — a parked task carries a `Task::Queue#pop` frame and the frame behind it says
   which queue, while `sleep` is a native and pushes no frame at all. The one guess is the last of
