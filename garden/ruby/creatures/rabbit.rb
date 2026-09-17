@@ -36,6 +36,12 @@ creature "Rabbit" do
     memory["meals"] = (memory["meals"] || 0) + 1
   end
 
+  # The world has said which season it is (W2). The rabbit remembers it and goes on as before:
+  # the point of the message is that a script *may* hear the world, not that it must obey it.
+  on(:season) do |season|
+    memory["season"] = season
+  end
+
   def run
     # `Rubevy.find` walks every entity in the world, so it is a thing to do now and then rather
     # than every frame — once, here, is what it is for. The trees never move, so where they are

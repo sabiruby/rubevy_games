@@ -64,10 +64,25 @@ class World
     @me ||= Rubevy.entity
   end
 
-  # The questions the game answers: `garden.rules`, `garden.sprout`, `garden.count`,
-  # `garden.spawn`, and — on the no-frame road — `garden.within`.
+  # The questions the game answers: `garden.rules`, `garden.sprout`, `garden.tell`,
+  # `garden.count`, `garden.spawn`, and — on the no-frame road — `garden.within`, `garden.now`
+  # and `garden.seed`.
   def garden
     @garden ||= Rubevy::Proxy.new("garden")
+  end
+
+  # **The garden's own clock, in seconds** (W2).
+  #
+  # Not the process's: this one stands still while the game is paused and goes on from where it
+  # was when a save is read back (`Sky::shift`, `hold_the_clock`). A rule that writes a time into
+  # a component — which is what a breeding cooldown is — has to write it in a clock that outlives
+  # this script, because the component does: `world.rb` can be edited and restarted under a
+  # garden that is still running, and an `@elapsed` of this object's own would start again at
+  # zero with every edit while the cooldowns it had already written would not.
+  #
+  # It costs no frame (`answer_in_tick`), which is why it may be read at the head of every pass.
+  def now
+    garden.now
   end
 
   # This frame's number, as the game answered it.
@@ -101,6 +116,29 @@ class World
     nil
   end
 
+  # **Say something to the creatures** (W2).
+  #
+  #     tell c, "ate", size          # to one of them
+  #     tell :all, "season", "dry"   # to every script that listens for it
+  #
+  # A script cannot publish: the creatures are a **second VM** and their queues are on the other
+  # side of the wall, where only the game can reach. So this is a question the game answers by
+  # carrying — `world.rb` → `answer_world` → `ScriptWorld::publish` — and what arrives is
+  # indistinguishable from what `startle` and `day_night` publish from Rust, because it *is* that.
+  #
+  # `who` is `:all` or one creature; `payload` is the one value the handler's block is given, and
+  # it may be nothing, a number, a string or a creature.
+  #
+  # **It is a command, not a question**: `ask` without a `pop`, exactly like `sprout`. A rule that
+  # waited to hear that its own announcement had been delivered would park the whole pass for a
+  # frame, and in a frame where nothing else happened at all — no grass grew, nobody got hungry.
+  # What a `pop` would have bought is the game's opinion of the arguments, and that is a thing to
+  # get right once while writing the rule rather than sixty times a second while running it.
+  def tell(who, name, payload = nil)
+    Rubevy.ask("garden.tell", who, name.to_s, payload)
+    nil
+  end
+
   # Whether this is the **first** frame of a meal for that creature.
   #
   # A creature standing on a blade of grass takes a bite on every frame of it, and a meal lasts a
@@ -109,9 +147,8 @@ class World
   # the same list in an `Eaters` resource and this is that list, in the language the rule is now
   # written in.
   #
-  # W1 defines it and nothing calls it: what it is for is `tell c, "ate", …`, which is W2's
-  # (`docs/plans/garden-world-plan.md` §4). It is here because the bookkeeping belongs beside the
-  # per-frame caches it rides on, not beside the thing that will use it.
+  # What it is for is `tell c, "ate", …` in `world.rb` (W2): the one line that turns a table of
+  # who is chewing into a message a beetle's `on(:ate)` hears once per meal.
   def starting_to_eat?(who)
     bits = who.to_i
     first = !@eating_before.key?(bits)
@@ -157,6 +194,57 @@ class World
     raise "each_frame needs a block" if block.nil?
     define_method(:each_frame, &block)
   end
+
+  # **Something that happens now and then rather than every frame** (W2).
+  #
+  #     every 60 do |n|            # n is 1 the first time, 2 the second
+  #       turn_to(n.odd? ? "dry" : "wet")
+  #     end
+  #
+  # Each one gets a **task of its own** in the world's VM, and that task does nothing but
+  # `sleep`. There is no counter in `each_frame` adding up deltas and no list of due times to
+  # walk: the scheduler already keeps a task that is sleeping for nothing, and the thing that
+  # wakes it is the same clock that makes `sleep 0.2` mean something in a creature's `run`.
+  #
+  # Which also settles what a **pause** does to it. rubevy moves the scheduler's clock on by the
+  # frame in the VM's tick, so a frame in which the world's tick does not run — `P`, or a garden
+  # being read back from a file — is a frame these tasks do not live through: a season with
+  # eleven seconds left when the world stops has eleven seconds left when it starts again. A
+  # wall-clock timer would have turned the season over while the player was reading the HUD.
+  #
+  # `define_method`, not the block called directly, for the same reason `each_frame` is
+  # (`instance_exec` and `Method#call` run the block in a nested run loop of the VM, and a task
+  # cannot park across one — so the first `tell` inside such a block would die). The name is in
+  # the source, which is what fixes the slots.
+  def self.every(seconds, &block)
+    raise "every needs a block" if block.nil?
+    raise "every wants a number of seconds" unless seconds.to_f > 0.0
+    slot = timers.size
+    raise "a world may have #{EVERY_SLOTS} `every` blocks at most" if slot >= EVERY_SLOTS
+    define_method("__every_#{slot}", &block)
+    timers << [seconds.to_f, slot]
+    block
+  end
+
+  def self.timers
+    @timers ||= []
+  end
+
+  # The turn of one `every`, called by its task. It is written out like `run_handler` in
+  # `prelude.rb`, and for the same reason: `send` would be a nested run loop.
+  def run_timer(slot, n)
+    case slot
+    when 0 then __every_0(n)
+    when 1 then __every_1(n)
+    when 2 then __every_2(n)
+    when 3 then __every_3(n)
+    end
+  end
+
+  # How many `every`s one world may have. Four, because the names have to be written out above
+  # and the world this game ships with uses one: it is room to play with in the editor, not a
+  # budget anybody measured.
+  EVERY_SLOTS = 4
 end
 
 # `world do … end` — a subclass of World with the block evaluated in it, remembered as the one
@@ -188,10 +276,24 @@ def run_world
   # (`docs/plans/garden-world-plan.md` §2), so nothing reads this yet; it costs one line and it is
   # the line that would have to be there.
   Task.current.instance_variable_set(:@being, being)
+  # **Which rules are the VM's rules now** (W2), for the timers below.
+  #
+  # Every task in this VM shares the globals, so this is the one place the `every` tasks of a
+  # *replaced* `world.rb` can look to find out that they have been replaced. They have to look,
+  # because nothing else will tell them: when the editor swaps the rules (W3, and the twelfth
+  # check already) rubevy terminates the script's own task and drops its subscriptions, and a
+  # task the script made with `Task.new` is neither of those. Measured before this line was
+  # here — the first `world.rb`'s season turned over at sixty seconds although its rules had
+  # been taken away at twenty.
+  $world_being = being
   srand(being.garden.seed.to_i)
 
   seconds = klass.day_length
   being.garden.rules(day_length: seconds) unless seconds.nil?
+
+  # One task per `every`, started before the first frame — the shape `start_handlers` gives a
+  # creature's `on` (`prelude.rb`), with a `sleep` where that one has a queue.
+  timers = start_timers(being, klass)
 
   loop do
     # **The one round trip, and the reason there is one.** The game answers this in
@@ -207,4 +309,38 @@ def run_world
 rescue => e
   Rubevy.log "world: #{e.class}: #{e.message}"
   raise
+ensure
+  # the timers are tasks of their own: nothing else stops them when the rules end, and the rules
+  # end every time somebody presses Ctrl+Enter
+  (timers || []).each { |t| t.terminate }
+end
+
+# The `every` blocks, each in a task that sleeps.
+#
+# A task made with `Task.new` carries the entity of the task that made it, so a timer may `tell`
+# and read components exactly as the main pass does (rubevy `docs/host-api.md`, "Events").
+#
+# The priority is the world task's own and not a step above it, because these are not reflexes:
+# a season turning over half a millisecond later than it might have is a season turning over at
+# the right time. What a higher priority would buy is that the timer runs before this frame's
+# `each_frame` rather than after it, and there is no rule here that would notice.
+def start_timers(being, klass)
+  klass.timers.map do |seconds, slot|
+    Task.new(name: "world-every-#{seconds}") do
+      turn = 0
+      loop do
+        sleep seconds
+        # the rules that made this timer are not the rules any more
+        break unless $world_being.equal?(being)
+        turn += 1
+        begin
+          being.run_timer(slot, turn)
+        rescue => e
+          # a timer that raises is one `every` block going quiet, not the world stopping: the
+          # grass keeps growing while the author fixes the season
+          Rubevy.log "world: every #{seconds}: #{e.class}: #{e.message}"
+        end
+      end
+    end
+  end
 end

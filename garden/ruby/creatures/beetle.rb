@@ -90,6 +90,13 @@ creature "Beetle" do
     end
   end
 
+  # The world has turned over into a dry or a wet season — `world.rb`'s `every 60`, carried across
+  # from the world's VM by `tell :all` (W2). A beetle can do nothing whatever about the weather;
+  # what it can do is know which one it is in, and a save file opened an hour later says so.
+  on(:season) do |season|
+    memory["season"] = season
+  end
+
   # --- the behaviour --------------------------------------------------------
 
   def run

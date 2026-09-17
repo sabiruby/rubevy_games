@@ -464,3 +464,113 @@ world: seed 866451, first rolls 0.6411 0.3198
 
 この 2 点を入れた状態で `--headless 90` の 12 判定は全部通る（4 番 `closest pair 0.929`、
 8 番 `9 pairings, 5 children`）。
+
+## 11. 世界が口をきく — `tell` と `every`
+
+### 11.1 `tell` は質問で、答えは待たない
+
+計画書 §5 の罠 1 のとおり、Ruby からは publish できない。生き物は**別の VM** で、キューは壁の向こうに
+あり、両端に手が届くのはホストだけだから。なので `tell(who, name, payload)` は
+`Rubevy.ask("garden.tell", …)` で、`answer_world` が受けて `ScriptWorld::publish`（生き物 VM）に渡す。
+届くものは `startle` や `day_night` が publish するものと区別がつかない——**同じ関数**だから。
+
+`sprout` と同じく**命令にした（`pop` しない）**。待つと、そのフレームのパスが 1 フレーム parked になる
+——草も伸びず、腹も減らないフレームが 1 つできる。`pop` で得られるのは「引数がおかしい」という
+ゲームの意見で、それは規則を書くときに 1 回直せばよいもので、毎秒 60 回聞くものではない。
+
+payload は `Arg` の 3 つ（数・文字列・Entity）とそれ以外＝nil に畳んだ。これは
+`prelude.rb` の `run_handler` がハンドラのブロックに渡せる形そのままで、
+生き物側には W2 のための行が 1 つも要らない（`on(:ate)` も `on(:mate)` も既にある形で受け取る）。
+
+### 11.2 `RubevySet::<World>::answer()` を生き物の tick の前に置いた
+
+最初に動かしたとき、`"season"` は届いていたが**次のフレーム**だった。rubevy は VM ごとに 3 つの set を
+chain するだけで、2 つの VM の間には順序が無い（`docs/host-api.md`）ので、メッセージを運ぶ system
+（`answer_world`）が、運ぶ先の VM の tick より後ろに置かれうる。
+
+```rust
+.configure_sets(Update, RubevySet::<World>::answer().before(RubevySet::Tick))
+```
+
+の 1 行で、W1 が tick に対して作った順序（世界 → 生き物）が**答えと配達にも**広がる。
+13 番の判定が `0.03 s` で通るのはこの行のおかげで、入れる前は最初の `each_frame` の宣言が
+ビートルに届くのが 1 フレーム遅かった。
+
+### 11.3 `every` は別タスクの `sleep`、そして**止め方**が要った
+
+`every 60 do |n| … end` は世界 VM のタスクを 1 本作り、そのタスクは `sleep` するだけ。
+デルタを足す数え上げも、期限の表も要らない——スケジューラは既に「何もせず寝ているタスク」を
+持っていて、それを起こす時計は生き物の `sleep 0.2` を意味あるものにしている時計と同じ。
+ポーズ（`P`、読み戻し中）は世界 VM の tick ごと飛ぶので、rubevy は
+スケジューラの時計を進めない（`ScriptWorld::budget` の doc）。**残り 11 秒の季節は、
+止めて再開しても残り 11 秒。**
+
+**最初の実装は季節が二重に来た。** 90 秒の走行の log:
+
+```
+world: the wet season     (t≈0   — 1 本目の world.rb)
+world: the wet season     (t≈26  — 12 番の判定が規則を戻した 3 本目)
+world: the dry season     (t≈60  — 1 本目のタイマー。規則はとっくに取り上げられている)
+world: the dry season     (t≈86  — 3 本目のタイマー)
+```
+
+原因は rubevy の `ScriptTask` の remove フック（`stop_removed_task`）が
+**スクリプト自身のタスクを terminate して購読を落とすだけ**だから。生き物のハンドラのタスクは
+`queue.pop` が `Rubevy::Unsubscribed` を上げるので自然に終わるが、`sleep` しかしないタスクには
+終わる理由がどこにも無い。`run_world` の `ensure` は、タスクが terminate されるときには走らない。
+
+直し方は 3 つ考えた:
+
+1. `main.status` を見る → terminate 済みのタスクは `live()` が「task is closed」で raise するので、
+   毎周 begin/rescue が要る。タスクの生死を例外で聞くことになる。捨てた。
+2. Rust 側で世界 VM のタスクを全部終わらせる → rubevy か、ゲームが `Task.list` を舐めることになる。
+   生き物側の作法（購読が切れたら終わる）と別の仕組みが 2 つ目にできる。捨てた。
+3. **`$world_being`**。VM の中の全タスクはグローバルを共有するので、差し替えられた `world.rb` の
+   タイマーが「自分はもう差し替えられた」と知れる唯一の場所がそこにある。**これにした**:
+   `run_world` が `$world_being = being` と書き、タイマーは目覚めるたびに
+   `break unless $world_being.equal?(being)`。1 行ずつで、例外を使わず、
+   「この規則のタイマー」という所有関係をそのまま言っている。
+
+入れたあと、同じ 90 秒で `dry` は 1 回だけ（3 本目のぶん）。
+
+### 11.4 `"ate"` が戻った（W1 §7.1 の穴）
+
+`world.rb` の一口の直後に `tell c, "ate", size[bits] if starting_to_eat?(c)`。
+payload は **残った草の大きさ**で、Rust の `eat` が publish していたものと同じ
+（`plant.size -= bite` の**あと**の値。1 フレームの一口はいつも同じ数で何も言わないが、
+座り込んだ株の大きさは script が覚えたくなる数）。`starting_to_eat?` は W1 で書いて誰も呼んでいなかった
+メソッドで、W2 の呼び手はこの 1 行。
+
+セーブの往復で `@memory` が戻ったことを確かめた（20 秒 → 読み戻し → 保存、バイト一致）:
+
+```
+Rabbit ['meals','season','trees'] / Beetle ['meals','season'] / Beetle ['favorite','meals','season'] …
+```
+
+W1 では `children` しか無かった（`docs/worklog` の §7.1）。`meals` と `favorite` が戻り、`season` が増えた。
+
+### 11.5 季節: 芽の確率だけを動かす
+
+`sprout_rate` は `world.rb` で**唯一 `const` 由来でない数**になった。`SPROUT_RATE` は年中 0.7 で、
+乾季 0.5 / 雨季 0.9 は**同梱版の遊びの設定**（計画書 §4 の言い方で「元の 0.7 を中心に」）。
+0.7 から同じ距離に置いたので 1 年ならすと W1 が予算を測った世界と同じ量の草になり、
+季節が変えるのは「いつ生えるか」であって「最後に何本あるか」ではない。この根拠は `world.rb` の
+コメントに 4 行で書いた。
+
+`every 60` は `day_length 60.0` と同じ数——**1 季節 = 1 日**。`n` は 1 から始まるので最初の転換は
+乾季で、世界は雨季で開く（`each_frame` の頭の `turn_to("wet") if @season.nil?` 1 行。
+`start do … end` を DSL に足すほどのものではない）。
+
+### 11.6 ハンドラの枠を 6 → 7
+
+`prelude.rb` の `ON_SLOTS` はブロックの名前を `run_handler` に書き出す都合で決まっている定数で、
+ビートルは既に 6 個（night / day / touched / bumped / ate / mate）使い切っていた。`on(:season)` で 7 個目。
+`when 6 then __handler_6(*args)` を 1 行足して 7 にした。測った上限ではなく
+「このリポジトリの生き物が要る数」なので、そう書いてある。
+
+### 11.7 世界の時計（`garden.now`）
+
+W2 の繁殖はクールダウンを**コンポーネントに書く**（§12）ので、スクリプトより長生きする時計が要る。
+`@elapsed` を自分で足すと Ctrl+Enter のたびに 0 に戻り、既に書いたクールダウンだけが古い時計に
+残る。`answer_in_tick` の `garden.now` は `world_now(&time, &sky)` そのもの——`court` と `hatch` が
+読んでいたのと同じ、`P` で止まりセーブで続く庭の時計（G9）。フレームは食わない。

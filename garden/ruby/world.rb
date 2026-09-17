@@ -30,8 +30,34 @@ world do
   def growth      = 0.06   # PLANT_GROWTH: how much bigger a blade gets per second
   def plant_max   = 1.4    # PLANT_MAX: and how big it may get
   def plant_cap   = 90     # PLANTS_MAX: how many blades the field holds
-  def sprout_rate = 0.7    # SPROUT_RATE: how many new ones come up per second
   def crumb       = 0.02   # `eat`: under this there is nothing left of a plant
+
+  # How many new blades come up per second — **and the one number in this file that is not a
+  # `const`'s** (W2).
+  #
+  # `SPROUT_RATE` was 0.7 all year round. The two seasons are this build's *play*, not a
+  # measurement: a garden whose rules can be edited while it runs wants something in it that
+  # changes without anybody editing it, and rain is the oldest one there is. The two values sit
+  # either side of the 0.7 the garden was tuned at, the same distance from it, so a year of them
+  # averages the world W1 measured its budget on; what a season changes is *when* the grass
+  # comes, not how much of it there is in the end.
+  def sprout_rate = @season == "dry" ? 0.5 : 0.9
+
+  # The seasons, and what saying so means. `@season` is an ordinary instance variable of this
+  # object — the world keeps no state in the save file (`docs/plans/garden-world-plan.md` §2,
+  # default 10), so a garden read back from F9 opens in the wet season whatever it was in when
+  # it was written — and `tell :all` is how every script that cares hears about it.
+  def turn_to(season)
+    @season = season
+    tell :all, "season", season
+    log "the #{season} season"
+  end
+
+  # A season is a day long, which is the `day_length` above. `n` is 1 the first time this runs,
+  # so the first turn is to the dry one and the world opens in the other.
+  every 60 do |n|
+    turn_to(n.odd? ? "dry" : "wet")
+  end
 
   # being alive
   def hunger_max  = 100.0  # HUNGER_MAX: stuffed. 0 is dead
@@ -44,6 +70,12 @@ world do
 
   # === the rules ============================================================
   each_frame do |dt|
+    # The world opens in the wet season, and says so: a creature that starts before the first
+    # `every 60` has gone round still has somewhere to read the season from. It is written this
+    # way rather than as a `start do … end` of its own because one line that runs once is not a
+    # part of the DSL worth having.
+    turn_to("wet") if @season.nil?
+
     # Three tables, kept between frames and emptied here rather than made again: at 90 plants and
     # sixty frames a second, a Hash a frame is five thousand of them a minute for the collector.
     #
@@ -111,6 +143,13 @@ world do
           changed[bits] = true
           h += bite * food_value
           h = full if h > full
+          # **The news of a meal** (W2), on the first frame of it and not on the sixtieth: a
+          # mouthful is taken on every frame of a meal, and a rule that announced each one would
+          # fill the sixty-four the queue holds with one beetle having lunch. The payload is what
+          # is *left* of the plant, as `eat` published it — one frame's bite is always the same
+          # number and says nothing, while the size of the thing it has sat down to is what a
+          # script might want to remember.
+          tell c, "ate", size[bits] if starting_to_eat?(c)
           break # one plant at a time
         end
       end

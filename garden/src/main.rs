@@ -45,7 +45,7 @@ use bevy::prelude::*;
 // G8: the event the glTF loader triggers when a model's entities actually exist, which is the
 // only moment a loaded material can be replaced (`tint_species`).
 use bevy::world_serialization::WorldInstanceReady;
-use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
+use rubevy::{Answer, Arg, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
 use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
@@ -1184,6 +1184,14 @@ struct SelfTest {
     /// meters fell", both of them a parent paying thirty points for a child. A check about the
     /// rules has to leave out what the rules did not do.
     paid: Vec<Entity>,
+    // --- W2: the world says something and the creatures hear it --------------
+    /// the rules have said `"season"` at least once, which is when it is worth reading anybody's
+    /// memory (a `read_memory` per creature is two `ivar_get`s and a conversion, and doing it on
+    /// every frame of a ninety-second run to find out that nothing has been said yet would be
+    /// the check costing more than the thing it checks)
+    season_told: bool,
+    /// the first creature whose `@memory` came back with a season in it, what it said, and when
+    season_heard: Option<(String, String, f32)>,
     /// the real rules have been asked for again
     thaw_asked: bool,
     /// …and a meter has fallen since, which is the second half of the check: rules that stop when
@@ -1227,6 +1235,8 @@ impl Default for SelfTest {
             frozen_at: None,
             fell_while_frozen: 0,
             paid: Vec::new(),
+            season_told: false,
+            season_heard: None,
             thaw_asked: false,
             fell_after_thaw: false,
         }
@@ -1570,6 +1580,14 @@ fn main() {
                 .before(window::VmClockSet)
                 .run_if(is_still),
         )
+        // W2: and the world's *answers* before the creatures' tick too, which is what makes
+        // `tell` arrive in the frame it was said. rubevy chains each VM's own three sets and no
+        // more (`docs/host-api.md`, "Two VMs in one app"), so without this line the system that
+        // carries a message from one VM to the other could be scheduled after the VM it carries
+        // it to has already had its frame — and a beetle would hear about its lunch on the next
+        // one. Nothing of the creatures' is read here that their tick has not already written:
+        // the world's questions are about the world.
+        .configure_sets(Update, RubevySet::<World>::answer().before(RubevySet::Tick))
         // `spawn_world` asks for `Option<Res<Look>>`, and a `None` there is how the headless
         // build says "no models". That makes the order load-bearing: without this the windowed
         // build's `spawn_world` may run before `make_look` and then it is `None` there too —
@@ -1697,7 +1715,8 @@ fn main() {
             .add_systems(Update, watch_overlap.after(separate))
             .add_systems(
                 Update,
-                (watch_probe, watch_turning, watch_sleep, watch_the_rules).after(RubevySet::Answer),
+                (watch_probe, watch_turning, watch_sleep, watch_the_rules, watch_the_season)
+                    .after(RubevySet::Answer),
             )
             // W1's twelfth check: the rules taken away and given back while the world runs. It is
             // after `note_the_rules`, because what it looks at is the falling meters that system
@@ -3097,6 +3116,36 @@ fn watch_the_rules(mut test: ResMut<SelfTest>, time: Res<Time>, plants: Query<(E
     test.grass = sizes;
 }
 
+/// **The thirteenth check: what the world says reaches the creatures** (W2).
+///
+/// The rules declare a season (`tell :all, "season", …` in `world.rb`), a creature's
+/// `on(:season)` writes it into its own `@memory`, and this reads that memory back **out of the
+/// VM** — the same two `ivar_get`s the save file is made of (`read_memory`). So what it proves is
+/// the whole road and not a step of it: the world's VM said something, the game carried it across
+/// to the creatures' VM, a handler in a script nobody here has read ran, and the thing it
+/// remembered is in the heap where the save would find it.
+///
+/// It reads nothing until the rules have actually said it (`season_told`), and nothing after the
+/// first creature is found to have heard it.
+fn watch_the_season(
+    time: Res<Time>,
+    mut test: ResMut<SelfTest>,
+    mut scripts: ResMut<ScriptWorld>,
+    creatures: Query<(&Mind, &ScriptTask)>,
+) {
+    if !test.season_told || test.season_heard.is_some() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    for (mind, task) in &creatures {
+        let memory = read_memory(&mut scripts.vm, task.task());
+        let Some(season) = memory.get("season").and_then(|v| v.as_str()) else { continue };
+        info!("selftest: {} knows it is the {season} season at {now:.2} s", mind.name);
+        test.season_heard = Some((mind.name.clone(), season.to_string(), now));
+        return;
+    }
+}
+
 /// How long the frozen rules are left in force before the twelfth check asks its question. Five
 /// seconds is the plan's (`docs/plans/garden-world-plan.md` §3.1) and it is a long time in a world
 /// where a creature loses `1.6 * appetite` of its meter every second: every creature in the garden
@@ -3735,6 +3784,20 @@ fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>, dice: Res<Dice
     let seed = (Dice(dice.0).roll() * 1_000_000.0).floor() as f64;
     scripts.answer_in_tick("garden.seed", Box::new(move |_, _| Answer::Num(seed)));
 
+    // **The garden's own clock** (W2), which is not the process's: `Sky::shift` carries a loaded
+    // world's age and `hold_the_clock` freezes it while the game is paused (G9). `court` and
+    // `hatch` read it through `world_now` for exactly the reason `world.rb` reads it now — a
+    // cooldown is a time in the garden's life, and a minute spent paused is not a minute of it.
+    scripts.answer_in_tick(
+        "garden.now",
+        Box::new(|world: &bevy::ecs::world::World, _: &rubevy::Request| {
+            match (world.get_resource::<Time>(), world.get_resource::<Sky>()) {
+                (Some(time), Some(sky)) => Answer::Num(world_now(time, sky) as f64),
+                _ => Answer::Nil,
+            }
+        }),
+    );
+
     scripts.answer_in_tick(
         "garden.within",
         Box::new(|world: &bevy::ecs::world::World, request: &rubevy::Request| {
@@ -3791,6 +3854,10 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     let mut refused: Option<String> = None;
     let mut seeds = 0u32;
     let mut day_length: Option<f32> = None;
+    // W2: what the rules said this frame, carried out of the world's VM and into the creatures'
+    // below. It is collected rather than published on the spot because publishing needs the
+    // *other* `ScriptWorld`, and this scope is holding the world's.
+    let mut said: Vec<(Option<Entity>, String, Answer)> = Vec::new();
     world.resource_scope(|world: &mut bevy::ecs::world::World, mut scripts: Mut<ScriptWorld<World>>| {
         let world = &*world;
         for request in scripts.take_requests() {
@@ -3845,6 +3912,43 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                 "garden.spawn" => {
                     answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused)
                 }
+                // **What the world says to the creatures** (W2): `tell(who, name, payload)`.
+                //
+                // A script cannot publish — publishing is delivering a message into *another*
+                // VM's queues, which is a thing only the host holds both ends of — so the rule
+                // asks and the game carries. `who` is `:all` or one creature; `name` is what its
+                // `on(…)` is written against; `payload` is the one value the handler is given.
+                //
+                // Like `garden.sprout`, it is **a command and not a question**: `world.rb` does
+                // not `pop`, so a rule that speaks does not park its pass for a frame. It is
+                // answered all the same, because a request nobody answers is a queue the
+                // collector may not have.
+                "garden.tell" => {
+                    let name = request.text(1).unwrap_or_default().to_string();
+                    // nil, a number, a string, or a creature — which is every shape a handler's
+                    // one parameter takes (`prelude.rb`, `run_handler`)
+                    let payload = match request.args.get(2) {
+                        Some(Arg::Num(n)) => Answer::Num(*n),
+                        Some(Arg::Text(t)) => Answer::Text(t.clone()),
+                        Some(Arg::Entity(e)) => Answer::Entity(*e),
+                        _ => Answer::Nil,
+                    };
+                    let to = match (request.entity_arg(0), request.text(0)) {
+                        (Some(entity), _) => Ok(Some(entity)),
+                        (None, Some("all")) => Ok(None),
+                        _ => Err("tell wants :all or a creature, a name, and a payload"),
+                    };
+                    match to {
+                        Ok(_) if name.is_empty() => {
+                            scripts.answer(&request, Answer::Text("tell wants a name".into()))
+                        }
+                        Ok(to) => {
+                            said.push((to, name, payload));
+                            scripts.answer(&request, Answer::Bool(true));
+                        }
+                        Err(why) => scripts.answer(&request, Answer::Text(why.into())),
+                    }
+                }
                 other => {
                     warn!("garden: nobody answers {other:?} for the world");
                     scripts.answer(&request, Answer::Nil);
@@ -3857,6 +3961,23 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     }
     if seeds > 0 {
         world.resource_mut::<Sprouts>().0 += seeds;
+    }
+    // W2. **The one place the two VMs touch.** What the rules said goes into the creatures'
+    // queues here — the same `publish` `startle` and `day_night` use, from the same side of the
+    // wall — and this set is ordered before the creatures' tick, so a creature hears about its
+    // meal in the frame the meal began.
+    if !said.is_empty() {
+        // the check counts what the rules said, which is the only thing this source still knows
+        // about the *names* of the messages: a `"mate"` is a pairing, and a `"season"` is what
+        // the thirteenth check waits for before it starts reading memories
+        if let Some(mut test) = world.get_resource_mut::<SelfTest>() {
+            test.courtings += said.iter().filter(|(_, name, _)| name == "mate").count() as u32;
+            test.season_told = test.season_told || said.iter().any(|(_, name, _)| name == "season");
+        }
+        let mut creatures = world.resource_mut::<ScriptWorld>();
+        for (to, name, payload) in said {
+            creatures.publish(to, &name, payload);
+        }
     }
     if let Some(seconds) = day_length {
         let mut sky = world.resource_mut::<Sky>();
@@ -5055,6 +5176,22 @@ fn stop_when_over(
             None => ok(
                 false,
                 "the rules can be taken away and given back while the world runs (the world's script never restarted on them)".into(),
+            ),
+        }
+        // --- W2: the world says something and the creatures hear it ----------
+        match &test.season_heard {
+            Some((who, season, at)) => ok(
+                true,
+                format!(
+                    "what the world declares reaches a creature's memory ({who} had \"{season}\" in its @memory at {at:.2} s)"
+                ),
+            ),
+            None => ok(
+                false,
+                format!(
+                    "what the world declares reaches a creature's memory (the rules {} and nobody's @memory had a season in it)",
+                    if test.season_told { "said it" } else { "never said it" }
+                ),
             ),
         }
         // --- G5: the save's version -----------------------------------------
