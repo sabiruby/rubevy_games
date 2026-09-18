@@ -143,3 +143,14 @@ PC 版（Linux）にもブラウザ版にも入らない）。
 
 wasm の確認（上の表）は `../rubevy-wt-publish` の path で取ったもので、`2d9eb92` との差は
 rubevy の README の 1 行だけ（コードは同じ）なので取り直していない。公開版は Pages の CI の結果で見る。
+
+## 追記（本体）— 公開版
+
+Pages の CI（run 35342540658、`62a7cbf`）は build・deploy とも success（9 分 22 秒）。`pages.yml` が
+lock から SabiRuby の rev を取る段も、Playground のコンパイラを作る段も無変更で通った。
+公開版を同じ `check.js`（playwright-core、swiftshader）で 1 回ずつ、2 ページ同時に開いて確認:
+
+| ページ | 秒 | canvas | pageerror | requestfailed | console.error | selftest |
+|---|---|---|---|---|---|---|
+| `sabiruby.github.io/rubevy_games/garden/?selftest` | 60 | 1280×800 | 0 | 0 | 0 | 57 行 — ok 43 / FAIL 0 |
+| `sabiruby.github.io/rubevy_games/sabibots/?selftest` | 40 | 1280×800 | 0 | 0 | 0 | 31 行 — ok 30 / FAIL 0 |
