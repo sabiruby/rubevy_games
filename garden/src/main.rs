@@ -1303,12 +1303,30 @@ struct SelfTest {
     /// nothing, so it is taken in `answer_spawn` out of the asker's `Creature` and the `Breeding`
     /// the rules wrote on it — the check watches the world instead of being told.
     matings: Vec<(Entity, Genome, Genome, f32)>,
-    /// how many times the rules said `"mate"`, and how many children came back. The first is
-    /// counted where the message is carried across to the creatures' VM (`answer_world`), and it
-    /// is the only thing left in this source that knows that name — for the sake of the line the
-    /// eighth check prints when no child was born at all, which would otherwise not be able to
-    /// say whether the rules had been silent or the scripts had.
+    /// how many of the rules' `"mate"`s the check may be judged on, and how many children came
+    /// back. The first is counted where the message is carried across to the creatures' VM
+    /// (`answer_world`), and it is the only thing left in this source that knows that name — for
+    /// the sake of the line the eighth check prints when no child was born at all, which would
+    /// otherwise not be able to say whether the rules had been silent or the scripts had.
+    ///
+    /// **It is the pairings that could have produced a child**, not every pairing the rules made
+    /// (2026-09-18). Two kinds never could, and neither of them is a rule that is broken:
+    ///
+    ///  * a pairing of a species whose file has no `on(:mate)` — the rabbit's — where the
+    ///    message reaches nobody. `world.rb` pairs by species and says so in as many words:
+    ///    "whether a creature does anything at all with the message is its own script's
+    ///    business". Such a pairing is never counted (see [`listens_for`]).
+    ///  * a pairing where one of the two was gone before the one that was told could ask for a
+    ///    child. Those are counted, and taken back out again when it happens
+    ///    ([`close_courtings`]) — which is `courtings_lost`, kept only for the sentence the
+    ///    check prints.
     courtings: u32,
+    courtings_lost: u32,
+    /// the pairings that have been counted and are still waiting to be measured: who was told,
+    /// who it was told about, and when. An entry leaves when that creature asks the game for a
+    /// child — the road the check is about was walked — or when either of the two is gone before
+    /// it could ([`close_courtings`]).
+    courtings_open: Vec<(Entity, Entity, f32)>,
     births: u32,
     /// the first child a script asked the game for: when it was asked for, and what the check
     /// below made of its three genes against its parents'
@@ -1387,6 +1405,8 @@ impl Default for SelfTest {
             asleep_counted: 0,
             matings: Vec::new(),
             courtings: 0,
+            courtings_lost: 0,
+            courtings_open: Vec::new(),
             births: 0,
             born_at: None,
             born_says: String::new(),
@@ -3998,6 +4018,8 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
     let mut refused: Option<String> = None;
     // W2: the two parents of each child asked for, for the eighth check (`answer_spawn`)
     let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
+    // and who asked for one at all, for the same check's other half (`close_courtings`)
+    let mut asked_for_a_child: Vec<Entity> = Vec::new();
     // who asked, for the HUD's frames-per-decision (G4): a gap in a task's instruction count that
     // begins on this frame is a round trip and not a nap (`watch_minds`)
     let mut askers: Vec<Entity> = Vec::new();
@@ -4082,7 +4104,7 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
                 // already is. The population cap is checked here because the script answered a
                 // frame after the rule spoke, and a frame is long enough for the garden to fill.
                 "garden.spawn" => {
-                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings)
+                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings, &mut asked_for_a_child)
                 }
                 other => {
                     warn!("garden: nobody answers {other:?}");
@@ -4101,6 +4123,9 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
         let mut test = world.resource_mut::<SelfTest>();
         test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
     }
+    // and the eighth check's pairings, settled once a frame: this is the system the creatures'
+    // `garden.spawn` arrives at, so it is the one that knows whether a pairing was walked
+    close_courtings(world, &asked_for_a_child);
     let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     for asker in askers {
         if let Some(mut mind) = world.get_mut::<Mind>(asker) {
@@ -4160,7 +4185,16 @@ fn answer_spawn<M: 'static>(
     newborn: &mut Vec<Birth>,
     refused: &mut Option<String>,
     pairings: &mut Vec<(Entity, Genome, Genome)>,
+    asked_for_a_child: &mut Vec<Entity>,
 ) {
+    // Whoever asked has walked the road the eighth check is about, whatever the answer turns out
+    // to be: a refusal ("the garden is full", a gene missing) is the game's answer to a question
+    // that *was* put, and the pairing behind it has been measured ([`close_courtings`]).
+    if let Some(asker) = request.entity
+        && world.get_resource::<SelfTest>().is_some()
+    {
+        asked_for_a_child.push(asker);
+    }
     let population =
         world.iter_entities().filter(|e| e.contains::<Creature>()).count() + newborn.len();
     let cap = world.get_resource::<Births>().map(|b| b.cap).unwrap_or(POP_MAX);
@@ -4372,6 +4406,9 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     let mut newborn: Vec<Birth> = Vec::new();
     let mut refused: Option<String> = None;
     let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
+    // nothing in `world.rb` asks for a child — the rules pair, the creatures spawn — but
+    // `answer_spawn` is shared with the creatures' VM and takes it either way
+    let mut asked_for_a_child: Vec<Entity> = Vec::new();
     let mut seeds = 0u32;
     let mut day_length: Option<f32> = None;
     let mut child_hunger: Option<f32> = None;
@@ -4471,7 +4508,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                     scripts.answer(&request, Answer::Num(count_of(world, of_kind) as f64));
                 }
                 "garden.spawn" => {
-                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings)
+                    answer_spawn(world, &mut scripts, &request, &mut newborn, &mut refused, &mut pairings, &mut asked_for_a_child)
                 }
                 // **What the world says to the creatures** (W2): `tell(who, name, payload)`.
                 //
@@ -4531,9 +4568,49 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
         // the check counts what the rules said, which is the only thing this source still knows
         // about the *names* of the messages: a `"mate"` is a pairing, and a `"season"` is what
         // the thirteenth check waits for before it starts reading memories
-        if let Some(mut test) = world.get_resource_mut::<SelfTest>() {
-            test.courtings += said.iter().filter(|(_, name, _)| name == "mate").count() as u32;
-            test.season_told = test.season_told || said.iter().any(|(_, name, _)| name == "season");
+        if world.get_resource::<SelfTest>().is_some() {
+            let season = said.iter().any(|(_, name, _)| name == "season");
+            // **A `"mate"` is only a pairing the check can be judged on if somebody is listening
+            // for it** (2026-09-18). `world.rb` pairs two of a sort that are well fed and close
+            // enough, whatever sort that is, and says outright that what a creature does with the
+            // message is its own script's business — the rabbit's file has no `on(:mate)` at all,
+            // so a pair of rabbits is a pairing out of which no child was ever going to come.
+            // Counting it put a run of the garden one unlucky meadow away from a FAIL that meant
+            // nothing (`docs/worklog/2026-09-18-corner-and-selftest.md` §1.6, `final64/run52`:
+            // two pairings, no children, both of them rabbits).
+            let told: Vec<(Entity, Entity)> = said
+                .iter()
+                .filter(|(_, name, _)| name == "mate")
+                .filter_map(|(to, _, payload)| match (to, payload) {
+                    // `tell one, "mate", two` — the addressee and the partner it was told about
+                    (Some(who), Answer::Entity(partner)) => Some((*who, *partner)),
+                    _ => None,
+                })
+                .collect();
+            let mut counted: Vec<(Entity, Entity)> = Vec::with_capacity(told.len());
+            if !told.is_empty() {
+                world.resource_scope(
+                    |world: &mut bevy::ecs::world::World, mut creatures: Mut<ScriptWorld>| {
+                        for (who, partner) in told {
+                            let task = world.get::<ScriptTask>(who).map(|t| t.task());
+                            match task.and_then(|task| listens_for(&mut creatures.vm, task, "mate")) {
+                                Some(false) => info!(
+                                    "selftest: --   the rules paired two of a species whose file has no on(:mate): \
+                                     nothing was ever going to come of it, and it is not counted"
+                                ),
+                                // listening, or too young to be asked (its script has not reached
+                                // `run_creature`): the check stays strict where it cannot tell
+                                _ => counted.push((who, partner)),
+                            }
+                        }
+                    },
+                );
+            }
+            let now = world_clock(world);
+            let mut test = world.resource_mut::<SelfTest>();
+            test.season_told = test.season_told || season;
+            test.courtings += counted.len() as u32;
+            test.courtings_open.extend(counted.into_iter().map(|(who, partner)| (who, partner, now)));
         }
         let mut creatures = world.resource_mut::<ScriptWorld>();
         for (to, name, payload) in said {
@@ -4827,6 +4904,91 @@ const BEING_IVAR: &str = "@being";
 /// The world's own clock: `Time` plus whatever a load shifted it by.
 fn world_now(time: &Time, sky: &Sky) -> f32 {
     time.elapsed_secs() + sky.shift
+}
+
+/// The same clock read out of the `World` itself, for the exclusive systems that answer the two
+/// VMs and have no `Res` parameters to read it from. It answers zero where either resource is
+/// missing, which is the frames before `main` has finished inserting them.
+fn world_clock(world: &bevy::ecs::world::World) -> f32 {
+    let shift = world.get_resource::<Sky>().map(|sky| sky.shift).unwrap_or(0.0);
+    world.get_resource::<Time>().map(|time| time.elapsed_secs()).unwrap_or(0.0) + shift
+}
+
+/// The class-level `@handlers` the prelude's `Creature.on` fills: `[[:touched, 0], [:mate, 1], …]`.
+const HANDLERS_IVAR: &str = "@handlers";
+
+/// **Does this creature's script listen for an event at all?** (2026-09-18)
+///
+/// Which species breeds is a fact about `ruby/creatures/*.rb` — a file the player may edit, and a
+/// file this source is not allowed to know the contents of — so the eighth check reads it out of
+/// the VM rather than keeping a table of its own. The road is the one `read_memory` takes, one
+/// step further: the task's `@being` is the creature object (`run_creature` put it there), its
+/// class is the anonymous subclass `creature "Beetle" do … end` made, and the prelude's
+/// `Creature.on` has been pushing `[event, slot]` onto that class's `@handlers` since the file was
+/// loaded. Two `ivar_get`s, a `real_class_of`, and serde reading an Array of pairs — the same
+/// three tools the save file is read with, and no new question for the script to answer.
+///
+/// It is asked rather than answered by rubevy because rubevy cannot answer it: a subscription
+/// lives in its `HostState` and only its count comes back out (`ScriptWorld::subscriptions`),
+/// which is the same wall `tell_newborns_the_sky` is written against.
+///
+/// `None` where it cannot be told — the task has not reached `run_creature` yet, so there is no
+/// `@being` to ask. A caller that must decide something takes `None` for the strict answer.
+fn listens_for(vm: &mut Vm, task: ObjId, event: &str) -> Option<bool> {
+    let being = vm.ivar_get(task, BEING_IVAR);
+    being.obj()?;
+    let class = vm.real_class_of(being);
+    let handlers = vm.ivar_get(class, HANDLERS_IVAR);
+    // nil rather than an Array: a file with no `on` in it at all, which listens for nothing
+    if handlers.obj().is_none() {
+        return Some(false);
+    }
+    let handlers = sabiruby_serde::from_value::<Vec<(String, u32)>>(vm, handlers).ok()?;
+    Some(handlers.iter().any(|(name, _)| name == event))
+}
+
+/// **The pairings the eighth check is still waiting on, closed one way or the other**
+/// (2026-09-18).
+///
+/// A pairing counted in `SelfTest::courtings` is a question put to a creature's `on(:mate)`: will
+/// the road from the rules' message to `garden.spawn` be walked? It is answered when that creature
+/// asks the game for a child — `asked`, which is every `garden.spawn` of this frame — and the
+/// entry simply leaves, having been measured.
+///
+/// It is **not** answered when one of the two is no longer there. The beetle's handler reads its
+/// partner's genome out of the partner's own `Creature` component, and a partner that starved in
+/// the frame between the rule speaking and the handler waking gives it nil; the handler stops
+/// there, and no spawn is ever asked for. That is not the road being broken, it is the road never
+/// having been walked — so the pairing comes back out of the denominator and is said out loud,
+/// because a pairing that quietly disappeared is what the check used to do with it.
+fn close_courtings(world: &mut bevy::ecs::world::World, asked: &[Entity]) {
+    if world.get_resource::<SelfTest>().is_none() {
+        return;
+    }
+    let open = std::mem::take(&mut world.resource_mut::<SelfTest>().courtings_open);
+    if open.is_empty() {
+        return;
+    }
+    let mut still: Vec<(Entity, Entity, f32)> = Vec::with_capacity(open.len());
+    let mut lost: Vec<(f32, &'static str)> = Vec::new();
+    for (who, partner, at) in open {
+        if asked.contains(&who) {
+            continue;
+        }
+        let there = |e: Entity| world.get::<Creature>(e).is_some();
+        match (there(who), there(partner)) {
+            (true, true) => still.push((who, partner, at)),
+            (true, false) => lost.push((at, "the partner was gone before the handler could ask for a child")),
+            _ => lost.push((at, "the creature that was told was gone before it could ask for a child")),
+        }
+    }
+    let mut test = world.resource_mut::<SelfTest>();
+    test.courtings_open = still;
+    test.courtings -= lost.len() as u32;
+    test.courtings_lost += lost.len() as u32;
+    for (at, why) in lost {
+        info!("selftest: --   the pairing at {at:.2} s measured nothing: {why}");
+    }
 }
 
 /// One creature's `@memory`, read out of the VM.
@@ -5804,27 +5966,28 @@ fn stop_when_over(
         }
         // --- G2: the genome ------------------------------------------------
         //
-        // **A run in which the rules paired nobody has measured nothing here** (2026-09-18).
-        // `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no
-        // `"mate"` in it never asked the thing this check is about a question — the same shape
-        // the fifth check took for a probe a rabbit walked into, and the same reason.
+        // **A run in which nobody was paired who could have answered has measured nothing here**
+        // (2026-09-18). `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a
+        // run with no such pairing in it never asked the thing this check is about a question —
+        // the same shape the fifth check took for a probe a rabbit walked into, and the same
+        // reason.
         //
-        // What makes it happen at all is the meadow corner (`spawn_world`): two hungry beetles
-        // 4.5 units either side of a clump of four plants, which walk in, eat, pass
-        // `mate_hunger` and are told about each other. It is not the certainty the comment there
-        // claims. A creature eats a plant from `reach` — `1.1` plus half the plant's size, so
-        // 1.8 at `plant_max` — and stops walking the moment its meter passes `hungry_below`, so
-        // **two beetles eating one clump from opposite sides stand up to 3.6 apart** while
-        // `mate_reach` is 2.0. They are paired when their wandering happens to bring them
-        // together afterwards, which is most of the time and not all of it: over 64 twenty-second
-        // runs the corner produced a pairing in 62, and the two it missed had the pair 2.8 and
-        // 4.1 apart at the frame they both passed `mate_hunger`.
+        // What makes it happen at all is the meadow corner ([`plant_the_meadow`]): two hungry
+        // beetles, each straight behind a blade of its own, placed out of the rules' own `reach`
+        // and `mate_reach` so that where they stop eating is inside where the rules pair. That
+        // made `courtings == 0` stop happening (64 twenty-second runs, 0 of them) and left the
+        // denominator being the thing that was wrong with this check.
         //
-        // The corner is left as it is. Making it certain means putting the two where the rules'
-        // own `reach` and `mate_reach` say they will end up, and those two numbers live in
-        // `ruby/world.rb` — where a player may edit them — and cannot be read from here. A
-        // geometry worked out in Rust from copies of them would be right until somebody changed
-        // the file. So what is fixed is the sentence: a run that paired nobody says so.
+        // **`courtings` is the pairings that could have produced a child**, which is not every
+        // pairing the rules made. `world.rb` pairs two of a sort, whatever sort it is, and leaves
+        // what to do about it to the creature's own file — so a pair of rabbits is a pairing with
+        // nobody at the other end of it, and a pair one of whom starved in the frame between the
+        // rule speaking and the handler waking is a handler that read nil and stopped. Neither is
+        // the road from `on(:mate)` to `garden.spawn` being broken, and both used to be counted:
+        // one run in 64 failed this check on two rabbit pairings and no children at all
+        // (`docs/worklog/2026-09-18-corner-and-selftest.md` §1.6). They are left out now —
+        // [`listens_for`] and [`close_courtings`] — and what is left in the denominator is
+        // pairings where somebody was listening and both of them lived to see it.
         match test.born_at {
             Some(at) => ok(
                 test.born_ok,
@@ -5833,11 +5996,14 @@ fn stop_when_over(
                     test.born_says, test.courtings, test.births
                 ),
             ),
-            None if test.courtings == 0 => unmeasured(
+            None if test.courtings == 0 => unmeasured(format!(
                 "a child was born whose genome is its parents' mixed and mutated
-         (not measured: the rules paired nobody in the whole run, so nothing asked `Genome#mix` anything)"
-                    .into(),
-            ),
+         (not measured: the rules paired nobody in the whole run who could have answered{}, so nothing asked `Genome#mix` anything)",
+                match test.courtings_lost {
+                    0 => String::new(),
+                    n => format!(" — {n} pairing(s) ended before the handler could ask"),
+                }
+            )),
             // a pairing was made and no child came of it: that is the road from `on(:mate)` to
             // `garden.spawn`, and it is this check's to report
             None => ok(
