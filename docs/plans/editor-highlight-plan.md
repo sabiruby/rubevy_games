@@ -124,4 +124,4 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 |---|---|
 | H0 | **済み**（sabiruby `4e1e1c8` + `1ef2d36`、2026-09-18、main にマージ済み）。2 パス（字句 + 木）。上限は置かない（箱庭のソース全体 64 KB、`world.rb` 16 KB の解析 147 µs）。**H2 の色選びへの申し送り**: 演算子（`=~` `+`）と `me[:Hunger]` の `[` `]` も分類 8（Ruby では呼び出し。family-mruby と同じ）なので、8 の色は演算子に付いても読める控えめなものに。`%i[c]` は外枠 2・中身 5。`:Plant` はシンボル全体が 5 |
 | H1 | **済み**（playground `75f553c`、main `d72e000`、2026-09-18）。wasm +1,736 バイト（gzip +493）。`SABIRUBY_REF` を `7be7b86` に（計画書の既定 10 に抜けていた。117 コミットが公開版に載る）。H2 の `PLAYGROUND_REF` は `d72e000` |
-| H2 | 未着手（残件の枝 `leftovers` のマージ後） |
+| H2 | **済み**（`663f3f2` `ad80e2f` `e0a3213`、2026-09-18）。9 色は地 (10,10,10) と帯 (103,77,17) の両方を実測してコントラストで選んだ（表は worklog）。熱い行の琥珀の前景は捨て、前景は分類色だけ（帯は残る）。橋は `window.gardenHighlight` / `sabibotsHighlight`（既存の `sabibotsCompile` に揃えた）。本文のハッシュ 2.3 µs、wasm +5.4 KB（garden）。窓 43 行・ブラウザ `?selftest` 43 行全通過。Battle のページには `?selftest` が無い（範囲外） |
