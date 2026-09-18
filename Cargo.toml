@@ -23,18 +23,37 @@ bevy = { version = "0.19.1", default-features = false, features = [
 ] }
 # what differs between the PC build and the browser build (threads, X11, WebGL) is added per
 # target in each game's Cargo.toml, so the one `cargo build` picks the right set
+# rubevy stays a git dependency: it moves every day here, and the games are not to be pinned to
+# whatever is on crates.io.
 rubevy = { git = "https://github.com/sabiruby/rubevy" }
-# the same source as rubevy's, so there is one VM in the binary and one set of types
-sabiruby = { git = "https://github.com/sabiruby/sabiruby" }
-sabiruby-compiler = { git = "https://github.com/sabiruby/sabiruby", features = ["host"] }
-# G3's save file: the same source again, so the `Vm` this converts values for is the one the
-# scripts run in. `sabiruby-serde` is published on crates.io as well, but a crates.io copy would
-# bring its own `sabiruby` 0.5.0 beside rubevy's git one — two VMs in the binary, and a `Value`
-# from one is not a `Value` of the other.
-sabiruby-serde = { git = "https://github.com/sabiruby/sabiruby" }
+# The SabiRuby crates are named by version, exactly as rubevy names them, and `[patch.crates-io]`
+# at the bottom of this file sends all of them to git. Writing it any other way puts two VMs in
+# the binary — rubevy asks crates.io for `sabiruby`, so a git `sabiruby` here would be a second,
+# different crate, and a `Value` of one is not a `Value` of the other. The patch is what keeps
+# them one while the games still ride the VM's main branch.
+sabiruby = "0.5.1"
+# 0.2.3 is the floor here rather than rubevy's 0.2.2: the editor's colours call
+# `sabiruby_compiler::highlight`, which 0.2.3 is the first to publish
+# (sabiruby `docs/design/compiler.md`, "Publishing").
+sabiruby-compiler = { version = "0.2.3", features = ["host"] }
+# G3's save file: the `Vm` this converts values for is the one the scripts run in, which the
+# patch below is what guarantees.
+sabiruby-serde = "0.1.0"
 rubevy-arena = { path = "crates/rubevy-arena" }
 # the in-game editor (the code panel); 0.42 is the one built for Bevy 0.19
 bevy_egui = { version = "0.42", default-features = false, features = ["render", "default_fonts"] }
+
+# One VM in the binary. rubevy is on crates.io now and asks for `sabiruby` by version, so every
+# SabiRuby crate in this workspace — the ones named above and the ones rubevy pulls in — resolves
+# to crates.io first; this sends them all to the same git checkout instead. Two things come out of
+# it: the source is the same for rubevy's copy and ours (one `Vm` type, one set of `Value`s), and
+# a fix in the VM reaches the games without waiting for a crates.io release, which is how they
+# have always been built. It also keeps `github.com/sabiruby/sabiruby#<rev>` in `Cargo.lock`,
+# which `.github/workflows/pages.yml` greps to build the Playground compiler from the same VM.
+[patch.crates-io]
+sabiruby = { git = "https://github.com/sabiruby/sabiruby" }
+sabiruby-compiler = { git = "https://github.com/sabiruby/sabiruby" }
+sabiruby-serde = { git = "https://github.com/sabiruby/sabiruby" }
 
 [workspace.package]
 edition = "2024"
