@@ -245,8 +245,19 @@ const HUNGER_MAX: f32 = 100.0;
 /// How close is touching, for a rabbit startling a beetle — and the distance the fifth check
 /// measures the probe's walk against. Eating has a reach of its own and it is `world.rb`'s now,
 /// with this same number in it: `startle` is a rule that stayed and `eat` is one that went.
+///
+/// It is also what [`Reaches`] holds until `world.rb` has said otherwise with
+/// `garden.rules(reach:)` — the same arrangement [`CHILD_HUNGER`] has, and for the same reason:
+/// the game has to have an answer before the rules have spoken.
 const REACH: f32 = 1.1;
 const TOUCH_REACH: f32 = 1.3;
+
+/// How close two well-fed creatures have to be before the rules tell them about each other, until
+/// `world.rb` says otherwise with `garden.rules(mate_reach:)`. The rule itself is `world.rb`'s
+/// (`mate_reach`), with this same number in it; the one thing the game builds with it is the
+/// selftest's meadow corner ([`plant_the_meadow`]), which has to stand where the rules can reach
+/// across it.
+const MATE_REACH: f32 = 2.0;
 
 /// How long a creature has been alive before the selftest expects its handlers to answer for it.
 /// A newborn (G2) is spawned with a `Script`, which rubevy turns into a task on a later frame,
@@ -956,6 +967,37 @@ impl Default for Births {
     /// whose `world.rb` will not compile, which runs on them for ever.
     fn default() -> Self {
         Births { waiting: Vec::new(), hunger: CHILD_HUNGER, cap: POP_MAX }
+    }
+}
+
+/// **The two distances the rules keep, for the one thing the game builds out of them**
+/// (2026-09-18): the selftest's meadow corner.
+///
+/// It is [`Births`]'s arrangement — `world.rb`'s numbers, handed over once by `garden.rules`, kept
+/// where they are used — with one difference that matters to the schedule. `hunger` and `cap` are
+/// wanted whenever a child arrives, which is minutes into a run; these two are wanted **once**,
+/// while the corner is being built, and the corner used to be built in `spawn_world`, which is a
+/// `Startup` system. The rules cannot have spoken by then: the world's script becomes a task in
+/// the first `Update` and `run_world` asks `garden.rules` in that task's first line. So the corner
+/// waits for this ([`plant_the_meadow`]) instead of being planted before the world's VM has drawn
+/// breath.
+#[derive(Resource)]
+struct Reaches {
+    /// how far from a blade a creature may stand and still eat it, before the blade's own size is
+    /// added (`world.rb`'s `reach`)
+    eat: f32,
+    /// how close two well-fed creatures have to be to be told about each other (`world.rb`'s
+    /// `mate_reach`)
+    mate: f32,
+    /// whether `world.rb` has said. Until it has, the two above are the game's own — and a
+    /// `world.rb` that will not compile leaves them on the game's own for ever, which is the case
+    /// [`plant_the_meadow`] has to notice so that the corner is planted at all.
+    told: bool,
+}
+
+impl Default for Reaches {
+    fn default() -> Self {
+        Reaches { eat: REACH, mate: MATE_REACH, told: false }
     }
 }
 
@@ -1678,6 +1720,8 @@ fn main() {
         // W1: the seeds `world.rb` asked for, the cost of its pass, and why it has no rules where
         // it has none
         .init_resource::<Sprouts>()
+        // and the two distances it keeps that the game builds a place out of (2026-09-18)
+        .init_resource::<Reaches>()
         .init_resource::<WorldMeter>()
         .init_resource::<WorldTrouble>()
         .init_resource::<WorldPrelude>()
@@ -1869,7 +1913,15 @@ fn main() {
             // W1's twelfth check: the rules taken away and given back while the world runs. It is
             // after `note_the_rules`, because what it looks at is the falling meters that system
             // counted on this frame.
-            .add_systems(Update, swap_the_rules.after(note_the_rules));
+            .add_systems(Update, swap_the_rules.after(note_the_rules))
+            // G2's pair, on the frame the rules say where it goes (2026-09-18). After the world's
+            // answers, so that frame is this one and not the next.
+            .add_systems(
+                Update,
+                plant_the_meadow
+                    .after(RubevySet::<World>::answer())
+                    .run_if(resource_exists::<Meadow>),
+            );
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
@@ -2149,15 +2201,17 @@ fn spawn_world(
     // everything else.
     let probe_at = Vec2::new(HALF_W - 3.0, HALF_D - 3.0);
     let dinner_at = probe_at + Vec2::new(-4.0, -3.0);
-    // and, for G2, a third corner: a tight clump of grass with a beetle on either side of it.
-    // Nothing about the rules is bent for it — the two walk to the grass because they are hungry,
-    // eat because they are standing on it, are full because they ate, and are told about each
-    // other because they are full and touching. What is arranged is only that it happens.
-    let meadow_at = Vec2::new(-HALF_W + 6.0, HALF_D - 6.0);
+    // and, for G2, a third corner: grass with a hungry beetle behind it, twice over. Nothing about
+    // the rules is bent for it — the two walk to the grass because they are hungry, eat because
+    // they are near it, and are told about each other because they are well fed and close. What is
+    // arranged is only that it happens, and **where** is [`plant_the_meadow`]'s to work out from
+    // the rules' own two distances, a frame or two from now (2026-09-18).
     let keep_clear = selftest.is_some();
     let clear_of_fixtures = |at: Vec2| {
         !keep_clear
-            || (at.distance(fasting_at) > 6.0 && at.distance(probe_at) > 7.0 && at.distance(meadow_at) > 8.0)
+            || (at.distance(fasting_at) > 6.0
+                && at.distance(probe_at) > 7.0
+                && at.distance(MEADOW_AT) > MEADOW_CLEAR)
     };
 
     // trees and rocks first: they never move, so everything else is placed around them. They are
@@ -2253,26 +2307,10 @@ fn spawn_world(
             probe_at.distance(dinner_at)
         );
 
-        // G2's pair. Four plants in a clump about a unit across, so that two beetles eating at it
-        // stand close enough to touch, and two hungry beetles four and a half units away on
-        // either side — inside the `Sight` of seven the smaller of the two genomes gives.
-        for offset in [Vec2::ZERO, Vec2::new(0.7, 0.2), Vec2::new(-0.2, 0.7), Vec2::new(0.5, -0.6)] {
-            spawn_plant(&mut commands, look, meadow_at + offset, PLANT_MAX, offset.x > 0.4);
-        }
-        // and they are not alike: `mix` averaging two copies of one thing would say nothing
-        let lovers = [
-            (Vec2::new(-4.5, 0.0), Genome { speed: 2.0, sight: 7.0, appetite: 0.9 }),
-            (Vec2::new(4.5, 0.0), Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }),
-        ];
-        for (offset, genome) in lovers {
-            let lover =
-                spawn_creature(&mut commands, look, Species::Beetle, meadow_at + offset, 45.0, genome, None);
-            give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
-        }
-        info!(
-            "selftest: two hungry beetles {:.1} apart, with four plants between them at ({:.1}, {:.1})",
-            9.0, meadow_at.x, meadow_at.y
-        );
+        // G2's pair is not planted here (2026-09-18): where it stands is worked out from two
+        // numbers `world.rb` has not handed over yet, so the corner is left to
+        // [`plant_the_meadow`] and this is only the note that it is coming.
+        commands.insert_resource(Meadow);
 
         // G3's ninth check, and the only script in the game that is not a creature: it asks the
         // game for a creature whose genome has no `sight` and reports what it is told. The point
@@ -2284,6 +2322,140 @@ fn spawn_world(
         }
     }
 }
+
+/// Where the selftest's meadow corner is, which is the one thing about it that is the garden's
+/// own: a spot far enough from the other two fixtures that `clear_of_fixtures` can keep eight
+/// units of field clear round it. Everything else about the corner — how far apart the two blades
+/// stand and how far behind them the two beetles start — comes out of the rules
+/// ([`plant_the_meadow`]).
+const MEADOW_AT: Vec2 = Vec2::new(-HALF_W + 6.0, HALF_D - 6.0);
+
+/// How much ground round [`MEADOW_AT`] `spawn_world` keeps empty of everything it scatters — grass,
+/// trees, rocks and the garden's own creatures. It is the number `clear_of_fixtures` has had since
+/// G2, named here rather than changed, because [`plant_the_meadow`] has to build inside it: a blade
+/// of the field's own that stands nearer to one of the corner's beetles than the blade the corner
+/// put in front of it is a beetle that walks the other way, and that is what it was doing.
+const MEADOW_CLEAR: f32 = 8.0;
+
+/// **The meadow corner has been asked for and not yet planted.** Inserted by [`spawn_world`] when
+/// the run is a selftest of a garden it built itself (a garden read back from a save has no
+/// fixtures at all), and taken away by [`plant_the_meadow`] on the frame it plants it.
+#[derive(Resource)]
+struct Meadow;
+
+/// **G2's pair, placed out of the rules' own two distances** (2026-09-18).
+///
+/// The corner exists so that two beetles certainly meet: the eighth check is about what a script
+/// does with a `"mate"`, and nothing can be asked of it in a run where the rules never said one.
+/// Until today the corner was a tight clump of grass with a beetle four and a half units away on
+/// **either side** of it, and that arrangement cannot work, for a reason that is geometry and not
+/// luck (`docs/worklog/2026-09-18-garden-leftovers.md` §5.2): a creature eats from a distance,
+/// and it stops walking towards the grass the moment it is no longer hungry — so two that came
+/// from opposite sides stand still on opposite sides, `2 × reach + a blade` apart, and the rules
+/// pair nobody. In sixty-four twenty-second runs the corner made a child inside two seconds
+/// thirty-five times and left the check waiting for a chance pairing somewhere else in the garden
+/// the other twenty-nine.
+///
+/// **So they come from the same side, each to a blade of its own.** A creature that is eating
+/// stands somewhere between `reach` and `reach + half a blade` from its blade, on the line it
+/// walked in on, and never past it. Put the two blades side by side, `apart` from each other, and
+/// each beetle straight behind its own: they walk in parallel, and when they stop they are
+///
+///     √(apart² + (how much further one stopped short than the other)²)
+///
+/// from each other, with the second term at most half a blade. The rules pair them when that is
+/// `mate_reach` or less, which is the whole of the placement:
+///
+///     apart² + (PLANT_MAX/2)² ≤ mate_reach²
+///
+/// The other wall is their own bodies — below `2 × BEETLE_RADIUS` they start inside each other
+/// and the first thing that happens in the corner is the separation pass pushing them apart — so
+/// `apart` is the middle of the window those two leave. With the rules as `world.rb` has them
+/// (`reach` 1.1, `mate_reach` 2.0) that window is 0.80 to 1.87 and the corner is 1.34 wide.
+///
+/// How far **behind** its blade each beetle starts is the same shape of answer, with three walls
+/// instead of two. It has to be outside `reach + half a blade`, or the beetle eats where it
+/// stands and never walks; inside the smaller of the two genomes' `sight`, or `garden.nearest`
+/// does not find the blade to walk to; and inside the ground the corner owns, which is the one
+/// that was doing the damage. `spawn_world` keeps [`MEADOW_CLEAR`] of field empty round
+/// [`MEADOW_AT`], so the nearest blade of the field's own can be `MEADOW_CLEAR − (how far the
+/// beetle stands from the middle)` away — and if that is less than `start`, the beetle's own
+/// blade is *not* the nearest plant and `garden.nearest` sends it walking the other way:
+///
+///     start + apart/2 + start ≤ MEADOW_CLEAR
+///
+/// Seven of sixteen traced runs had that happening with a start of 4.4: in one, both beetles
+/// walked the wrong way to a blade of 0.46 that two other creatures were already eating, and were
+/// still on 42 of their meters five seconds later; in others, one of the pair did. The middle of
+/// the window the three walls leave is 2.73 with today's numbers, where the old corner said 4.5 —
+/// and at 2.73 the nearest blade the field can put down is 5.19 away, which is nearly twice the
+/// beetle's whole walk.
+///
+/// **Nothing here is a copy of a number in `world.rb`.** `reach` and `mate_reach` arrive through
+/// `garden.rules` like `day_length` does ([`RuleBook`]), which is why this is not part of
+/// [`spawn_world`]: `spawn_world` is a `Startup` system and the world's script has not run a line
+/// by then. It waits for [`Reaches::told`] — or for [`WorldTrouble`], which is the game finding
+/// out at startup that the rules will never speak at all, and the corner then stands on the
+/// game's own [`REACH`] and [`MATE_REACH`].
+///
+/// The size of a blade is the *garden's* number and not the rules': [`PLANT_MAX`] is what
+/// `spawn_plant` is told to make these two, and `world.rb`'s `plant_max` is the cap its growth
+/// stops at. They are the same number today, and the corner is planted by whoever plants it.
+fn plant_the_meadow(
+    mut commands: Commands,
+    look: Option<Res<Look>>,
+    ruby: Res<RubyDir>,
+    brains: Res<Brains>,
+    mut mrb: ResMut<Assets<MrbAsset>>,
+    reaches: Res<Reaches>,
+    trouble: Res<WorldTrouble>,
+) {
+    // the rules have spoken, or the game knows they never will
+    if !reaches.told && trouble.0.is_none() {
+        return;
+    }
+    commands.remove_resource::<Meadow>();
+    let look = look.as_deref();
+
+    // and they are not alike: `mix` averaging two copies of one thing would say nothing
+    let lovers =
+        [Genome { speed: 2.0, sight: 7.0, appetite: 0.9 }, Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }];
+
+    let half_blade = PLANT_MAX * 0.5;
+    // how far from its blade a creature may be and still eat it (`world.rb`: `arm = reach + cap * 0.5`)
+    let arm = reaches.eat + half_blade;
+    // √(mate_reach² − (half a blade)²), and the two beetles' own bodies under it
+    let touching = 2.0 * BEETLE_RADIUS;
+    let widest = (reaches.mate * reaches.mate - half_blade * half_blade).max(0.0).sqrt();
+    let apart = (touching + widest.max(touching)) * 0.5;
+    // outside the arm, inside the shorter sight, and inside the ground the corner owns; in the
+    // middle of what those leave
+    let sight = lovers.iter().fold(f32::INFINITY, |least, g| least.min(g.sight));
+    let own_ground = (MEADOW_CLEAR - apart * 0.5) * 0.5;
+    let start = (arm + sight.min(own_ground)) * 0.5;
+
+    // MEADOW_AT is the field's near left corner, so "into the field" is +x and the two blades
+    // stand one behind the other along z
+    let toward = Vec2::X;
+    let along = Vec2::Y;
+    for (i, genome) in lovers.into_iter().enumerate() {
+        let side = if i == 0 { 0.5 } else { -0.5 };
+        let blade = MEADOW_AT + along * apart * side;
+        spawn_plant(&mut commands, look, blade, PLANT_MAX, i == 0);
+        let lover =
+            spawn_creature(&mut commands, look, Species::Beetle, blade + toward * start, 45.0, genome, None);
+        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
+    }
+    info!(
+        "selftest: two hungry beetles {apart:.2} apart, each {start:.2} behind a blade of its own at ({:.1}, {:.1}) — from the rules' reach {:.2} and mate_reach {:.2}{}",
+        MEADOW_AT.x,
+        MEADOW_AT.y,
+        reaches.eat,
+        reaches.mate,
+        if reaches.told { "" } else { " (the game's own: the rules never spoke)" },
+    );
+}
+
 
 /// The selftest's tester (G3). It is a creature by the prelude's reckoning — it has to be, because
 /// `garden` is a `Creature` method — and it never moves.
@@ -4023,14 +4195,16 @@ fn answer_spawn<M: 'static>(
 }
 
 /// What `world.rb` hands the game once, at the start: **the numbers a rule keeps but the game
-/// has to build or draw with**. There are three of them, and the test for whether one belongs
-/// here is whether the thing that needs it is Rust: the sun is drawn here, and a creature's body
-/// is made here.
+/// has to build or draw with**. There are five of them, and the test for whether one belongs
+/// here is whether the thing that needs it is Rust: the sun is drawn here, a creature's body is
+/// made here, and the selftest's meadow corner is *placed* here (2026-09-18) — which is what the
+/// last two are for, and the reason they are a handover rather than a copy of two numbers in this
+/// source.
 ///
 /// Every field is an `Option` and `#[serde(default)]`, so a `world.rb` that says nothing about
-/// the sun, or about children, is not an error — it leaves the game on its own numbers
-/// ([`DAY_LENGTH`], [`CHILD_HUNGER`], [`POP_MAX`]), which is also what a `world.rb` that will not
-/// compile leaves it on.
+/// the sun, or about children, or about how close is close enough, is not an error — it leaves
+/// the game on its own numbers ([`DAY_LENGTH`], [`CHILD_HUNGER`], [`POP_MAX`], [`REACH`],
+/// [`MATE_REACH`]), which is also what a `world.rb` that will not compile leaves it on.
 #[derive(Deserialize, Debug, Default)]
 struct RuleBook {
     #[serde(default)]
@@ -4039,6 +4213,10 @@ struct RuleBook {
     child_hunger: Option<f32>,
     #[serde(default)]
     pop_max: Option<f32>,
+    #[serde(default)]
+    reach: Option<f32>,
+    #[serde(default)]
+    mate_reach: Option<f32>,
 }
 
 /// **The question the world's script asks that costs no frame at all** (W1): `garden.within`.
@@ -4198,6 +4376,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     let mut day_length: Option<f32> = None;
     let mut child_hunger: Option<f32> = None;
     let mut pop_max: Option<usize> = None;
+    let mut reaches: Option<(Option<f32>, Option<f32>)> = None;
     // W2: what the rules said this frame, carried out of the world's VM and into the creatures'
     // below. It is collected rather than published on the spot because publishing needs the
     // *other* `ScriptWorld`, and this scope is holding the world's.
@@ -4220,7 +4399,8 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                     let asked = request
                         .value(0)
                         .ok_or_else(|| {
-                            "rules wants a Hash: day_length:, child_hunger:, pop_max:".to_string()
+                            "rules wants a Hash: day_length:, child_hunger:, pop_max:, reach:, mate_reach:"
+                                .to_string()
                         })
                         .and_then(|v| {
                             sabiruby_serde::from_value::<RuleBook>(&mut scripts.vm, v)
@@ -4253,6 +4433,24 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                                 }
                                 Some(n) => pop_max = Some(n as usize),
                                 None => {}
+                            }
+                            // the two distances (2026-09-18). A reach of nothing is a mouth that
+                            // can never touch a blade, and a `mate_reach` of nothing is a garden
+                            // where two creatures would have to stand in the same spot: both are
+                            // rules the garden could be given, but neither is a place the meadow
+                            // corner can be built out of, so they are refused where the other
+                            // three are. **Both are taken together**, even where one is `nil`:
+                            // the pair is what says "the rules have spoken" ([`Reaches::told`]),
+                            // and a `world.rb` that names neither still says that much.
+                            for (n, what) in [(book.reach, "reach"), (book.mate_reach, "mate_reach")] {
+                                if let Some(n) = n
+                                    && n <= 0.0
+                                {
+                                    wrong = Some(format!("a {what} of {n} is no distance at all"));
+                                }
+                            }
+                            if wrong.is_none() {
+                                reaches = Some((book.reach, book.mate_reach));
                             }
                             match wrong {
                                 Some(why) => scripts.answer(&request, Answer::Text(why)),
@@ -4364,6 +4562,16 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
         if let Some(cap) = pop_max {
             births.cap = cap;
         }
+    }
+    if let Some((eat, mate)) = reaches {
+        let mut reaches = world.resource_mut::<Reaches>();
+        if let Some(eat) = eat {
+            reaches.eat = eat;
+        }
+        if let Some(mate) = mate {
+            reaches.mate = mate;
+        }
+        reaches.told = true;
     }
     if let Some(why) = refused
         && let Some(mut test) = world.get_resource_mut::<SelfTest>()

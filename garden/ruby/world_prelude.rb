@@ -160,6 +160,17 @@ class World
   def child_hunger = nil
   def pop_max = nil
 
+  # And the two **distances** the game has to know about, for the same reason and with the same
+  # default of nothing (`REACH`, `MATE_REACH` in `main.rs`): how far from a blade a creature may
+  # eat it, and how close two well-fed creatures have to be before the rules tell them about each
+  # other. The game does not use either one to *decide* anything — deciding is what this file is
+  # for — it uses them to **place** the selftest's meadow corner, which is the one spot in the
+  # garden built so that two beetles certainly meet. Where those distances are is a fact about
+  # these rules, so the corner has to follow them rather than keep a copy
+  # (`docs/worklog/2026-09-18-corner-and-selftest.md`).
+  def reach = nil
+  def mate_reach = nil
+
   # What the rules are where `world.rb` did not say. A world that defines no `each_frame` is a
   # world that stands still, which is also what a `world.rb` that will not compile leaves behind
   # (the game says so on the HUD rather than refusing to start).
@@ -292,8 +303,10 @@ def run_world
   #
   # The sun is drawn in Rust and a creature's body is made in Rust, so those three numbers have
   # to cross: how long a day is, what a newborn's meter says, and how many creatures the game
-  # will make at all. Everything else in `world.rb` is read in `world.rb`. A world that says
-  # nothing about one of them sends `nil` and the game keeps its own (`main.rs`, `RuleBook`).
+  # will make at all. The last two are the **distances**, and they cross for a fourth thing the
+  # game builds: the selftest's meadow corner stands where `reach` and `mate_reach` put it
+  # (2026-09-18). Everything else in `world.rb` is read in `world.rb`. A world that says nothing
+  # about one of them sends `nil` and the game keeps its own (`main.rs`, `RuleBook`).
   #
   # It is the one question in this file that is asked for its answer's sake: a number the game
   # will not take (a day of no seconds) comes back as the sentence saying why, in the log.
@@ -301,6 +314,8 @@ def run_world
     day_length: klass.day_length,
     child_hunger: being.child_hunger,
     pop_max: being.pop_max,
+    reach: being.reach,
+    mate_reach: being.mate_reach,
   )
   Rubevy.log "world: #{answer}" unless answer == true
 
