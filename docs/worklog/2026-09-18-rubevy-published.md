@@ -128,3 +128,18 @@ rev が `7be7b86f` → `08d8e785` に進んだうえ syn・rustix・zlib-rs な�
 ## 残り
 
 `cargo update -p rubevy`、main への merge・push、Pages の CI を見るところまでは本体（P3）。
+
+## 追記（本体、P3）— rubevy を push したあとの lock
+
+rubevy を main に merge して push（`2d9eb92`）、`cargo publish` で 0.0.1 を公開、タグ `v0.0.1`。
+そのあとこの worktree の一時 `.cargo/config.toml` を消し、`git checkout -- Cargo.lock` →
+`cargo update -p rubevy`。lock の差は rubevy の `source` が `e7b3eb52` → `2d9eb922` になった
+1 行と、cargo が一緒に選び直した `windows-sys 0.61.2` → `0.60.2` の 5 行（Windows 専用の依存で、
+PC 版（Linux）にもブラウザ版にも入らない）。
+
+* `grep -m1 -o 'github.com/sabiruby/sabiruby#[0-9a-f]*' Cargo.lock` → `…#7be7b86f…`（`pages.yml` は無変更）
+* `cargo tree -i sabiruby` → `sabiruby v0.5.2 (https://github.com/sabiruby/sabiruby#7be7b86f)` の 1 つ
+* `cargo test --workspace` → 18 passed / 0 failed
+
+wasm の確認（上の表）は `../rubevy-wt-publish` の path で取ったもので、`2d9eb92` との差は
+rubevy の README の 1 行だけ（コードは同じ）なので取り直していない。公開版は Pages の CI の結果で見る。
