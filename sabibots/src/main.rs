@@ -337,7 +337,10 @@ fn main() {
                     ..default()
                 }),
                 ArenaPlugin::default(),
-                EditorPlugin,
+                // H2: the editor, with the lexer behind its colours. Which lexer is
+                // `platform.rs`'s to know — the compiler linked in on a PC,
+                // `window.sabibotsHighlight` in a page.
+                EditorPlugin::with_highlighter(platform::highlight),
                 VmInspectorPlugin,
                 // G6: the `H` panel, and with it the Japanese font (`rubevy_arena::guide`)
                 GuidePlugin,
@@ -943,6 +946,17 @@ fn selftest(
             test.at = now + 0.5;
         }
         1 => {
+            // H2. Both robots' files hold a `def run`, so one `find` reaches a keyword the lexer
+            // has to have seen. `drawn_kind` goes the whole way through the panel's own
+            // `listing()` and reads the colour back out of the `LayoutJob`: what this says is
+            // "it is *painted* in the keyword colour", not "the table says 1". This is the same
+            // line the garden's window checks have, and the panel drawing it is the same crate.
+            let def = editor.text.find("def ").unwrap_or(usize::MAX);
+            let kind = rubevy_arena::editor::drawn_kind(&editor, def);
+            ok(
+                kind == Some(1),
+                &format!("`def` in the listing is painted in the keyword colour (kind {kind:?})"),
+            );
             editor.text = editor.text.replace("sleep 0.05", "sleep 0.5");
             ok(editor.changed(), "typing marks the text edited");
             editor.action = Some(EditorAction::Apply);

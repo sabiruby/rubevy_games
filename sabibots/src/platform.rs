@@ -52,6 +52,13 @@ mod imp {
         sabiruby_compiler::compile(src.as_bytes(), &opts).map_err(|e| format!("{name}: {e}"))
     }
 
+    /// **What kind each byte of the source is** (0..=8), for the editor's colours: Prism's lexer
+    /// and a pass over the tree, in the compiler that is already linked in here. It never fails
+    /// — a half-typed file classifies as far as it got — so there is no `Result`.
+    pub fn highlight(src: &str) -> Vec<u8> {
+        sabiruby_compiler::highlight(src.as_bytes())
+    }
+
     /// A seed for a match that did not name one.
     pub fn clock_seed() -> u64 {
         std::time::SystemTime::now()
@@ -83,6 +90,12 @@ mod imp {
         /// compiler's message.
         #[wasm_bindgen(catch, js_name = sabibotsCompile)]
         fn js_compile(src: &str) -> Result<js_sys::Uint8Array, JsValue>;
+
+        /// `window.sabibotsHighlight(source)`, defined by the page beside the compiler: one kind
+        /// per source byte. `catch` because a page built before H2 does not define it at all,
+        /// and a missing global is a `ReferenceError` at the call.
+        #[wasm_bindgen(catch, js_name = sabibotsHighlight)]
+        fn js_highlight(src: &str) -> Result<js_sys::Uint8Array, JsValue>;
     }
 
     /// The files have no directory; their paths start with this, as the built-in table's do.
@@ -125,6 +138,21 @@ mod imp {
         js_compile(src)
             .map(|bytes| bytes.to_vec())
             .map_err(|e| format!("{name}: {}", e.as_string().unwrap_or_else(|| format!("{e:?}"))))
+    }
+
+    /// **The editor's colours, from the page's bridge** — and the default kind for every byte if
+    /// there is no bridge to ask.
+    ///
+    /// A game can be opened from a page that is older than this function (the site publishes one
+    /// copy of `sabi.js` per game and a browser holds pages in its cache), and a table of the
+    /// wrong length is not a table about *this* text. Neither is worth a black screen for: both
+    /// answer zeroes, which is the kind the listing painted everything before there were any
+    /// colours (`docs/worklog/2026-09-18-web-black-screen.md` is what a panic here costs).
+    pub fn highlight(src: &str) -> Vec<u8> {
+        match js_highlight(src) {
+            Ok(kinds) if kinds.length() as usize == src.len() => kinds.to_vec(),
+            _ => vec![0; src.len()],
+        }
     }
 
     pub fn clock_seed() -> u64 {

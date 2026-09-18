@@ -1514,7 +1514,11 @@ fn main() {
                 RubevyPlugin::<World>::for_vm(platform::assets_dir()),
                 // G4: the editor and the VM panel, both `rubevy-arena`'s — the same two SabiRuby
                 // Battle uses. They bring `bevy_egui` between them.
-                EditorPlugin,
+                //
+                // H2: with the lexer behind the editor's colours. Which lexer is `platform.rs`'s
+                // to know — the compiler linked in on a PC, `window.gardenHighlight` in a page —
+                // and the panel only ever sees one kind per byte.
+                EditorPlugin::with_highlighter(platform::highlight),
                 VmInspectorPlugin,
                 // G6: the `H` panel, and with it the Japanese font every egui panel in the game
                 // now has as a fallback (`rubevy_arena::guide`)

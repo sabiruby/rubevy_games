@@ -1322,6 +1322,18 @@ pub fn window_selftest(
                 editor.file == "beetle.rb" && editor.text.contains("creature \"Beetle\""),
                 "the editor shows the file of the creature that was clicked",
             );
+            // H2. `beetle.rb` opens with a comment in English and holds `def hungry_below`, so
+            // one `find` reaches a keyword the lexer has to have seen. `drawn_kind` goes the
+            // whole way through the panel's own `listing()` and reads the colour back out of the
+            // `LayoutJob`, so what this says is "it is *painted* in the keyword colour" rather
+            // than "the table says 1" — without a pixel, which a check with no screen cannot
+            // read anyway.
+            let def = editor.text.find("def ").unwrap_or(usize::MAX);
+            let kind = rubevy_arena::editor::drawn_kind(&editor, def);
+            ok(
+                kind == Some(1),
+                &format!("`def` in the listing is painted in the keyword colour (kind {kind:?})"),
+            );
             editor.text = editor.text.replace("sleep 0.2", "sleep 0.9");
             ok(editor.changed(), "typing marks the text edited");
             test.insn = spent();

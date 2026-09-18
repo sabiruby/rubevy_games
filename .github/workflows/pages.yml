@@ -17,8 +17,12 @@ concurrency:
   group: pages-${{ github.ref }}
   cancel-in-progress: true
 env:
-  # 3f47c9d: sabi_take_binary, which the page's compile bridge calls
-  PLAYGROUND_REF: 3f47c9d787fb4e36e94d4b976f7e61c3fa82fbec
+  # d72e000: sabi_highlight and Sabi#highlight, which the page's colour bridge calls (H2 of
+  # docs/plans/editor-highlight-plan.md). Older than that and the published game is the only one
+  # without colour, because window.gardenHighlight would not exist. The playground's own module
+  # is built here against the SabiRuby commit below, which is Cargo.lock's — and `highlight()`
+  # arrived in SabiRuby at 7be7b86, so the two have to move together.
+  PLAYGROUND_REF: d72e0002812c0f674189f6429c7770230fd1a70c
   WASI_SDK: "34"
   BINARYEN: "132"
 jobs:

@@ -3,7 +3,8 @@
 //! * [`ArenaPlugin`] — a 2D camera that shows a square arena whatever the window size is.
 //! * [`Hud`] — the line of text at the top, and the per-script panel below it.
 //! * [`CodePanel`] — the script a game is showing, with the line it stands on marked.
-//! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game.
+//! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game,
+//!   in colour where the game hands it a [`Highlighter`].
 //! * [`Guide`] — the in-game explanation (G6), in English or Japanese, that `H` opens. The frame
 //!   and the Japanese font are here; the words are each game's, and G6b's `English | 日本語`
 //!   buttons pick which of the two is drawn.
@@ -27,7 +28,7 @@ pub mod hud;
 pub mod inspect;
 pub mod settings;
 pub use code::{CodePanel, CodePanelPlugin};
-pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin};
+pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin, Highlighter};
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
 pub use inspect::{VmClock, VmInspector, VmInspectorPlugin, Waiting};

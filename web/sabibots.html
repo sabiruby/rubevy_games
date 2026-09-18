@@ -40,6 +40,13 @@ try {
     if (sabi.compile(source, true) !== OK) throw sabi.text();
     return sabi.binary();
   };
+  // The editor's colours (H2). One kind per source byte, 0..8, from the same module's Prism —
+  // the game asks once per edit, not once per frame, and a build of the game older than this
+  // page simply never calls it. It must not throw: the panel is drawn every frame and an
+  // exception crossing back into wasm here would take the canvas with it.
+  window.sabibotsHighlight = (source) => {
+    try { return sabi.highlight(source); } catch (e) { console.error(e); return new Uint8Array(0); }
+  };
   step.textContent = "loading the game…";
   const game = await import("./pkg/game.js");
   setTimeout(() => { status.hidden = true; document.getElementById("sabibots").focus(); }, 0);
