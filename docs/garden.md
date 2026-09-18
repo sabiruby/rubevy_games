@@ -2006,8 +2006,40 @@ and one is about the genome (G2), which is the whole round trip in a single line
 
    ```
    selftest: n/a  a child was born whose genome is its parents' mixed and mutated
-            (not measured: the rules paired nobody in the whole run, so nothing asked `Genome#mix` anything)
+            (not measured: the rules paired nobody in the whole run who could have answered, so nothing asked `Genome#mix` anything)
    ```
+
+   **"Paired" means a pairing that could have produced a child** (2026-09-18), which is not every
+   pairing the rules made. `world.rb` pairs two well-fed creatures of a sort — whatever sort that
+   is — and leaves what to do about it to the creature's own file, in as many words: *"whether a
+   creature does anything at all with the message is its own script's business"*. Two kinds of
+   pairing therefore never had a child in them, and neither is a rule that is broken:
+
+   * **two rabbits.** `ruby/creatures/rabbit.rb` has no `on(:mate)`, so the message reaches
+     nobody. Which species listens is a fact about a file the player may edit, so the game does
+     not keep a table of it: `listens_for` reads it out of the VM, the way the save reads a
+     creature's `@memory`. The task's `@being` is the creature object, its class is the one
+     `creature "Rabbit" do … end` made, and the prelude's `Creature.on` has been pushing
+     `[event, slot]` onto that class's `@handlers` since the file was loaded — two `ivar_get`s
+     and a `real_class_of`, with serde reading the Array of pairs. rubevy cannot be asked
+     instead: a subscription lives in its `HostState` and only its count comes back out.
+   * **a pairing one of whom was gone before the handler could ask.** The beetle's `on(:mate)`
+     reads its partner's genome off the partner's own `Creature` component, and a partner that
+     starved in the frame between the rule speaking and the handler waking hands it nil; the
+     handler stops there and no `garden.spawn` is ever made. `close_courtings` watches every
+     counted pairing until the creature that was told asks the game for a child — whatever the
+     answer — or until one of the two is no longer in the world, and takes the second kind back
+     out of the denominator with a line of its own:
+
+   ```
+   selftest: --   the rules paired two of a species whose file has no on(:mate): nothing was ever going to come of it, and it is not counted
+   selftest: --   the pairing at 1.06 s measured nothing: the partner was gone before the handler could ask for a child
+   ```
+
+   Both are ordinary, not rare: five ninety-second runs made 1 to 7 rabbit pairings each. Shown
+   deliberately, in a garden of nothing but rabbits, the check says `n/a` where the old counting
+   said `FAIL a child was born … (none was, from 5 pairings)`
+   (`docs/worklog/2026-09-18-check-holes.md`).
 
 and two are about the save file (G3 and G5):
 
