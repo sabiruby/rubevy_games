@@ -1310,7 +1310,7 @@ struct SelfTest {
     /// otherwise not be able to say whether the rules had been silent or the scripts had.
     ///
     /// **It is the pairings that could have produced a child**, not every pairing the rules made
-    /// (2026-09-18). Two kinds never could, and neither of them is a rule that is broken:
+    /// (2026-09-18). Three kinds never could, and none of them is a rule that is broken:
     ///
     ///  * a pairing of a species whose file has no `on(:mate)` — the rabbit's — where the
     ///    message reaches nobody. `world.rb` pairs by species and says so in as many words:
@@ -1320,7 +1320,14 @@ struct SelfTest {
     ///    child. Those are counted, and taken back out again when it happens
     ///    ([`close_courtings`]) — which is `courtings_lost`, kept only for the sentence the
     ///    check prints.
+    ///  * a pairing put to a creature that was asleep when the rules spoke. `beetle.rb`'s
+    ///    `on(:mate)` is `next if @asleep` before it is anything else, so a courtship in the
+    ///    night ends where it starts. Never counted (see [`asleep_now`]), and added to
+    ///    `courtings_lost` for the same sentence.
     courtings: u32,
+    /// the pairings that were not measured — asleep when they were told ([`asleep_now`]), or one
+    /// of the two gone before the handler could ask ([`close_courtings`]). It is in no
+    /// denominator; it is there so the check can say *why* it measured nothing
     courtings_lost: u32,
     /// the pairings that have been counted and are still waiting to be measured: who was told,
     /// who it was told about, and when. An entry leaves when that creature asks the game for a
@@ -4587,29 +4594,53 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                     _ => None,
                 })
                 .collect();
+            // read before the pairings are looked at, because it is the stamp on both: when a
+            // counted pairing started waiting, and when a sleeping one was asked and answered
+            // nothing
+            let now = world_clock(world);
             let mut counted: Vec<(Entity, Entity)> = Vec::with_capacity(told.len());
+            // pairings put to somebody who was asleep — out of the denominator, and kept only as
+            // a number for the sentence the check prints when no child was born at all
+            let mut slept_through = 0u32;
             if !told.is_empty() {
                 world.resource_scope(
                     |world: &mut bevy::ecs::world::World, mut creatures: Mut<ScriptWorld>| {
                         for (who, partner) in told {
                             let task = world.get::<ScriptTask>(who).map(|t| t.task());
-                            match task.and_then(|task| listens_for(&mut creatures.vm, task, "mate")) {
-                                Some(false) => info!(
+                            let listens =
+                                task.and_then(|task| listens_for(&mut creatures.vm, task, "mate"));
+                            // **and asleep is the other way a file that does listen answers
+                            // nothing** (2026-09-18). It is read here, in the frame the message is
+                            // carried across, because that is the only moment this side can be
+                            // sure of: the handler wakes a frame later, and by then the answer may
+                            // have changed either way. See [`asleep_now`] for why it is asked of
+                            // the VM rather than worked out from the sky.
+                            let asleep = task.and_then(|task| asleep_now(&creatures.vm, task));
+                            match (listens, asleep) {
+                                (Some(false), _) => info!(
                                     "selftest: --   the rules paired two of a species whose file has no on(:mate): \
                                      nothing was ever going to come of it, and it is not counted"
                                 ),
-                                // listening, or too young to be asked (its script has not reached
-                                // `run_creature`): the check stays strict where it cannot tell
+                                (_, Some(true)) => {
+                                    slept_through += 1;
+                                    info!(
+                                        "selftest: --   the pairing at {now:.2} s measured nothing: \
+                                         the one that was told was asleep"
+                                    );
+                                }
+                                // listening and awake, or too young to be asked (its script has
+                                // not reached `run_creature`): the check stays strict where it
+                                // cannot tell
                                 _ => counted.push((who, partner)),
                             }
                         }
                     },
                 );
             }
-            let now = world_clock(world);
             let mut test = world.resource_mut::<SelfTest>();
             test.season_told = test.season_told || season;
             test.courtings += counted.len() as u32;
+            test.courtings_lost += slept_through;
             test.courtings_open.extend(counted.into_iter().map(|(who, partner)| (who, partner, now)));
         }
         let mut creatures = world.resource_mut::<ScriptWorld>();
@@ -4945,6 +4976,32 @@ fn listens_for(vm: &mut Vm, task: ObjId, event: &str) -> Option<bool> {
     }
     let handlers = sabiruby_serde::from_value::<Vec<(String, u32)>>(vm, handlers).ok()?;
     Some(handlers.iter().any(|(name, _)| name == event))
+}
+
+/// The instance variable a creature's own file writes when the sun goes down: `on(:night)` sets
+/// it, `on(:day)` clears it, and every other handler in both creature files starts by reading it.
+const ASLEEP_IVAR: &str = "@asleep";
+
+/// **Was the creature that was told asleep in that moment?** (2026-09-18)
+///
+/// `beetle.rb`'s `on(:mate)` is `next if @asleep` before it is anything else, so a pairing the
+/// rules make in the night is one no child was ever going to come out of — the file doing exactly
+/// what it says, not the road from `on(:mate)` to `garden.spawn` being broken. It belongs out of
+/// the eighth check's denominator for the same reason a pair of rabbits does.
+///
+/// It is **asked of the VM**, by the road [`listens_for`] takes and one ivar shallower, rather
+/// than worked out here from the `Sky`. Night and asleep are not the same thing, and this source
+/// is not allowed to guess which: whether to sleep at all is the creature file's own decision, a
+/// creature born after dark has never seen the `on(:night)` that would have set the flag, and a
+/// species whose file has no `on(:night)` walks about all night. A copy of the rule in Rust would
+/// be a second opinion about somebody else's script, and wrong in all three cases.
+///
+/// `None` where there is nothing to ask — no `@being` yet, the task not having reached
+/// `run_creature` — and the caller counts the pairing, exactly as it does for [`listens_for`].
+fn asleep_now(vm: &Vm, task: ObjId) -> Option<bool> {
+    let being = vm.ivar_get(task, BEING_IVAR).obj()?;
+    // nil until the night handler has run for the first time, which reads as awake
+    Some(vm.ivar_get(being, ASLEEP_IVAR).truthy())
 }
 
 /// **The pairings the eighth check is still waiting on, closed one way or the other**
@@ -5981,13 +6038,16 @@ fn stop_when_over(
         // **`courtings` is the pairings that could have produced a child**, which is not every
         // pairing the rules made. `world.rb` pairs two of a sort, whatever sort it is, and leaves
         // what to do about it to the creature's own file — so a pair of rabbits is a pairing with
-        // nobody at the other end of it, and a pair one of whom starved in the frame between the
-        // rule speaking and the handler waking is a handler that read nil and stopped. Neither is
-        // the road from `on(:mate)` to `garden.spawn` being broken, and both used to be counted:
-        // one run in 64 failed this check on two rabbit pairings and no children at all
+        // nobody at the other end of it, a pair told in the night is a handler that reads
+        // `@asleep` and stops on its first line, and a pair one of whom starved in the frame
+        // between the rule speaking and the handler waking is a handler that read nil and
+        // stopped. None of the three is the road from `on(:mate)` to `garden.spawn` being broken,
+        // and all three used to be counted: one run in 64 failed this check on two rabbit
+        // pairings and no children at all
         // (`docs/worklog/2026-09-18-corner-and-selftest.md` §1.6). They are left out now —
-        // [`listens_for`] and [`close_courtings`] — and what is left in the denominator is
-        // pairings where somebody was listening and both of them lived to see it.
+        // [`listens_for`], [`asleep_now`] and [`close_courtings`] — and what is left in the
+        // denominator is pairings where somebody was listening, awake, and both of them lived to
+        // see it.
         match test.born_at {
             Some(at) => ok(
                 test.born_ok,
@@ -6001,7 +6061,10 @@ fn stop_when_over(
          (not measured: the rules paired nobody in the whole run who could have answered{}, so nothing asked `Genome#mix` anything)",
                 match test.courtings_lost {
                     0 => String::new(),
-                    n => format!(" — {n} pairing(s) ended before the handler could ask"),
+                    n => format!(
+                        " — {n} pairing(s) measured nothing (asleep when they were told, or one of \
+                         the two gone before the handler could ask)"
+                    ),
                 }
             )),
             // a pairing was made and no child came of it: that is the road from `on(:mate)` to

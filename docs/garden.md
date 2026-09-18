@@ -2012,8 +2012,8 @@ and one is about the genome (G2), which is the whole round trip in a single line
    **"Paired" means a pairing that could have produced a child** (2026-09-18), which is not every
    pairing the rules made. `world.rb` pairs two well-fed creatures of a sort — whatever sort that
    is — and leaves what to do about it to the creature's own file, in as many words: *"whether a
-   creature does anything at all with the message is its own script's business"*. Two kinds of
-   pairing therefore never had a child in them, and neither is a rule that is broken:
+   creature does anything at all with the message is its own script's business"*. Three kinds of
+   pairing therefore never had a child in them, and none of them is a rule that is broken:
 
    * **two rabbits.** `ruby/creatures/rabbit.rb` has no `on(:mate)`, so the message reaches
      nobody. Which species listens is a fact about a file the player may edit, so the game does
@@ -2023,6 +2023,15 @@ and one is about the genome (G2), which is the whole round trip in a single line
      `[event, slot]` onto that class's `@handlers` since the file was loaded — two `ivar_get`s
      and a `real_class_of`, with serde reading the Array of pairs. rubevy cannot be asked
      instead: a subscription lives in its `HostState` and only its count comes back out.
+   * **a pairing put to somebody who was asleep** (2026-09-18). `beetle.rb`'s `on(:mate)` is
+     `next if @asleep` before it is anything else, so a courtship the rules make in the night ends
+     on the handler's first line — the file doing what it says. Whether a creature is asleep is
+     read out of the VM in the moment the `"mate"` is carried across, by the road `listens_for`
+     takes and one ivar shallower: the task's `@being`, and that object's own `@asleep`
+     (`asleep_now`). It is **not** worked out from the sky, because night and asleep are not the
+     same thing — sleeping at all is the creature file's decision, a creature born after dark has
+     never heard the `on(:night)` that would have set the flag, and a species whose file has no
+     `on(:night)` walks about all night.
    * **a pairing one of whom was gone before the handler could ask.** The beetle's `on(:mate)`
      reads its partner's genome off the partner's own `Creature` component, and a partner that
      starved in the frame between the rule speaking and the handler waking hands it nil; the
@@ -2034,11 +2043,14 @@ and one is about the genome (G2), which is the whole round trip in a single line
    ```
    selftest: --   the rules paired two of a species whose file has no on(:mate): nothing was ever going to come of it, and it is not counted
    selftest: --   the pairing at 1.06 s measured nothing: the partner was gone before the handler could ask for a child
+   selftest: --   the pairing at 25.44 s measured nothing: the one that was told was asleep
    ```
 
-   Both are ordinary, not rare: five ninety-second runs made 1 to 7 rabbit pairings each. Shown
-   deliberately, in a garden of nothing but rabbits, the check says `n/a` where the old counting
-   said `FAIL a child was born … (none was, from 5 pairings)`
+   All three are ordinary, not rare: five ninety-second runs made 1 to 7 rabbit pairings each, and
+   a pairing in the night turned up in two of ten such runs without anything being arranged. Shown
+   deliberately — a garden of nothing but rabbits for the first, a garden put to sleep for the
+   second — the check says `n/a` where the old counting said `FAIL a child was born … (none was,
+   from 5 pairings)` and `FAIL … (none was, from 22 pairings)`
    (`docs/worklog/2026-09-18-check-holes.md`).
 
 and two are about the save file (G3 and G5):
