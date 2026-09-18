@@ -741,8 +741,8 @@ running.
 The handler check needs a fight rather than a mouse, so it runs headless as well: every hit taken
 by a robot that has a handler, is still standing and is not already in the middle of one is noted
 with the way it was facing, and 0.3 s later it must have run a handler and turned by more than
-0.2 rad at some point in between. Two kinds of hit are not counted at all, and say so with a `--`
-line rather than passing or failing quietly:
+0.2 rad at some point in between. Three kinds of hit are not counted at all, and say so with a
+`--` line rather than passing or failing quietly:
 
 * **a robot destroyed inside those 0.3 s** — the game takes its task away and zeroes its
   controls, so it is not a robot that failed to swerve;
@@ -750,6 +750,22 @@ line rather than passing or failing quietly:
   old task is terminated and the new one subscribes afresh, so a `hit` published in between
   reaches nobody and a swerve already under way is cut off with it. What the check watches is the
   task the robot's behaviour is running: a different one is a different behaviour.
+* **any robot's hit, while the editor's checks are handing behaviours out** (2026-09-18). The
+  test above is about the robot that was hit, and that is not enough: `Apply to all` reaches
+  every robot on the file and a restart reaches all four, so a hit taken by *another* robot loses
+  the same 0.3 s for the same reason — and the robot that was hit is usually not the one the
+  editor is showing. The moments come from `EditChecks`, which is where the steps that press the
+  buttons write down when they pressed them and when the last replacement was seen to have
+  landed; the handler check reads it and excludes every robot over that span. The window asked
+  about is the same 0.3 s. It is a resource of its own because the two checks do not run
+  together — headless has no editor's checks, and an empty `EditChecks` excludes nothing.
+
+  This is what made the browser page fail one run in four: `FAIL 3 blue/scout ran a handler
+  within 0.3 s of the hit at 3.78 s`, where 3.78 s is between the checks' Revert (3.5 s) and
+  their restart (4.0 s). Driven deliberately — `Apply to all` pressed every half second from 10 s
+  to 30 s of a match that is really being fought — two runs in three turned up a hit the old
+  counting would have called `ran=false`, one of them on a robot that was not the one being shown.
+  Eight browser runs after the change: no FAIL, no page error.
 
 At the end, every robot that has been down for more than half a second must have had as many
 handler tasks end as it registered handlers.

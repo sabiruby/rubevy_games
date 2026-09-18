@@ -418,7 +418,12 @@ fn main() {
     let checks_asked = platform::selftest_asked();
     if checks_asked {
         // the handler check wants a fight, not a mouse, so it runs in both modes
-        app.init_resource::<HandlerTest>().add_systems(Update, handler_selftest);
+        // `EditChecks` is read by the handler check and written by the editor's checks below.
+        // It is initialised for both modes, because headless has no editor's checks and an empty
+        // one excludes nothing.
+        app.init_resource::<HandlerTest>()
+            .init_resource::<EditChecks>()
+            .add_systems(Update, handler_selftest);
     }
     if checks_asked && headless.is_none() {
         // before `inspect_keys`, so a key it presses is still `just_pressed` when that reads it
@@ -911,6 +916,66 @@ struct SelfTest {
     deadline: f32,
 }
 
+/// **What the editor's checks are doing to the arena's behaviours, where the handler check can
+/// read it** (2026-09-18).
+///
+/// [`selftest`] above drives the editor's buttons: Apply, Apply to all, Revert, and then a
+/// restart of the whole match. Every one of those takes a running behaviour away and starts
+/// another in its place — `do_editor_actions` calls `restart` on each robot it reaches, and
+/// `restart_match` builds four new ones — and a behaviour that has just been started has not
+/// subscribed to `hit` yet, while the one it replaced had its swerve cut off mid-turn.
+///
+/// [`handler_selftest`] is measuring exactly that 0.3 s, and it already declined to count a hit
+/// on a robot **whose own** task had changed. That is not enough: `Apply to all` reaches every
+/// robot on the file and a restart reaches all four, so a hit taken by *another* robot loses its
+/// window just as completely, and the one that was hit is often not the one the editor is
+/// showing. That is the FAIL a browser run turned up one time in four — `3 blue/scout ran a
+/// handler within 0.3 s of the hit at 3.78 s`, where the checks were between Revert (3.5 s) and
+/// the restart (4.0 s) — and it is reachable on a PC with a window open too
+/// (`docs/worklog/2026-09-18-corner-and-selftest.md` §2.4).
+///
+/// So the moments are published here, in one place, rather than worked out twice: each step that
+/// replaces a behaviour writes down when it asked for it, and the step that sees the restart's
+/// four robots standing there closes the span. `handler_selftest` reads it and excludes every
+/// robot's hits over that span. **No threshold is moved**: the 0.3 s window is the same 0.3 s,
+/// and what changes is which hits are inside a window this check can answer for.
+///
+/// It is a resource of its own rather than a field of [`SelfTest`] because the two checks do not
+/// run together: the handler check runs headless as well, where the editor's checks are not
+/// registered at all. There it stays empty, and nothing is excluded.
+#[derive(Resource, Default)]
+struct EditChecks {
+    /// every step that replaces a running behaviour, in the order they happen: when it was asked
+    /// for, and what it was
+    swaps: Vec<(f32, &'static str)>,
+    /// when the last of them was seen to have landed — the restart's four robots standing there.
+    /// `None` while the checks are still swapping, which is the honest answer: the game has not
+    /// been asked whether a replacement has taken, and until it is seen the span is still open.
+    settled: Option<f32>,
+}
+
+impl EditChecks {
+    fn asked(&mut self, at: f32, what: &'static str) {
+        self.swaps.push((at, what));
+    }
+
+    fn landed(&mut self, at: f32) {
+        self.settled = Some(at);
+    }
+
+    /// What the checks were doing to the arena's behaviours at any moment between `from` and
+    /// `to`, if they were doing anything. `None` where they had not started, had finished, or
+    /// were never registered at all.
+    fn over(&self, from: f32, to: f32) -> Option<&'static str> {
+        let (first, what) = *self.swaps.first()?;
+        if to < first || from > self.settled.unwrap_or(f32::INFINITY) {
+            return None;
+        }
+        // the nearest one at or before the end of the window, for the line it prints
+        self.swaps.iter().rev().find(|(at, _)| *at <= to).map(|(_, what)| *what).or(Some(what))
+    }
+}
+
 fn selftest(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
@@ -928,6 +993,7 @@ fn selftest(
     walls: Query<&Transform, With<Wall>>,
     arena: Res<ArenaSize>,
     mut restart: ResMut<Restart>,
+    mut edits: ResMut<EditChecks>,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -964,6 +1030,7 @@ fn selftest(
             editor.text = editor.text.replace("sleep 0.05", "sleep 0.5");
             ok(editor.changed(), "typing marks the text edited");
             editor.action = Some(EditorAction::Apply);
+            edits.asked(now, "Apply");
             test.step = 2;
             test.at = now + 0.5;
         }
@@ -976,6 +1043,7 @@ fn selftest(
             ok(on_disk == test.original, "Apply does not touch the file");
             ok(!editor.changed(), "after Apply the text is what the robot runs");
             editor.action = Some(EditorAction::ApplyAll);
+            edits.asked(now, "Apply to all");
             test.step = 3;
             test.at = now + 0.5;
         }
@@ -985,6 +1053,7 @@ fn selftest(
             ok(r4.brain.is_some(), "Apply to all reaches robot 4 (same file)");
             ok(r2.brain.is_none(), "Apply to all leaves robot 2 (another file) alone");
             editor.action = Some(EditorAction::Revert);
+            edits.asked(now, "Revert");
             test.step = 4;
             test.at = now + 0.5;
         }
@@ -997,6 +1066,7 @@ fn selftest(
             let on_disk = platform::read(&r3.file).unwrap_or_default();
             ok(on_disk == test.original, "nothing was written");
             restart.0 = true;
+            edits.asked(now, "Restart");
             test.before = robots.iter().map(|(e, _)| e).collect();
             test.step = 5;
             test.at = now;
@@ -1014,6 +1084,9 @@ fn selftest(
             }
             ok(robots.iter().count() == 4 && fresh == 4, "after a restart there are four robots again, not eight");
             ok(robots.iter().all(|(_, r)| r.hp == 100.0), "every robot starts with full health");
+            // the last of the four replacements has landed: from here the arena's behaviours are
+            // nobody's but the match's again, and a hit is a hit (`EditChecks`)
+            edits.landed(now);
             test.step = 6;
             test.at = now + 1.0;
         }
@@ -1268,6 +1341,7 @@ fn angle_between(a: f32, b: f32) -> f32 {
 fn handler_selftest(
     time: Res<Time>,
     mut test: ResMut<HandlerTest>,
+    edits: Res<EditChecks>,
     robots: Query<&Robot>,
     tasks: Query<&ScriptTask>,
 ) {
@@ -1303,6 +1377,20 @@ fn handler_selftest(
         // three times while the match is being fought.
         if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
             info!("selftest: --   {}'s behaviour was replaced within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
+            continue;
+        }
+        // **Nor any robot at all, while the editor's checks are handing behaviours out**
+        // (2026-09-18). The test above catches the robot the editor was showing; `Apply to all`
+        // reaches every robot on the file and a restart reaches all four, and their hits lose
+        // the same 0.3 s for the same reason — the task that would have run the handler was
+        // terminated and its replacement had not subscribed yet. The moments come from
+        // [`EditChecks`], which is where the steps that press the buttons write them down; the
+        // window asked about is this check's own, and unchanged.
+        if let Some(what) = edits.over(watch.at, watch.at + 0.3) {
+            info!(
+                "selftest: --   the editor's checks were handing out behaviours ({what}) within 0.3 s of the hit on {} at {:.2} s: not counted",
+                robot.name, watch.at
+            );
             continue;
         }
         let ran = robot.handler_runs > watch.runs;
