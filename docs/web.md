@@ -91,15 +91,25 @@ compiler for the browser, as a `wasm32-wasip1` module with wasi-sdk. So each pag
 garden/index.html
   compiler/sabiruby.wasm  (wasm32-wasip1: the compiler, and a VM the game does not use)
       ▲ sabi.js + browser_wasi_shim
-      │ window.gardenCompile(source) → RITE bytes  (sabi_compile, sabi_take_binary)
+      │ window.gardenCompile(source)   → RITE bytes   (sabi_compile, sabi_take_binary)
+      │ window.gardenHighlight(source) → kind bytes   (sabi_highlight, sabi_take_highlight)
   pkg/game_bg.wasm        (wasm32-unknown-unknown: Bevy, egui, rubevy, the SabiRuby VM)
 ```
 
 The compiler module is loaded first and the call is synchronous, so to the game `compile` is an
-ordinary function that returns bytes or an error message — the same shape as on a PC. The only
-thing added to the playground for this was `sabi_take_binary`, the compiled bytes. The module is
-~2.4 MB (0.8 MB gzipped) and carries a VM of its own that the game does not use; a compiler-only
-module would be smaller, and is not worth a second C build yet.
+ordinary function that returns bytes or an error message — the same shape as on a PC. Two things
+have been added to the playground for this: `sabi_take_binary`, the compiled bytes, and — for the
+editor's colours (2026-09-18) — `sabi_highlight` / `sabi_take_highlight`, one kind byte per source
+byte from the same Prism that is already in there. The module is ~2.4 MB (0.8 MB gzipped) and
+carries a VM of its own that the game does not use; a compiler-only module would be smaller, and
+is not worth a second C build yet.
+
+**The colour bridge is allowed to be missing.** A browser holds pages in its cache, and a game can
+be opened from an `index.html` older than the build it loads; `platform::highlight` catches the
+`ReferenceError` and answers zeroes, which is the listing as it was before there was any colour
+(`garden/src/platform.rs`). The page's own side never throws either. A black screen has been paid
+for once here already (`docs/worklog/2026-09-18-web-black-screen.md`) and the editor's colours are
+not worth a second one.
 
 **What the page's compiler cannot pass on is the file's name.** On a PC `platform::compile` hands
 `sabiruby_compiler::Options { filename: … }` the creature's own file, and the debug info in the
@@ -111,8 +121,13 @@ past the prelude's length, not by the name (`watch_minds`) — so this is a labe
 Giving the bridge a name is a change to sabiruby-playground.
 
 In CI (`.github/workflows/pages.yml`) the compiler module is built from sabiruby-playground at a
-pinned commit, against the SabiRuby commit `Cargo.lock` names for the games, so the bytecode the
-compiler writes and the VM that reads it come from the same source.
+pinned commit (`PLAYGROUND_REF`, `d72e000` since 2026-09-18), against the SabiRuby commit
+`Cargo.lock` names for the games, so the bytecode the compiler writes and the VM that reads it
+come from the same source. **The two pins move together.** A bridge the game calls has to exist in
+the pinned playground — `sabi_take_binary` was why the pin moved last time and `sabi_highlight` is
+why it moved this time — and the playground is built here against the games' own SabiRuby, so a
+`sabiruby_compiler` function that arrived after `Cargo.lock`'s commit would not compile in CI even
+though it compiles at home.
 
 ## Keys
 
@@ -189,9 +204,37 @@ re-measured:
 |---|---|---|---|---|
 | `sabibots/pkg/game_bg.wasm` | 38,772,420 | 9,877,837 | 34,794,885 | 10,593,843 |
 | `garden/pkg/game_bg.wasm` | 39,250,403 | 10,011,507 | 35,216,938 | 10,715,122 |
-| `compiler/sabiruby.wasm` (each game's copy) | 2,435,191 | 835,234 | — | — |
+| `compiler/sabiruby.wasm` (each game's copy) | 2,445,509 | 840,268 | — | — |
 | `sabibots/assets/` (16 files) | 234,202 | | | |
 | `garden/assets/` (10 files) | 322,924 | 64,744 | | |
+
+The compiler module's row is the playground at `d72e000` (2026-09-18), which is what
+`PLAYGROUND_REF` pins; it was 2,435,191 / 835,234 at `3f47c9d`, and **+10,318 raw / +5,034
+gzipped** of that is `sabi_highlight` and the SabiRuby the playground was rebuilt against.
+Of it, +1,736 / +493 is the export itself (measured in sabiruby-playground's
+`docs/worklog/2026-09-18-highlight.md`, the same tree built with and without it).
+
+### What the editor's colours cost (2026-09-18)
+
+The game module, `wasm-opt -Os`, both games built from the same tree with and without the change —
+the only difference being the commit the code came from, so the VM and the toolchain are held
+still:
+
+| | without the colours | with them | delta |
+|---|---|---|---|
+| `sabibots/pkg/game_bg.wasm` | 34,934,405 | **34,937,939** | **+3,534** (+0.010%) |
+| its `gzip -9` | 10,675,858 | **10,677,505** | **+1,647** |
+| `garden/pkg/game_bg.wasm` | 35,642,569 | **35,647,958** | **+5,389** (+0.015%) |
+| its `gzip -9` | 10,881,862 | **10,885,349** | **+3,487** |
+
+A few kilobytes, because the browser build adds no lexer — the lexer is in the compiler module,
+which the page has loaded anyway. What is in the game module is the nine colours, the run loop and
+one more `wasm_bindgen` import. On a PC the reference compiler was already linked in and
+`highlight()` is a second entry point into it, so the cost there is smaller still.
+
+(These two rows are bigger than the `wasm-opt` column above them because everything else moved in
+between — G6's font, G9, the leftovers, and SabiRuby 0.5.0 → 0.5.2. The table above was not
+re-measured; the pair here was, on one machine, minutes apart, and only the pair is a delta.)
 
 The garden's assets are the Kenney models: `animal-crab.glb` 150,768, `animal-bunny.glb` 131,568,
 `grass.glb` 11,496, `Textures/colormap.png` 10,915, `tree_default.glb` 9,428, `plant_bush.glb`

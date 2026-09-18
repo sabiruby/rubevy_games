@@ -521,6 +521,15 @@ Two details that make it a listing rather than a text box: it never wraps (a cus
 the wrap width to infinity), so each row of the gutter is one line of the file; and the shading is a
 background on that line's text section, so it moves with the text as the file is edited.
 
+**And it is in colour** (2026-09-18). The shading is the background and the kinds are the
+foreground, and the two do not fight: the picture above has `sleep 0.05` on the hottest line of
+`scout.rb`, in the band and readable. Nothing in the game reads Ruby to decide the kinds — the
+classification is Prism's, the same lexer the compiler uses, through
+`sabiruby_compiler::highlight` on a PC and through `window.sabibotsHighlight` in a browser, one
+byte per source byte. The colours and why they are those colours are in
+`crates/rubevy-arena/src/editor.rs`. The lexer runs when the text changes, not once a frame, and a
+page too old to have the bridge gets the listing as it was before there was any colour.
+
 The editor lives in `rubevy-arena` (`Editor`, `EditorPlugin`) so the other games get it for free.
 The older read-only panel (`CodePanel`, Bevy UI only) is still there for a game that does not want
 egui.

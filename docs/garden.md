@@ -1072,6 +1072,18 @@ species' colour: the two species wear the colour of the model standing in the gr
 rules are not a thing in the grass. It goes dim when `world.rb` will not compile, which is the
 same thing `dim` says about a species with nothing alive running it.
 
+**The listing is in colour** (2026-09-18). The words are painted by kind — keyword, string,
+comment, number, symbol, constant, variable, method name — and nothing in the game reads Ruby to
+decide which: the classification is Prism's, the same lexer the compiler uses, through
+`sabiruby_compiler::highlight` on a PC and through `window.gardenHighlight` in a browser. It
+answers one byte per source byte, and the panel paints a run wherever that byte changes. The
+colours and why they are those colours are in `crates/rubevy-arena/src/editor.rs`; the short of it
+is that nothing is orange or amber, because the heat band already is, and that a method name is
+the quietest of them, because in Ruby an operator is a method call and so is `[]`.
+
+The lexer runs when the text changes, not once a frame. A page too old to have the bridge, or a
+game built with no highlighter at all, gets the listing as it was before there was any colour.
+
 The rules get no band and no shading. Those come from `watch_minds`, which reads the line a
 *creature's* task stands on; the world's script has no `Mind`, and a pass that runs top to bottom
 once a frame has no line it keeps coming back to. What it has instead is the HUD's line —
