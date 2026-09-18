@@ -6,8 +6,8 @@
 
 | コミット | 何を |
 |---|---|
-| （下） | 1. 8 番の隅を `reach` と `mate_reach` から組み立てる |
-| （下） | 2. Battle のブラウザ版でも `?selftest` で編集チェックが走る |
+| `6da9fd4` | 1. 8 番の隅を `reach` と `mate_reach` から組み立てる |
+| `f03d9dd` | 2. Battle のブラウザ版でも `?selftest` で編集チェックが走る |
 
 **閾値は 1 つも動かしていない。** `world.rb` の規則は 1 行も変えていない（変えたのは
 「game に渡る数が 2 つ増えた」ことを言うコメントだけ）。`unsafe` は 0 のまま。
@@ -337,3 +337,28 @@ selftest: two hungry beetles 1.34 apart, each 2.73 behind a blade of its own at 
 §1 の隅はブラウザでも同じ数で建つ（`world.rb` は `build.rs` でモジュールに埋め込まれ、
 `garden.rules` の道はプラットフォームに関係が無い）。43 行は `2026-09-18-editor-highlight.md`
 が測った 43 行と同じ。
+
+
+---
+
+## 3. 2 件が入ったあとの確認
+
+```
+$ cargo build --release -p garden -p sabibots
+    Finished `release` profile [optimized] target(s) in 10.48s
+$ cargo clippy -p garden -p sabibots -p rubevy-arena
+warning: `rubevy-arena` (lib) generated 2 warnings      （着手前と同じ）
+warning: `garden` (bin "garden") generated 13 warnings  （着手前と同じ）
+warning: `sabibots` (bin "sabibots") generated 12 warnings （着手前と同じ）
+$ cargo test -p garden --release
+test result: ok. 6 passed; 0 failed
+$ grep -rn unsafe garden/src/ sabibots/src/ crates/ | wc -l
+0
+```
+
+* 箱庭 `--headless 90` ×5（並列）: **13 判定すべて ok**、FAIL 0 / `n/a` 0。
+* 箱庭 `--headless 20` ×64（8 本並列、`TMPDIR` 別）: 8 番 **ok 64 / FAIL 0 / n/a 0**。
+* Battle `--headless 30` ×1: FAIL 0（当たり 26 発、`26/26` が 2 行）。
+* ブラウザ（Chromium、swiftshader）: `garden/?selftest` は pageerror 0 / ok 43 / FAIL 0、
+  `sabibots/?selftest` は pageerror 0 / 固定 31 行 + 当たり 2 行ずつ。
+  どちらも `requestfailed` 0、`console.error` 0、canvas 1280×800。
