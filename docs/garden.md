@@ -53,7 +53,7 @@ hand against volumes of its own.
 | left-drag | turn the camera round the garden |
 | right-drag, or Shift and left-drag | slide the view over the field (G6) |
 | W A S D, or the arrow keys | the same, without a mouse (G6) |
-| wheel | closer / further away: a tenth of the distance per notch (G6) |
+| wheel | closer / further away: a tenth of the distance per notch (G6) — unless the pointer is over a panel, and then it is the panel's (2026-09-18) |
 | Home | put the camera back where it started (G6) |
 | click a creature | look at it: the HUD marks it, the editor shows its file, the VM panel its task |
 | Tab | the next creature |
@@ -70,6 +70,27 @@ hand against volumes of its own.
 In a browser the same keys do the same things (the page takes F5 back from the browser, which
 would otherwise reload it), and the two buttons in the HUD are what a player who has not read this
 finds. `docs/web.md` has the rest. The window itself is described under **The window (G4)** below.
+
+### A wheel turned over a panel is the panel's (2026-09-18)
+
+The author scrolled the editor's listing and the garden zoomed out underneath it. A drag inside a
+panel had been the panel's since G4 and a key typed into the editor since G4; the wheel was the one
+gesture nobody had asked egui about, so `orbit_camera` read every `MouseWheel` while egui read the
+same message for its `ScrollArea`, and both happened at once.
+
+What is asked now is `wants_pointer_input() || is_pointer_over_area()`, which is a wider question
+than the drag's was: egui's own `wants_pointer_input` is `is_using_pointer() || (is_pointer_over_area()
+&& no button is down)`, so a pointer resting on a panel with a button held is not "wanted" by egui
+and a wheel turned there would have come back to the camera. Over an area is over an area.
+
+Widening it would have cost the drags something — a turn begun on the grass and swept across the
+editor would stop dead half way — so **a drag is decided when the button goes down**: one that
+began on the garden stays the camera's wherever the pointer goes afterwards, and one that began on
+a panel never becomes the camera's however far it is dragged out. That is what the old code did by
+accident, through the `any_down` in egui's own definition; it is said on purpose now.
+
+SabiRuby Battle reads no mouse at all — its camera is fixed and the arena is scaled to the window
+— so there was nothing of the same shape to fix there.
 
 ### The wheel had two steps in it, and the unit is why (G6)
 
@@ -992,6 +1013,29 @@ the host a whole frame. Nothing in the game needed fixing.
 What has not been pressed is the key itself; this machine has no GPU driver and the window goes
 through the container in `docker/` (`docs/wsl-gpu.md`).
 
+**A creature read out of a file is told what the sky is doing** (2026-09-18). `"night"` and
+`"day"` are published once each, at the turn, to whoever is subscribed at that moment, and a
+creature `load_world` has just built is exactly as deaf as a creature that has just been born: its
+script has a body and has subscribed to nothing. A garden saved at night and opened again
+therefore came back with every creature walking about until morning — the hole the newborns' one
+(`tell_newborns_the_sky`) closed at the other end. Every creature the file makes goes on the same
+`Newborns` list now, and is told two frames later by the same system.
+
+It is told **whatever** the sky is, not only when it is night: "only if `sky.night`" would be a
+second copy of `day_night`'s list of what the sky can say, kept in step by hand, to save one
+publish per creature on a daytime load — and that publish is a `"day"` to a creature that is
+already awake, which is what `on(:day)` does with it in any case. Measured with a save taken at
+35.0 s (night, phase 0.66), loaded back, with every creature's speed printed twice a second:
+
+| | 35.5 s after the load | 36.0 s | 38.6 s |
+|---|---|---|---|
+| before | eleven at `CRUISE` (2.00) | eleven at 2.00 | eleven at 2.00 |
+| after | nine at 0.00, two at 2.19 / 2.00 | **all eleven at 0.00** | all eleven at 0.00 |
+
+The two that are still moving half a second in are the ones a flee handler had the wheel of when
+the word arrived; the handler drops it and they stop. F9 over a running daytime garden does the
+same, and a daytime save loaded back leaves everybody walking.
+
 ## The window (G4, and G9)
 
 Two panels and the garden behind them — and a third, the VM panel, which `F2` opens. Two of the
@@ -1036,6 +1080,34 @@ budget the measurement above chose.
 
 Nothing about the rules is saved to disk until `Ctrl+S`, exactly as with a creature; in a browser
 that is the `localStorage` key `garden:ruby/world.rb`, beside the two the creatures use.
+
+**A text that will not compile says where** (2026-09-18). It used to say `not applied: beetle.rb
+would not compile (see the log)`, and the log's line number was the prelude's length out — the
+beetle's `if hunger < < hungry_below`, which is line 118 of `beetle.rb`, came back as line 600.
+Both files are handed to the compiler as *one program* with their prelude in front
+(`compile_source`, `compile_world_source`), so every line the compiler names is a line of that
+program and not of the file in the panel. The VM panel had always taken the prelude off the frames
+it draws; the status line and the log had not, and those are the two places somebody who has just
+mistyped is looking.
+
+The number is moved in the text rather than asked for again, because in a browser there is nobody
+to ask: `window.gardenCompile(source)` takes a source and nothing else and throws whatever the
+page's compiler says (G5's third finding). Both builds write `FILE:LINE:COL: message`, one
+diagnostic to a line, so the whole of the fix is finding the first `:LINE:COL:` on a line and
+subtracting (`in_the_authors_lines`). A line at or below the prelude's own length is an error *in
+the prelude*, and is named as one — `beetle.rb: prelude.rb:47:3: syntax error` — rather than
+printed as a number the author cannot find. The status carries the first error whole:
+
+```
+not applied — beetle.rb: beetle.rb:118:19: syntax error, unexpected '<'; expected an expression after the operator
+not applied — world.rb: world.rb:128:14: syntax error, unexpected '<'; expected an expression after the operator
+```
+
+Two things the numbers do not promise. An error the compiler places **past the end** of the file —
+an unclosed `do`, say, which it reports at end-of-input — lands one or two lines past the last, on
+the `run_creature` / `run_world` the game appends; the program really does go on there. And in a
+browser the *inner* file name is the page compiler's own (`playground.rb`), because that bridge
+cannot be passed a name; the outer one, which the game writes, is right.
 
 That is one Apply where Battle has two, and the reason is the whole difference between the two
 games. A robot **has** a file: `3 blue/scout` is one robot running `scout.rb`, and "apply to this
@@ -1149,6 +1221,39 @@ because "unreachable" was too strong a word for it: neither game comes near its 
 garden's tick is under 1 ms of the 8 it is given), but a species applied in the editor can be
 given a loop that does.
 
+**`F2` shows the rules when `F3` has opened them** (2026-09-18). Until then the panel could only
+ever be about a creature, and the reason was in `rubevy-arena`: `VmInspector::fill` named
+`ScriptWorld` by its default marker, so the garden's *second* VM — the one `ruby/world.rb` runs in
+— was not a thing it could be handed. The marker is on the method now, so it takes either, and
+`Watched::world` (the flag `F3` already sets for the editor) decides which VM the garden fills it
+from: the two panels stay on the same file, and `Tab` or a click on a creature brings both back.
+
+Everything the panel says about a creature it says about the rules, because none of it was ever
+about creatures. *Why* it is waiting is read off the frames by the same table above — one pass of
+`each_frame` ends on `Rubevy.ask("frame")`, which is the fourth row (a question to the game, named
+by the method that asked, because `Rubevy.ask` is a module function and not a `Rubevy::Proxy`), and
+a timer task made by `every` is the fifth. *Where* is the innermost frame of `world.rb` with the
+world's prelude taken off, which is what `WorldPrelude` is for — the world's half of what a
+creature keeps in its `Mind`, kept as a resource because there is one set of rules, and written
+wherever they are put on so that saving `world_prelude.rb` moves the line numbers with it. The two
+figures are `WorldMeter`'s: the last pass and the middle one.
+
+```
+the rules  world.rb                      the world is running — P to stop it
+waiting for the game to answer `run_world`
+on world.rb:313
+world.rb:313        (block or top level)
+12087 insn/frame · 4 tasks in the VM · VM 0.40 / 8.0 ms
+```
+
+Two things that line says which are worth knowing. `world.rb:313` is one line past the end of the
+file: it is the `run_world` the game appends, and it is the only frame of its own that a task
+parked *between* passes has — inside a pass it is a real line of the rules. And the `VM 0.40 / 8.0
+ms` at the end is still the **creatures'** tick, because that figure is `VmClock`'s and `VmClock`
+measures the first VM; what a pass of the rules costs in milliseconds is on the HUD's own line.
+The same panel is printed after the creatures' in a headless run (`stop_when_over`), which is where
+the block above was read off.
+
 **A creature's handlers are tasks of their own and the panel does not follow them**: it is about
 the `ScriptTask` the entity carries, which is the behaviour. So the event row is what a creature
 whose *own* `run` waits on a subscription would show; in `beetle.rb` as it stands, the `on(:…)`
@@ -1249,9 +1354,9 @@ many tasks the VM holds. The rest is what the window folds under **details**.
 
 `GARDEN_SELFTEST=1` with a window drives the editor the way a click would (by setting
 `Editor::action`) and presses the keys for real, exactly as `SABIBOTS_SELFTEST=1 docker/run.sh` does
-for Battle. Save is left out on purpose, since it writes to the repository. **Forty lines**
-(twenty-nine until W3, twenty-one until G9), all `ok` (through `docker`, lavapipe — and all but the
-W3 eleven in a browser too, at `garden/?selftest`):
+for Battle. Save is left out on purpose, since it writes to the repository. **Forty-two lines**
+(forty until 2026-09-18, twenty-nine until W3, twenty-one until G9), all `ok` (through `docker`,
+lavapipe — and all of them in a browser too, at `garden/?selftest`):
 
 ```
 selftest: ok   the VM panel starts closed
@@ -1294,6 +1399,8 @@ selftest: ok   after Apply the text is what the world runs
 selftest: ok   Revert puts the file's rules back
 selftest: ok   Revert shows world.rb again
 selftest: ok   and nothing is running a text of its own
+selftest: ok   the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: true; camera 42.00 -> 42.00)
+selftest: ok   and with the panel closed the same wheel in the same place zooms (egui holds the pointer: false; camera 42.00 -> 38.18)
 selftest: Rabbit 415v0 — 34 ask round trips, 32 decisions, 472 insn/decision
 ```
 
@@ -1315,6 +1422,18 @@ and the shell wants its prompt back — and `false` in a browser, where `AppExit
 but stops the canvas: winit's wasm loop is no longer pumped, every system stops, and the last frame
 drawn stays on the screen looking like a garden that has quietly stopped taking keys. A page says
 `selftest: done — the garden keeps running` instead and goes on being a garden (`docs/web.md`).
+
+**The last two are the wheel's** (2026-09-18), and they are last because they move the pointer and
+everything above them would rather it stayed where the player left it. There is no way to tell egui
+to pretend the pointer is somewhere, and warping the real cursor wants a desktop that will do it,
+so the check writes the `WindowEvent::CursorMoved` winit would have written — the same kind of
+forgery as the `keys.press(KeyCode::F2)` the other checks are driven by, and the only thing that
+tells egui where the pointer is. It puts it in the middle of the editor's own default rectangle
+(`rubevy_arena::editor::{MARGIN, WIDTH, HEIGHT}`, so the check is not guessing at it), turns one
+notch, and the camera's distance has to be the number it was. Then the editor is closed and the
+same wheel at the same place has to move it — a control, because "the camera did not move" is worth
+nothing on its own, and the line prints whether egui was holding the pointer for the same reason.
+One notch is `42.00 -> 38.18`, which is `1 / 1.10` of the default distance.
 
 The keys are checked **before** the editor, and on purpose: the editor restarts scripts, and a
 check about the scheduler asked after that would be a check about the restart.
@@ -1824,6 +1943,33 @@ and one is about the genome (G2), which is the whole round trip in a single line
    on it, are full because they ate, and are told about each other because they are full and
    standing together. In four consecutive runs the first child arrived at 1.95, 1.96, 2.00 and
    6.42 seconds. Wild pairings happen too, and are counted in the same line.
+
+   **"Standing together" is not what the corner actually arranges** (measured 2026-09-18). A
+   creature eats a plant from `reach` away — `1.1` plus half the plant's size, so 1.8 at
+   `plant_max` — and its script stops walking towards grass the moment its meter passes
+   `hungry_below`. Two beetles approaching one clump from opposite sides therefore stop about 1.8
+   short on each side and stand **up to 3.6 apart** while both eat, where `mate_reach` is 2.0.
+   What pairs them is the wandering they do once fed happening to bring them together, which it
+   does most of the time: over 64 twenty-second runs the corner produced a pairing in 62, and the
+   two it missed had the pair 2.8 and 4.1 apart in the frame they both passed `mate_hunger`, never
+   closer afterwards. Over forty ninety-second runs the first child arrived at 2.15 s at the
+   median and at 61.39 s at the worst — eight of the forty had to wait for a wild pairing.
+
+   The corner is left as it is, because making it certain means putting the two where `reach` and
+   `mate_reach` say they will end up, and both of those numbers live in `ruby/world.rb`, which the
+   player is invited to edit. A geometry worked out in Rust from copies of them would be right
+   until somebody changed the file.
+
+   **A run in which the rules paired nobody says `n/a`** instead, in the shape check 5 has.
+   `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no `"mate"`
+   in it never asked this check its question. A pairing with **no child after it** is still a
+   FAIL: that is the road from `on(:mate)` through `garden.spawn`, and it is this check's to
+   report.
+
+   ```
+   selftest: n/a  a child was born whose genome is its parents' mixed and mutated
+            (not measured: the rules paired nobody in the whole run, so nothing asked `Genome#mix` anything)
+   ```
 
 and two are about the save file (G3 and G5):
 

@@ -586,6 +586,17 @@ struct Breeding {
 #[derive(Component)]
 struct WorldScript;
 
+/// **How many lines stand in front of `world.rb` in the program the world's task runs** (W3+).
+///
+/// A creature keeps this in its `Mind` and the VM panel takes it off every frame it draws
+/// (`VmInspector::fill`). The world has no `Mind` — its script is one task and there is nothing
+/// to tell it apart from — so until the panel could be pointed at the world's VM nobody needed
+/// the number anywhere but inside `compile_world_source`. It is a resource because there is one
+/// set of rules, and it is written wherever they are put on, so that editing `world_prelude.rb`
+/// and saving it moves the panel's line numbers with it.
+#[derive(Resource, Default)]
+pub struct WorldPrelude(pub u32);
+
 /// The selftest's fasting beetle: no script, almost no hunger left.
 #[derive(Component)]
 struct Fasting;
@@ -835,6 +846,12 @@ impl Brains {
 /// The rules' file name, in the one place both the loader and the editor read it from (W3).
 pub const WORLD_FILE: &str = "world.rb";
 
+/// What goes in front of a creature's file, and in front of the world's, in the one program each
+/// is compiled as. They are named because the compiler's line numbers have to be told about them
+/// ([`in_the_authors_lines`]) as well as read from them.
+pub const PRELUDE_FILE: &str = "prelude.rb";
+pub const WORLD_PRELUDE_FILE: &str = "world_prelude.rb";
+
 /// How many seeds `world.rb` asked for this frame (`garden.sprout`), read in `answer_world` and
 /// put in the ground by `sprout_plants` a moment later.
 ///
@@ -953,6 +970,14 @@ impl Default for Births {
 /// So each newborn waits here for its two frames and is then told what the sky is doing, on its
 /// own. It is a list rather than a component because what is waited for is frames of the
 /// creatures' VM, which is the thing the list is counted in.
+///
+/// **A creature read out of a save file is one of these too** (2026-09-18). `load_world` builds a
+/// body and calls `give_mind`, exactly as `children_arrive` does, and the script it hangs there
+/// is exactly as deaf — so a garden saved at night and opened again had every creature walking
+/// about until morning. It goes on the same list and is told by the same system; it is not a
+/// newborn in the world's terms (`Creature::age` is the age it was saved with, and the rules do
+/// not treat it as a child) but it is a newborn in the only sense this list means: a script that
+/// has not heard anything yet.
 #[derive(Resource, Default)]
 struct Newborns {
     /// the creature, and how many frames it has waited
@@ -974,6 +999,8 @@ struct VmReport<'w> {
     meter: Res<'w, WorldMeter>,
     trouble: Res<'w, WorldTrouble>,
     world: Res<'w, ScriptWorld<World>>,
+    /// and what the world's own program has in front of it, so the panel's lines are `world.rb`'s
+    prelude: Res<'w, WorldPrelude>,
 }
 
 /// `--headless N`: how long the world may run.
@@ -1649,6 +1676,7 @@ fn main() {
         .init_resource::<Sprouts>()
         .init_resource::<WorldMeter>()
         .init_resource::<WorldTrouble>()
+        .init_resource::<WorldPrelude>()
         // The one thing this game puts in the VM (G2): the `Genome` class and its seven methods.
         // `ScriptWorld::vm` is public and the resource exists as soon as `RubevyPlugin` is added,
         // while no script runs before the first `Update` — so `Startup` is the place and rubevy
@@ -2246,7 +2274,7 @@ fn spawn_world(
         // game for a creature whose genome has no `sight` and reports what it is told. The point
         // is the message — a Hash of the wrong shape has to say what is wrong with it, in the
         // script's own terms, and with serde doing the reading that message is written by nobody.
-        if let Some((handle, _)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb) {
+        if let Ok((handle, _)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb) {
             commands.spawn(Script::new(handle).with_name("Tester").with_priority(120));
             info!("selftest: a tester script will ask for a creature with a gene missing");
         }
@@ -2442,7 +2470,13 @@ fn give_mind(
         Some(text) => compile_source(ruby, species.file(), text, mrb),
         None => compile(ruby, &brains.path(ruby, species), mrb),
     };
-    let Some((handle, prelude_lines)) = compiled else { return };
+    let (handle, prelude_lines) = match compiled {
+        Ok(it) => it,
+        Err(why) => {
+            error!("{why}");
+            return;
+        }
+    };
     let name = format!("{} {}", species.name(), entity);
     commands.entity(entity).insert((
         Script::new(handle).with_name(&name).with_priority(100),
@@ -2472,14 +2506,15 @@ fn give_mind(
 /// so the game reads `.rb` and nothing has to be built ahead of time. The two are compiled as one
 /// program, which is why neither needs a `require`; the answer says how many lines the prelude
 /// added, so a line can be reported in the author's own terms.
-fn compile(ruby: &Path, creature: &Path, mrb: &mut Assets<MrbAsset>) -> Option<(Handle<MrbAsset>, u32)> {
-    let body = match platform::read(creature) {
-        Ok(b) => b,
-        Err(e) => {
-            error!("{e}");
-            return None;
-        }
-    };
+///
+/// The error is the compiler's, already put back into those terms ([`in_the_authors_lines`]) —
+/// the caller logs it and shows it, and there is nothing left for either of them to work out.
+fn compile(
+    ruby: &Path,
+    creature: &Path,
+    mrb: &mut Assets<MrbAsset>,
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let body = platform::read(creature)?;
     let name = creature.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     compile_source(ruby, &name, &body, mrb)
 }
@@ -2491,23 +2526,69 @@ fn compile_source(
     name: &str,
     body: &str,
     mrb: &mut Assets<MrbAsset>,
-) -> Option<(Handle<MrbAsset>, u32)> {
-    let prelude = match platform::read(&ruby.join("prelude.rb")) {
-        Ok(p) => p,
-        Err(e) => {
-            error!("{e}");
-            return None;
-        }
-    };
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let prelude = platform::read(&ruby.join(PRELUDE_FILE))?;
     let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_creature\n");
     let prelude_lines = prelude.lines().count() as u32 + 2;
     match platform::compile(&src, name) {
-        Ok(bytes) => Some((mrb.add(MrbAsset { bytes }), prelude_lines)),
-        Err(e) => {
-            error!("{e}");
-            None
-        }
+        Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), prelude_lines)),
+        Err(e) => Err(in_the_authors_lines(&e, prelude_lines, PRELUDE_FILE)),
     }
+}
+
+/// **Take the prelude off the line numbers a compiler reports** (2026-09-18).
+///
+/// A creature's file and the world's are each handed to the compiler with their prelude in front,
+/// as one program (`compile_source`, `compile_world_source`), so every line the compiler names is
+/// a line of *that* program: the beetle's `if hunger < < hungry_below`, which is line 118 of
+/// `beetle.rb`, was reported as line 600. The VM panel has always taken the prelude off the
+/// frames it shows (`VmInspector::fill`'s `prelude_lines`); the editor's status line and the log
+/// did not, and those are the two places somebody who has just mistyped is looking.
+///
+/// It is done on the **text** rather than by asking the compiler for a better answer, because in
+/// a browser there is no compiler to ask: `window.gardenCompile(source)` takes a source and
+/// nothing else (`platform.rs`) and throws whatever the playground's module says. Both builds
+/// report `FILE:LINE:COL: message`, one diagnostic to a line — the shape `mrbc` prints and the
+/// shape `sabiruby_compiler::Diagnostic` renders — so the one thing that has to be found in the
+/// string is the `:LINE:COL:` in it, and the first one on a line is the only one that can be it.
+///
+/// A line at or below the prelude's own length is an error **in the prelude**, which is not the
+/// author's file at all: it is said so by name, with the line it really is, rather than by a
+/// number the author cannot find (and rather than a negative one).
+fn in_the_authors_lines(message: &str, prelude_lines: u32, prelude: &str) -> String {
+    message.lines().map(|line| one_diagnostic(line, prelude_lines, prelude)).collect::<Vec<_>>().join("\n")
+}
+
+/// One line of a compiler's message, with its line number moved. Anything that does not look like
+/// `…:LINE:COL:…` is handed back untouched — a message the compiler wrote without a place in it
+/// ("compile error") is still the whole of what it said.
+fn one_diagnostic(line: &str, prelude_lines: u32, prelude: &str) -> String {
+    let bytes = line.as_bytes();
+    // a run of digits from `at`, and where it ends
+    let digits = |at: usize| -> (Option<u32>, usize) {
+        let end = at + bytes[at..].iter().take_while(|b| b.is_ascii_digit()).count();
+        (line[at..end].parse().ok(), end)
+    };
+    for colon in 0..line.len() {
+        if bytes[colon] != b':' {
+            continue;
+        }
+        let (Some(number), after_line) = digits(colon + 1) else { continue };
+        if bytes.get(after_line) != Some(&b':') {
+            continue;
+        }
+        let (Some(_), after_col) = digits(after_line + 1) else { continue };
+        if bytes.get(after_col) != Some(&b':') {
+            continue;
+        }
+        if number > prelude_lines {
+            return format!("{}:{}{}", &line[..colon], number - prelude_lines, &line[after_line..]);
+        }
+        // the file's name is the word in front of that colon; the prelude's goes in its place
+        let name_at = line[..colon].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+        return format!("{}{prelude}:{number}{}", &line[..name_at], &line[after_line..]);
+    }
+    line.to_string()
 }
 
 /// **The world's rules, compiled and hung on an entity of their own** (W1).
@@ -2529,7 +2610,8 @@ fn give_the_world_its_rules(
 ) {
     let entity = commands.spawn(WorldScript).id();
     match compile_world(&ruby.0, &mut mrb) {
-        Ok(handle) => {
+        Ok((handle, prelude_lines)) => {
+            commands.insert_resource(WorldPrelude(prelude_lines));
             // the priority rubevy gives a script by default. A creature's is set because a
             // creature has handlers that must be looked at before its behaviour (`give_mind`);
             // the world has one task and nothing to be ahead of.
@@ -2543,7 +2625,10 @@ fn give_the_world_its_rules(
 }
 
 /// `ruby/world.rb`, as the file says it.
-fn compile_world(ruby: &Path, mrb: &mut Assets<MrbAsset>) -> Result<Handle<MrbAsset>, String> {
+fn compile_world(
+    ruby: &Path,
+    mrb: &mut Assets<MrbAsset>,
+) -> Result<(Handle<MrbAsset>, u32), String> {
     let body = platform::read(&ruby.join(WORLD_FILE))?;
     compile_world_source(ruby, &body, mrb)
 }
@@ -2564,29 +2649,40 @@ fn compile_world(ruby: &Path, mrb: &mut Assets<MrbAsset>) -> Result<Handle<MrbAs
 /// forgotten what it ate. What *is* kept is everything the rules wrote into components: a
 /// `Breeding` cooldown outlives the rule that set it, which is most of why it is a component
 /// (W2).
-fn wear_the_rules(commands: &mut Commands, entity: Entity, handle: Handle<MrbAsset>) {
+fn wear_the_rules(
+    commands: &mut Commands,
+    entity: Entity,
+    handle: Handle<MrbAsset>,
+    prelude_lines: u32,
+) {
     commands
         .entity(entity)
         .remove::<ScriptTask<World>>()
         .remove::<rubevy::ScriptDone<World>>()
         .insert(Script::<World>::for_vm(handle).with_name("world"));
+    // the new program may have a prelude of a different length (`world_prelude.rb` saved), and
+    // the panel's line numbers are worked out from it every frame
+    commands.insert_resource(WorldPrelude(prelude_lines));
 }
 
 /// `world_prelude.rb` and one world, compiled as one program — which is why neither needs a
 /// `require` — with `run_world` on the end, exactly as a creature's file gets `run_creature`.
 ///
-/// It answers no line offset, where `compile_source` does: that number is for the editor's band
-/// and the HUD's line column, which are a creature's, and W3 is where the world gets a panel of
-/// its own.
+/// It answers the same pair `compile_source` does. The line offset used to be left out here,
+/// because the only readers of it were a creature's editor band and the HUD's line column; a
+/// compiler's error is the third reader and it belongs to both files
+/// ([`in_the_authors_lines`]).
 fn compile_world_source(
     ruby: &Path,
     body: &str,
     mrb: &mut Assets<MrbAsset>,
-) -> Result<Handle<MrbAsset>, String> {
-    let prelude = platform::read(&ruby.join("world_prelude.rb"))?;
+) -> Result<(Handle<MrbAsset>, u32), String> {
+    let prelude = platform::read(&ruby.join(WORLD_PRELUDE_FILE))?;
     let src = format!("{prelude}\n# ---- world.rb ----\n{body}\nrun_world\n");
-    let bytes = platform::compile(&src, "world.rb")?;
-    Ok(mrb.add(MrbAsset { bytes }))
+    let prelude_lines = prelude.lines().count() as u32 + 2;
+    let bytes = platform::compile(&src, WORLD_FILE)
+        .map_err(|e| in_the_authors_lines(&e, prelude_lines, WORLD_PRELUDE_FILE))?;
+    Ok((mrb.add(MrbAsset { bytes }), prelude_lines))
 }
 
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
@@ -2628,6 +2724,25 @@ fn ground_axes(yaw: f32) -> (Vec2, Vec2) {
 /// not look like a world — and, since G6, one seen from one fixed *place* does not either: the
 /// field is forty by thirty and a beetle in a corner was something you could turn towards but
 /// never go to.
+///
+/// **What the panels keep** (2026-09-18). The author scrolled the editor's listing and the garden
+/// zoomed out under it: the wheel was the one gesture that was never asked whether egui wanted it.
+/// The drag was (G4) and the keyboard was, so the hole was in one loop and not in the idea — a
+/// wheel message is read here whatever the pointer is over, and egui reads the same message for
+/// its `ScrollArea`, so both happened at once.
+///
+/// The question asked is `wants_pointer_input() || is_pointer_over_area()`, which is wider than
+/// the `wants_pointer_input()` the drag used alone. egui's own `wants_pointer_input` is
+/// `is_using_pointer() || (is_pointer_over_area() && no button is down)` — so a pointer resting on
+/// a panel with a button held is *not* wanted by egui, and a wheel turned there would have come
+/// back to the camera. Over an area is over an area, whatever the buttons are doing.
+///
+/// Widening it would have cost the drags something, though: a turn that begins on the grass and
+/// sweeps across the editor would stop dead half way. So a drag is decided **when the button goes
+/// down** ([`orbit_camera`]'s `grabbed`): one that began on the garden stays the camera's wherever
+/// the pointer goes, and one that began on a panel never becomes the camera's however far it is
+/// dragged out. That is what the old code did by accident, through the `any_down` in egui's own
+/// definition, and it is said here on purpose.
 #[allow(clippy::too_many_arguments)]
 fn orbit_camera(
     time: Res<Time>,
@@ -2640,14 +2755,25 @@ fn orbit_camera(
     mut cameras: Query<&mut Transform, With<Camera3d>>,
     watch: Option<Res<CameraLog>>,
     mut said_at: Local<f32>,
+    // whether the drag under way is the camera's: decided on the press, held until the buttons
+    // are all up again
+    mut grabbed: Local<bool>,
 ) {
     let was = *orbit;
     // G4: a drag inside a panel is the panel's, not the camera's; nor is a key typed into the
-    // editor the camera's, or `w` in a creature's brain would slide the garden about
-    let (mine, mine_keys) = match pointer {
-        Some(p) => (!p.wants_pointer_input(), !p.wants_keyboard_input()),
-        None => (true, true),
+    // editor the camera's, or `w` in a creature's brain would slide the garden about. The wheel
+    // joined the first of those in 2026-09-18 (see above).
+    let (egui_pointer, mine_keys) = match pointer {
+        Some(p) => (p.wants_pointer_input() || p.is_pointer_over_area(), !p.wants_keyboard_input()),
+        None => (false, true),
     };
+    let dragging = [MouseButton::Left, MouseButton::Right];
+    if !buttons.any_pressed(dragging) {
+        *grabbed = false;
+    } else if buttons.any_just_pressed(dragging) {
+        *grabbed = !egui_pointer;
+    }
+    let mine = *grabbed;
     let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     // left drag turns; right drag — or Shift and left, for a trackpad and for a browser that
     // keeps the right button for its own menu — slides
@@ -2668,6 +2794,11 @@ fn orbit_camera(
         }
     }
     for w in wheel.read() {
+        // read either way, so that a wheel turned over a panel is not still sitting in the reader
+        // when the pointer comes back off it
+        if egui_pointer {
+            continue;
+        }
         let notches = notches_of(w.unit, w.y);
         let was_at = orbit.distance;
         orbit.distance = zoom_by(orbit.distance, notches);
@@ -3373,8 +3504,8 @@ fn swap_the_rules(
             None => compile_world(&ruby.0, &mut mrb),
         };
         match compiled {
-            Ok(handle) => {
-                wear_the_rules(commands, entity, handle);
+            Ok((handle, prelude_lines)) => {
+                wear_the_rules(commands, entity, handle, prelude_lines);
                 Ok(())
             }
             Err(why) => Err(why),
@@ -3564,6 +3695,9 @@ fn children_arrive(
 /// and the reason it almost never fires is luck: the twelfth check's thaw pins a burst of births
 /// five frames clear of the night, and five frames is all the room there is
 /// (`docs/worklog/2026-09-17-selftest-flakes.md` §4).
+///
+/// The same is true of a creature built out of a save file, which has a body and a fresh script
+/// and has heard nothing either — see [`Newborns`] and `load_world`.
 ///
 /// The cure is not a wider window in the check but the missing letter: the sky is said again, to
 /// each newborn on its own, as soon as it can hear it. There is no way for the game to ask rubevy
@@ -4644,12 +4778,28 @@ fn write_a_save_from_another_version() -> String {
 /// so a loaded garden has no minds left over from the one before it. Then the same three spawn
 /// functions the world was built with the first time, and `give_mind` again: a creature read out
 /// of a file is not a special kind of creature.
+///
+/// **And it is told what the sky is doing** (2026-09-18). A creature made here is exactly as deaf
+/// as a creature made by `children_arrive`: its script has not subscribed to anything yet, and
+/// `"night"` and `"day"` are said once each, at the turn. A garden saved in the dark and opened
+/// again therefore used to come back with every creature walking about until morning — the same
+/// hole the newborns had, found from the other end (`docs/worklog/2026-09-18-selftest-fixes.md`,
+/// §5). So every creature the file makes goes on [`Newborns`] and hears the sky two frames later,
+/// by the same road and with the same wait.
+///
+/// It is told **whatever the sky is**, not only when it is night. "Only if `sky.night`" would be
+/// a second copy of `day_night`'s list of what the sky can say, kept in step by hand, and it
+/// would buy one publish per creature on a daytime load — a `"day"` to a creature that is already
+/// awake, which is what `on(:day)` does with it anyway. The duplicate is cheaper than the flag,
+/// which is the same trade `tell_newborns_the_sky` already makes for a birth on the turning
+/// frame.
 fn load_world(
     mut commands: Commands,
     time: Res<Time>,
     loading: Res<Loading>,
     mut sky: ResMut<Sky>,
     mut note: ResMut<SaveNote>,
+    mut newborns: ResMut<Newborns>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
@@ -4664,6 +4814,10 @@ fn load_world(
         commands.entity(entity).despawn();
         gone += 1;
     }
+    // whatever was still waiting for its word belonged to the garden that has just been thrown
+    // away (F9 over a running world): those entities are gone, and `tell_newborns_the_sky` would
+    // drop them anyway for having no `Mind`
+    newborns.waiting.clear();
 
     for plant in &save.plants {
         // whether a plant is a bush or a tuft is the model's business, so it is rolled again
@@ -4698,6 +4852,8 @@ fn load_world(
             parent: None,
         });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, creature.species);
+        // it has a body and no ears yet, which is the whole of what a newborn is here
+        newborns.waiting.push((entity, 0));
         if !creature.memory.is_null() {
             pending.push((entity, creature.memory.clone()));
         }
@@ -5206,6 +5362,7 @@ fn stop_when_over(
     creatures: Query<(&Creature, &Hunger, &Velocity, &Transform, Option<&Mind>)>,
     panelled: Query<(Entity, &Creature, &Hunger, &Mind)>,
     tasks: Query<(&Mind, &ScriptTask)>,
+    world_task: Query<&ScriptTask<World>, With<WorldScript>>,
     plants: Query<&Plant>,
     everything: Query<Entity>,
     mut exit: MessageWriter<AppExit>,
@@ -5327,6 +5484,19 @@ fn stop_when_over(
                 info!("{line}");
             }
         }
+        // and the rules, which are the other VM's one task (2026-09-18). `F2` shows this in a
+        // window when `F3` has the editor on `world.rb` (`window::show_vm`); here it is the same
+        // panel filled from the same VM, printed, so a run with no screen says what the rules are
+        // waiting for as well as what a beetle is.
+        if let Ok(task) = world_task.single() {
+            panel.spent = vms.meter.last_pass;
+            panel.per_frame = vms.meter.median();
+            panel.prelude_file = Some(WORLD_PRELUDE_FILE.into());
+            panel.fill(&vms.world, task.task(), format!("the rules  {WORLD_FILE}"), vms.prelude.0);
+            for line in panel.log_lines() {
+                info!("{line}");
+            }
+        }
     }
     // what the population is made of (G2). The world starts with each species' own numbers
     // jittered by a sixth either way; anything the run has moved is breeding and starving —
@@ -5421,6 +5591,28 @@ fn stop_when_over(
             None => ok(false, "the creatures were asleep a second after night fell (night never came)".into()),
         }
         // --- G2: the genome ------------------------------------------------
+        //
+        // **A run in which the rules paired nobody has measured nothing here** (2026-09-18).
+        // `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no
+        // `"mate"` in it never asked the thing this check is about a question — the same shape
+        // the fifth check took for a probe a rabbit walked into, and the same reason.
+        //
+        // What makes it happen at all is the meadow corner (`spawn_world`): two hungry beetles
+        // 4.5 units either side of a clump of four plants, which walk in, eat, pass
+        // `mate_hunger` and are told about each other. It is not the certainty the comment there
+        // claims. A creature eats a plant from `reach` — `1.1` plus half the plant's size, so
+        // 1.8 at `plant_max` — and stops walking the moment its meter passes `hungry_below`, so
+        // **two beetles eating one clump from opposite sides stand up to 3.6 apart** while
+        // `mate_reach` is 2.0. They are paired when their wandering happens to bring them
+        // together afterwards, which is most of the time and not all of it: over 64 twenty-second
+        // runs the corner produced a pairing in 62, and the two it missed had the pair 2.8 and
+        // 4.1 apart at the frame they both passed `mate_hunger`.
+        //
+        // The corner is left as it is. Making it certain means putting the two where the rules'
+        // own `reach` and `mate_reach` say they will end up, and those two numbers live in
+        // `ruby/world.rb` — where a player may edit them — and cannot be read from here. A
+        // geometry worked out in Rust from copies of them would be right until somebody changed
+        // the file. So what is fixed is the sentence: a run that paired nobody says so.
         match test.born_at {
             Some(at) => ok(
                 test.born_ok,
@@ -5429,6 +5621,13 @@ fn stop_when_over(
                     test.born_says, test.courtings, test.births
                 ),
             ),
+            None if test.courtings == 0 => unmeasured(
+                "a child was born whose genome is its parents' mixed and mutated
+         (not measured: the rules paired nobody in the whole run, so nothing asked `Genome#mix` anything)"
+                    .into(),
+            ),
+            // a pairing was made and no child came of it: that is the road from `on(:mate)` to
+            // `garden.spawn`, and it is this check's to report
             None => ok(
                 false,
                 format!(
@@ -5545,6 +5744,47 @@ fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mu
 mod tests {
     use super::*;
     use bevy::input::mouse::MouseScrollUnit;
+
+    /// **The compiler's line numbers, put back into the author's file** (2026-09-18).
+    ///
+    /// The three cases are the three a person meets: an error in the file being edited, an error
+    /// in the prelude in front of it, and a message with no place in it at all. The input is the
+    /// real thing — `beetle.rb` with `if hunger < < hungry_below` on its line 118, compiled with
+    /// a 482-line prelude in front of it, which is what the game printed before this was written.
+    #[test]
+    fn a_compiler_line_is_reported_in_the_authors_own_file() {
+        let real = "beetle.rb: beetle.rb:600:19: syntax error, unexpected '<'; expected an expression after the operator";
+        assert_eq!(
+            in_the_authors_lines(real, 482, PRELUDE_FILE),
+            "beetle.rb: beetle.rb:118:19: syntax error, unexpected '<'; expected an expression after the operator"
+        );
+        // a line inside the prelude is not the author's file: it is said by name, with the line
+        // it really is, rather than as a number nobody can find or a negative one
+        assert_eq!(
+            in_the_authors_lines("beetle.rb: beetle.rb:47:3: syntax error", 482, PRELUDE_FILE),
+            "beetle.rb: prelude.rb:47:3: syntax error"
+        );
+        // the boundary: the prelude's last line is the prelude's, the first line after it is the
+        // author's line 1
+        assert_eq!(in_the_authors_lines("f:482:1: x", 482, PRELUDE_FILE), "prelude.rb:482:1: x");
+        assert_eq!(in_the_authors_lines("f:483:1: x", 482, PRELUDE_FILE), "f:1:1: x");
+        // the world's file is the same machinery with the other prelude
+        assert_eq!(
+            in_the_authors_lines("world.rb: world.rb:20:1: syntax error", 120, WORLD_PRELUDE_FILE),
+            "world.rb: world_prelude.rb:20:1: syntax error"
+        );
+        // several diagnostics, one to a line, each moved
+        assert_eq!(
+            in_the_authors_lines("a.rb:600:1: one\na.rb:610:2: two", 482, PRELUDE_FILE),
+            "a.rb:118:1: one\na.rb:128:2: two"
+        );
+        // and a message with no place in it is handed back whole: `CompileError` renders
+        // "compile error" when the compiler gave it no diagnostics, and a missing file's message
+        // is `platform::read`'s, which has a path with colons in it and no line
+        assert_eq!(in_the_authors_lines("beetle.rb: compile error", 482, PRELUDE_FILE), "beetle.rb: compile error");
+        let missing = "/home/x/garden/ruby/creatures/beetle.rb: No such file or directory (os error 2)";
+        assert_eq!(in_the_authors_lines(missing, 482, PRELUDE_FILE), missing);
+    }
 
     #[test]
     fn a_notch_is_a_notch_in_either_unit() {

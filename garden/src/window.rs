@@ -309,6 +309,17 @@ pub fn show_code(
     editor.elsewhere = None;
 }
 
+/// **What the editor says when a text will not compile** (2026-09-18).
+///
+/// It used to be `not applied: beetle.rb would not compile (see the log)`, and the log had a line
+/// number that was the prelude's length out — 600 where the author's file has 118. The number is
+/// right now (`crate::in_the_authors_lines`), so the status can carry it: the first error, whole,
+/// in the panel the typing was done in. The rest of them, if there were several, are still in the
+/// log, and the caller logs the whole thing either way.
+fn first_trouble(why: &str) -> &str {
+    why.lines().next().unwrap_or(why)
+}
+
 /// What the editor's buttons asked for. Nothing here writes a file except Save.
 #[allow(clippy::too_many_arguments)]
 pub fn do_editor_actions(
@@ -336,10 +347,13 @@ pub fn do_editor_actions(
     match action {
         // there is one of these in this game (`apply_all_label` is None), and it is the species
         EditorAction::Apply | EditorAction::ApplyAll => {
-            let Some((handle, lines)) = compile_source(&ruby.0, species.file(), &text, &mut mrb)
-            else {
-                editor.message = format!("not applied: {} would not compile (see the log)", species.file());
-                return;
+            let (handle, lines) = match compile_source(&ruby.0, species.file(), &text, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message = format!("not applied — {}", first_trouble(&why));
+                    return;
+                }
             };
             brains.set(species, Some(text));
             let n = restart_species(&mut commands, &mut minds, species, handle, lines, true);
@@ -355,9 +369,14 @@ pub fn do_editor_actions(
             }
             // the file says this now, so nothing is running a text of its own any more
             brains.set(species, None);
-            let Some((handle, lines)) = compile(&ruby.0, &path, &mut mrb) else {
-                editor.message = format!("saved {}, but it would not compile", species.file());
-                return;
+            let (handle, lines) = match compile(&ruby.0, &path, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message =
+                        format!("saved {}, but it would not compile — {}", species.file(), first_trouble(&why));
+                    return;
+                }
             };
             restart_species(&mut commands, &mut minds, species, handle, lines, false);
             editor.applied(format!("saved to {}", species.file()));
@@ -367,9 +386,13 @@ pub fn do_editor_actions(
                 editor.message = format!("could not read {}", species.file());
                 return;
             };
-            let Some((handle, lines)) = compile(&ruby.0, &path, &mut mrb) else {
-                editor.message = format!("{} does not compile", species.file());
-                return;
+            let (handle, lines) = match compile(&ruby.0, &path, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message = format!("{} does not compile — {}", species.file(), first_trouble(&why));
+                    return;
+                }
             };
             brains.set(species, None);
             restart_species(&mut commands, &mut minds, species, handle, lines, false);
@@ -408,17 +431,17 @@ fn do_world_actions(
     let path = brains.world_path(&ruby.0);
     // the one entity's script is replaced by the road W1's twelfth check drives
     // (`crate::wear_the_rules`), and a garden that had no rules at all has them from this moment
-    let mut wear = |handle| {
-        crate::wear_the_rules(commands, entity, handle);
+    let mut wear = |handle, prelude_lines| {
+        crate::wear_the_rules(commands, entity, handle, prelude_lines);
         trouble.0 = None;
     };
 
     match action {
         EditorAction::Apply | EditorAction::ApplyAll => {
             match crate::compile_world_source(&ruby.0, &text, mrb) {
-                Ok(handle) => {
+                Ok((handle, lines)) => {
                     brains.set_world(Some(text));
-                    wear(handle);
+                    wear(handle, lines);
                     editor.applied(
                         "the garden is running these rules now — in memory. Save to keep them."
                             .to_string(),
@@ -426,8 +449,7 @@ fn do_world_actions(
                 }
                 Err(why) => {
                     error!("{why}");
-                    editor.message =
-                        format!("not applied: {} would not compile (see the log)", crate::WORLD_FILE);
+                    editor.message = format!("not applied — {}", first_trouble(&why));
                 }
             }
         }
@@ -439,14 +461,17 @@ fn do_world_actions(
             // the file says this now, so nothing is running a text of its own any more
             brains.set_world(None);
             match crate::compile_world(&ruby.0, mrb) {
-                Ok(handle) => {
-                    wear(handle);
+                Ok((handle, lines)) => {
+                    wear(handle, lines);
                     editor.applied(format!("saved to {}", crate::WORLD_FILE));
                 }
                 Err(why) => {
                     error!("{why}");
-                    editor.message =
-                        format!("saved {}, but it would not compile", crate::WORLD_FILE);
+                    editor.message = format!(
+                        "saved {}, but it would not compile — {}",
+                        crate::WORLD_FILE,
+                        first_trouble(&why)
+                    );
                 }
             }
         }
@@ -456,14 +481,15 @@ fn do_world_actions(
                 return;
             };
             match crate::compile_world(&ruby.0, mrb) {
-                Ok(handle) => {
+                Ok((handle, lines)) => {
                     brains.set_world(None);
-                    wear(handle);
+                    wear(handle, lines);
                     editor.reset_to(source, format!("back to {}", crate::WORLD_FILE));
                 }
                 Err(why) => {
                     error!("{why}");
-                    editor.message = format!("{} does not compile", crate::WORLD_FILE);
+                    editor.message =
+                        format!("{} does not compile — {}", crate::WORLD_FILE, first_trouble(&why));
                 }
             }
         }
@@ -547,7 +573,8 @@ pub fn reload_changed(
         // below — so saving it restarted every beetle and every rabbit and left the rules it
         // actually belongs to running the old text. Both tests name the file exactly now.
         let is_world = path.file_name().is_some_and(|f| {
-            f == std::ffi::OsStr::new(crate::WORLD_FILE) || f == std::ffi::OsStr::new("world_prelude.rb")
+            f == std::ffi::OsStr::new(crate::WORLD_FILE)
+                || f == std::ffi::OsStr::new(crate::WORLD_PRELUDE_FILE)
         });
         if is_world {
             // rules applied in the editor keep their text until Save or Revert, as a species does
@@ -555,8 +582,8 @@ pub fn reload_changed(
                 && let Ok(entity) = rules.single()
             {
                 match crate::compile_world(&ruby.0, &mut mrb) {
-                    Ok(handle) => {
-                        crate::wear_the_rules(&mut commands, entity, handle);
+                    Ok((handle, lines)) => {
+                        crate::wear_the_rules(&mut commands, entity, handle, lines);
                         trouble.0 = None;
                         if editor.key == Some(crate::Brains::WORLD as u64)
                             && !editor.changed()
@@ -568,8 +595,7 @@ pub fn reload_changed(
                     }
                     Err(why) => {
                         error!("{why}");
-                        editor.message =
-                            format!("{}: compile error (see the log)", crate::WORLD_FILE);
+                        editor.message = first_trouble(&why).to_string();
                     }
                 }
             }
@@ -577,16 +603,20 @@ pub fn reload_changed(
         }
         for species in Species::ALL {
             let mine = brains.path(&ruby.0, species);
-            if path != mine && path.file_name() != Some(std::ffi::OsStr::new("prelude.rb")) {
+            if path != mine && path.file_name() != Some(std::ffi::OsStr::new(crate::PRELUDE_FILE)) {
                 continue;
             }
             // a species running a text applied in the editor keeps it until Save or Revert
             if brains.text(species).is_some() {
                 continue;
             }
-            let Some((handle, lines)) = compile(&ruby.0, &mine, &mut mrb) else {
-                editor.message = format!("{}: compile error (see the log)", species.file());
-                continue;
+            let (handle, lines) = match compile(&ruby.0, &mine, &mut mrb) {
+                Ok(it) => it,
+                Err(why) => {
+                    error!("{why}");
+                    editor.message = first_trouble(&why).to_string();
+                    continue;
+                }
             };
             if editor.key == Some(species.index() as u64)
                 && !editor.changed()
@@ -657,14 +687,55 @@ pub fn inspect_keys(
     }
 }
 
-/// The VM panel follows the creature being looked at, as the editor follows its file.
+/// The VM panel follows the creature being looked at, as the editor follows its file — **or the
+/// rules, when the editor is on them** (`F3`, 2026-09-18).
+///
+/// Until now `F2` could only ever show a creature. The reason was in `rubevy-arena`: the panel's
+/// `fill` named `ScriptWorld` by its default marker, so the second VM — the one `world.rb` runs
+/// in — was not a thing it could be handed (`docs/worklog/2026-09-17-garden-world.md` §24.1). It
+/// takes either now, and this is where the garden decides which: `Watched::world` is the same
+/// flag the editor reads, so the two panels stay on the same file and `Tab` or a click brings
+/// both back to the creature.
+///
+/// Everything the panel says about a creature it can say about the rules, because none of it was
+/// ever about creatures: **what it is waiting for** is worked out from the frames alone
+/// (`rubevy_arena::inspect::why`), and the world's task waits for exactly two things — one pass
+/// of `each_frame` ends on `Rubevy.ask("frame")`, which is a `Rubevy::Proxy` ask like any other,
+/// and a timer task made by `every` is asleep. **Where it is waiting** is the innermost frame of
+/// `world.rb` itself, once the world's prelude has been taken off it (`crate::WorldPrelude`, the
+/// world's half of what a creature keeps in its `Mind`). The two numbers are `WorldMeter`'s — the
+/// last pass and the middle one — where a creature's are its `Mind`'s.
+#[allow(clippy::too_many_arguments)]
 pub fn show_vm(
     watched: Res<Watched>,
     world: Res<ScriptWorld>,
+    rules: Res<ScriptWorld<crate::World>>,
+    meter: Res<crate::WorldMeter>,
+    trouble: Res<crate::WorldTrouble>,
+    prelude: Res<crate::WorldPrelude>,
     mut panel: ResMut<VmInspector>,
     minds: Query<(&Mind, Option<&ScriptTask>)>,
+    world_task: Query<Option<&ScriptTask<crate::World>>, With<crate::WorldScript>>,
 ) {
     if !panel.open {
+        return;
+    }
+    if watched.world {
+        panel.title = format!("the rules  {}", crate::WORLD_FILE);
+        let Ok(Some(task)) = world_task.single() else {
+            panel.clear(match &trouble.0 {
+                Some(why) => format!("the world has no rules: {why}"),
+                None => "the rules have no task yet".into(),
+            });
+            return;
+        };
+        panel.spent = meter.last_pass;
+        panel.per_frame = meter.median();
+        // the world's program is `world_prelude.rb` in front of `world.rb`, not `prelude.rb` in
+        // front of a creature's, and the panel names the frames that fall in the prelude
+        panel.prelude_file = Some(crate::WORLD_PRELUDE_FILE.into());
+        let title = panel.title.clone();
+        panel.fill(&rules, task.task(), title, prelude.0);
         return;
     }
     let Some(entity) = watched.entity else { return };
@@ -680,6 +751,7 @@ pub fn show_vm(
     panel.spent = mind.spent;
     // G9: the panel's top half says insn/frame, and this is the same average the HUD's column is
     panel.per_frame = Some(mind.last_instructions / mind.frames.max(1));
+    panel.prelude_file = None;
     panel.fill(&world, script.task(), mind.name.clone(), mind.prelude_lines);
 }
 
@@ -1033,6 +1105,71 @@ pub struct WindowTest {
     hunger: Vec<(Entity, f32)>,
     /// where the sun stood
     phase: f32,
+    /// how far back the camera stood before a wheel message was written (2026-09-18)
+    distance: f32,
+}
+
+/// **A pointer the checks can put where they like, and a wheel they can turn** (2026-09-18).
+///
+/// `window_selftest` was already at fourteen system parameters and Bevy's limit is sixteen, so
+/// the five the wheel check wants travel as one, the way [`crate::VmReport`] does for the two VMs.
+///
+/// The pointer is moved by writing the `WindowEvent::CursorMoved` that winit would have written:
+/// bevy_egui reads that message in `PreUpdate` and it is the only thing that tells egui where the
+/// pointer is (`bevy_egui::input::write_pointer_moved_and_button_messages_system`). Writing it is
+/// the same kind of forgery as `keys.press(KeyCode::F2)` above — the input the operating system
+/// would have delivered, delivered by the check instead — and it is the only one available: there
+/// is no way to ask egui "pretend the pointer is here", and warping the real cursor needs a
+/// desktop that will do it.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct FakePointer<'w, 's> {
+    windows: Query<'w, 's, (Entity, &'static Window)>,
+    orbit: Res<'w, crate::Orbit>,
+    wheel: MessageWriter<'w, bevy::input::mouse::MouseWheel>,
+    events: MessageWriter<'w, bevy::window::WindowEvent>,
+    egui: Option<Res<'w, bevy_egui::input::EguiWantsInput>>,
+}
+
+impl FakePointer<'_, '_> {
+    /// Whether egui is holding the pointer, as [`crate::orbit_camera`] asks it.
+    fn egui_has_it(&self) -> bool {
+        self.egui.as_ref().is_some_and(|e| e.wants_pointer_input() || e.is_pointer_over_area())
+    }
+
+    /// The middle of the editor panel, where it stands before anybody drags it
+    /// (`rubevy_arena::editor`'s own figures, so the check is not guessing the rectangle).
+    fn over_the_editor(&self) -> Option<Vec2> {
+        let (_, window) = self.windows.iter().next()?;
+        use rubevy_arena::editor::{HEIGHT, MARGIN, WIDTH};
+        Some(Vec2::new(window.width() - MARGIN - WIDTH * 0.5, MARGIN + HEIGHT * 0.5))
+    }
+
+    /// Which window the forged input is about: the primary one, which is the only one these
+    /// games open.
+    fn the_window(&self) -> Option<Entity> {
+        self.windows.iter().next().map(|(entity, _)| entity)
+    }
+
+    fn point_at(&mut self, at: Vec2) {
+        let Some(window) = self.the_window() else { return };
+        self.events.write(bevy::window::WindowEvent::CursorMoved(bevy::window::CursorMoved {
+            window,
+            position: at,
+            delta: None,
+        }));
+    }
+
+    /// One notch of a PC mouse wheel, towards the garden.
+    fn turn_the_wheel(&mut self) {
+        let Some(window) = self.the_window() else { return };
+        self.wheel.write(bevy::input::mouse::MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+    }
 }
 
 impl WindowTest {
@@ -1060,6 +1197,8 @@ pub fn window_selftest(
     // left in its meter
     bodies: Query<(Entity, &Transform, &Hunger), With<Creature>>,
     tasks: Query<&ScriptTask>,
+    // 2026-09-18: the pointer and the wheel, for the last two checks
+    mut pointing: FakePointer,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -1311,6 +1450,59 @@ pub fn window_selftest(
             ok(sky.day_length == 60.0, "Revert puts the file's rules back");
             ok(editor.text == test.world_original, "Revert shows world.rb again");
             ok(brains.world().is_none(), "and nothing is running a text of its own");
+            // --- and the wheel, which is the other thing a panel takes (2026-09-18) ---
+            //
+            // Last rather than first because it moves the pointer, and every check above is
+            // driven by keys and by `Editor::action` and would rather the pointer stayed where
+            // the player left it.
+            let at = pointing.over_the_editor().unwrap_or_default();
+            pointing.point_at(at);
+            test.step = 14;
+            test.at = now + 0.2;
+        }
+        14 => {
+            test.distance = pointing.orbit.distance;
+            pointing.turn_the_wheel();
+            test.step = 15;
+            test.at = now + 0.2;
+        }
+        15 => {
+            // the two halves are in one line on purpose: "the camera did not move" is only worth
+            // anything if the pointer really was over the panel, and a run where egui had let go
+            // of it would otherwise pass by doing nothing
+            let held = pointing.egui_has_it();
+            let moved = pointing.orbit.distance != test.distance;
+            ok(
+                held && !moved,
+                &format!(
+                    "the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                    test.distance, pointing.orbit.distance
+                ),
+            );
+            // the control: the same wheel, at the same place, with nothing drawn there. Only the
+            // editor has to go — the HUD is at the top left and the VM panel at the bottom left,
+            // and neither reaches the middle of the editor's rectangle.
+            editor.open = false;
+            test.step = 16;
+            test.at = now + 0.2;
+        }
+        16 => {
+            test.distance = pointing.orbit.distance;
+            pointing.turn_the_wheel();
+            test.step = 17;
+            test.at = now + 0.2;
+        }
+        17 => {
+            let held = pointing.egui_has_it();
+            let moved = pointing.orbit.distance != test.distance;
+            ok(
+                !held && moved,
+                &format!(
+                    "and with the panel closed the same wheel in the same place zooms (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                    test.distance, pointing.orbit.distance
+                ),
+            );
+            editor.open = true;
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
             // garden — and `AppExit` there does not end a run, it stops the canvas for good
@@ -1320,7 +1512,7 @@ pub fn window_selftest(
             } else {
                 info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
             }
-            test.step = 14;
+            test.step = 18;
         }
         _ => {}
     }

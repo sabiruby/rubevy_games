@@ -243,9 +243,9 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
     egui::Window::new("Ruby")
         .collapsible(false)
         .resizable(true)
-        .default_width(520.0)
-        .default_height(640.0)
-        .default_pos([right - 8.0 - 520.0, 8.0])
+        .default_width(WIDTH)
+        .default_height(HEIGHT)
+        .default_pos([right - MARGIN - WIDTH, MARGIN])
         .show(ctx, |ui| {
             // one button per thing the game offers; the one showing is marked
             if !choices.is_empty() {
@@ -328,6 +328,17 @@ fn draw_editor(mut contexts: EguiContexts, mut editor: ResMut<Editor>, keys: Res
 }
 
 const FONT: f32 = 13.0;
+
+/// **Where the editor stands before anybody drags it**, in egui points from the top right.
+///
+/// They are named rather than written into the `Window` builder because a check has to be able to
+/// put a pointer *inside* the panel without a screen to look at: the garden's window checks drive
+/// the wheel over the editor to show that the camera does not take it
+/// (`garden/src/window.rs`, `window_selftest`). A test that guessed the rectangle would be
+/// testing its own guess.
+pub const MARGIN: f32 = 8.0;
+pub const WIDTH: f32 = 520.0;
+pub const HEIGHT: f32 = 640.0;
 
 /// The source as a layout: monospace, no wrapping, and each line shaded by how much of the
 /// brain's recent time it took — the hottest line fully, the rest in proportion.
