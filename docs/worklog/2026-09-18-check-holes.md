@@ -327,3 +327,164 @@ $ grep -rn unsafe garden/src/ sabibots/src/ crates/ | wc -l
 
 触っていないもの: `ruby/world.rb`、`ruby/creatures/*.rb`、`ruby/robots/*.rb`、
 `ruby/prelude.rb`、閾値（0.3 秒、0.2 rad、変異率 0.1、`mate_reach` ほか `world.rb` の数）。
+
+---
+
+## 4. 眠っている個体のつがい — §1.6 に残した 3 つ目の穴
+
+同じ日の続きである。作業場所は worktree `rubevy_games-wt-asleep`（ブランチ `asleep-pairing`、
+main `1f6ab16`）。着手前の clippy は §0 と同じ 2 / 12 / 13 で、最後まで変わっていない。
+
+### 4.1 穴
+
+`garden/ruby/creatures/beetle.rb` の `on(:mate)` は
+
+```ruby
+on(:mate) do |partner|
+  next if @asleep
+  mate = genome_of(partner)
+  …
+```
+
+で始まる。`@asleep` は同じファイルの `on(:night)` が立て、`on(:day)` が下ろす（`rabbit.rb` も
+同じ形を持っている）。夜のつがいは子を産まない——これは規則どおりの振る舞いであって、
+`on(:mate)` から `garden.spawn` までの道が壊れているのではない。ところが §1 の直しのあとでも
+そのつがいは `courtings_open` に積まれたまま走行の終わりまで残り、分母に入る。その走行で
+ほかに子が 1 匹も来なければ `FAIL … (none was, from N pairings)` になる。
+
+除外の理由としては §1 のウサギ（`on(:mate)` を持たない種）と同じ種類のもので、違うのは
+**種の性質ではなくその瞬間の状態**だという点だけである。
+
+### 4.2 「夜なら眠っている」を Rust に写さない
+
+いちばん短い実装は `answer_world` で `Sky::night` を見ることで、これは**採らなかった**。
+夜と睡眠は同じものではない:
+
+* 眠るかどうかは `creatures/*.rb` の判断である。`on(:night)` を書いていない種は夜でも起きている。
+* 夜の直後に生まれた個体は、その `on(:night)` を聞いていない。実際 `--at midnight` で始めた
+  試し走行では、夜のはずの時刻に子が 5 匹生まれた（4.4）——最初のフレームの `"night"` を
+  聞き逃した個体が起きたまま動いていた。
+* つまり `Sky` から導いた「眠っているはず」は、他人のスクリプトについての**二つ目の意見**に
+  なる。
+
+なので §1.2 と同じ道で VM に聞く。`listens_for` はクラスの `@handlers` まで 2 段降りたが、
+こちらは 1 段浅い:
+
+```rust
+fn asleep_now(vm: &Vm, task: ObjId) -> Option<bool> {
+    let being = vm.ivar_get(task, BEING_IVAR).obj()?;
+    // nil until the night handler has run for the first time, which reads as awake
+    Some(vm.ivar_get(being, ASLEEP_IVAR).truthy())
+}
+```
+
+`@asleep` は「一度も夜を迎えていなければ nil」なので、`Value::truthy()` がそのまま
+「起きている」と読む。`@being` がまだ無い（`run_creature` に届いていない）ときは `None` で、
+呼び手は §1.2 と同じく**数える側に倒す**。
+
+読む時点は `answer_world` の、`world.rb` が言ったものを creatures の VM に `publish` する
+直前——`listens_for` を呼んでいるその場である。ハンドラが実際に起きるのは 1 フレーム後で、
+そのときの `@asleep` はもう違うかもしれないが、**こちら側が確かだと言えるのは告げた瞬間**
+だけなので、そこで読む。眠っていたつがいは分母に入れず、`courtings_lost` に足して
+`selftest: --   the pairing at N s measured nothing: the one that was told was asleep` を 1 行出す。
+`close_courtings` と同じ文型にしてある。
+
+`n/a` のときの括弧の中も、理由が 2 つになったので
+
+```
+— 18 pairing(s) measured nothing (asleep when they were told, or one of the two gone before the handler could ask)
+```
+
+に書き換えた（前は「ended before the handler could ask」の 1 通りしか言っていなかった）。
+
+### 4.3 素のままの走行
+
+`--headless 90` を 5 回（並列、`TMPDIR` 別）:
+
+| | 判定 | ウサギの除外 | 眠っていた除外 |
+|---|---|---|---|
+| run 1 | ok 13 / FAIL 0 / n/a 0 | 6 | 0 |
+| run 2 | ok 13 / FAIL 0 / n/a 0 | 1 | 0 |
+| run 3 | ok 12 / FAIL 0 / **n/a 1** | 6 | **1**（25.44 s） |
+| run 4 | ok 13 / FAIL 0 / n/a 0 | 2 | 0 |
+| run 5 | ok 13 / FAIL 0 / n/a 0 | 7 | 0 |
+
+run 3 の `n/a` は 8 番ではなく **5 番**（`a hungry creature with a plant in sight reached it` —
+「ウサギが 1.42 s に probe に歩いて入った」）で、これは前からある「測れなかった」枠である。
+8 番はこの走行でも `ok … [4 pairings, 4 children]`。
+
+着手前に同じ 5 回を回したときも（同じコード、別の乱数）13 判定すべて ok で、そのうち 1 回に
+87.31 s の眠っていたつがいが出ている。**10 回中 2 回、素のままで夜のつがいを踏む**——
+めったに無いことではない。
+
+### 4.4 作った状況で引き当てる
+
+引き当てたいのは「つがいがあって子が 0」である。ところが箱庭は §1 の隅（`plant_the_meadow`）
+のおかげで 1.1 秒で必ず子が来るので、素のままでは `born_at` が埋まってしまい、
+直す前の `FAIL` が出ない。使い捨ての probe を 3 つ重ねた（すべて `GARDEN_PROBE` で入る）:
+
+1. `plant_the_meadow` を即 return（昼のうちに必ず子が来る仕掛けを外す）。
+2. 毎フレーム、`ScriptTask` を持つ全個体の `@being` に `@asleep = true` を
+   `vm.ivar_set` で書く——`on(:night)` が来たのと同じ状態を外から作る。
+3. 5.00〜5.10 秒のあいだだけ、甲虫 2 匹の `Hunger` を 100 にし、片方を他方の 1.2 隣に置き、
+   `Breeding.ready_at` を 0 にする。**つがいを作るのは規則のほう**で、probe は条件を揃える
+   だけである。
+
+`--headless 30` を 3 回:
+
+```
+selftest: --   the pairing at 5.00 s measured nothing: the one that was told was asleep
+…（18〜30 行）
+selftest: n/a  a child was born whose genome is its parents' mixed and mutated
+         (not measured: the rules paired nobody in the whole run who could have answered
+          — 18 pairing(s) measured nothing (asleep when they were told, or one of the two gone
+          before the handler could ask), so nothing asked `Genome#mix` anything)
+```
+
+同じ二進で、眠っていたつがいの除外だけを外した数え方（probe の `GARDEN_OLD`）にすると、
+同じ状況が 3 回とも
+
+```
+run 1: selftest: FAIL a child was born whose genome is its parents' mixed and mutated (none was, from 23 pairings)
+run 2: selftest: FAIL … (none was, from 22 pairings)
+run 3: selftest: FAIL … (none was, from 19 pairings)
+```
+
+になる。**前後で変わるのは判定の言葉だけで、庭で起きたことは 1 つも変わっていない。**
+この probe 走行では 5 番と 6 番（`reached it` と `changed heading`）が FAIL するが、これは
+「庭じゅうが眠っていて誰も歩かない」という probe の作った状況そのもので、8 番とは関係がない。
+
+**捨てた作り方。** 最初は「夜（26〜55 秒）に隅の 2 匹を満腹にして告げさせる」だけを試した。
+`--` の行は出たが、昼のうちに野良のつがいから子が生まれるので判定は `ok` のままで、
+「直す前なら FAIL」を見せられない。次に `--at midnight` で夜から始めてみたが、4.2 に書いた
+とおり最初のフレームの `"night"` を聞き逃した個体が起きていて、夜なのに子が 5 匹生まれた
+（これ自体が「夜＝眠っている」と書かなくてよかった証拠になった）。最後に `@asleep` を
+外から書く形にした。また 3 の窓を最初 30 秒以降ずっと開けていたときは、`Breeding.ready_at`
+を毎フレーム 0 に戻していたせいで規則が毎フレームつがいを作り、`--` の行が 1500 行出た。
+窓を 0.1 秒に縮めて 18〜30 行にした。
+
+probe は 3 つとも外した（`grep -c PROBE garden/src/main.rs` が 0、`git status` は
+`garden/src/main.rs` と docs の 2 ファイルだけ）。
+
+### 4.5 入ったあとの確認
+
+```
+$ cargo clippy -p garden -p sabibots -p rubevy-arena
+warning: `rubevy-arena` (lib) generated 2 warnings        （着手前と同じ）
+warning: `sabibots` (bin "sabibots") generated 12 warnings （着手前と同じ）
+warning: `garden` (bin "garden") generated 13 warnings     （着手前と同じ）
+$ cargo test -p garden --release
+test result: ok. 6 passed; 0 failed
+$ grep -rn unsafe garden/src/ sabibots/src/ crates/ | wc -l
+0
+```
+
+* 箱庭 `--headless 90` ×5: FAIL 0（4.3 の表）。
+* `web/build.sh garden` ＋ Chromium（swiftshader）で `garden/?selftest` 60 秒:
+  **selftest 58 行のうち ok 43 / FAIL 0 / n/a 0**、pageerror 0 / requestfailed 0 /
+  console.error 0、canvas 1280×800。ブラウザのページは走り続けるので 13 判定の行は出ない
+  （出るのは編集・VM パネルの 43 と `done`）。
+* Battle 側は触っていない（`sabibots` は再ビルドと clippy だけ）。
+
+触っていないもの: `ruby/world.rb`、`ruby/creatures/*.rb`、`ruby/prelude.rb`、閾値
+（変異率 0.1、`mate_reach` ほか `world.rb` の数）。
