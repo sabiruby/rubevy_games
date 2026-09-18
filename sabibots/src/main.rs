@@ -413,11 +413,14 @@ fn main() {
                 .chain()
                 .in_set(RubevySet::Answer),
         );
-    if std::env::var("SABIBOTS_SELFTEST").is_ok() {
+    // `SABIBOTS_SELFTEST=1` on a PC, `?selftest` in the page's address (2026-09-18): a browser has
+    // no environment, and `platform.rs` is where the difference between the two builds lives
+    let checks_asked = platform::selftest_asked();
+    if checks_asked {
         // the handler check wants a fight, not a mouse, so it runs in both modes
         app.init_resource::<HandlerTest>().add_systems(Update, handler_selftest);
     }
-    if std::env::var("SABIBOTS_SELFTEST").is_ok() && headless.is_none() {
+    if checks_asked && headless.is_none() {
         // before `inspect_keys`, so a key it presses is still `just_pressed` when that reads it
         app.insert_resource(SelfTest { at: 2.0, ..default() })
             .add_systems(Update, selftest.before(inspect_keys));
@@ -886,9 +889,10 @@ fn show_vm(
     panel.fill(&world, script.task(), robot.name.clone(), robot.prelude_lines);
 }
 
-/// `SABIBOTS_SELFTEST=1`: drives the editor's buttons the way a click would (by setting
-/// `Editor::action`) and checks what happened to the robots and to the file — the part of the
-/// editor that cannot be clicked where there is no mouse. Logs `selftest:` lines and exits.
+/// `SABIBOTS_SELFTEST=1`, or `?selftest` in a page's address (2026-09-18): drives the editor's
+/// buttons the way a click would (by setting `Editor::action`) and checks what happened to the
+/// robots and to the file — the part of the editor that cannot be clicked where there is no
+/// mouse. Logs `selftest:` lines and, where there is something to exit to, exits.
 #[derive(Resource, Default)]
 struct SelfTest {
     step: usize,
@@ -1101,7 +1105,15 @@ fn selftest(
             ok(moved, "and the match moves again: somebody has driven");
             ok(match_clock.0 > test.clock, "the match's clock runs again");
             keys.release(KeyCode::KeyP);
-            exit.write(AppExit::Success);
+            // A PC run was asked for the checks on a command line and should give the prompt
+            // back. A page was asked for them in its address, by somebody who is looking at the
+            // arena — and `AppExit` there does not end a run, it stops the canvas for good
+            // (`platform::CHECKS_EXIT_WHEN_DONE`).
+            if platform::CHECKS_EXIT_WHEN_DONE {
+                exit.write(AppExit::Success);
+            } else {
+                info!("selftest: done — the match keeps running (a page has nothing to exit to)");
+            }
             test.step = 11;
         }
         _ => {}
@@ -1213,7 +1225,7 @@ fn stop_when_over(
     exit.write(AppExit::Success);
 }
 
-/// `SABIBOTS_SELFTEST=1`: the check the handler is for — a hit is noted with the way the robot was
+/// `SABIBOTS_SELFTEST=1` or `?selftest`: the check the handler is for — a hit is noted with the way the robot was
 /// facing, and 0.3 s later it must have run a handler and turned. It runs headless as well as in a
 /// window, since a handler needs a fight rather than a mouse:
 ///

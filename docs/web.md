@@ -66,6 +66,7 @@ Everything that differs is in each game's `src/platform.rs`, one module per targ
 | `SAVE_LABEL` | Save to file | Save in browser |
 | the garden's save (G3) | `garden.save.json`, a file | `localStorage`, key `garden:garden.save.json` |
 | the garden's checks | `GARDEN_SELFTEST=1` | `?selftest` in the page's address (G5) |
+| the Battle's checks | `SABIBOTS_SELFTEST=1` | `?selftest` in the page's address (2026-09-18) — the same query string, the same `CHECKS_EXIT_WHEN_DONE`, and 31 lines plus two per hit come out of `sabibots/?selftest` where a page before it said nothing |
 
 And outside that module:
 

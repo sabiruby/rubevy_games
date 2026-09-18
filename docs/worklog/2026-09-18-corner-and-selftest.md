@@ -212,3 +212,128 @@ def reach = 2.2 / def mate_reach = 3.0
 ```
 
 `apart` は 1.34 → 1.86、`start` は 2.73 → 3.22。どちらも §1.4 の式のとおり。
+
+---
+
+## 2. Battle のブラウザ版に `?selftest`
+
+### 2.1 足りなかったのは 2 つの関数だった
+
+箱庭は G5 で `platform::selftest_asked()` を持っている（PC は `GARDEN_SELFTEST`、
+ブラウザは `window.location.search` に `selftest` が入っているか）。Battle は
+`sabibots/src/main.rs` の中で `std::env::var("SABIBOTS_SELFTEST").is_ok()` を**2 か所で直に
+呼んでいた**——`wasm32` では `std::env::var` はコンパイルは通るが必ず `Err` を返すので、
+ブラウザ版はチェックを頼む口が無かった。
+
+`sabibots/src/platform.rs` の両方の `mod imp` に、箱庭と同じ 2 つを足した:
+
+* `selftest_asked()` — PC は環境変数、ブラウザは `?selftest`。
+* `CHECKS_EXIT_WHEN_DONE` — PC `true` / ブラウザ `false`。
+
+`main.rs` 側は `let checks_asked = platform::selftest_asked();` を 1 つ置いて 2 か所で使う。
+（`selftest` はシステム関数の名前なので、ローカル変数名は `checks_asked`。
+最初 `selftest` と書いて `no method named 'before' found for type 'bool'` で落ちた。）
+
+### 2.2 `AppExit` を書いたままにしない
+
+箱庭が G5 で踏んだ穴（`docs/web.md`「ページがマウスとキーボードに答えなくなる」）が
+Battle にもそのまま残っていた。編集チェックの最後は `exit.write(AppExit::Success)` で、
+ブラウザではこれは「走行の終わり」ではなく「この canvas が止まる」。winit の wasm の
+イベントループが回らなくなり、最後のフレームが表示されたままアリーナに見える。
+
+箱庭の `window_selftest` と同じ形にした:
+
+```rust
+if platform::CHECKS_EXIT_WHEN_DONE {
+    exit.write(AppExit::Success);
+} else {
+    info!("selftest: done — the match keeps running (a page has nothing to exit to)");
+}
+```
+
+なお `stop_when_over`（`--headless` の最後の `AppExit`）は触っていない。
+`Headless` Resource はブラウザでは存在しないので、そのシステム自体が登録されない。
+
+### 2.3 ページ側 — 鍵の一覧を箱庭に揃えた
+
+`web/sabibots.html` が `preventDefault` していたのは `F5` / `Tab` / `Ctrl+S` / `Ctrl+Enter` だけ。
+Battle が読む鍵を数えると `F1`（ガイド）と `F2`（VM パネル）があり、**チェックは `F2` を押す**。
+ブラウザには `F1` について自分の考えがある。`web/garden.html` と同じ書き方に揃えた
+（箱庭の `F9` は Battle が使わないので入れない）:
+
+```js
+const own = ["F1", "F2", "F5", "Tab"].includes(e.key);
+if (own || (mod && (e.key === "s" || e.key === "Enter"))) e.preventDefault();
+```
+
+ページ側に `?selftest` のための仕掛けは**要らなかった**。箱庭の `garden.html` にも無く、
+クエリ文字列は wasm 側が `window.location.search` で自分で読む。
+
+### 2.4 実測
+
+`web/build.sh sabibots` → `web/dist` を `python3 -m http.server 8099` で出し、
+playwright-core（`~/.cache/ms-playwright` の Chromium、`--use-angle=swiftshader
+--enable-unsafe-swiftshader`、`page.goto` は `waitUntil: 'commit'`）で 40 秒ずつ 4 回。
+
+```
+== status {"hidden":true,"text":"SabiRuby Battleloading the game…",
+           "canvas":{"w":1280,"h":800,"cw":1280,"ch":800}}
+== pageerror 0
+== requestfailed 0
+== console.error 0
+== selftest lines 43
+selftest: ok   `def` in the listing is painted in the keyword colour (kind Some(1))
+selftest: ok   typing marks the text edited
+selftest: ok   Apply gives robot 3 the edited behaviour
+…
+selftest: ok   nothing that was sleeping woke on the resume frame: the next one is due in 125 ticks, as it was two seconds ago
+selftest: ok   P again gives the budget back
+selftest: ok   the behaviours are running again
+selftest: ok   and the match moves again: somebody has driven
+selftest: ok   the match's clock runs again
+selftest: done — the match keeps running (a page has nothing to exit to)
+selftest: ok   3 blue/scout ran a handler within 0.3 s of the hit at 11.34 s
+selftest: ok   3 blue/scout turned within 0.3 s of the hit at 11.34 s (0.71 rad)
+…
+```
+
+**固定で 31 行**（編集チェックと VM パネルのチェック 30 + `done`）、そのあと
+**当たり 1 発につき 2 行**。40 秒の走行で全体は 33〜43 行になり、当たりの数だけ動く。
+4 回とも `pageerror` 0 / `requestfailed` 0 / `console.error` 0、canvas は 1280×800
+（`300×150` のままなら 1 フレームも完走していない、というのが黒画面のときの読み方）。
+
+FAIL は 4 回のうち 1 回だけ、`3 blue/scout ran a handler within 0.3 s of the hit at 3.78 s`
+という**当たりの行**で出た。3.78 秒は編集チェックが Apply / ApplyAll / Restart を押している
+最中で、`handler_selftest` の除外（0.3 秒以内に brain が差し替わった当たりは数えない）は
+*その* robot の brain が替わった場合しか見ていない。swiftshader のページはフレームレートが
+低いので 0.3 秒が数フレームしかない。**PC で窓を開けて `SABIBOTS_SELFTEST=1` を走らせても
+同じ組み合わせになる**ので今回の変更で増えた穴ではないが、ブラウザで初めて見えた。
+今回は手を付けていない（報告に上げる）。
+
+`?selftest` の付かない `sabibots/` は selftest の行 **0 行**（チェックは頼まれなければ走らない）。
+
+PC 側も測り直した:
+
+```
+$ SABIBOTS_SELFTEST=1 ./target/release/sabibots --headless 30
+selftest: ok   the handler tasks of every robot that went down ended (1/1)
+selftest: ok   26 hits on a robot with a handler were checked
+selftest: ok   a handler ran within 0.3 s of the hit (26/26)
+selftest: ok   the heading changed within 0.3 s of the hit (26/26)
+（FAIL 0）
+```
+
+### 2.5 箱庭のブラウザ版も測り直した
+
+同じ `web/build.sh` で箱庭も作り直して 60 秒:
+
+```
+== pageerror 0 / requestfailed 0 / console.error 0
+== selftest: ok 43、FAIL 0、n/a 0
+selftest: two hungry beetles 1.34 apart, each 2.73 behind a blade of its own at (-14.0, 9.0)
+          — from the rules' reach 1.10 and mate_reach 2.00
+```
+
+§1 の隅はブラウザでも同じ数で建つ（`world.rb` は `build.rs` でモジュールに埋め込まれ、
+`garden.rules` の道はプラットフォームに関係が無い）。43 行は `2026-09-18-editor-highlight.md`
+が測った 43 行と同じ。

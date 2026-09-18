@@ -723,6 +723,13 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25   # the handler check
 SABIBOTS_SELFTEST=1 docker/run.sh                            # that, and the editor's
 ```
 
+**Or `?selftest` in a page's address** (2026-09-18): `sabibots/?selftest` turns on exactly the
+same two sets in the browser build, because a page has no environment to put the variable in —
+`platform::selftest_asked()`, which is the garden's from G5 with this game's name in it. The one
+thing that differs there is the end: a page has nothing to exit to, so the checks say
+`selftest: done — the match keeps running` and leave the match running
+(`platform::CHECKS_EXIT_WHEN_DONE`, `docs/web.md`).
+
 `SABIBOTS_SELFTEST` turns on two sets of checks. The editor's need a window (above), and end with
 `F2` and `P`: the VM panel must start closed and open on `F2` (G9); pressing `P` must give the
 scripts a budget of 0 and stop them running, **and stop the match with them** — two seconds later
