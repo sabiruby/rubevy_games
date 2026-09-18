@@ -7,6 +7,10 @@
 //! * Browser (`web/build.sh`): the `ruby/` files built into the binary, a save goes to the
 //!   browser's `localStorage` and wins over the built-in file from then on; Ruby is compiled by
 //!   the playground's compiler module, which the page loads beside the game (`web/index.html`).
+//!
+//! And **how the checks are asked for** (2026-09-18): `SABIBOTS_SELFTEST` on a PC, `?selftest` in
+//! the page's address. That pair was the garden's from G5 and is this game's now, with the whole
+//! difference between the two builds in the two functions at the foot of each half.
 
 use std::path::{Path, PathBuf};
 
@@ -58,6 +62,20 @@ mod imp {
     pub fn highlight(src: &str) -> Vec<u8> {
         sabiruby_compiler::highlight(src.as_bytes())
     }
+
+    /// Whether the run was asked for the checks.
+    ///
+    /// An environment variable here, and the page's query string in a browser (2026-09-18): the
+    /// checks are the only way to see from outside that the editor's buttons still do what they
+    /// say, and a browser has no environment. It is the garden's `selftest_asked` with this
+    /// game's name in it, for the reason the head of this file gives.
+    pub fn selftest_asked() -> bool {
+        std::env::var("SABIBOTS_SELFTEST").is_ok()
+    }
+
+    /// Whether the checks end the run when they are done. On a PC they do: they were asked for on
+    /// a command line and the shell wants its prompt back.
+    pub const CHECKS_EXIT_WHEN_DONE: bool = true;
 
     /// A seed for a match that did not name one.
     pub fn clock_seed() -> u64 {
@@ -154,6 +172,28 @@ mod imp {
             _ => vec![0; src.len()],
         }
     }
+
+    /// Whether the page was asked for the checks: `sabibots/?selftest` (2026-09-18).
+    ///
+    /// The garden grew this in G5 and the Battle did not, so until today the browser build of
+    /// this game could be watched but not *checked* — the lines that say Apply reached one robot
+    /// and not its twin, that `P` stopped the match's clock as well as the VM, that a `def` in
+    /// the listing is painted in the keyword colour, are all written by the checks and there was
+    /// no way to ask for them here. The query string is the environment a page has. It is read
+    /// once, at startup, by the same `main` that reads the variable on a PC; everything after it
+    /// is the same code.
+    pub fn selftest_asked() -> bool {
+        web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .is_some_and(|q| q.contains("selftest"))
+    }
+
+    /// **A page has nothing to exit to** (the garden's G5 finding, `docs/web.md`): `AppExit` in a
+    /// browser is not "the run ended", it is "this canvas stops" — winit's wasm event loop stops
+    /// being pumped, every system stops running, and the last frame drawn stays on the screen
+    /// looking like an arena while no key, no click and no robot does anything ever again. So the
+    /// checks do not exit here; they say they are done and the match goes on.
+    pub const CHECKS_EXIT_WHEN_DONE: bool = false;
 
     pub fn clock_seed() -> u64 {
         js_sys::Date::now() as u64

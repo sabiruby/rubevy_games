@@ -85,10 +85,13 @@ world do
                            #   so nothing is born breeding
   def pop_max       = 24   # POP_MAX: how many creatures the garden holds
 
-  # The two of those the **game** needs, because the game builds the body: a newborn's meter and
-  # the cap. They go over once, at the start, with `day_length` — the same handover and the same
-  # reason, which is that Rust cannot ask this file a question (`world_prelude.rb`, `run_world`).
-  # Everything else above is read here and nowhere else.
+  # Four of those the **game** needs. Two because the game builds the body — a newborn's meter
+  # and the cap — and two because the game builds one *place* out of them: `reach` and
+  # `mate_reach` are where the selftest's meadow corner stands, so that two beetles walking to
+  # grass certainly end up close enough for these rules to pair them (2026-09-18). They go over
+  # once, at the start, with `day_length` — the same handover and the same reason, which is that
+  # Rust cannot ask this file a question (`world_prelude.rb`, `run_world`). Change one of them
+  # here and the corner moves with it; everything else above is read here and nowhere else.
 
   # === the rules ============================================================
   each_frame do |dt|

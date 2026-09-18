@@ -1949,28 +1949,54 @@ and one is about the genome (G2), which is the whole round trip in a single line
    Hash, or if `garden.spawn` could not read it.
 
    Left to chance this is a coin toss, so it is arranged the way the starvation and the probe are:
-   two hungry beetles with **different genomes** are put four and a half units either side of a
-   tight clump of four plants, in a corner nothing else is within eight units of. Not one rule is
-   bent for them. They walk to the grass because they are hungry, eat it because they are standing
-   on it, are full because they ate, and are told about each other because they are full and
-   standing together. In four consecutive runs the first child arrived at 1.95, 1.96, 2.00 and
-   6.42 seconds. Wild pairings happen too, and are counted in the same line.
+   two hungry beetles with **different genomes**, each with a plant of its own in front of it, in
+   a corner nothing else is within eight units of. Not one rule is bent for them. They walk to the
+   grass because they are hungry, eat it because they got near it, are full because they ate, and
+   are told about each other because they are well fed and close. Wild pairings happen too, and
+   are counted in the same line.
 
-   **"Standing together" is not what the corner actually arranges** (measured 2026-09-18). A
-   creature eats a plant from `reach` away — `1.1` plus half the plant's size, so 1.8 at
-   `plant_max` — and its script stops walking towards grass the moment its meter passes
-   `hungry_below`. Two beetles approaching one clump from opposite sides therefore stop about 1.8
-   short on each side and stand **up to 3.6 apart** while both eat, where `mate_reach` is 2.0.
-   What pairs them is the wandering they do once fed happening to bring them together, which it
-   does most of the time: over 64 twenty-second runs the corner produced a pairing in 62, and the
-   two it missed had the pair 2.8 and 4.1 apart in the frame they both passed `mate_hunger`, never
-   closer afterwards. Over forty ninety-second runs the first child arrived at 2.15 s at the
-   median and at 61.39 s at the worst — eight of the forty had to wait for a wild pairing.
+   **Where they stand is worked out from the rules' own two distances** (2026-09-18), and until
+   that day it was not. The corner used to be a tight clump of four plants with a beetle four and
+   a half units away on *either side* of it, and that cannot work: a creature eats a plant from
+   `reach` away — `1.1` plus half the plant's size, so 1.8 at `plant_max` — and its script stops
+   walking towards grass the moment its meter passes `hungry_below`. Two beetles approaching one
+   clump from opposite sides therefore stop about 1.8 short on each side and stand **up to 3.6
+   apart** while both eat, where `mate_reach` is 2.0. What paired them was the wandering they do
+   once fed happening to bring them together. Over 64 twenty-second runs the corner made a child
+   inside two seconds 35 times, and the other 29 runs waited on a wild pairing — one of them for
+   19 seconds.
 
-   The corner is left as it is, because making it certain means putting the two where `reach` and
-   `mate_reach` say they will end up, and both of those numbers live in `ruby/world.rb`, which the
-   player is invited to edit. A geometry worked out in Rust from copies of them would be right
-   until somebody changed the file.
+   So `ruby/world.rb` hands `reach` and `mate_reach` over with `day_length`, through the same
+   `garden.rules` (`RuleBook` in `main.rs`), and `plant_the_meadow` builds the corner out of them.
+   **The two beetles come from the same side**, each straight behind a blade of its own, so they
+   walk in parallel and stop side by side rather than face to face. Two numbers fall out of three
+   inequalities, and the corner takes the middle of each window:
+
+   | | has to be | because | with today's rules |
+   |---|---|---|---|
+   | `apart`, between the two blades | `> 2 × BEETLE_RADIUS` | or the two start inside each other | 0.80 … 1.87, so **1.34** |
+   | | `√(mate_reach² − (PLANT_MAX/2)²)` or less | two creatures that stopped at their own blade are `√(apart² + Δ²)` from each other, and `Δ` — how much further one stopped short than the other — is at most half a blade | |
+   | `start`, behind each blade | `> reach + PLANT_MAX/2` | or the beetle eats where it stands and never walks | 1.80 … 3.67, so **2.73** |
+   | | `≤` the smaller genome's `sight` | or `garden.nearest` does not find the blade | |
+   | | `2 × start + apart/2 ≤ 8` | or a blade of the field's own can be nearer to the beetle than its own blade, and eight units is all the corner is kept clear of | |
+
+   That third wall is the one that was doing the damage, and it is not about `mate_reach` at all.
+   Seven of sixteen traced runs at a start of 4.4 had a beetle walking the *wrong way*, to a stray
+   blade 3.6 away that two other creatures were already eating. At 2.73 the nearest blade the
+   field can put down is 5.19 away.
+
+   The corner is planted a frame or two into the run rather than in `spawn_world`, because
+   `spawn_world` is a `Startup` system and the world's script has not run a line by then; it waits
+   for `garden.rules`, or for the game finding out at startup that `world.rb` will not compile, in
+   which case it stands on the game's own `REACH` and `MATE_REACH` and says so in its line.
+   **No number is copied**: editing `reach` to 2.2 and `mate_reach` to 3.0 in `ruby/world.rb`
+   moves the corner to 1.86 apart and 3.22 back, with nothing rebuilt.
+
+   Over 64 twenty-second runs after the change, the first child arrived at 1.08–1.11 s in 59 of
+   them and the check passed in all 64 — where it had been 35 of 64 inside two seconds. What is
+   left is the beetle's own threshold: it stops steering for the grass the moment it is over
+   `hungry_below` and wanders, and about one run in twenty that wander takes it off its blade
+   before its meter reaches `mate_hunger`. It comes back when it is hungry again.
 
    **A run in which the rules paired nobody says `n/a`** instead, in the shape check 5 has.
    `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no `"mate"`
@@ -2029,47 +2055,49 @@ not what is running the garden:
 $ GARDEN_SELFTEST=1 ./target/release/garden --headless 90
 selftest: a beetle with no behaviour and nothing to eat stands at (-17.0, -12.0)
 selftest: a hungry beetle at (17.0, 12.0) with one plant 5.0 away
-selftest: two hungry beetles 9.0 apart, with four plants between them at (-14.0, 9.0)
 selftest: a tester script will ask for a creature with a gene missing
+selftest: two hungry beetles 1.34 apart, each 2.73 behind a blade of its own at (-14.0, 9.0) — from the rules' reach 1.10 and mate_reach 2.00
 [script] world: the wet season
 selftest: the grass grew at 0.03 s — `world.rb` is running
-selftest: Beetle 102v0 knows it is the wet season at 0.03 s
-[script] Rabbit: 7 trees, and 37 plants to start with
+selftest: Beetle 105v0 knows it is the wet season at 0.03 s
+[script] Rabbit: 7 trees, and 36 plants to start with
 [script] Tester: a genome with no sight: missing field `sight` (TypeError)
-selftest: first meal at 0.83 s
-selftest: the hungry beetle reached its plant at 1.78 s
-Beetle 112v0 starved at 1.9 s (age 1.9 s)
-a Beetle was born at 1.9 s (124v0) — speed 2.09, sight 7.7, appetite 1.08
-[script] Beetle: {"season":"wet","meals":1,"favorite":{"at":[-13.300000190734863,9.199999809265137],"size":1.3832914862781762}}
-selftest: the rules were taken away at 20.02 s
+selftest: first meal at 0.55 s
+a Beetle was born at 1.1 s (124v0) — speed 2.16, sight 7.4, appetite 0.93
+[script] Beetle: child 1: speed 2.16, sight 7.4, appetite 0.93
+selftest: the hungry beetle reached its plant at 1.79 s
+Beetle 115v0 starved at 1.9 s (age 1.9 s)
+[script] Beetle: {"season":"wet","meals":1,"favorite":{"at":[-14.0,9.668375015258789],"size":1.383029892668128}}
+selftest: the rules were taken away at 20.03 s
 selftest: the rules go back at 25.03 s (0 meters fell while they were away)
 night at 25.2 s
 day at 55.2 s
-a Beetle was born at 58.1 s (162v0) — speed 2.12, sight 8.0, appetite 1.03
+a Beetle was born at 80.7 s (172v0) — speed 2.25, sight 8.5, appetite 1.05
+[script] world: the dry season
 night at 85.2 s
-Beetle 162v0   hunger  89.5  age  31.9  at (   3.6,   -3.5)  v (  0.0,   0.0)      13 insn/frame  beetle.rb:109
-Rabbit 110v0   hunger  73.6  age  84.9  at (   5.6,  -11.8)  v (  0.0,   0.0)      20 insn/frame  rabbit.rb:66
+Beetle 131v0   hunger  86.0  age  75.7  at (   2.4,    3.6)  v (  0.0,   0.0)       9 insn/frame  beetle.rb:109
+Rabbit 114v0   hunger  89.7  age  84.9  at ( -14.8,   -0.7)  v (  0.0,   0.0)      27 insn/frame  rabbit.rb:66
 …
-15 creatures, 48 plants, night at phase 0.58
-12 × Beetle: mean genome speed 2.22, sight 8.3, appetite 1.03 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
-3 × Rabbit: mean genome speed 3.82, sight 11.7, appetite 1.00 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
-selftest: ok   somebody ate within 10 s (first at 0.83 s)
-selftest: ok   night arrived by 60 s (at 25.21 s)
-selftest: ok   the starved creature's entity is gone (112v0 starved at 1.90 s)
-selftest: ok   nothing walked through anything over 5392 frames (closest pair 1.000 of the radii, 0 frames under 0.9)
-selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.78 s)
-selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (22/22)
-selftest: ok   the creatures were asleep a second after night fell (14 of them, newborns aside, fastest 0.000 at 26.21 s)
-selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.91 s: speed 2.094 vs 2.400/2.000, mean 2.200; sight 7.680 vs 9.000/7.000, mean 8.000; appetite 1.078 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [4 pairings, 4 children]
+13 creatures, 45 plants, night at phase 0.58
+9 × Beetle: mean genome speed 2.13, sight 8.5, appetite 1.04 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
+4 × Rabbit: mean genome speed 3.59, sight 11.9, appetite 0.94 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
+selftest: ok   somebody ate within 10 s (first at 0.55 s)
+selftest: ok   night arrived by 60 s (at 25.20 s)
+selftest: ok   the starved creature's entity is gone (115v0 starved at 1.89 s)
+selftest: ok   nothing walked through anything over 5364 frames (closest pair 0.995 of the radii, 0 frames under 0.9)
+selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.79 s)
+selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (30/30)
+selftest: ok   the creatures were asleep a second after night fell (15 of them, newborns aside, fastest 0.000 at 26.21 s)
+selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.09 s: speed 2.161 vs 2.400/2.000, mean 2.200; sight 7.354 vs 9.000/7.000, mean 8.000; appetite 0.928 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [9 pairings, 3 children]
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
-selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5390 passes of `each_frame`)
-selftest: ok   the rules can be taken away and given back while the world runs (from 20.02 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
-selftest: ok   what the world declares reaches a creature's memory (Beetle 102v0 had "wet" in its @memory at 0.03 s)
+selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5362 passes of `each_frame`)
+selftest: ok   the rules can be taken away and given back while the world runs (from 20.03 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
+selftest: ok   what the world declares reaches a creature's memory (Beetle 105v0 had "wet" in its @memory at 0.03 s)
 selftest: ok   a save with the wrong version is refused (garden-from-another-version.json: saved with version 99, this garden reads 1)
 ```
 
 (That is one run of the build of 2026-09-18, printed as it came, with lines left out rather than
-changed: the creature table is cut to two of fifteen, one `@memory` is shown of the many, and the
+changed: the creature table is cut to two of thirteen, one `@memory` is shown of the many, and the
 timestamps and the log target are stripped as they are everywhere else in this file.)
 
 Eight runs of that at G2, and four more at G3. The genome check has passed every time — the first
@@ -2085,6 +2113,12 @@ were mended: **no FAIL of any kind**, and one run out of the forty printed the f
 1.9 — the shape the survey measured). The closest any two colliders came was between 0.981 and
 1.000 of the sum of their radii, with 0.998 at the median and no frame under 0.9 in any run; the
 fastest anything moved a second after nightfall was 0.000 in all forty.
+
+**Five ninety-second runs and sixty-four twenty-second ones of the build after the meadow corner
+was rebuilt** (2026-09-18, eight at a time, each with a `TMPDIR` of its own): the five long runs
+printed **13 ok and nothing else**, and the eighth check passed in all 64 of the short ones, with
+the corner's own child at 1.08–1.11 s in 59 of them. Before the corner was rebuilt the same 64
+runs put it inside two seconds 35 times.
 `docs/worklog/2026-09-18-selftest-fixes.md` has the table and what each of the three fixes was
 measured against.
 

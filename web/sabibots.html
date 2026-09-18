@@ -27,11 +27,16 @@ import { Sabi, OK } from "./compiler/sabi.js";
 const status = document.getElementById("status");
 const step = document.getElementById("step");
 
-// keys the game uses and the browser would take: F5 (Apply) reloads, Ctrl+S (Save) opens a
-// save dialog, Ctrl+Enter, Tab (next robot) moves the focus away
+// Keys the game uses and the browser would take. F5 is the one that matters: in the arena it is
+// Apply, and in a browser it reloads the page. The capture phase runs before anything else can
+// see the event, so preventDefault here stops the browser and the game still gets the key.
+// F1 is the guide and F2 the VM panel — both of which `?selftest` presses — and a browser has its
+// own idea about F1; Tab moves the focus off the canvas; Ctrl+S is Save page and Ctrl+Enter
+// belongs to the address bar. The garden's page keeps the same list (`web/garden.html`).
 addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
-  if (e.key === "F5" || e.key === "Tab" || (mod && (e.key === "s" || e.key === "Enter"))) e.preventDefault();
+  const own = ["F1", "F2", "F5", "Tab"].includes(e.key);
+  if (own || (mod && (e.key === "s" || e.key === "Enter"))) e.preventDefault();
 }, { capture: true });
 
 try {
