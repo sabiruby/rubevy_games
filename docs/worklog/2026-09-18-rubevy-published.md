@@ -154,3 +154,13 @@ lock から SabiRuby の rev を取る段も、Playground のコンパイラを�
 |---|---|---|---|---|---|---|
 | `sabiruby.github.io/rubevy_games/garden/?selftest` | 60 | 1280×800 | 0 | 0 | 0 | 57 行 — ok 43 / FAIL 0 |
 | `sabiruby.github.io/rubevy_games/sabibots/?selftest` | 40 | 1280×800 | 0 | 0 | 0 | 31 行 — ok 30 / FAIL 0 |
+
+## 追記（2026-09-19）— `rubevy-arena` は今は crates.io に出さない
+
+著者判断: 公開 crate にするのは、構成を見直してからにする。今の中身は 2 種類が混ざっている
+（`crates/rubevy-arena/src/lib.rs` の冒頭の一覧）— rubevy を使う誰にでも役に立つもの
+（`Editor`、`VmInspector`、`Watch`、`CodePanel`）と、この 2 つのゲームの都合のもの
+（`Guide` とその日本語フォント、`Settings`、`ArenaPlugin` の正方形の 2D カメラ、`Hud`）。
+見直すときの論点: どこで切るか、名前（arena は後者の名前）、`bevy_egui` の版への依存、
+置き場所（games の workspace の中か、独立した repo か）。それまでは GitHub の公開 repo の
+中の crate のまま（git 依存でなら引ける）。
