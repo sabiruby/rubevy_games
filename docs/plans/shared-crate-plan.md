@@ -182,6 +182,7 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 
 | 日付・段階 | 気づいた点 | どこ | 属する先 | 状況（計画に足した／著者判断待ち／見送り・理由） |
 |---|---|---|---|---|
+| 09-20 R2 | （rubevy の R2 から）箱庭は 1 匹ごとに `Assets::add` している（`give_mind` が spawn と出産のたび）。VM の irep は rubevy の R2 で 1 部になったが、`Assets<MrbAsset>` には同じバイト列が匹数ぶん残る。種ごとに 1 つの `Handle` を持てば消える | `garden/src/main.rs:2660-2685` | ゲーム固有（箱庭） | S5b のついでに直すか別に。**著者判断待ち**（小） |
 | 09-20 S2 | `replace_script` に替えられる同じ 3 行があと 2 か所ある: garden の `wear_the_rules`（`Script::<World>` 版）と sabibots のファイル監視からの再読み込み。計画書 3.2 が 2 つしか名指ししていなかった | `garden/src/main.rs`、`sabibots/src/main.rs:2304-2308` | 計画書（S2 の書き漏らし） | 計画に足す: S3 の最初に替える |
 | 09-20 S2 | **`Program` にコンパイラへ渡すファイル名の置き場所が無い**。`name` は区切りコメント専用で、呼び出し側が同じ `name` を 2 回書く（片方だけ変えると食い違う）。`&str` 4 本は取り違えなかった（変数名がそのまま引数の順に並ぶ）。ビルダは要らない | rubevy `src/source.rs` | rubevy（API） | rubevy の計画 7 章に写す。直すなら `Program` が `name` を持って読めるように |
 | 09-20 S2 | Battle の「当たりに依らない行」の基準に、走行次第で入れ替わる行が混じっている（編集チェック中の当たりの除外行、撃破の有無で入れ替わる `handler tasks … ended` ⇄ `no robot with a handler was down long enough`） | `sabibots/src/main.rs:1308,1429`、`docs/README.md` の基準 | 確認の作法／本の素材 | **著者判断待ち**（小）: n/a の文面を 1 つに決めるか、基準の行を列挙して `docs/` に置くか |
