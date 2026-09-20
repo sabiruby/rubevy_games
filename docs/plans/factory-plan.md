@@ -139,8 +139,8 @@ end
 
 ### 3.5 窓（F5）
 
-- 共有 crate: `Editor`（インサータ、`data.rb`、`control.rb` を選べる）、`VmInspector`、`Guide`（英日、`factory/src/guide_text.rs` →
-  `tools/subset-font.sh:45` に足して**フォントを切り直す**）、`Settings`、パン・ズームのカメラ、`Watch`。
+- `rubevy-egui`: `Editor`（インサータ、`data.rb`、`control.rb` を選べる）、`VmInspector`、`Watch`。`games-shell`: `platform`、`checks`、`Args`、`Guide`（英日、`factory/src/guide_text.rs` →
+  `tools/subset-font.sh:45` に足して**フォントを切り直す**）、`Settings`、`CameraPlugin::showing(half_height)`（パン・ズーム、クリックは `WorldClick`、Ruby からは `CameraView` に書く）。
 - HUD は egui。`FrameStats`（R5）: 命令数 / 予算、走ったタスク、持ち越し、落としたメッセージ。機械の数、ベルト上のアイテムの数。
 - `P` で世界ごと停止（2 本と同じ作り）。セーブ / ロード（serde、先頭に `version`、違う版は読まない。`docs/web.md:187-194`）。
 - **Ruby からカメラ**（R9 の層 + S3 の答える側）: `control.rb` が勝ったときに納品口へカメラを寄せる、ガイドの中の「ここを見て」、のどちらか 1 つを実例として入れる。
