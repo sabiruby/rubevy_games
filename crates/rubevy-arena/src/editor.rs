@@ -272,6 +272,7 @@ impl Plugin for EditorPlugin {
             app.insert_resource(Highlight(highlight));
         }
         app.init_resource::<Editor>()
+            .init_resource::<crate::ViewInsets>()
             .add_systems(EguiPrimaryContextPass, draw_editor);
     }
 }
@@ -281,8 +282,15 @@ fn draw_editor(
     mut editor: ResMut<Editor>,
     highlight: Option<Res<Highlight>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mut insets: ResMut<crate::ViewInsets>,
 ) {
     if !editor.open {
+        // S3: a camera reads this to keep what matters out from under the panel. Written only
+        // when it changes, so a closed editor does not wake the camera sixty times a second.
+        if insets.left != 0.0 || insets.right != 0.0 {
+            insets.left = 0.0;
+            insets.right = 0.0;
+        }
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -326,8 +334,9 @@ fn draw_editor(
     // egui 0.36 grows panels inside a Ui; a window takes the context, and a movable one suits an
     // editor that shares the screen with the game. It starts at the top right; drag its title bar
     // to put it anywhere else.
-    let right = ctx.content_rect().right();
-    egui::Window::new("Ruby")
+    let content = ctx.content_rect();
+    let right = content.right();
+    let panel = egui::Window::new("Ruby")
         .collapsible(false)
         .resizable(true)
         .default_width(WIDTH)
@@ -412,6 +421,22 @@ fn draw_editor(
                 });
             });
         });
+
+    // **What the panel covers, for whatever camera is behind it** (S3, [`crate::ViewInsets`]).
+    // The band is measured from the panel's own rectangle rather than from `WIDTH` below,
+    // because egui may have grown it to fit its buttons and because the player may have dragged
+    // or resized it; it is claimed on whichever side of the window the panel is nearer to, since
+    // a panel that has been dragged to the left of the screen is covering the left.
+    let covered = panel.map(|p| p.response.rect);
+    let (left, right_side) = match covered {
+        Some(rect) if rect.center().x >= content.center().x => {
+            (0.0, (content.right() - rect.left()).max(0.0))
+        }
+        Some(rect) => ((rect.right() - content.left()).max(0.0), 0.0),
+        None => (0.0, 0.0),
+    };
+    insets.left = left;
+    insets.right = right_side;
 }
 
 const FONT: f32 = 13.0;
