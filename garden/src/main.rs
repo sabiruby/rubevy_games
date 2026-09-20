@@ -52,7 +52,7 @@ use rubevy::{
 use games_shell::GuidePlugin;
 use rubevy_egui::{EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
-use sabiruby::{IntoRuby, Vm};
+use sabiruby::{IntoRuby, Value, Vm};
 use serde::{Deserialize, Serialize};
 
 use crate::genome::{Birth, CreatureSpec, Genome};
@@ -2123,7 +2123,10 @@ struct SelfTest {
     /// `court` was the rule and knew both parents; the rule is `ruby/world.rb`'s now and reports
     /// nothing, so it is taken in `answer_spawn` out of the asker's `Creature` and the `Breeding`
     /// the rules wrote on it — the check watches the world instead of being told.
-    matings: Vec<(Entity, Genome, Genome, f32)>,
+    /// **and, since S5b-4, the rate its file mutates at**, read out of the VM in that same
+    /// frame ([`mutation_rate_of`]): the file may be edited between a child being asked for and
+    /// the check printing its line, and what the child was made by is the file as it was.
+    matings: Vec<(Entity, Genome, Genome, f32, Option<f32>)>,
     /// how many of the rules' `"mate"`s the check may be judged on, and how many children came
     /// back. The first is counted where the message is carried across to the creatures' VM
     /// (`answer_world`), and it is the only thing left in this source that knows that name — for
@@ -4973,7 +4976,7 @@ fn children_arrive(
                     .parent
                     .and_then(|m| test.matings.iter().rev().find(|(e, ..)| *e == m).copied());
                 let (says, ok) = match mating {
-                    Some((_, one, two, _)) => judge_child(&birth.genome, &one, &two),
+                    Some((_, one, two, _, rate)) => judge_child(&birth.genome, &one, &two, rate),
                     None => ("its parents' pairing was not recorded".into(), false),
                 };
                 test.born_at = Some(now);
@@ -5046,9 +5049,15 @@ fn tell_newborns_the_sky(
 /// Is this child the mutated average of those two parents? Every gene has to lie within the
 /// mutation rate of the parents' mean, and at least one has to have actually moved — a child
 /// exactly on the mean would mean `mutate` did nothing, and a child on a parent would mean `mix`
-/// did nothing. The rate is the one the beetle's script passes to `mutate`, which is 0.1.
-fn judge_child(child: &Genome, one: &Genome, two: &Genome) -> (String, bool) {
-    const RATE: f32 = 0.1;
+/// did nothing.
+///
+/// **The rate is read out of the VM** ([`mutation_rate_of`]), in the frame the child was asked
+/// for, off the class of the creature that asked. It used to be a `const 0.1` here with a
+/// comment saying it was a copy of `beetle.rb`'s — which meant that raising the rate in the
+/// editor, which is a thing this game invites, turned the check into a FAIL. `rate` is `None`
+/// for a file that does not name its rate, and then the stand-in is what it always was.
+fn judge_child(child: &Genome, one: &Genome, two: &Genome, rate: Option<f32>) -> (String, bool) {
+    let rate = rate.unwrap_or(MUTATION_RATE);
     let genes = [
         ("speed", child.speed, one.speed, two.speed),
         ("sight", child.sight, one.sight, two.sight),
@@ -5062,7 +5071,7 @@ fn judge_child(child: &Genome, one: &Genome, two: &Genome) -> (String, bool) {
         let drift = (got - mean).abs();
         // the mutation is a multiplication by 1 ± rate, so this is how far from the mean it may
         // be; the epsilon is the f32 round trip through the Ruby Float and back
-        if drift > RATE * mean.abs() + 1e-3 {
+        if drift > rate * mean.abs() + 1e-3 {
             ok = false;
         }
         if got != a && got != b {
@@ -5070,6 +5079,8 @@ fn judge_child(child: &Genome, one: &Genome, two: &Genome) -> (String, bool) {
         }
         said.push(format!("{name} {got:.3} vs {a:.3}/{b:.3}, mean {mean:.3}"));
     }
+    // the sentence is left exactly as it was: `docs/verification/selftest-lines.md` is a list of
+    // the checks' sentences and a stage that means to change nothing has to diff empty against it
     (format!("{} ({})", said.join("; "), if moved { "mutated off both parents" } else { "identical to a parent" }), ok && moved)
 }
 
@@ -5120,7 +5131,7 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
     // and the first `garden.spawn` this frame that was refused, for the selftest's malformed Hash
     let mut refused: Option<String> = None;
     // W2: the two parents of each child asked for, for the eighth check (`answer_spawn`)
-    let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
+    let mut pairings: Vec<(Entity, Genome, Genome, Option<f32>)> = Vec::new();
     // and who asked for one at all, for the same check's other half (`close_courtings`)
     let mut asked_for_a_child: Vec<Entity> = Vec::new();
     // who asked, for the HUD's frames-per-decision (G4): a gap in a task's instruction count that
@@ -5224,7 +5235,7 @@ fn answer_garden(world: &mut bevy::ecs::world::World) {
     {
         let now = world.resource::<Time>().elapsed_secs() + sky;
         let mut test = world.resource_mut::<SelfTest>();
-        test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
+        test.matings.extend(pairings.into_iter().map(|(who, one, two, rate)| (who, one, two, now, rate)));
     }
     // and the eighth check's pairings, settled once a frame: this is the system the creatures'
     // `garden.spawn` arrives at, so it is the one that knows whether a pairing was walked
@@ -5287,7 +5298,7 @@ fn answer_spawn<M: 'static>(
     request: &rubevy::Request,
     newborn: &mut Vec<Birth>,
     refused: &mut Option<String>,
-    pairings: &mut Vec<(Entity, Genome, Genome)>,
+    pairings: &mut Vec<(Entity, Genome, Genome, Option<f32>)>,
     asked_for_a_child: &mut Vec<Entity>,
 ) {
     // Whoever asked has walked the road the eighth check is about, whatever the answer turns out
@@ -5315,7 +5326,12 @@ fn answer_spawn<M: 'static>(
                 && let Some(other) = world.get::<Breeding>(asker).map(|b| b.partner)
                 && let Some(two) = world.get::<Creature>(other).map(|c| c.genome)
             {
-                pairings.push((asker, one, two));
+                // and what its file mutates at, asked of the VM here because here is where the
+                // task that asked is still in hand (S5b-4)
+                let rate = world
+                    .get::<ScriptTask<M>>(asker)
+                    .and_then(|task| mutation_rate_of(&scripts.vm, task.task()));
+                pairings.push((asker, one, two, rate));
             }
             newborn.push(spec.into_birth(request.entity));
             scripts.answer(request, Answer::Bool(true));
@@ -5544,7 +5560,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     let mut newborn: Vec<Birth> = Vec::new();
     let mut refused: Option<String> = None;
-    let mut pairings: Vec<(Entity, Genome, Genome)> = Vec::new();
+    let mut pairings: Vec<(Entity, Genome, Genome, Option<f32>)> = Vec::new();
     // nothing in `world.rb` asks for a child — the rules pair, the creatures spawn — but
     // `answer_spawn` is shared with the creatures' VM and takes it either way
     let mut asked_for_a_child: Vec<Entity> = Vec::new();
@@ -5830,7 +5846,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     {
         let now = world.resource::<Time>().elapsed_secs() + sky;
         let mut test = world.resource_mut::<SelfTest>();
-        test.matings.extend(pairings.into_iter().map(|(who, one, two)| (who, one, two, now)));
+        test.matings.extend(pairings.into_iter().map(|(who, one, two, rate)| (who, one, two, now, rate)));
     }
     if let Some(seconds) = day_length {
         let mut sky = world.resource_mut::<Sky>();
@@ -6183,6 +6199,47 @@ fn listens_for(vm: &mut Vm, task: ObjId, event: &str) -> Option<bool> {
     let handlers = sabiruby_serde::from_value::<Vec<(String, u32)>>(vm, handlers).ok()?;
     Some(handlers.iter().any(|(name, _)| name == event))
 }
+
+/// The class-level instance variable the prelude's `Creature.mutation_rate` fills: the number a
+/// species' file passes to `Genome#mutate`, named rather than written into the call.
+const MUTATION_RATE_IVAR: &str = "@mutation_rate";
+
+/// **How far a child of this creature's species may stray from its parents' mean — asked of the
+/// file that decides it** (S5b-4).
+///
+/// The eighth check measures a child against `mix` and `mutate`, and `mutate`'s rate is
+/// `beetle.rb`'s: the line is `my_genome.mix(mate).mutate(mutation_rate)`. Until S5b-4 the check
+/// kept `const RATE = 0.1` — a copy, and one that said so in its own comment — so **a player who
+/// opened the editor and raised the rate turned the check into a FAIL**, on a file this game
+/// exists to invite people to edit (`docs/numbers.md` §7-3).
+///
+/// It is the road [`listens_for`] takes, and the same three tools: the task's `@being` is the
+/// creature object, its class is the anonymous subclass `creature "Beetle" do … end` made, and
+/// `Creature.mutation_rate` has put the number on that class since the file was loaded.
+///
+/// `None` where there is nothing to ask — no `@being` yet, or a species file that never names a
+/// rate, which is every file written before this stage (they pass the number to `mutate`
+/// directly, and it is not readable from out here). The caller then judges on [`MUTATION_RATE`],
+/// which is what it always judged on.
+fn mutation_rate_of(vm: &Vm, task: ObjId) -> Option<f32> {
+    let being = vm.ivar_get(task, BEING_IVAR);
+    being.obj()?;
+    let class = vm.real_class_of(being);
+    match vm.ivar_get(class, MUTATION_RATE_IVAR) {
+        Value::Float(n) => Some(n as f32),
+        Value::Int(n) => Some(n as f32),
+        _ => None,
+    }
+}
+
+/// What the eighth check judges a child by when the file that made it does not say — every
+/// creature file written before S5b-4, including one a player has in their browser.
+///
+/// It is `ruby/creatures/beetle.rb`'s `mutation_rate` as it ships, and it is a **stand-in** in
+/// exactly the sense [`TOUCH_REACH`] is: the number belongs to the file, the check reads the
+/// file's, and this is what is left for a file that cannot be asked. **Source**: the line in
+/// `beetle.rb`, which has always been the only source there was.
+const MUTATION_RATE: f32 = 0.1;
 
 /// The instance variable a creature's own file writes when the sun goes down: `on(:night)` sets
 /// it, `on(:day)` clears it, and every other handler in both creature files starts by reading it.
