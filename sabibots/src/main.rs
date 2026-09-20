@@ -54,6 +54,15 @@ const BASE_SPREAD: f32 = 0.02;
 /// "leave this as it is", for any part of `act` the brain does not set
 const UNSET: f64 = -999.0;
 
+/// **Half the width of the arena**, in world units: the middle to a wall.
+///
+/// It was `games_shell::ArenaSize`'s default until S5b-1, which is a game's number living in the
+/// shared shell — how much world a window holds is a thing only the game knows, and the third
+/// game has no arena at all. **Source unknown**: it arrived with the first match and nothing
+/// says why 32 (`docs/numbers.md` §1.1). A match shrinks the field from here
+/// (`arena.shrink`), and `restart_match` puts it back.
+const ARENA_HALF_WIDTH: f32 = 32.0;
+
 /// The teams a match can put on the field, in the order Ruby names them.
 const TEAMS: [(&str, &str, &str); 4] = [
     ("red", "sprites/tankBody_red_outline.png", "sprites/bulletRed1_outline.png"),
@@ -302,7 +311,7 @@ fn main() {
             ))
             // no renderer here, but the same systems run and they load sprites
             .init_asset::<Image>()
-            .insert_resource(ArenaSize::default())
+            .insert_resource(ArenaSize(ARENA_HALF_WIDTH))
             .insert_resource(Headless { until: seconds })
             .init_resource::<Hud>()
             .add_systems(Update, stop_when_over);
@@ -339,15 +348,19 @@ fn main() {
                     }),
                     ..default()
                 }),
-                ArenaPlugin::default(),
+                ArenaPlugin::showing(ARENA_HALF_WIDTH),
                 // H2: the editor, with the lexer behind its colours. Which lexer is
                 // `platform.rs`'s to know — the compiler linked in on a PC,
                 // `window.sabibotsHighlight` in a page.
                 EditorPlugin::with_highlighter(platform::highlight),
                 VmInspectorPlugin,
                 // G6: the `H` panel, and with it the Japanese font (`games_shell::guide`)
-                GuidePlugin,
+                GuidePlugin::default(),
                 RubevyPlugin::default(),
+                // S5b-1: whatever the player left in `sabibots.settings.txt` about the panels —
+                // how big the editor is, how big the VM panel is, the HUD's text. Each panel
+                // knows its own keys; this is the wiring.
+                games_shell::PanelSettingsPlugin,
             ))
             // G6. A picture is asked for one thing, and the panel sits over the middle of the
             // window — which would be that thing. So a `--shot` run starts with it shut unless
@@ -1580,7 +1593,7 @@ fn restart_match(
     for entity in &others {
         commands.entity(entity).despawn();
     }
-    arena.0 = ArenaSize::default().0;
+    arena.0 = ARENA_HALF_WIDTH;
     shots.0.clear();
     events.0.clear();
     hud.line = "the match starts again".into();

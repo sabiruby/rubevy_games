@@ -24,9 +24,141 @@ use rubevy::{RubevySet, ScriptWorld};
 use sabiruby::inspect::HeapView;
 use sabiruby::value::ObjId;
 
+// ---------------------------------------------------------------------------------------------
+// The numbers (S5b-1). Every one of them is a field of `InspectStyle`, which sits in
+// `VmInspector` — the resource whose method `fill` is, and which a headless game builds by hand
+// without any of this crate's plugins being in the app. The `const`s are the names of the
+// defaults and nothing else; each says where its value came from, and most of them say "unknown".
+// ---------------------------------------------------------------------------------------------
+
 /// How many of the innermost frames of a context carry their registers. A brain waiting for the
 /// game stands about three frames deep in the DSL, so six reaches its own code as well.
+///
+/// *Reason only*: the sentence above is the record. Nobody counted the DSL's frames.
 pub const REGS_FRAMES: usize = 6;
+
+/// The size of the letters in the panel's monospace lines. **Source unknown**.
+pub const FONT: f32 = 12.0;
+
+/// How tall the window stands by default, and how much of it the frames and the registers get.
+/// **Source unknown** — all three arrived with the panel.
+pub const PANEL_HEIGHT: f32 = 440.0;
+pub const FRAMES_HEIGHT: f32 = 148.0;
+pub const REGS_HEIGHT: f32 = 150.0;
+
+/// How wide it stands, and how much of the window is left clear when the window is narrower than
+/// that. **Source unknown** for both.
+pub const WIDTH: f32 = 640.0;
+pub const WIDTH_MARGIN: f32 = 16.0;
+
+/// How long a rendered value may be before it is cut, in characters. **Source unknown**; what is
+/// written down is only that a class rendered as `#<#<Class:0x…>:0x… ivars=3>` is not worth the
+/// room.
+pub const VALUE_CHARS: usize = 52;
+
+/// How long a name from the frames may be before it is cut ( `nearest(:Plant)`, `:Hunger`).
+/// **Source unknown**.
+pub const NAME_CHARS: usize = 40;
+
+/// How many frames a headless log prints of a stack. **Source unknown**.
+pub const LOG_FRAMES: usize = 4;
+
+/// How much of a new reading goes into the instructions-per-frame figure the panel watches for
+/// itself. **Source unknown**; what is written down is why it is smoothed at all — a parked task
+/// spends nothing on most frames, and 0, 0, 340, 0 is not a number anybody can read.
+pub const INSN_SMOOTHING: f32 = 0.05;
+
+/// **Every number the VM panel has.** It is a field of [`VmInspector`] rather than a resource of
+/// its own because [`VmInspector::fill`] is a method — a game with no window builds a panel by
+/// hand to print a log with (SabiRuby Battle's `--headless`), and none of this crate's plugins is
+/// in that app to have inserted a second resource.
+///
+/// A game hands its own in at startup, writes into it while it runs, or lets a player change the
+/// sizes through the `key=value` store ([`InspectStyle::read_from`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectStyle {
+    /// [`REGS_FRAMES`] — and the one number here that costs something: `Vm::snapshot` carries
+    /// this many frames' registers, every frame the panel is open.
+    pub regs_frames: usize,
+    /// [`FONT`]
+    pub font: f32,
+    /// [`PANEL_HEIGHT`]
+    pub panel_height: f32,
+    /// [`FRAMES_HEIGHT`]
+    pub frames_height: f32,
+    /// [`REGS_HEIGHT`]
+    pub regs_height: f32,
+    /// [`WIDTH`]
+    pub width: f32,
+    /// [`WIDTH_MARGIN`]
+    pub width_margin: f32,
+    /// [`VALUE_CHARS`]
+    pub value_chars: usize,
+    /// [`NAME_CHARS`]
+    pub name_chars: usize,
+    /// [`LOG_FRAMES`]
+    pub log_frames: usize,
+    /// [`INSN_SMOOTHING`]
+    pub insn_smoothing: f32,
+}
+
+impl Default for InspectStyle {
+    fn default() -> Self {
+        InspectStyle {
+            regs_frames: REGS_FRAMES,
+            font: FONT,
+            panel_height: PANEL_HEIGHT,
+            frames_height: FRAMES_HEIGHT,
+            regs_height: REGS_HEIGHT,
+            width: WIDTH,
+            width_margin: WIDTH_MARGIN,
+            value_chars: VALUE_CHARS,
+            name_chars: NAME_CHARS,
+            log_frames: LOG_FRAMES,
+            insn_smoothing: INSN_SMOOTHING,
+        }
+    }
+}
+
+impl InspectStyle {
+    /// **What a player left in a `key=value` store**, for the numbers a person can sensibly be
+    /// asked about: how big the panel is, and how deep into the VM it looks. The store is the
+    /// game's (`games_shell::Settings`), which this crate does not depend on, so what comes in is
+    /// a function that answers a key.
+    ///
+    /// | key | field |
+    /// |---|---|
+    /// | `vm_font` | [`InspectStyle::font`] |
+    /// | `vm_panel_height` | [`InspectStyle::panel_height`] |
+    /// | `vm_frames_height` | [`InspectStyle::frames_height`] |
+    /// | `vm_regs_height` | [`InspectStyle::regs_height`] |
+    /// | `vm_width` | [`InspectStyle::width`] |
+    /// | `vm_regs_frames` | [`InspectStyle::regs_frames`] |
+    /// | `vm_value_chars` | [`InspectStyle::value_chars`] |
+    ///
+    /// A key that is not there leaves the field alone. A count that is written as a fraction is
+    /// truncated, and one written as a negative number is read as 0 — which for `vm_regs_frames`
+    /// means a snapshot with no registers in it, not a panic.
+    pub fn read_from(&mut self, number: impl Fn(&str) -> Option<f32>) {
+        let take = |key: &str, slot: &mut f32| {
+            if let Some(value) = number(key) {
+                *slot = value;
+            }
+        };
+        let count = |key: &str, slot: &mut usize| {
+            if let Some(value) = number(key) {
+                *slot = value.max(0.0) as usize;
+            }
+        };
+        take("vm_font", &mut self.font);
+        take("vm_panel_height", &mut self.panel_height);
+        take("vm_frames_height", &mut self.frames_height);
+        take("vm_regs_height", &mut self.regs_height);
+        take("vm_width", &mut self.width);
+        count("vm_regs_frames", &mut self.regs_frames);
+        count("vm_value_chars", &mut self.value_chars);
+    }
+}
 
 /// One frame of the task, innermost first.
 #[derive(Debug, Clone, Default)]
@@ -215,6 +347,11 @@ pub struct VmInspector {
     /// sets it to `world_prelude.rb` when the panel is pointed at the world's VM, whose program
     /// is a different file in front of a different file (2026-09-18).
     pub prelude_file: Option<String>,
+    /// **How big the panel is, how deep into the VM it looks, and where it cuts a long line**
+    /// ([`InspectStyle`]). It travels with the panel rather than in a resource of its own
+    /// because [`VmInspector::fill`] needs it and a headless game calls that on a `VmInspector`
+    /// it made by hand.
+    pub style: InspectStyle,
 }
 
 impl VmInspector {
@@ -244,7 +381,7 @@ impl VmInspector {
         self.title = title;
         self.note.clear();
         let vm = &world.vm;
-        let snapshot = vm.snapshot(REGS_FRAMES);
+        let snapshot = vm.snapshot(self.style.regs_frames);
         self.heap = Some(snapshot.heap.clone());
         self.contexts = snapshot.contexts.len();
         self.contexts_live = snapshot
@@ -261,7 +398,8 @@ impl VmInspector {
         }
         let this_frame = self.instructions.saturating_sub(self.watched_at) as f32;
         self.watched_at = self.instructions;
-        self.watched_per_frame = self.watched_per_frame * 0.95 + this_frame * 0.05;
+        let keep = 1.0 - self.style.insn_smoothing;
+        self.watched_per_frame = self.watched_per_frame * keep + this_frame * self.style.insn_smoothing;
 
         let Some(ctx) = vm.task_context(task) else {
             self.frames.clear();
@@ -332,7 +470,7 @@ impl VmInspector {
                 }
             })
             .collect();
-        self.waiting = why(&self.frames);
+        self.waiting = why(&self.frames, self.style.name_chars);
         self.waiting_at = self.frames.iter().find(|f| f.own).map(|f| f.at.clone());
         // the innermost frame of the robot's own file, which is where its author is reading. A
         // brain waiting for a scan stands in `pop`, in `incoming`, in `Kernel#loop` — three
@@ -407,7 +545,7 @@ impl VmInspector {
             "vm:   details: {} — contexts {} live of {} — {heap}",
             self.status, self.contexts_live, self.contexts
         ));
-        for (i, f) in self.frames.iter().enumerate().take(4) {
+        for (i, f) in self.frames.iter().enumerate().take(self.style.log_frames) {
             let locals: Vec<String> = f
                 .regs
                 .iter()
@@ -431,7 +569,7 @@ impl VmInspector {
 /// Innermost first. A `pop` frame means a queue, and then the first frame behind it that is not
 /// another `pop` says which queue it is: the plumbing each kind of wait goes through is a
 /// different class, and a class is a fact the VM reports rather than a string to be parsed.
-fn why(frames: &[FrameRow]) -> Waiting {
+fn why(frames: &[FrameRow], name_chars: usize) -> Waiting {
     let Some(inner) = frames.first() else { return Waiting::Nothing };
     if !inner.is_pop() {
         return Waiting::Sleep;
@@ -445,7 +583,7 @@ fn why(frames: &[FrameRow]) -> Waiting {
         // `e[:Hunger]` → `Rubevy::Entity#[]` → `#get` → `Rubevy.ask("component.get", …).pop`.
         // Answered inside the tick, so a task is only found here when the tick ran out of frame.
         if f.class == "Rubevy::Entity" {
-            return Waiting::Read(f.local("name").map(clean).unwrap_or_default());
+            return Waiting::Read(f.local("name").map(|t| clean(t, name_chars)).unwrap_or_default());
         }
         // `garden.nearest(:Plant)` → `Rubevy::Proxy#method_missing` → `Rubevy.ask(…).pop`
         if f.class.contains("Rubevy::Proxy") {
@@ -453,10 +591,10 @@ fn why(frames: &[FrameRow]) -> Waiting {
             // what the author wrote is `nearest`
             let name = f
                 .local("name")
-                .map(clean)
+                .map(|t| clean(t, name_chars))
                 .map(|n| n.trim_start_matches(':').to_string())
                 .unwrap_or_default();
-            let args = f.local("args").map(clean).unwrap_or_default();
+            let args = f.local("args").map(|t| clean(t, name_chars)).unwrap_or_default();
             return Waiting::Ask(match (name.is_empty(), args.is_empty() || args == "[]") {
                 (true, _) => String::new(),
                 (false, true) => name,
@@ -474,13 +612,13 @@ fn why(frames: &[FrameRow]) -> Waiting {
 }
 
 /// A rendered value as a person would write it: `:Hunger` rather than `:Hunger`'s quotes, and
-/// nothing longer than a column.
-fn clean(text: &str) -> String {
+/// nothing longer than a column ([`InspectStyle::name_chars`]).
+fn clean(text: &str, chars: usize) -> String {
     let text = text.trim_matches('"');
-    if text.chars().count() <= 40 {
+    if text.chars().count() <= chars {
         return text.to_string();
     }
-    let kept: String = text.chars().take(39).collect();
+    let kept: String = text.chars().take(chars.saturating_sub(1)).collect();
     format!("{kept}…")
 }
 
@@ -494,7 +632,7 @@ fn clean(text: &str) -> String {
 /// It was the garden's (`garden/src/window.rs`, G4). G9 moved it here because the VM panel shows
 /// it and both games have a VM panel; [`VmInspectorPlugin`] measures it, and a game with no
 /// window (the garden's `--headless`, where the figure is printed) adds the two systems itself.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct VmClock {
     started: Option<bevy::platform::time::Instant>,
     /// milliseconds the last frame's scripts took
@@ -503,6 +641,25 @@ pub struct VmClock {
     pub mean_ms: f32,
     /// what `ScriptWorld::frame_time` allows, in milliseconds
     pub budget_ms: f32,
+    /// **How much of a new reading goes into [`VmClock::mean_ms`]** ([`CLOCK_SMOOTHING`]). A game
+    /// that wants the figure to settle faster or slower writes it.
+    pub smoothing: f32,
+}
+
+/// A fifth of each new reading: about a sixth of a second of memory at 60 Hz. *Reason only* —
+/// the sentence is the record, and the fifth itself has **no recorded source**.
+pub const CLOCK_SMOOTHING: f32 = 0.2;
+
+impl Default for VmClock {
+    fn default() -> Self {
+        VmClock {
+            started: None,
+            spent_ms: 0.0,
+            mean_ms: 0.0,
+            budget_ms: 0.0,
+            smoothing: CLOCK_SMOOTHING,
+        }
+    }
 }
 
 /// **Where the clock's two systems stand**, so that a game with a *second* VM can keep the two
@@ -530,7 +687,7 @@ pub fn vm_clock_end(mut clock: ResMut<VmClock>, world: Res<ScriptWorld>) {
     let spent = started.elapsed().as_secs_f32() * 1000.0;
     clock.spent_ms = spent;
     // a fifth of the new reading: about a sixth of a second of memory at 60 Hz
-    clock.mean_ms = clock.mean_ms * 0.8 + spent * 0.2;
+    clock.mean_ms = clock.mean_ms * (1.0 - clock.smoothing) + spent * clock.smoothing;
     clock.budget_ms = world.frame_time.map(|d| d.as_secs_f32() * 1000.0).unwrap_or(0.0);
 }
 
@@ -552,20 +709,13 @@ impl Plugin for VmInspectorPlugin {
     }
 }
 
-const FONT: f32 = 12.0;
-/// How tall the window stands by default, and how much of it the frames and registers get.
-const PANEL_HEIGHT: f32 = 440.0;
-const FRAMES_HEIGHT: f32 = 148.0;
-const REGS_HEIGHT: f32 = 150.0;
-
 /// A rendered value, short enough for a column. The VM renders an object of a robot's own class
 /// as `#<#<Class:0x…>:0x… ivars=3>`, which says nothing worth this much room.
-fn short(text: &str) -> String {
-    const LIMIT: usize = 52;
-    if text.chars().count() <= LIMIT {
+fn short(text: &str, chars: usize) -> String {
+    if text.chars().count() <= chars {
         return text.to_string();
     }
-    let kept: String = text.chars().take(LIMIT - 1).collect();
+    let kept: String = text.chars().take(chars.saturating_sub(1)).collect();
     format!("{kept}…")
 }
 
@@ -593,12 +743,14 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
     // the bottom left: the scoreboard has the top left and the editor the right side, and all
     // three can be dragged anywhere
     let bottom = ctx.content_rect().bottom();
-    let width = 640.0_f32.min(ctx.content_rect().width() - 16.0);
+    let style = panel.style.clone();
+    let font = style.font;
+    let width = style.width.min(ctx.content_rect().width() - style.width_margin);
     egui::Window::new("VM")
         .collapsible(true)
         .resizable(true)
         .default_width(width)
-        .default_pos([8.0, (bottom - 8.0 - PANEL_HEIGHT).max(8.0)])
+        .default_pos([8.0, (bottom - 8.0 - style.panel_height).max(8.0)])
         .show(ctx, |ui| {
             // --- who, and whether the world is moving ------------------------------------
             ui.horizontal(|ui| {
@@ -622,7 +774,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
             if let Some(at) = &waiting_at {
                 ui.label(
                     egui::RichText::new(format!("on {at}"))
-                        .font(egui::FontId::monospace(FONT + 1.0))
+                        .font(egui::FontId::monospace(font + 1.0))
                         .color(pale),
                 )
                 .on_hover_text("the innermost line of this script's own file — which a VM that parks tasks can say and a callback cannot");
@@ -645,7 +797,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                 for f in &own {
                     ui.label(
                         egui::RichText::new(format!("{:<22} {}", f.at, f.method))
-                            .font(egui::FontId::monospace(FONT))
+                            .font(egui::FontId::monospace(font))
                             .color(pale),
                     )
                     .on_hover_text(format!("in {}", f.class));
@@ -702,7 +854,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                     // two lists, each with a fixed height and its own scrollbar: a deep stack must
                     // not push the registers — or the window — off the bottom of the screen
                     ui.label(egui::RichText::new("every frame, innermost first").weak());
-                    egui::ScrollArea::vertical().id_salt("frames").auto_shrink([false, false]).max_height(FRAMES_HEIGHT).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("frames").auto_shrink([false, false]).max_height(style.frames_height).show(ui, |ui| {
                         for (i, f) in frames.iter().enumerate() {
                             let mark = if panel.selected == i { "▸" } else { " " };
                             let text = egui::RichText::new(format!(
@@ -712,7 +864,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                                 f.pc,
                                 if f.native_boundary { "  (a native is waiting for this frame)" } else { "" }
                             ))
-                            .font(egui::FontId::monospace(FONT))
+                            .font(egui::FontId::monospace(font))
                             .color(if panel.selected == i {
                                 egui::Color32::from_rgb(255, 236, 150)
                             } else if f.own {
@@ -738,7 +890,8 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                     if frame.regs.is_empty() {
                         ui.label(
                             egui::RichText::new(format!(
-                                "this frame keeps no registers in the snapshot: only the innermost {REGS_FRAMES} do"
+                                "this frame keeps no registers in the snapshot: only the innermost {} do",
+                                style.regs_frames
                             ))
                             .weak(),
                         );
@@ -748,7 +901,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                         egui::RichText::new(format!("registers of #{} {} — locals are named from the debug info", panel.selected, frame.at))
                             .weak(),
                     );
-                    egui::ScrollArea::vertical().id_salt("regs").auto_shrink([false, false]).max_height(REGS_HEIGHT).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("regs").auto_shrink([false, false]).max_height(style.regs_height).show(ui, |ui| {
                         egui::Grid::new("regs").num_columns(4).spacing([10.0, 2.0]).striped(true).show(ui, |ui| {
                             for r in &frame.regs {
                                 let name = match (&r.name, r.index) {
@@ -761,10 +914,10 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                                 } else {
                                     egui::Color32::from_gray(130)
                                 };
-                                ui.label(egui::RichText::new(format!("R{}", r.index)).font(egui::FontId::monospace(FONT)).color(egui::Color32::from_gray(120)));
-                                ui.label(egui::RichText::new(name).font(egui::FontId::monospace(FONT)).color(color));
-                                ui.label(egui::RichText::new(short(&r.class)).font(egui::FontId::monospace(FONT)).color(egui::Color32::from_gray(140)));
-                                ui.label(egui::RichText::new(short(&r.text)).font(egui::FontId::monospace(FONT)).color(color))
+                                ui.label(egui::RichText::new(format!("R{}", r.index)).font(egui::FontId::monospace(font)).color(egui::Color32::from_gray(120)));
+                                ui.label(egui::RichText::new(name).font(egui::FontId::monospace(font)).color(color));
+                                ui.label(egui::RichText::new(short(&r.class, style.value_chars)).font(egui::FontId::monospace(font)).color(egui::Color32::from_gray(140)));
+                                ui.label(egui::RichText::new(short(&r.text, style.value_chars)).font(egui::FontId::monospace(font)).color(color))
                                     .on_hover_text(&r.text);
                                 ui.end_row();
                             }
@@ -815,7 +968,7 @@ mod tests {
             frame("loop", "Kernel", "(no debug info)", false, &[]),
             frame("run", "#<Class:0x11ac0>", "beetle.rb:96", true, &[]),
         ];
-        assert_eq!(why(&frames), Waiting::Sleep);
+        assert_eq!(why(&frames, NAME_CHARS), Waiting::Sleep);
     }
 
     /// `me[:Hunger]` — `Rubevy::Entity#[]`, `#get`, `Rubevy.ask("component.get", …).pop`.
@@ -832,7 +985,7 @@ mod tests {
             frame("[]", "Rubevy::Entity", "(no debug info)", false, &[]),
             frame("hunger", "Creature", "prelude.rb:138", false, &[]),
         ];
-        assert_eq!(why(&frames), Waiting::Read(":Hunger".into()));
+        assert_eq!(why(&frames, NAME_CHARS), Waiting::Read(":Hunger".into()));
     }
 
     /// `garden.nearest(:Plant)` — the proxy turns the name into a question, and the name and the
@@ -850,7 +1003,7 @@ mod tests {
             ),
             frame("run", "#<Class:0x11ac0>", "beetle.rb:118", true, &[]),
         ];
-        assert_eq!(why(&frames), Waiting::Ask("nearest(:Plant)".into()));
+        assert_eq!(why(&frames, NAME_CHARS), Waiting::Ask("nearest(:Plant)".into()));
     }
 
     /// SabiRuby Battle's DSL spells the question out — `Rubevy.ask("radar", range).pop` — so the
@@ -862,7 +1015,7 @@ mod tests {
             frame("radar", "Robot", "prelude.rb:67", false, &[("range", "45.0")]),
             frame("run", "#<Class:0x2a40>", "scout.rb:36", true, &[]),
         ];
-        assert_eq!(why(&frames), Waiting::Ask("radar".into()));
+        assert_eq!(why(&frames, NAME_CHARS), Waiting::Ask("radar".into()));
     }
 
     /// A handler's task: `Rubevy.subscribe` extends the queue it hands out, so the `pop` goes
@@ -875,11 +1028,53 @@ mod tests {
             frame("(block or top level)", "Object", "prelude.rb:448", false, &[]),
             frame("loop", "Kernel", "(no debug info)", false, &[]),
         ];
-        assert_eq!(why(&frames), Waiting::Event);
+        assert_eq!(why(&frames, NAME_CHARS), Waiting::Event);
     }
 
     #[test]
     fn a_task_with_no_frames_has_nothing_to_say() {
-        assert_eq!(why(&[]), Waiting::Nothing);
+        assert_eq!(why(&[], NAME_CHARS), Waiting::Nothing);
+    }
+
+    /// **A number in the store changes the panel and leaves the rest alone** (S5b-1), and a
+    /// count written as a fraction or a negative is read as a count all the same.
+    #[test]
+    fn the_store_changes_a_number_and_leaves_the_rest() {
+        let mut style = InspectStyle::default();
+        style.read_from(|key| match key {
+            "vm_width" => Some(900.0),
+            "vm_regs_frames" => Some(2.7),
+            "vm_value_chars" => Some(-4.0),
+            _ => None,
+        });
+        assert_eq!(style.width, 900.0);
+        assert_eq!(style.regs_frames, 2, "a fraction of a frame is the frames below it");
+        assert_eq!(style.value_chars, 0, "and below zero is nothing, not a panic");
+        assert_eq!(style.font, FONT, "a key nobody wrote leaves the default alone");
+
+        let mut untouched = InspectStyle::default();
+        untouched.read_from(|_| None);
+        assert_eq!(untouched, InspectStyle::default());
+    }
+
+    /// The two lengths a long line is cut at are the panel's own settings now: what a name is cut
+    /// to is read by [`why`], and what a rendered value is cut to by the register list.
+    #[test]
+    fn a_long_name_is_cut_where_the_setting_says() {
+        let long = ":".to_string() + &"a".repeat(80);
+        let frames = vec![
+            frame("pop", "Task::Queue", "(no debug info)", false, &[]),
+            frame("get", "Rubevy::Entity", "(no debug info)", false, &[("name", &long)]),
+        ];
+        // the default: forty characters, the last of them an ellipsis
+        let Waiting::Read(cut) = why(&frames, NAME_CHARS) else { panic!("not a read") };
+        assert_eq!(cut.chars().count(), NAME_CHARS);
+        assert!(cut.ends_with('…'));
+        // and a game that asks for ten gets ten
+        let Waiting::Read(shorter) = why(&frames, 10) else { panic!("not a read") };
+        assert_eq!(shorter.chars().count(), 10);
+        // what is short enough is not touched at either length
+        assert_eq!(short("scout", VALUE_CHARS), "scout");
+        assert_eq!(short("scout", 3).chars().count(), 3);
     }
 }

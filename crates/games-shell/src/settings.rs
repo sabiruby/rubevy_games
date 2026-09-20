@@ -141,6 +141,67 @@ pub fn remembered(
     (settings, lang)
 }
 
+/// **The panels, as the player left them** (S5b-1).
+///
+/// Every panel in `rubevy-egui` and in this crate keeps its numbers in a resource of its own now,
+/// and the ones a person can sensibly be asked about can come out of the store: how big the
+/// editor is, how big its letters are, how big the VM panel is and how deep it looks, the HUD's
+/// text, the guide's window. Each of those resources knows its own keys; this plugin is only the
+/// wiring, and it is a plugin rather than ten lines in each game because the ten lines would be
+/// the same ten lines twice and wrong in the third game.
+///
+/// It reads once, in `PreStartup`, which is before anything has been drawn with the defaults —
+/// the same place [`CameraPlugin`](crate::CameraPlugin) reads its own `camera_*` keys, and it
+/// leaves those to it. A game without a store, or a panel a game does not use, is simply skipped:
+/// every one of them is an `Option`.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use games_shell::settings::PanelSettingsPlugin;
+/// # let mut app = App::new();
+/// app.add_plugins(PanelSettingsPlugin);
+/// ```
+pub struct PanelSettingsPlugin;
+
+impl Plugin for PanelSettingsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(PreStartup, read_panels);
+    }
+}
+
+fn read_panels(
+    settings: Option<Res<Settings>>,
+    editor: Option<ResMut<rubevy_egui::EditorLayout>>,
+    inspector: Option<ResMut<rubevy_egui::VmInspector>>,
+    clock: Option<ResMut<rubevy_egui::VmClock>>,
+    code: Option<ResMut<rubevy_egui::CodeStyle>>,
+    hud: Option<ResMut<crate::hud::HudStyle>>,
+    guide: Option<ResMut<crate::guide::GuideStyle>>,
+) {
+    let Some(settings) = settings else { return };
+    let number = |key: &str| settings.number(key);
+    if let Some(mut editor) = editor {
+        editor.read_from(number);
+    }
+    if let Some(mut inspector) = inspector {
+        inspector.style.read_from(number);
+    }
+    if let Some(mut clock) = clock
+        && let Some(value) = settings.number("vm_clock_smoothing")
+    {
+        clock.smoothing = value;
+    }
+    if let Some(mut code) = code {
+        code.read_from(number);
+    }
+    if let Some(mut hud) = hud {
+        hud.read_from(&settings);
+    }
+    if let Some(mut guide) = guide {
+        guide.read_from(&settings);
+    }
+}
+
 /// The language the machine is set to, as a tag like `ja_JP.UTF-8` or `ja-JP`, if it says.
 ///
 /// Two environments, one question. On a PC it is `LC_ALL` then `LANG`, which is where a Unix
@@ -189,6 +250,39 @@ mod tests {
         assert_eq!(second.get("lang"), Some("ja"));
         assert_eq!(second.number("night"), Some(1.30));
         assert!(read(&path).unwrap().starts_with("# a test\n"), "the file says what it is");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **The wiring, end to end** (S5b-1): a store with one line about the editor and one about
+    /// the VM panel, and the two resources those panels are drawn from carrying it before the
+    /// first frame. What each key means is the panel's own business and tested there; what is
+    /// tested here is that a line in a file reaches it at all, and that the panels a game does
+    /// not have are not a problem.
+    #[test]
+    fn the_store_reaches_the_panels_before_the_first_frame() {
+        let path = std::env::temp_dir().join("games-shell-panels-test.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut settings = Settings::load(&path, "a test", read, write);
+        settings.set("editor_width", "700");
+        settings.set("vm_regs_frames", "3");
+
+        let mut app = App::new();
+        app.add_plugins(PanelSettingsPlugin)
+            .insert_resource(settings)
+            // the two panels this app has; there is no HUD, no guide and no code panel, and
+            // their absence is what the `Option`s are for
+            .init_resource::<rubevy_egui::EditorLayout>()
+            .init_resource::<rubevy_egui::VmInspector>();
+        app.update();
+
+        assert_eq!(app.world().resource::<rubevy_egui::EditorLayout>().width, 700.0);
+        assert_eq!(app.world().resource::<rubevy_egui::VmInspector>().style.regs_frames, 3);
+        // and what nobody wrote about is what it always was
+        assert_eq!(
+            app.world().resource::<rubevy_egui::EditorLayout>().height,
+            rubevy_egui::editor::HEIGHT
+        );
 
         let _ = std::fs::remove_file(&path);
     }
