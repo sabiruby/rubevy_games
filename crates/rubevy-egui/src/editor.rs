@@ -99,10 +99,12 @@ pub struct Editor {
     /// What the second button says, and whether there is one: `None` draws no second button,
     /// for a game where "all of them" and "this one" are the same set.
     pub apply_all_label: Option<String>,
-    /// The key that applies, beside `Ctrl+Enter`. `None` where the game wants that key
-    /// (the garden's `F5` writes the world to a file).
+    /// A second key that applies, beside `Ctrl+Enter`, which always does. `None` by default:
+    /// which keys are free is the game's to know (SabiRuby Battle gives this one `F5`; the
+    /// garden's `F5` writes the world to a file, so there it stays `None`).
     pub apply_key: Option<KeyCode>,
-    /// What one of the things being edited is called, for the hover texts: `robot`, `creature`.
+    /// What one of the things being edited is called, for the hover texts: `script` by default,
+    /// `robot` or `creature` where the game says so.
     pub noun: String,
 
     /// **What kind each byte of [`Editor::text`] is**, 0..=8, as
@@ -143,10 +145,18 @@ impl Default for Editor {
             save_label: None,
             message: String::new(),
             open: false,
-            apply_label: "▶ Apply (F5)".into(),
+            // **Neutral, and deliberately so** (S4a). Until 2026-09-20 these three said
+            // `▶ Apply (F5)`, `F5` and `robot` — SabiRuby Battle's words and SabiRuby Battle's
+            // key, sitting in a crate that is not supposed to know what a robot is, and left
+            // there because the first game that used it happened to want them. A crate that
+            // names one game's unit teaches the next game to override a word rather than to say
+            // its own. `script` is what this panel edits whatever the game calls it, the label
+            // does not promise a key, and no key is claimed: a game that wants one says which,
+            // because only it knows what its other keys already mean.
+            apply_label: "▶ Apply".into(),
             apply_all_label: Some("Apply to all".into()),
-            apply_key: Some(KeyCode::F5),
-            noun: "robot".into(),
+            apply_key: None,
+            noun: "script".into(),
             kinds: Vec::new(),
             highlighted_for: None,
         }
@@ -240,9 +250,9 @@ impl Editor {
 ///
 /// It is the game's and not this crate's because the two ends of it are the game's: a PC links
 /// the Ruby compiler in and a browser calls a function the page defines under the game's own
-/// name (`garden/src/platform.rs`). A plain `fn` pointer rather than a boxed closure, which is
-/// what [`crate::Settings::load`] already takes for `read` and `write` for the same reason —
-/// there is nothing for it to capture.
+/// name (`garden/src/platform.rs`). A plain `fn` pointer rather than a boxed closure, for the
+/// same reason the `read` and `write` a settings store is given are: there is nothing for one to
+/// capture, and a resource holding it stays `Copy`.
 pub type Highlighter = fn(&str) -> Vec<u8>;
 
 /// The game's [`Highlighter`], where it registered one ([`EditorPlugin::with_highlighter`]).

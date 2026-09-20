@@ -58,8 +58,10 @@ Three things the VM gives a game, which is what these are built to show:
 ## Layout
 
 ```
-crates/rubevy-arena/   what both games stand on: the 2D camera and HUD, the code editor,
-                       the VM inspector, and watching the Ruby directory for edits
+crates/rubevy-egui/   the panels, for any rubevy game: the code editor, the VM inspector,
+                      watching the Ruby directory for edits, and what they cover of the window
+crates/games-shell/   what the games here stand on: the PC/browser split, the checks, the
+                      flags, the in-game guide, the settings, the HUD and the two cameras
 sabibots/             SabiRuby Battle
   src/main.rs         the game: arena, robots, bullets, and the answers to what Ruby asks
   src/platform.rs     what differs between the PC build and the browser build
@@ -67,7 +69,7 @@ sabibots/             SabiRuby Battle
   ruby/robots/*.rb    the robots
 garden/               Garden: the 3D world, and the components its creatures read by name
   src/main.rs         the rules, and the components that are the Ruby API
-  src/window.rs       the editor, the VM panel and the HUD — the game's half of rubevy-arena's
+  src/window.rs       the editor, the VM panel and the HUD — the game's half of rubevy-egui's
   src/platform.rs     the same split as sabibots'
   ruby/prelude.rb     the DSL the creatures are written in
   ruby/creatures/*.rb one file per species

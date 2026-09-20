@@ -57,18 +57,18 @@ One font is. The in-game guide (`H`) is written in English **and Japanese**, and
 above has a single CJK character in it:
 
 **Noto Sans JP**, by Google, **SIL Open Font License 1.1**. The licence text is
-`crates/rubevy-arena/assets/fonts/OFL.txt`, beside the file, exactly as it comes from
+`crates/games-shell/assets/fonts/OFL.txt`, beside the file, exactly as it comes from
 [google/fonts `ofl/notosansjp`](https://github.com/google/fonts/tree/main/ofl/notosansjp)
 (downloaded 2026-09-17).
 
 | file | what it is |
 |---|---|
-| `crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf` | 65,904 bytes: Noto Sans JP pinned to `wght=400` and subset to the 334 characters the guides use (G7 re-cut it) |
-| `crates/rubevy-arena/assets/fonts/OFL.txt` | its licence |
+| `crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf` | 65,904 bytes: Noto Sans JP pinned to `wght=400` and subset to the 334 characters the guides use (G7 re-cut it) |
+| `crates/games-shell/assets/fonts/OFL.txt` | its licence |
 
 The source font is 9,589,900 bytes; what is in each binary is 0.65% of that. `tools/subset-font.sh`
 is the recipe — it reads the characters out of `garden/src/guide_text.rs`,
-`sabibots/src/guide_text.rs` and `crates/rubevy-arena/src/guide.rs` and cuts the font again, which
+`sabibots/src/guide_text.rs` and `crates/games-shell/src/guide.rs` and cuts the font again, which
 has to be done whenever the Japanese is edited. The OFL allows the font to be modified and bundled
 (this is a subset, not a renamed font: the name records say "Noto Sans JP Subset" and the copyright
 and licence records are Noto's own, unchanged). What the size costs the browser build is measured

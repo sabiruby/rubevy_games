@@ -21,7 +21,7 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 
 ## 1. 何を作るのか（30 秒版）
 
-両ゲームのエディタ（`crates/rubevy-arena/src/editor.rs`）は egui の `TextEdit` に自前の `layouter` を渡していて、`listing()` が行ごとの色と背景（脳の熱の帯）を `LayoutJob` に積んでいる。ここを**トークンごとの前景色**に広げる。分類は family-mruby の `picoruby-syntax-highlight`（`fmruby-core/lib/add/picoruby-syntax-highlight/src/syntax_highlight.c`、325 行、Prism の `pm_lex_callback_t` で 1 トークンずつ分類してバイト表に書く）と同じ 9 種:
+両ゲームのエディタ（`crates/rubevy-egui/src/editor.rs`）は egui の `TextEdit` に自前の `layouter` を渡していて、`listing()` が行ごとの色と背景（脳の熱の帯）を `LayoutJob` に積んでいる。ここを**トークンごとの前景色**に広げる。分類は family-mruby の `picoruby-syntax-highlight`（`fmruby-core/lib/add/picoruby-syntax-highlight/src/syntax_highlight.c`、325 行、Prism の `pm_lex_callback_t` で 1 トークンずつ分類してバイト表に書く）と同じ 9 種:
 
 | # | 分類 | 例 |
 |---|---|---|
@@ -37,7 +37,7 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 
 字句解析は **Prism**（`sabiruby-compiler` に `vendor/prism` が入っている）。ネイティブはそのまま呼び、ブラウザ版はページの `sabi.js`（playground の wasm）に同じ口を足して `window.gardenHighlight(source)` で受ける（`gardenCompile` と同じ形）。
 
-**境界**: 分類は Prism（正確）、色と描画は `rubevy-arena`（egui）。トークナイザを自前で書かない。
+**境界**: 分類は Prism（正確）、色と描画は `rubevy-egui`（egui）。トークナイザを自前で書かない。
 
 ---
 
@@ -60,7 +60,7 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 | 6 | 色 | 9 種の色は暗い配色（今の本文 `210,214,222`、熱い行 `255,236,150`、gutter `120,128,140`）と**同じ系統**で選ぶ。熱の帯（背景 `150,110,20` の α）と重ねて読めること。**既定の文字色（分類 0）は今の `210,214,222` のまま**。コメントは gutter と同じ弱い色。選んだ色の根拠（何と何を区別したいか、帯の上で読めるか）を worklog に |
 | 7 | prelude の行 | エディタが映すのは種のファイル・`world.rb` 本文だけ（prelude は見えない）。**解析も本文だけ**に掛ける（prelude を付けて解析すると本文の頭が別の文脈になることは無い。逆に `run_creature` を末尾に付けないので末尾も素直）。行番号のずれの補正（`2026-09-18-garden-leftovers.md` の件）とは無関係 |
 | 8 | ON/OFF | 作らない（全ファイルが Ruby） |
-| 9 | Battle | `rubevy-arena` を共有しているので同じ変更で色が付く。`sabibots.html` にも橋を足す。Battle のセルフテストが無変更で通ること |
+| 9 | Battle | 同じ crate を共有しているので同じ変更で色が付く。`sabibots.html` にも橋を足す。Battle のセルフテストが無変更で通ること |
 | 10 | pages.yml | `PLAYGROUND_REF` を H1 の playground のコミットに進める（今は `3f47c9d`。`docs/web.md` と `pages.yml` の冒頭のコメントに理由が書いてある） |
 
 ---
@@ -84,7 +84,7 @@ git -C /home/kishima/book/kishima/rubevy_games worktree add -b editor-highlight 
 ### 3.3 rubevy_games（H2）
 
 * `garden/src/platform.rs` / `sabibots/src/platform.rs`（相当）: `highlight(src: &str) -> Vec<u8>`。ネイティブ = `sabiruby_compiler::highlight`、wasm = `window.gardenHighlight` / `battleHighlight`（無ければ全部 0 = 色なしで動く。橋が無い古いページでも壊れない）。
-* `crates/rubevy-arena/src/editor.rs`: `Editor.highlight: Vec<u8>` と `Editor.highlighted_for: u64`（本文のハッシュ）。`Editor` は `rubevy-arena` にあり `platform` はゲーム側なので、**解析関数はゲームがプラグインに渡す**（`EditorPlugin::with_highlighter(fn(&str) -> Vec<u8>)` か `Resource` の `Highlighter(Box<dyn Fn>)`。既存の `compile` の渡し方に揃える）。`listing()`: 行ごとに、その行のバイト範囲を分類表で区切り、分類が変わるところで `job.append` を分ける。熱の帯は行の `background` のまま。
+* `crates/rubevy-egui/src/editor.rs`: `Editor.highlight: Vec<u8>` と `Editor.highlighted_for: u64`（本文のハッシュ）。`Editor` は `rubevy-egui` にあり `platform` はゲーム側なので、**解析関数はゲームがプラグインに渡す**（`EditorPlugin::with_highlighter(fn(&str) -> Vec<u8>)` か `Resource` の `Highlighter(Box<dyn Fn>)`。既存の `compile` の渡し方に揃える）。`listing()`: 行ごとに、その行のバイト範囲を分類表で区切り、分類が変わるところで `job.append` を分ける。熱の帯は行の `background` のまま。
 * 色の表（9 種）は `editor.rs` の定数 1 か所。既定 6 のとおり選び、根拠を worklog に。
 * `web/garden.html` / `web/sabibots.html`: `window.gardenHighlight` / `battleHighlight`。`web/build.sh` は playground の `web/sabiruby.wasm` と `sabi.js` を写す既存の道なので変更なし（playground を H1 の版にしてから組む）。
 * `pages.yml`: `PLAYGROUND_REF` を H1 のコミットに。

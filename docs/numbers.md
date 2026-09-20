@@ -1,7 +1,8 @@
 # 数の一覧 — rubevy_games が今持っている数と、その出どころ
 
 計画書 `docs/plans/shared-crate-plan.md` の段階 **S5a**。コードは 1 行も変えていない。
-対象は `crates/rubevy-arena/src/`、`garden/src/`、`sabibots/src/`、`garden/ruby/**/*.rb`、`sabibots/ruby/**/*.rb`。
+対象は `crates/rubevy-egui/src/` と `crates/games-shell/src/`（S5a を取った時点ではどちらも `crates/rubevy-arena/src/` だった。
+S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**/*.rb`、`sabibots/ruby/**/*.rb`。
 行番号は `numbers` ブランチ（main `b1ce042` から分岐）の時点のもの。
 拾い方と選び方の過程は `docs/worklog/2026-09-20-numbers-inventory.md`。
 
@@ -50,7 +51,13 @@
 
 ---
 
-## 1. `crates/rubevy-arena`（共有 crate）
+## 1. 共有 crate（`crates/rubevy-egui` と `crates/games-shell`）
+
+> **S4a（2026-09-20）で `crates/rubevy-arena` は 2 つに割れた。** この節の表の `位置` 欄は S5a を取った
+> 時点のもので、ファイル名はそのままだが置き場所と行番号は動いている。`editor.rs` / `inspect.rs` /
+> `code.rs` は `crates/rubevy-egui/src/`、`lib.rs`（`ArenaPlugin`）/ `camera.rs` / `guide.rs` /
+> `settings.rs` / `platform.rs` / `args.rs` / `checks.rs` / `hud.rs` は `crates/games-shell/src/`。
+> S5b で数を動かすときに行番号ごと取り直す。
 
 ### 1.1 カメラと画面
 
@@ -521,7 +528,7 @@
 
 | どこ | 件数 | うち不明 |
 |---|---|---|
-| `crates/rubevy-arena/src` | 33 | 19 |
+| 共有 crate の `src`（S4a 後は `rubevy-egui` + `games-shell`） | 33 | 19 |
 | `garden/src` | 117 | 49 |
 | `garden/ruby` | 40 | 20 |
 | `sabibots/src` | 57 | 28 |
@@ -535,7 +542,7 @@
 
 | どこ | `const` 宣言 | 数値リテラルを含む行 | 選んだ数 |
 |---|---|---|---|
-| `crates/rubevy-arena/src` | 20（うち数値 17） | 149 | 33 |
+| 共有 crate の `src`（S4a 後は `rubevy-egui` + `games-shell`） | 20（うち数値 17） | 149 | 33 |
 | `garden/src` | 88（うち数値 68） | 538 | 117 |
 | `sabibots/src` | 28（うち数値 21） | 322 | 57 |
 | `garden/ruby` + `sabibots/ruby` | 8（`NAME = 数` の行） | 237 | 53 |
@@ -549,7 +556,7 @@
 
 ## 7. 気づいた点（一覧の仕事の外。**直していない**）
 
-1. **`code.rs` のコメントと定数が最初から食い違っている。** `crates/rubevy-arena/src/code.rs:147` は
+1. **`code.rs` のコメントと定数が最初から食い違っている。** `crates/rubevy-egui/src/code.rs:147` は
    「430px of a monospace 12px font: about 58 characters」と書いているのに `code.rs:149` は `WIDTH = 44`。
    両方 1 つのコミット（`23c5ad3`）で入っている。どちらが正しいのか読んでも分からない。
    なお `CodePanel` は**どのゲームからも使われていない**（`HudPlugin`、`read_script` も同じ。計画書 §2 が
@@ -565,7 +572,7 @@
    beetle's script passes to `mutate`, which is 0.1」と写しだと書いているが、**`beetle.rb` を書き換えても
    判定は 0.1 のまま**なので、8 番目の判定は利用者が変異率を上げた瞬間に FAIL になる（エディタで
    その場で書き換えられるのがこのゲームの見せ場なので、踏める）。属する話: (d) の閾値の設計。
-4. **`ArenaPlugin` のコメントと数が合っていない。** `crates/rubevy-arena/src/lib.rs:117` は
+4. **`ArenaPlugin` のコメントと数が合っていない。** `crates/games-shell/src/lib.rs:117` は
    「the editor is about a third of the window on the right」と書いて、次の行で `visible_width * 0.16` を
    使っている。1/3 なら中心をずらす量は 1/6 ≈ 0.167 なので**計算としては合っている**が、コメントは
    「エディタの幅」を、数は「ずらす量」を言っていて、読むと食い違って見える。計画 S3 がこの行を
@@ -614,7 +621,7 @@
    モデルの倍率（`main.rs:2589-2590` の 0.55 / 0.75）と一緒に動かさないと見た目と当たりがずれるので、
    → (b) と書いたが「2 つで 1 組」であることを S5b で保つ必要がある。
 
-4. **`KINDS` の 9 色**（`crates/rubevy-arena/src/editor.rs:454`）。
+4. **`KINDS` の 9 色**（`crates/rubevy-egui/src/editor.rs:454`）。
    **(c) 表示**に入れたが、これは「測って決めた既定値」の模範例で、利用者が変えられるようにすると
    測った制約（コントラスト 4.9 / ΔE 25）を破れてしまう。**(a) 寄りの (c)**。
    → 変えられるようにするなら「変えると測った保証が消える」と rustdoc に書くべき、と考えるが、

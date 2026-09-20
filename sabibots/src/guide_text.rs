@@ -2,7 +2,7 @@
 //!
 //! Every string the `H` panel shows for SabiRuby Battle is here, English and Japanese side by
 //! side, and nothing else is: the window, the keys that open it and the Japanese font are
-//! `rubevy-arena`'s ([`rubevy_arena::guide`]). The garden's words are in
+//! `games-shell`'s ([`games_shell::guide`]). The garden's words are in
 //! `garden/src/guide_text.rs`; the frame is shared and the words are not, because what a battle
 //! is and what a garden is have nothing in common.
 //!
@@ -10,7 +10,7 @@
 //! binary carries only the characters these strings use, so a word with a character that was not
 //! here before would be drawn as a blank box until the subset is made again.
 
-use rubevy_arena::Guide;
+use games_shell::Guide;
 
 /// What the `H` panel says about the Battle: two teams, energy, the handler task, and an editor
 /// whose unit is one robot rather than a whole species.

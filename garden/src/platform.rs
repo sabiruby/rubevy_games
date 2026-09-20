@@ -2,7 +2,7 @@
 //! the models come from, how Ruby is compiled, where a saved script goes, and a clock for the
 //! dice. The rest of the game is the same code in both.
 //!
-//! **Since S1 the work is `rubevy_arena::platform`'s and what is left here is the garden's own
+//! **Since S1 the work is `games_shell::platform`'s and what is left here is the garden's own
 //! names.** This file used to be sabibots' with the crate's own name in it, and said so at the
 //! top: making it shareable means passing four things in, "which is a change to sabibots for no
 //! gain while there are two games; when there are three it is worth doing". The third game
@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rubevy_arena::platform;
+use games_shell::platform;
 
 // **The `ruby/` files, built into the browser's binary** by `build.rs`: a page has no directory
 // to read from.
@@ -45,10 +45,10 @@ const COMPILE_BRIDGE: &str = "gardenCompile";
 const HIGHLIGHT_BRIDGE: &str = "gardenHighlight";
 
 /// What the Save button says, since what it does differs; and a clock for the dice.
-pub use rubevy_arena::platform::{clock_seed, SAVE_LABEL};
+pub use games_shell::platform::{clock_seed, SAVE_LABEL};
 /// Whether the window's checks end the run when they are done — `true` on a PC, `false` in a
 /// page, which has nothing to exit to (`docs/web.md`, and the note on the constant).
-pub use rubevy_arena::checks::CHECKS_EXIT_WHEN_DONE;
+pub use games_shell::checks::CHECKS_EXIT_WHEN_DONE;
 
 /// Where a saved garden goes (G3): a file in the directory the game was started from, which is
 /// the workspace root when it is `cargo run`; `--save PATH` overrides it. In a browser there are
@@ -78,14 +78,14 @@ pub const SETTINGS_FILE: &str = "garden.settings.txt";
 /// Where the Ruby lives: next to the crate, from the workspace root or from the crate — and in a
 /// browser the bare name the built-in table's paths start with.
 pub fn ruby_dir() -> PathBuf {
-    rubevy_arena::crate_dir!("ruby", "garden/ruby")
+    games_shell::crate_dir!("ruby", "garden/ruby")
 }
 
 /// Where the models live. Bevy looks next to the executable by default, which is not where a
 /// workspace puts them. G0 has none — the meshes are Bevy's own primitives — but rubevy reads a
 /// `require` from here, so it still has to point somewhere real.
 pub fn assets_dir() -> String {
-    rubevy_arena::crate_dir!("assets", "garden/assets").to_string_lossy().into_owned()
+    games_shell::crate_dir!("assets", "garden/assets").to_string_lossy().into_owned()
 }
 
 pub fn read(path: &Path) -> Result<String, String> {
@@ -109,7 +109,7 @@ pub fn highlight(src: &str) -> Vec<u8> {
 
 /// Whether the run was asked for the checks (G0's `GARDEN_SELFTEST`, `?selftest` in a page).
 pub fn selftest_asked() -> bool {
-    rubevy_arena::checks::selftest_asked("GARDEN_SELFTEST")
+    games_shell::checks::selftest_asked("GARDEN_SELFTEST")
 }
 
 /// `GARDEN_RELOAD_AT=SECONDS`, the checks' only way to press F9 without a keyboard.
@@ -122,7 +122,7 @@ pub fn selftest_asked() -> bool {
 /// where the checks press F9 for real (`web/garden.html` sends the key) and there is nothing to
 /// defer.
 pub fn reload_asked_at() -> Option<f32> {
-    rubevy_arena::checks::asked_number("GARDEN_RELOAD_AT")
+    games_shell::checks::asked_number("GARDEN_RELOAD_AT")
 }
 
 /// Where the tenth check's file goes (G5). A temporary directory on a PC, because the file is

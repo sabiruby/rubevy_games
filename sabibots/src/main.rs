@@ -25,7 +25,8 @@ use rubevy::{
     in_the_authors_lines, replace_script, Answer, MrbAsset, Program, RubevyPlugin, RubevySet,
     Script, ScriptEnded, ScriptTask, ScriptWorld,
 };
-use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, GuidePlugin, Hud, ScriptPanel, VmInspector, VmInspectorPlugin, Watch};
+use games_shell::{ArenaPlugin, ArenaSize, GuidePlugin, Hud, ScriptPanel};
+use rubevy_egui::{Editor, EditorAction, EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::Value;
 
 const ROBOT_RADIUS: f32 = 1.6;
@@ -260,7 +261,7 @@ impl Shots {
 
 /// How long `--headless` runs when it is given no number, and what `--shot` writes to and waits
 /// for when it is given neither. **They are the values that were written into `main` here before
-/// S1**, moved out only because the parsing they were in is `rubevy_arena::Args`' now and the
+/// S1**, moved out only because the parsing they were in is `games_shell::Args`' now and the
 /// garden's `--shot` waits a different six seconds; no run's behaviour turns on them, since every
 /// line in `docs/sabiruby-battle.md` passes its own number.
 const HEADLESS_SECONDS: f32 = 10.0;
@@ -269,8 +270,8 @@ const SHOT_SECONDS: f32 = 3.0;
 
 fn main() {
     let ruby = platform::ruby_dir();
-    // The flags both games take, read by `rubevy_arena::Args` since S1.
-    let args = rubevy_arena::Args::from_env();
+    // The flags both games take, read by `games_shell::Args` since S1.
+    let args = games_shell::Args::from_env();
     // `--headless N`: no window, N seconds, the match reported on stdout. It is how the game is
     // tested where there is no GPU, and it runs exactly the same systems as the windowed one.
     let headless = args.headless(HEADLESS_SECONDS);
@@ -311,8 +312,8 @@ fn main() {
             // read in. Read before the first frame, because the panel opens by itself and must
             // not show one language and then jump to the other. `platform.rs` decides whether
             // that is a file beside the game or a key in the browser's local storage, and the
-            // ten lines that read it are `rubevy_arena::remembered`'s since S1.
-            let (settings, lang) = rubevy_arena::remembered(
+            // ten lines that read it are `games_shell::remembered`'s since S1.
+            let (settings, lang) = games_shell::remembered(
                 platform::SETTINGS_FILE,
                 "SabiRuby Battle: what the panel remembers. Delete a line for the default.",
                 platform::read,
@@ -344,7 +345,7 @@ fn main() {
                 // `window.sabibotsHighlight` in a page.
                 EditorPlugin::with_highlighter(platform::highlight),
                 VmInspectorPlugin,
-                // G6: the `H` panel, and with it the Japanese font (`rubevy_arena::guide`)
+                // G6: the `H` panel, and with it the Japanese font (`games_shell::guide`)
                 GuidePlugin,
                 RubevyPlugin::default(),
             ))
@@ -669,7 +670,7 @@ fn draw_scoreboard(
             ui.separator();
             // G6: the one line that says the rest is explained inside the game
             ui.label(
-                egui::RichText::new(rubevy_arena::Guide::HINT)
+                egui::RichText::new(games_shell::Guide::HINT)
                     .color(egui::Color32::from_rgb(255, 226, 150))
                     .strong(),
             );
@@ -736,14 +737,14 @@ fn follow_life_bars(
 /// The editor follows the watched robot: its file, and the line its brain stands on.
 fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(Entity, &Robot)>) {
     // the buttons along the top of the editor: every robot, by number, in its team's colour
-    let mut choices: Vec<(usize, rubevy_arena::editor::EditorChoice)> = robots
+    let mut choices: Vec<(usize, rubevy_egui::editor::EditorChoice)> = robots
         .iter()
         .map(|(e, r)| {
             let (cr, cg, cb) = TEAM_COLORS[r.team.min(TEAM_COLORS.len() - 1)];
             let brain = r.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             (
                 r.number,
-                rubevy_arena::editor::EditorChoice {
+                rubevy_egui::editor::EditorChoice {
                     id: e.to_bits(),
                     label: format!("{} {brain}{}", r.number, if r.brain.is_some() { "*" } else { "" }),
                     color: if r.hp <= 0.0 {
@@ -760,6 +761,16 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
     editor.choices = choices.into_iter().map(|(_, c)| c).collect();
     editor.selected = watched.entity.map(|e| e.to_bits());
 
+    // **The word, the label and the key this game wants** (S4a, 2026-09-20). They used to be the
+    // editor's own defaults, which is to say that a crate shared by every game here said `robot`
+    // and meant this one. The defaults are neutral now (`script`, `▶ Apply`, no second key) and
+    // these three lines are what keeps the panel word-for-word and key-for-key what it was.
+    // Before the early returns below, as the garden's are, so that a frame with no robot watched
+    // does not draw a differently-worded button.
+    editor.noun = "robot".into();
+    editor.apply_label = "▶ Apply (F5)".into();
+    editor.apply_key = Some(KeyCode::F5);
+
     let Some(entity) = watched.entity else { return };
     let Ok((_, robot)) = robots.get(entity) else { return };
     // what the robot is running: its applied brain, or its file
@@ -767,7 +778,7 @@ fn show_code(watched: Res<Watched>, mut editor: ResMut<Editor>, robots: Query<(E
         robot.brain.clone().unwrap_or_else(|| platform::read(&robot.file).unwrap_or_default())
     });
     editor.file = brain_name(robot);
-    // the editor no longer knows what a robot is (`rubevy-arena` had to grow a second game):
+    // the editor no longer knows what a robot is (`rubevy-egui` had to grow a second game):
     // the buttons' words are the game's
     editor.apply_all_label = Some(format!("Apply to all {}", brain_name(robot)));
     editor.save_label = Some(platform::SAVE_LABEL.into());
@@ -1061,7 +1072,7 @@ fn selftest(
             // "it is *painted* in the keyword colour", not "the table says 1". This is the same
             // line the garden's window checks have, and the panel drawing it is the same crate.
             let def = editor.text.find("def ").unwrap_or(usize::MAX);
-            let kind = rubevy_arena::editor::drawn_kind(&editor, def);
+            let kind = rubevy_egui::editor::drawn_kind(&editor, def);
             ok(
                 kind == Some(1),
                 &format!("`def` in the listing is painted in the keyword colour (kind {kind:?})"),

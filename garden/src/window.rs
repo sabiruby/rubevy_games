@@ -1,7 +1,7 @@
 //! **The window (G4).** The editor, the VM panel, the HUD, and the keys that drive them.
 //!
 //! None of it is new code in the sense of being written here: the editor and the inspector are
-//! `rubevy-arena`'s, the same two SabiRuby Battle uses, and what is in this file is the game's
+//! `rubevy-egui`'s, the same two SabiRuby Battle uses, and what is in this file is the game's
 //! half — which creature is being looked at, what a species' file is, what happens when Apply is
 //! pressed, and what the HUD shows. The whole of it is off in the headless build, which has no
 //! window and no egui; the numbers the HUD draws are printed there instead (`stop_when_over`).
@@ -19,7 +19,7 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use rubevy::{replace_script, MrbAsset, Script, ScriptTask, ScriptWorld};
-use rubevy_arena::{Editor, EditorAction, VmInspector, Watch};
+use rubevy_egui::{Editor, EditorAction, VmInspector, Watch};
 
 use crate::{
     compile, compile_source, platform, Brains, Creature, Hunger, Mind, Plant, RubyDir, Sky,
@@ -67,12 +67,12 @@ impl Paused {
     }
 }
 
-/// **The VM's share of the frame lives in `rubevy-arena` now** (G9). It was written here in G4,
+/// **The VM's share of the frame lives in `rubevy-egui` now** (G9). It was written here in G4,
 /// and the VM panel — which both games have — is where it is shown, so it moved to the panel:
 /// `VmInspectorPlugin` measures it in the windowed build and the headless one adds the two
 /// systems itself (`main`). The names are re-exported because the callers here, the HUD and
 /// `crate::stop_when_over`, are the garden's own.
-pub use rubevy_arena::inspect::{vm_clock_end, vm_clock_start, VmClock, VmClockSet};
+pub use rubevy_egui::inspect::{vm_clock_end, vm_clock_start, VmClock, VmClockSet};
 
 // ---------------------------------------------------------------------------------------------
 // Picking a creature
@@ -220,7 +220,7 @@ pub fn species_color(species: Species) -> (u8, u8, u8) {
 /// The two species' buttons are the colour of the model standing in the grass (G8, `species_tint`)
 /// — a row in the HUD can be checked against the thing it is about. The rules are not a thing in
 /// the grass and have no model to borrow a colour from, so `world.rb` takes the editor's own
-/// foreground, the grey the listing writes an ordinary line in (`rubevy_arena::editor::listing`).
+/// foreground, the grey the listing writes an ordinary line in (`rubevy_egui::editor::listing`).
 /// It reads as "the panel", which is what it is.
 const WORLD_COLOR: (u8, u8, u8) = (210, 214, 222);
 
@@ -238,7 +238,7 @@ pub fn show_code(
 ) {
     editor.choices = Species::ALL
         .iter()
-        .map(|species| rubevy_arena::EditorChoice {
+        .map(|species| rubevy_egui::EditorChoice {
             id: species.index() as u64,
             label: format!(
                 "{}{}",
@@ -251,7 +251,7 @@ pub fn show_code(
         // W3: and the rules. `dim` says the same thing about it that it says about a species with
         // nothing alive running it — the file is there and nothing is running it — which for the
         // rules means `world.rb` would not compile (`WorldTrouble`).
-        .chain(std::iter::once(rubevy_arena::EditorChoice {
+        .chain(std::iter::once(rubevy_egui::EditorChoice {
             id: crate::Brains::WORLD as u64,
             label: format!("{}{}", crate::WORLD_FILE, if brains.world().is_some() { "*" } else { "" }),
             color: WORLD_COLOR,
@@ -693,7 +693,7 @@ pub fn inspect_keys(
 /// The VM panel follows the creature being looked at, as the editor follows its file — **or the
 /// rules, when the editor is on them** (`F3`, 2026-09-18).
 ///
-/// Until now `F2` could only ever show a creature. The reason was in `rubevy-arena`: the panel's
+/// Until now `F2` could only ever show a creature. The reason was in `rubevy-egui`: the panel's
 /// `fill` named `ScriptWorld` by its default marker, so the second VM — the one `world.rb` runs
 /// in — was not a thing it could be handed (`docs/worklog/2026-09-17-garden-world.md` §24.1). It
 /// takes either now, and this is where the garden decides which: `Watched::world` is the same
@@ -702,7 +702,7 @@ pub fn inspect_keys(
 ///
 /// Everything the panel says about a creature it can say about the rules, because none of it was
 /// ever about creatures: **what it is waiting for** is worked out from the frames alone
-/// (`rubevy_arena::inspect::why`), and the world's task waits for exactly two things — one pass
+/// (`rubevy_egui::inspect::why`), and the world's task waits for exactly two things — one pass
 /// of `each_frame` ends on `Rubevy.ask("frame")`, which is a `Rubevy::Proxy` ask like any other,
 /// and a timer task made by `every` is asleep. **Where it is waiting** is the innermost frame of
 /// `world.rb` itself, once the world's prelude has been taken off it (`crate::WorldPrelude`, the
@@ -815,7 +815,7 @@ pub fn draw_hud(
     mut watched: ResMut<Watched>,
     mut editor: ResMut<Editor>,
     mut dial: ResMut<crate::NightDial>,
-    mut settings: Option<ResMut<rubevy_arena::Settings>>,
+    mut settings: Option<ResMut<games_shell::Settings>>,
     trouble: Res<crate::WorldTrouble>,
     meter: Res<crate::WorldMeter>,
     rules: Res<ScriptWorld<crate::World>>,
@@ -1007,7 +1007,7 @@ pub fn draw_hud(
             // in the colour the keys are, not the weak grey the line above it is, because a hint
             // nobody notices is the same as no hint — which is what the author's play found.
             ui.label(
-                egui::RichText::new(rubevy_arena::Guide::HINT)
+                egui::RichText::new(games_shell::Guide::HINT)
                     .color(egui::Color32::from_rgb(255, 226, 150))
                     .strong(),
             );
@@ -1030,7 +1030,7 @@ pub fn draw_hud(
 fn night_dial(
     ui: &mut egui::Ui,
     dial: &mut crate::NightDial,
-    settings: &mut Option<bevy::prelude::ResMut<rubevy_arena::Settings>>,
+    settings: &mut Option<bevy::prelude::ResMut<games_shell::Settings>>,
 ) {
     let mut value = dial.0;
     let slider = ui
@@ -1140,10 +1140,10 @@ impl FakePointer<'_, '_> {
     }
 
     /// The middle of the editor panel, where it stands before anybody drags it
-    /// (`rubevy_arena::editor`'s own figures, so the check is not guessing the rectangle).
+    /// (`rubevy_egui::editor`'s own figures, so the check is not guessing the rectangle).
     fn over_the_editor(&self) -> Option<Vec2> {
         let (_, window) = self.windows.iter().next()?;
-        use rubevy_arena::editor::{HEIGHT, MARGIN, WIDTH};
+        use rubevy_egui::editor::{HEIGHT, MARGIN, WIDTH};
         Some(Vec2::new(window.width() - MARGIN - WIDTH * 0.5, MARGIN + HEIGHT * 0.5))
     }
 
@@ -1332,7 +1332,7 @@ pub fn window_selftest(
             // than "the table says 1" — without a pixel, which a check with no screen cannot
             // read anyway.
             let def = editor.text.find("def ").unwrap_or(usize::MAX);
-            let kind = rubevy_arena::editor::drawn_kind(&editor, def);
+            let kind = rubevy_egui::editor::drawn_kind(&editor, def);
             ok(
                 kind == Some(1),
                 &format!("`def` in the listing is painted in the keyword colour (kind {kind:?})"),
@@ -1433,7 +1433,7 @@ pub fn window_selftest(
             editor.text = editor.text.replace("day_length 60.0", "day_length 30.0");
             ok(editor.changed(), "typing in the rules marks them edited");
             keys.release(KeyCode::F3);
-            // the keys themselves this time, not `Editor::action`: `rubevy-arena`'s panel reads
+            // the keys themselves this time, not `Editor::action`: `rubevy-egui`'s panel reads
             // Ctrl+Enter in `PostUpdate` (the egui pass), so the action it sets is taken by
             // `do_editor_actions` on the next frame — which is inside the breath below
             keys.press(KeyCode::ControlLeft);

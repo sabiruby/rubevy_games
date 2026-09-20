@@ -15,13 +15,13 @@
 //! about.
 //!
 //! ```text
-//! cargo run -p rubevy-arena --example camera        # until it is closed
-//! cargo run -p rubevy-arena --example camera -- 5   # five seconds, for a machine with no hands
+//! cargo run -p games-shell --example camera        # until it is closed
+//! cargo run -p games-shell --example camera -- 5   # five seconds, for a machine with no hands
 //! ```
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use rubevy_arena::camera::{CameraControls, CameraPlugin, CameraView, ViewInsets, WorldClick};
+use games_shell::camera::{CameraControls, CameraPlugin, CameraView, ViewInsets, WorldClick};
 
 /// How wide one square of the floor is, in world units. The floor is a picture of the world's
 /// scale and nothing else, so this is the example's own number: something a `TILE`-sized thing
@@ -54,7 +54,7 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: "rubevy-arena: the camera".into(),
+            title: "games-shell: the camera".into(),
             resolution: (1280u32, 720u32).into(),
             ..default()
         }),

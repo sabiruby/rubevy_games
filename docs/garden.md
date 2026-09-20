@@ -206,7 +206,7 @@ other's — and the key table lost a column with them. Which language the panel 
 The hint in the HUD stays in **both** languages (`H: help / 操作説明`): it is the one line that has
 to be understood before anybody has chosen anything.
 
-The **frame** is `rubevy-arena`'s (`crates/rubevy-arena/src/guide.rs`): the window, the two keys,
+The **frame** is `games-shell`'s (`crates/games-shell/src/guide.rs`): the window, the two keys,
 the switch and the font. The **words** are each game's, and each game keeps all of them in one
 file and nothing else in it — **the switch changed none of them**, since a paragraph and a key row
 each carry both languages as they always did and only the drawing chooses:
@@ -215,7 +215,7 @@ each carry both languages as they always did and only the drawing chooses:
 |---|---|
 | `garden/src/guide_text.rs` | the garden's words — the file to edit to change them |
 | `sabibots/src/guide_text.rs` | SabiRuby Battle's |
-| `crates/rubevy-arena/src/guide.rs` | the strings both games show: the HUD's `H: help / 操作説明`, the two buttons, and the line at the foot of the panel |
+| `crates/games-shell/src/guide.rs` | the strings both games show: the HUD's `H: help / 操作説明`, the two buttons, and the line at the foot of the panel |
 
 `--shot` starts with the panel shut, since a picture is asked for one thing and the panel sits
 over the middle of the window; the two pictures above are
@@ -1039,7 +1039,7 @@ same, and a daytime save loaded back leaves everybody walking.
 ## The window (G4, and G9)
 
 Two panels and the garden behind them — and a third, the VM panel, which `F2` opens. Two of the
-three are `rubevy-arena`'s — the same editor and the same VM inspector SabiRuby Battle uses — so
+three are `rubevy-egui`'s — the same editor and the same VM inspector SabiRuby Battle uses — so
 what the garden added is the game's half of each: which creature is being looked at, what a
 species' file is, and what the HUD says. That half is one file, `garden/src/window.rs`.
 
@@ -1077,7 +1077,7 @@ comment, number, symbol, constant, variable, method name — and nothing in the 
 decide which: the classification is Prism's, the same lexer the compiler uses, through
 `sabiruby_compiler::highlight` on a PC and through `window.gardenHighlight` in a browser. It
 answers one byte per source byte, and the panel paints a run wherever that byte changes. The
-colours and why they are those colours are in `crates/rubevy-arena/src/editor.rs`; the short of it
+colours and why they are those colours are in `crates/rubevy-egui/src/editor.rs`; the short of it
 is that nothing is orange or amber, because the heat band already is, and that a method name is
 the quietest of them, because in Ruby an operator is a method call and so is `[]`.
 
@@ -1166,10 +1166,10 @@ because the garden breeds and starves while the check is getting to the Apply; t
 total falls at the Apply itself because a restarted task counts from zero again.)
 
 Saving `garden/ruby/creatures/beetle.rb` from any other editor does what Save does, through
-`rubevy-arena`'s directory watcher; a species running an applied text is left alone until it is
+`rubevy-egui`'s directory watcher; a species running an applied text is left alone until it is
 saved or reverted.
 
-**What the editor needed in `rubevy-arena`** was four fields, and every one of them was a place
+**What the editor needed in `rubevy-egui`** was four fields, and every one of them was a place
 that had been decided by there being only one game: the first button's words (`apply_label`),
 whether there is a second button at all (`apply_all_label: Option<String>` — `None` draws none),
 which key applies (`apply_key: Option<KeyCode>` — the garden's `F5` is taken by the save file, so
@@ -1217,7 +1217,7 @@ a native and pushes none, so a task that is parked and not on a queue has nothin
 called `sleep` from. **The last row is the one guess in the table**, and the panel's hover says so:
 a task that had used up its timeslice — ready to run, not asleep — looks exactly the same from
 here, and the VM has no read-only way to ask a task which it is (`Task#status` is Ruby). In these
-two games nothing else parks a task. Six unit tests in `rubevy-arena` hold the five shapes, copied
+two games nothing else parks a task. Six unit tests in `rubevy-egui` hold the five shapes, copied
 out of a running garden.
 
 **The second row changed its meaning on 2026-09-17, and that is the most interesting thing the
@@ -1234,7 +1234,7 @@ garden's tick is under 1 ms of the 8 it is given), but a species applied in the 
 given a loop that does.
 
 **`F2` shows the rules when `F3` has opened them** (2026-09-18). Until then the panel could only
-ever be about a creature, and the reason was in `rubevy-arena`: `VmInspector::fill` named
+ever be about a creature, and the reason was in `rubevy-egui`: `VmInspector::fill` named
 `ScriptWorld` by its default marker, so the garden's *second* VM — the one `ruby/world.rb` runs in
 — was not a thing it could be handed. The marker is on the method now, so it takes either, and
 `Watched::world` (the flag `F3` already sets for the editor) decides which VM the garden fills it
@@ -1441,7 +1441,7 @@ to pretend the pointer is somewhere, and warping the real cursor wants a desktop
 so the check writes the `WindowEvent::CursorMoved` winit would have written — the same kind of
 forgery as the `keys.press(KeyCode::F2)` the other checks are driven by, and the only thing that
 tells egui where the pointer is. It puts it in the middle of the editor's own default rectangle
-(`rubevy_arena::editor::{MARGIN, WIDTH, HEIGHT}`, so the check is not guessing at it), turns one
+(`rubevy_egui::editor::{MARGIN, WIDTH, HEIGHT}`, so the check is not guessing at it), turns one
 notch, and the camera's distance has to be the number it was. Then the editor is closed and the
 same wheel at the same place has to move it — a control, because "the camera did not move" is worth
 nothing on its own, and the line prints whether egui was holding the pointer for the same reason.
@@ -1469,7 +1469,7 @@ not that the garden went one particular way.
 | Rust for one type made into a Ruby class | — (none) | **61 lines** with the macros, **113** by hand |
 | the scripts a player writes | `robots/scout.rb` 62 lines (43 without comments and blanks), `robots/hunter.rb` 22 (18) | `creatures/beetle.rb` 128 (68), `creatures/rabbit.rb` 89 (57) |
 | the DSL in front of them | `ruby/prelude.rb` 295 (165) | `ruby/prelude.rb` 472 (221) |
-| what the window cost the game (G4) | `src/main.rs`, spread through it | `src/window.rs` **one file**, plus four fields in `rubevy-arena`'s `Editor` and one line in sabibots |
+| what the window cost the game (G4) | `src/main.rs`, spread through it | `src/window.rs` **one file**, plus four fields in `rubevy-egui`'s `Editor` and one line in sabibots |
 | a round trip, measured (G4) | one frame (`docs/worklog/2026-09-17-battle-followups.md`) | one frame for the 407 questions the *game* answers (1.000 frames each); **none at all** for a component read, since 2026-09-17 |
 | reading one structured argument out of Ruby | — | **72 lines** by hand (G2), **7** with serde (G3) |
 

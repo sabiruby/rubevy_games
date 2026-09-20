@@ -411,7 +411,7 @@ single file easy.
 
 ## Reloading
 
-`rubevy-arena`'s `Watch` watches `ruby/` with `notify`. On a write the game recompiles that robot
+`rubevy-egui`'s `Watch` watches `ruby/` with `notify`. On a write the game recompiles that robot
 (prelude + file) and gives the entity a new `Script`, dropping the old `ScriptTask`: the robot
 starts over with the new behaviour, the world is untouched, and the other robot never notices. Saving
 `prelude.rb` reloads every robot.
@@ -527,10 +527,10 @@ foreground, and the two do not fight: the picture above has `sleep 0.05` on the 
 classification is Prism's, the same lexer the compiler uses, through
 `sabiruby_compiler::highlight` on a PC and through `window.sabibotsHighlight` in a browser, one
 byte per source byte. The colours and why they are those colours are in
-`crates/rubevy-arena/src/editor.rs`. The lexer runs when the text changes, not once a frame, and a
+`crates/rubevy-egui/src/editor.rs`. The lexer runs when the text changes, not once a frame, and a
 page too old to have the bridge gets the listing as it was before there was any colour.
 
-The editor lives in `rubevy-arena` (`Editor`, `EditorPlugin`) so the other games get it for free.
+The editor lives in `rubevy-egui` (`Editor`, `EditorPlugin`) so the other games get it for free.
 The older read-only panel (`CodePanel`, Bevy UI only) is still there for a game that does not want
 egui.
 
@@ -608,10 +608,10 @@ shows the default form.
 
 It reads `Vm::snapshot`, `Vm::task_frames` and `Vm::task_context`. The last of those is what
 joins the other two — *which* of the VM's contexts this task stands in — and it did not exist when
-the panel was built: `rubevy-arena`'s `inspect.rs` read the index out of the way the VM renders a
+the panel was built: `rubevy-egui`'s `inspect.rs` read the index out of the way the VM renders a
 task (`#<Task 12 ctx=3>`), which is a debugging format and not an API, and gave up quietly if it
 ever changed. sabiruby 0.5.0 answers it properly and the parser is gone. The panel lives in
-`rubevy-arena` (`VmInspector`, `VmInspectorPlugin`), so the other games get it too.
+`rubevy-egui` (`VmInspector`, `VmInspectorPlugin`), so the other games get it too.
 
 ## Starting again
 
@@ -671,8 +671,8 @@ the same local storage the edited scripts go to), else the machine's own: `LC_AL
 both languages is the hint in the scoreboard, `H: help / 操作説明`, because it has to be read
 *before* anybody has chosen anything.
 
-The frame — the window, the two keys, the switch and the font — is `rubevy-arena`'s
-(`crates/rubevy-arena/src/guide.rs`), shared with the garden; the words are this game's and live
+The frame — the window, the two keys, the switch and the font — is `games-shell`'s
+(`crates/games-shell/src/guide.rs`), shared with the garden; the words are this game's and live
 in **`sabibots/src/guide_text.rs`**, which is the one file to edit to change them, and which the
 switch did not change: every paragraph and every key row still carries both languages and only the
 drawing picks. egui's default fonts have no CJK at all, so a subset of Noto Sans JP goes in the
