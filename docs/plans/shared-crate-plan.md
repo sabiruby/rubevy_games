@@ -171,6 +171,7 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 | S1 | **済み**（2026-09-20、`shared-crate` の `8f836d4`）。`rubevy_arena::{platform, checks, args}` と `settings::remembered` / `Guide::opening`。2 本の `platform.rs` は 261 → 141 行、201 → 98 行（コメントと空行を除くと 121 → 51、103 → 33）。ブラウザの橋は `js_sys::Reflect` で unsafe 0。共有 crate に数は 1 つも置いていない（`--shot` / `--headless` の既定はゲームが渡す）。動きは不変: テスト 18 → 22、箱庭ヘッドレスの 13 件は本文まで一致、窓は 3 走行とも ok 43、ブラウザは 2 ゲームとも pageerror 0・requestfailed 0（garden ok 43、Battle は当たりに依らない 31 行）。計画に無かった判断 1 つ: PC の `compile` / `highlight` も共有側へ移したので `rubevy-arena` が PC で `sabiruby-compiler` に依存する。記録は `docs/worklog/2026-09-20-shared-platform.md` |
 | S2 | **済み**（2026-09-20、`shared-crate` の `cce11ba`。**rubevy が push されるまで GitHub の rubevy では通らない** — 一時の `[patch]` で `rubevy-wt-r6` を指して作った。`Cargo.lock` はコミットに入れていない。rubevy の push の後に本体が取り直す）。2 本の `build.rs` は 35 行 → `rubevy_build::Embed::new("ruby").write()`、build.rs → `include!` → 表を引く、の通しはブラウザの 2 ゲームが走ったことで確認。`Program::new` に替えて `prelude_lines` は前と同じ数（482 / 376 / 297）。**sabibots のエディタが著者の行番号を言う**: `scout.rb:68:5`（直す前なら 365）、ブラウザは `playground.rb:68:5`。selftest に 1 段足した。garden の `beetle.rb:136` / `world.rb:315` も今までどおり。動きは不変: テスト 22 → 21（減った 1 本は rubevy に移った）、箱庭はヘッドレス 13 行・窓 43 行・ブラウザ 43 行が完全一致、Battle は当たりに依らない行が窓 30 → 31・ブラウザ 31 → 32（増えたのは新しい判定だけ）、pageerror 0・requestfailed 0、`web/build.sh all` + `wasm-opt` 通る。記録は `docs/worklog/2026-09-20-rubevy-entry-points.md` |
 | S3 | 実行中 |
+| S4a | 未着手（S3 の後、S4 の前）。**`rubevy-arena` を `rubevy-egui` と `games-shell` に割る**（8 章） |
 | S4 | 未着手 |
 | S6 | 未着手（S4 の後、S5b の前）。**箱庭の窓のチェックの揺れの調査**（コードは変えない）: 無改変で 3 走行中 2 走行が FAIL した 2 件（`Revert puts every beetle back on the file`、`every restarted beetle's new task has run`）を、何十回か回して数え、原因を割り、直し方を並べて報告して止まる |
 | S5a | **済み**（2026-09-20、`a0de41e` を main に取り込み）。`docs/numbers.md`: 数値リテラルを含む 1,246 行から **260 件**。分類案は (a) 不変量 33 / (b) 遊びの数 → Ruby 33 / (c) 動かす側 → Settings・引数 101 / (d) selftest の閾値 28 / (e) 既に変えられる 65。出どころは 測った 14 / 導出 18 / 引用 50 / 理由のみ 53 / **不明 125（48%）**。毎フレーム読まれる数 103 件。コードは無変更。記録は `docs/worklog/2026-09-20-numbers-inventory.md` |
@@ -185,7 +186,7 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 | 日付・段階 | 気づいた点 | どこ | 属する先 | 状況（計画に足した／著者判断待ち／見送り・理由） |
 |---|---|---|---|---|
 | 09-20 R2 | （rubevy の R2 から）箱庭は 1 匹ごとに `Assets::add` している（`give_mind` が spawn と出産のたび）。VM の irep は rubevy の R2 で 1 部になったが、`Assets<MrbAsset>` には同じバイト列が匹数ぶん残る。種ごとに 1 つの `Handle` を持てば消える | `garden/src/main.rs:2660-2685` | ゲーム固有（箱庭） | **本体が原則から決めた（09-20、著者「原則を大切に判断して」）**: **S5b のついでに直す**（種ごとに 1 つの `Handle`）。動きは変わらず、同じバイト列を匹数ぶん持つ理由が無い |
-| 09-20 著者 | **「アリーナクレートの名前も検討して」**。`rubevy-arena` の名前は 1 本目（Battle の正方形のアリーナ）から来ていて、今の中身（エディタ、VM パネル、ファイル監視、`platform`、selftest の枠、引数、案内、設定、2 種類のカメラ）を言っていない。3 本目は「アリーナ」を持たない | `crates/rubevy-arena`（名前は repo 内 47 ファイルに出る。crates.io には出していない） | 共有 crate（名前と構成） | **著者判断待ち**。本体の案は下の「名前の検討」。決まったら S4 で変える（S3 と S5b の間。機械的な置換なので 1 コミット、selftest とブラウザで確認） |
+| 09-20 著者 | **「アリーナクレートの名前も検討して」**。`rubevy-arena` の名前は 1 本目（Battle の正方形のアリーナ）から来ていて、今の中身（エディタ、VM パネル、ファイル監視、`platform`、selftest の枠、引数、案内、設定、2 種類のカメラ）を言っていない。3 本目は「アリーナ」を持たない | `crates/rubevy-arena`（名前は repo 内 47 ファイルに出る。crates.io には出していない） | 共有 crate（名前と構成） | **著者判断済み（09-20）: 案 1 — 2 つに割る**（`rubevy-egui` と `games-shell`）。段階 S4a（8 章の末尾） |
 | 09-20 S2 | `replace_script` に替えられる同じ 3 行があと 2 か所ある: garden の `wear_the_rules`（`Script::<World>` 版）と sabibots のファイル監視からの再読み込み。計画書 3.2 が 2 つしか名指ししていなかった | `garden/src/main.rs`、`sabibots/src/main.rs:2304-2308` | 計画書（S2 の書き漏らし） | 計画に足す: S3 の最初に替える |
 | 09-20 S2 | **`Program` にコンパイラへ渡すファイル名の置き場所が無い**。`name` は区切りコメント専用で、呼び出し側が同じ `name` を 2 回書く（片方だけ変えると食い違う）。`&str` 4 本は取り違えなかった（変数名がそのまま引数の順に並ぶ）。ビルダは要らない | rubevy `src/source.rs` | rubevy（API） | rubevy の計画 7 章に写す。直すなら `Program` が `name` を持って読めるように |
 | 09-20 S2 | Battle の「当たりに依らない行」の基準に、走行次第で入れ替わる行が混じっている（編集チェック中の当たりの除外行、撃破の有無で入れ替わる `handler tasks … ended` ⇄ `no robot with a handler was down long enough`） | `sabibots/src/main.rs:1308,1429`、`docs/README.md` の基準 | 確認の作法／本の素材 | **本体が原則から決めた（09-20、著者「原則を大切に判断して」）**: **両方やる**（S4）。走行次第で入れ替わる 2 組は n/a の文面を 1 つにし、基準の行は数ではなく**行の一覧**として `docs/verification/` に置く。「31 行」のような数は、何が 31 行なのかを言わないと確認の基準にならない |
@@ -234,4 +235,24 @@ selftest の枠、引数、案内（英日）、設定、パン・ズームの�
 **本体の推奨は 1**。理由: 著者が 2026-09-19 に保留した「構成を見直してから crates.io に」の見直しの中身がまさにこの 2 種類の同居で、
 名前を決めることと割ることは同じ 1 つの判断。3 本目が入る前（S4）にやれば、Factory は最初から正しい名前を `use` できる。
 割るのが今は重いなら 2 を採り、割るのは公開のときに、でもよい。
+
+### 決定（著者、2026-09-20）: 案 1 — 段階 S4a
+
+`crates/rubevy-arena` を 2 つに割り、`rubevy-arena` という名前は無くす。
+
+| 新しい crate | 入るもの | 依存 | 公開 |
+|---|---|---|---|
+| **`crates/rubevy-egui`** | `editor`（`Editor`・`EditorPlugin`・`EditorAction`・`EditorChoice`・`Highlighter`・寸法の設定）、`inspect`（`VmInspector`・`VmInspectorPlugin`・`Waiting`・`VmClock`・`VmClockSet`）、`code`（`CodePanel`）、`Watch`、**塞がれ px の Resource**（エディタが書く側なのでこちら） | bevy、bevy_egui、rubevy、sabiruby（`inspect` が要る）、`notify`（PC の `Watch`） | しない（crates.io に出すかは著者が別に決める。出せる形にはしておく: ゲームの語彙なし、`games-shell` に依存しない） |
+| **`crates/games-shell`** | `platform`、`checks`、`args`、`guide`（日本語フォント同梱）、`settings`、`hud`、`ArenaPlugin`（固定の 2D カメラ）、`camera`（パン・ズーム） | bevy、bevy_egui、`rubevy-egui`（塞がれ px を読む）、PC で `sabiruby-compiler`、wasm で `js-sys` / `wasm-bindgen` / web-sys | しない |
+
+- **依存の向きは `games-shell` → `rubevy-egui` の一方向。** 逆向きの参照が 1 つでも残るなら、どちらに置くかを見直す（`rubevy-egui` が殻を知ってはいけない）。
+  S3 が実際にどう切ったか（塞がれ px の Resource の置き場所、`Editor` の `Default`）を先に読み、上の表と食い違う所は実物に合わせて表を直し、理由を worklog に。
+- `use rubevy_arena::…` は 2 本のゲームと docs に広く出る（repo 内 47 ファイル）。**互換の別名 crate は残さない**（名前が中身を言わない状態を残すことになる）。
+  機械的な置換だが、`docs/worklog/` の過去の記録は**書き換えない**（その時点の名前が正しい）。`docs/README.md`・`README.md`・`docs/garden.md`・`docs/sabiruby-battle.md`・`docs/web.md`・
+  `docs/numbers.md`・計画書・`tools/subset-font.sh`（フォントと `guide.rs` の場所）・`CREDITS.md` は今の名前に直す。
+- フォントの `include_bytes!` の相対パス、`crate_dir!` マクロ（`env!("CARGO_MANIFEST_DIR")` を運ぶ）、egui の窓の id（`"rubevy-arena-guide"` — **変えない**。利用者の egui のメモリに残る名前なので、
+  変える理由が無い。rustdoc に「旧名が id に残っている」と 1 行）に注意。
+- 動きは変えない。確認は S1〜S3 と同じ: `cargo test --workspace`、2 本の selftest（行の集合で比べる）、wasm ビルド、`web/build.sh all` + Playwright（pageerror 0、requestfailed 0）。
+- 死んでいるもの（`HudPlugin`、`CodePanel`、`read_script`）の扱い: `read_script` は未使用で wasm でも動かないので**移さずに消す**（割るときに行き先の無いものを運ばない）。
+  `CodePanel` と `Hud` は使い道が文書に書いてある（egui を使わないゲーム向け、Battle が `Hud` を文字列の受け皿に使う）ので移す。
 
