@@ -3,45 +3,40 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SabiRuby Battle</title>
+<title>{{TITLE}}</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #15161a; color: #d8dae0;
+  html, body { margin: 0; height: 100%; background: {{BG}}; color: {{FG}};
                font: 15px/1.5 system-ui, sans-serif; overflow: hidden; }
   #game { position: fixed; inset: 0; }
   canvas { display: block; width: 100%; height: 100%; outline: none; }
   #status { position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
             padding: 0 16px; pointer-events: none; }
   #status[hidden] { display: none; }
-  #status small { color: #8a8f99; }
+  #status small { color: {{DIM}}; }
 </style>
 </head>
 <body>
-<div id="game"><canvas id="sabibots" tabindex="0"></canvas></div>
-<div id="status"><div>SabiRuby Battle<br><small id="step">loading the Ruby compiler…</small></div></div>
+<div id="game"><canvas id="{{GAME}}" tabindex="0"></canvas></div>
+<div id="status"><div>{{TITLE}}<br><small id="step">loading the Ruby compiler…</small></div></div>
 <script type="module">
 // Two modules: the game (Bevy + the SabiRuby VM, wasm32-unknown-unknown) and the Ruby compiler
 // (the reference mruby compiler in C, the SabiRuby playground's wasm32-wasip1 module). The game
-// calls window.sabibotsCompile(source) whenever it needs a robot's behaviour as bytecode.
+{{COMPILE_NOTE}}
 import { Sabi, OK } from "./compiler/sabi.js";
 
 const status = document.getElementById("status");
 const step = document.getElementById("step");
 
-// Keys the game uses and the browser would take. F5 is the one that matters: in the arena it is
-// Apply, and in a browser it reloads the page. The capture phase runs before anything else can
-// see the event, so preventDefault here stops the browser and the game still gets the key.
-// F1 is the guide and F2 the VM panel — both of which `?selftest` presses — and a browser has its
-// own idea about F1; Tab moves the focus off the canvas; Ctrl+S is Save page and Ctrl+Enter
-// belongs to the address bar. The garden's page keeps the same list (`web/garden.html`).
+{{KEYS_NOTE}}
 addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
-  const own = ["F1", "F2", "F5", "Tab"].includes(e.key);
+  const own = [{{KEYS}}].includes(e.key);
   if (own || (mod && (e.key === "s" || e.key === "Enter"))) e.preventDefault();
 }, { capture: true });
 
 try {
   const sabi = await Sabi.create(await fetch("./compiler/sabiruby.wasm"));
-  window.sabibotsCompile = (source) => {
+  window.{{GAME}}Compile = (source) => {
     if (sabi.compile(source, true) !== OK) throw sabi.text();
     return sabi.binary();
   };
@@ -49,12 +44,12 @@ try {
   // the game asks once per edit, not once per frame, and a build of the game older than this
   // page simply never calls it. It must not throw: the panel is drawn every frame and an
   // exception crossing back into wasm here would take the canvas with it.
-  window.sabibotsHighlight = (source) => {
+  window.{{GAME}}Highlight = (source) => {
     try { return sabi.highlight(source); } catch (e) { console.error(e); return new Uint8Array(0); }
   };
   step.textContent = "loading the game…";
   const game = await import("./pkg/game.js");
-  setTimeout(() => { status.hidden = true; document.getElementById("sabibots").focus(); }, 0);
+  setTimeout(() => { status.hidden = true; document.getElementById("{{GAME}}").focus(); }, 0);
   await game.default();
 } catch (e) {
   // winit leaves its start-up by throwing on purpose; that one is not a failure

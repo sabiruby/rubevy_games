@@ -29,12 +29,41 @@ runs) writes both and the entry page above them:
 
 ```
 web/index.html      →  dist/index.html      the entry page: two links and a sentence each
-web/sabibots.html   →  dist/sabibots/index.html
-web/garden.html     →  dist/garden/index.html
+web/page.html.in  ┐
+web/games.sh      ┘ →  dist/<game>/index.html    the game's page, one template + that game's values
                        dist/<game>/pkg/          the game (wasm-bindgen's output)
                        dist/<game>/assets/       the game's assets, copied whole
                        dist/<game>/compiler/     the Ruby compiler module
 ```
+
+### One template, and a game's values
+
+There were two hand-written pages, `web/garden.html` and `web/sabibots.html`, and they differed
+in fifteen lines out of seventy — a third game would have been a third copy of the same file. As
+of 2026-09-20 there is `web/page.html.in` with eight `{{…}}` in it, and `web/games.sh`, which is
+one block of shell a game:
+
+| the value | what it fills |
+|---|---|
+| the game's word (`GAMES_ALL`) | the canvas id (`<canvas id="garden">`), and the prefix of the two functions the page hangs on `window` — `gardenCompile`, `gardenHighlight` |
+| `TITLE` | the `<title>` and the word on the loading screen |
+| `BG`, `FG`, `DIM` | the page behind the canvas, so that the moment before the game draws is the game's own colour rather than white |
+| `KEYS` | the keys this game takes back from the browser (below) — the garden wants `F9` and Battle does not |
+| `COMPILE_NOTE`, `KEYS_NOTE` | the two comments, which are prose about *this* game and are what somebody who opens `view-source` reads |
+
+The word is not a value of its own on purpose: it is the crate's name, and the canvas id, the
+two `window.<game>…` names and the `localStorage` prefix are all already spelled that way, in
+`src/platform.rs` and in the game's `WindowPlugin`. Changing it would orphan every script a
+player has saved.
+
+`web/build.sh` fills the template with plain parameter expansion rather than `sed`, because the
+values are prose with slashes, ampersands, apostrophes, backticks and newlines in them and none
+of that has to be escaped in `${page//'{{X}}'/$value}`; it refuses to write a page that still
+has a `{{` in it. **A third game is one word in `GAMES_ALL` and one block in `games.sh`** — plus
+its own `<li>` in `web/index.html`, the entry page, which is a name and a sentence about the game
+and not a value. The two pages it writes today are byte-identical to the two files it replaced,
+except that Battle's page used to point at `web/garden.html` for the other key list and now
+points at the block beside it.
 
 **Each game's directory is complete on its own**, down to its own copy of the 2.4 MB compiler
 module. That is the one deliberate duplication here, and it is for the thing the script is mostly
@@ -66,7 +95,7 @@ Everything that differs is in each game's `src/platform.rs`, one module per targ
 | `SAVE_LABEL` | Save to file | Save in browser |
 | the garden's save (G3) | `garden.save.json`, a file | `localStorage`, key `garden:garden.save.json` |
 | the garden's checks | `GARDEN_SELFTEST=1` | `?selftest` in the page's address (G5) |
-| the Battle's checks | `SABIBOTS_SELFTEST=1` | `?selftest` in the page's address (2026-09-18) — the same query string, the same `CHECKS_EXIT_WHEN_DONE`, and 31 lines plus two per hit come out of `sabibots/?selftest` where a page before it said nothing |
+| the Battle's checks | `SABIBOTS_SELFTEST=1` | `?selftest` in the page's address (2026-09-18) — the same query string, the same `CHECKS_EXIT_WHEN_DONE`, and a page that said nothing before it now runs the editor's whole sequence. What each run has to print, line by line, is [`verification/selftest-lines.md`](verification/selftest-lines.md) |
 
 And outside that module:
 
@@ -196,18 +225,26 @@ older build wrote. `docs/garden.md` has the rest.
 ## Size
 
 Measured with `--profile web` (release, `opt-level = "s"`, thin LTO, stripped) and binaryen 132 —
-the version CI installs. The garden's two `wasm-opt` columns are from the sabiruby 0.5.1 build (the
-restart queue gone, `GARDEN_RELOAD_AT` and `CHECKS_EXIT_WHEN_DONE` in); it is 10 KB smaller than
-the 0.5.0 one and 5 KB smaller gzipped, which is nothing, and the unoptimized columns were not
-re-measured:
+the version CI installs. **Taken again on 2026-09-20**, after S1–S4 of `plans/shared-crate-plan.md`
+(the shared crate, split in two; rubevy's new entry points; the 2D camera), all four columns of
+both games on one machine within the same minutes, so the four are comparable with each other:
 
 | | bytes | gzip -9 | with `wasm-opt -Os` | its gzip |
 |---|---|---|---|---|
-| `sabibots/pkg/game_bg.wasm` | 38,772,420 | 9,877,837 | 34,794,885 | 10,593,843 |
-| `garden/pkg/game_bg.wasm` | 39,250,403 | 10,011,507 | 35,216,938 | 10,715,122 |
+| `sabibots/pkg/game_bg.wasm` | 39,100,735 | 10,026,050 | 35,111,618 | 10,736,516 |
+| `garden/pkg/game_bg.wasm` | 39,873,551 | 10,243,952 | 35,828,300 | 10,947,996 |
 | `compiler/sabiruby.wasm` (each game's copy) | 2,445,509 | 840,268 | — | — |
 | `sabibots/assets/` (16 files) | 234,202 | | | |
-| `garden/assets/` (10 files) | 322,924 | 64,744 | | |
+| `garden/assets/` (10 files) | 322,924 | 63,725 | | |
+
+The rows before these were measured at the sabiruby 0.5.1 build, before G6's Japanese font and
+everything after it, so the difference between the two tables is not any one change's — the
+two deltas worth naming are measured against their own build and are further down. The nearest
+one is S4a's split of the shared crate into `rubevy-egui` and `games-shell`, which cost
+**+6,952 bytes for Battle and +4,551 for the garden** (0.02%) against the same tree unsplit; S4's
+two new lines in Battle's checks cost 92 bytes. (The garden's assets gzip a kilobyte smaller than
+last time because the two readings concatenated the ten files in different orders; the files are
+the same files.)
 
 The compiler module's row is the playground at `d72e000` (2026-09-18), which is what
 `PLAYGROUND_REF` pins; it was 2,435,191 / 835,234 at `3f47c9d`, and **+10,318 raw / +5,034
@@ -244,8 +281,9 @@ The garden's assets are the Kenney models: `animal-crab.glb` 150,768, `animal-bu
 Two things in that table are worth saying out loud.
 
 **`wasm-opt -Os` makes the file smaller and the download bigger.** It takes about 10% off the raw
-module and puts about 7% back on the gzipped one (sabibots 9.88 → 10.59 MB gzipped, the garden
-10.01 → 10.72 MB), which is what the wire actually carries — Pages serves gzip. The optimizer's
+module and puts about 7% back on the gzipped one (sabibots 10.03 → 10.74 MB gzipped, the garden
+10.24 → 10.95 MB; −10.2% and −10.1% raw against +7.1% and +6.9% gzipped, on the 2026-09-20
+table), which is what the wire actually carries — Pages serves gzip. The optimizer's
 output is smaller but less repetitive, and gzip lives on repetition. CI has `wasm-opt` and still
 runs it, because the raw size is what the browser must decode and keep, but **the case for it is
 not the download**, and this is the first time the two were measured side by side here. Kept
@@ -280,7 +318,7 @@ The font was 9,589,900 bytes as it comes from Google Fonts. Shipping it whole wo
 27% increase on the module, which is the decision the subsetting avoided; `tools/subset-font.sh`
 is what has to be run again when the Japanese is edited (`docs/garden.md`, `CREDITS.md`).
 
-**The garden is 1.2% bigger than Battle** (39.25 vs 38.77 MB raw), which is the whole of 3D:
+**The garden is 2.0% bigger than Battle** (39.87 vs 39.10 MB raw, 2026-09-20), which is the whole of 3D:
 `bevy_pbr`, `bevy_gltf`, `bevy_animation` and the glTF loader against Battle's sprites. The plan
 guessed 35–40 MB against "Battle's 30 MB"; both games are at the top of that. The figure recorded
 here at the time of the Battle's own build was 26.7 MB — the module has grown by 8 MB since, on

@@ -73,9 +73,12 @@ garden/               Garden: the 3D world, and the components its creatures rea
   src/platform.rs     the same split as sabibots'
   ruby/prelude.rb     the DSL the creatures are written in
   ruby/creatures/*.rb one file per species
-web/                  the browser build: build.sh, serve.sh, index.html (the entry page) and
-                      one page per game, sabibots.html and garden.html (dist/ is the output)
-docs/                 how it is put together, and what is next
+web/                  the browser build: build.sh, serve.sh, index.html (the entry page), and
+                      one page.html.in with one block of values a game in games.sh, which
+                      build.sh fills in (dist/ is the output)
+tools/                fixedlines.sh, which turns a run of the checks into a list two runs can
+                      be diffed by, and subset-font.sh for the guide's Japanese
+docs/                 how it is put together, what the checks have to say, and what is next
 ```
 
 Bevy is pinned once, in the workspace's `[workspace.dependencies]`: a binary can have only one
