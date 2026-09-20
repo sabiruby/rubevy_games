@@ -299,24 +299,48 @@ def run_world
   $world_being = being
   srand(being.garden.seed.to_i)
 
-  # **What the rules keep but the game has to build or draw with**, handed over once.
+  # **What the rules keep but the game has to build, draw or sweep with**, handed over once.
   #
-  # The sun is drawn in Rust and a creature's body is made in Rust, so those three numbers have
-  # to cross: how long a day is, what a newborn's meter says, and how many creatures the game
-  # will make at all. The last two are the **distances**, and they cross for a fourth thing the
-  # game builds: the selftest's meadow corner stands where `reach` and `mate_reach` put it
-  # (2026-09-18). Everything else in `world.rb` is read in `world.rb`. A world that says nothing
-  # about one of them sends `nil` and the game keeps its own (`main.rs`, `RuleBook`).
+  # The sun is drawn in Rust and a creature's body is made in Rust, so those numbers have to
+  # cross: how long a day is, what a newborn's meter says, and how many creatures the game will
+  # make at all. Then the **distances**, which cross for a fourth thing the game builds: the
+  # selftest's meadow corner stands where `reach` and `mate_reach` put it (2026-09-18).
+  #
+  # And since S5b-4 the numbers of the two **sweeps** — `touch_reach`, which is how close a
+  # rabbit has to come for a beetle to be told, and `sprout_gap`, which is how far a new blade
+  # has to stand from the ones already up — with the four **bodies**. Those six were the last
+  # numbers of the garden's play still written in Rust, and they are here for the reason the top
+  # of `world.rb` gives about `garden.within`: the number is a rule, the walk over every pair of
+  # things in the field is not something Ruby should be doing sixty times a second. So the rules
+  # say the number once and the game does the walking.
+  #
+  # Everything else in `world.rb` is read in `world.rb`. A world that says nothing about one of
+  # these sends `nil` and the game keeps its own (`main.rs`, `RuleBook`).
+  #
+  # **A world that has never heard of one of them does not send the key at all**, which is what
+  # `respond_to?` is for: a `world.rb` saved out of the editor before this stage has no
+  # `touch_reach` method, and calling it would end the rules with a `NoMethodError` — a garden
+  # in somebody's browser going quiet because the game learned a new number. The older keys are
+  # asked for outright, because a `world.rb` without `reach` never ran in any published build.
   #
   # It is the one question in this file that is asked for its answer's sake: a number the game
   # will not take (a day of no seconds) comes back as the sentence saying why, in the log.
-  answer = being.garden.rules(
+  numbers = {
     day_length: klass.day_length,
     child_hunger: being.child_hunger,
     pop_max: being.pop_max,
     reach: being.reach,
     mate_reach: being.mate_reach,
-  )
+  }
+  numbers[:touch_reach] = being.touch_reach if being.respond_to?(:touch_reach)
+  numbers[:sprout_gap] = being.sprout_gap if being.respond_to?(:sprout_gap)
+  numbers[:beetle_radius] = being.beetle_radius if being.respond_to?(:beetle_radius)
+  numbers[:rabbit_radius] = being.rabbit_radius if being.respond_to?(:rabbit_radius)
+  numbers[:tree_radius] = being.tree_radius if being.respond_to?(:tree_radius)
+  numbers[:rock_radius] = being.rock_radius if being.respond_to?(:rock_radius)
+  # the Hash goes over as the one positional argument, which is what the keyword form was
+  # anyway: `Rubevy::Proxy#method_missing` takes `*args` and the game reads `request.value(0)`
+  answer = being.garden.rules(numbers)
   Rubevy.log "world: #{answer}" unless answer == true
 
   # One task per `every`, started before the first frame — the shape `start_handlers` gives a

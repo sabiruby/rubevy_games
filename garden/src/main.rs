@@ -782,6 +782,17 @@ const HUNGER_MAX: f32 = 100.0;
 /// `garden.rules(reach:)` — the same arrangement [`CHILD_HUNGER`] has, and for the same reason:
 /// the game has to have an answer before the rules have spoken.
 const REACH: f32 = 1.1;
+/// How close a rabbit has to come to a beetle for the beetle to be told about it — **the rules'
+/// number, and the game only sweeps for it** (S5b-4). `world.rb` says it (`touch_reach`) and
+/// hands it over with the other distances; `startle` walks every beetle against every rabbit,
+/// because that walk is what Ruby should not be writing sixty times a second (`world.rb`'s own
+/// first paragraph).
+///
+/// What is left here is the **stand-in**: what [`Reaches`] holds for the frames before the rules
+/// have spoken, and for ever in a garden whose `world.rb` will not compile — which is a garden
+/// this game goes on running, deliberately (see [`WorldTrouble`]). It is not a second opinion
+/// about the rules: a test (`the_stand_ins_are_what_world_rb_says`) reads `ruby/world.rb` and
+/// fails if the two ever drift apart. **Source: unknown** — 1.3 has no record anywhere.
 const TOUCH_REACH: f32 = 1.3;
 
 /// How close two well-fed creatures have to be before the rules tell them about each other, until
@@ -838,6 +849,12 @@ const POP_MAX: usize = 24;
 
 /// Solid things. Circles on XZ, pushed apart after the move; no physics crate, because the rule
 /// is three lines and a physics crate is a megabyte of wasm and a second vocabulary.
+///
+/// **The four are `world.rb`'s since S5b-4** ([`Bodies`]): how wide a body is is a number the
+/// garden is played with — a fatter beetle is a beetle that bumps into more — and the rules hand
+/// it over with the distances. These four are the **stand-ins**, the same arrangement [`REACH`]
+/// and [`CHILD_HUNGER`] have: what a body is until the rules have spoken, and for ever in a
+/// garden whose `world.rb` will not compile. **Source: unknown** for all four.
 const BEETLE_RADIUS: f32 = 0.40;
 const RABBIT_RADIUS: f32 = 0.50;
 const TREE_RADIUS: f32 = 0.70;
@@ -845,7 +862,13 @@ const ROCK_RADIUS: f32 = 0.60;
 const TREES: usize = 7;
 const ROCKS: usize = 9;
 /// the side of one cell of the neighbour grid: at least twice the largest radius, so two circles
-/// that touch are always in the same cell or in neighbouring ones
+/// that touch are always in the same cell or in neighbouring ones.
+///
+/// **It is a floor now, not the answer** (S5b-4). The radii are the rules' and a `world.rb` that
+/// makes a tree three units wide would be sorting its neighbours into cells too small to find
+/// them in — so the grid is [`Bodies::cell`], which is this or twice the largest body, whichever
+/// is more. With the rules as they ship the largest body is 0.70 and twice it is 1.4, so the
+/// answer is this number and the grid is the grid it always was.
 const CELL: f32 = 1.6;
 /// how many times the push is repeated in a frame. One pass settles a pair; a huddle of three or
 /// four wants a few, and four is enough that nothing is ever seen overlapping.
@@ -1473,8 +1496,38 @@ pub const WORLD_PRELUDE_FILE: &str = "world_prelude.rb";
 /// ordinary system parameters. What the rule decided — *whether* there is room and *whether* the
 /// dice came up — is `world.rb`'s; where the seed lands and what it is made of is the garden's
 /// furniture and stayed here.
-#[derive(Resource, Default)]
-struct Sprouts(u32);
+///
+/// **And how far a new blade has to stand from the ones already up is the rules' too** (S5b-4).
+/// It was the one number of the grass that W1 left behind in this source, because the thing it
+/// is used for is a walk over every plant in the field and that walk is Rust's. The number
+/// crosses with the others, once, in `garden.rules(sprout_gap:)`; the walk stays here. It is
+/// kept in this resource rather than in one of its own because this is the resource
+/// [`sprout_plants`] already reads — numbers live where they are used, which is [`Births`]'
+/// arrangement.
+#[derive(Resource)]
+struct Sprouts {
+    /// asked for this frame, not yet in the ground
+    asked: u32,
+    /// how close to another blade a new one may not be put (`world.rb`'s `sprout_gap`)
+    gap: f32,
+}
+
+impl Default for Sprouts {
+    /// The game's own, for the frames before `world.rb` has spoken and for a garden whose
+    /// `world.rb` will not compile ([`SPROUT_GAP`]).
+    fn default() -> Self {
+        Sprouts { asked: 0, gap: SPROUT_GAP }
+    }
+}
+
+/// How far a new blade of grass has to stand from every blade already up, until `world.rb` says
+/// otherwise with `garden.rules(sprout_gap:)`.
+///
+/// It is the **stand-in** and nothing else — the number itself is `ruby/world.rb`'s, on the line
+/// named beside it there, and a test holds the two together
+/// (`the_stand_ins_are_what_world_rb_says`). **Source: unknown**: 1.5 was written into
+/// `sprout_plants` when the grass was still Rust's and no record says why that far.
+const SPROUT_GAP: f32 = 1.5;
 
 /// **What one pass of `world.rb`'s `each_frame` costs** (W1), and the wall time this VM's tick
 /// took — the two numbers `ScriptWorld<World>`'s `budget` and `frame_time` were chosen from.
@@ -1588,10 +1641,15 @@ struct Reaches {
     /// how far from a blade a creature may stand and still eat it, before the blade's own size is
     /// added (`world.rb`'s `reach`)
     eat: f32,
+    /// how close a rabbit has to come to a beetle for the beetle to be told (`world.rb`'s
+    /// `touch_reach`). **Wanted every frame**, by [`startle`], which is why it is read out of a
+    /// resource here rather than asked of the VM: the rules say the number once and the game
+    /// does the sweeping (S5b-4).
+    touch: f32,
     /// how close two well-fed creatures have to be to be told about each other (`world.rb`'s
     /// `mate_reach`)
     mate: f32,
-    /// whether `world.rb` has said. Until it has, the two above are the game's own — and a
+    /// whether `world.rb` has said. Until it has, the three above are the game's own — and a
     /// `world.rb` that will not compile leaves them on the game's own for ever, which is the case
     /// [`plant_the_meadow`] has to notice so that the corner is planted at all.
     told: bool,
@@ -1599,7 +1657,57 @@ struct Reaches {
 
 impl Default for Reaches {
     fn default() -> Self {
-        Reaches { eat: REACH, mate: MATE_REACH, told: false }
+        Reaches { eat: REACH, touch: TOUCH_REACH, mate: MATE_REACH, told: false }
+    }
+}
+
+/// **How wide the things in the garden are** — `world.rb`'s numbers, handed over once by
+/// `garden.rules`, and the only place the game asks how big a body is (S5b-4).
+///
+/// It is [`Reaches`]' arrangement with one thing more to do. A reach is read where it is used and
+/// that is the whole of it; a radius is also **written onto an entity** — `Collider` is what
+/// `separate` walks and what the fourth check measures — so a handover has to reach the bodies
+/// that are already standing about. [`bodies_wear_the_rules`] is that, and it is
+/// `plants_wear_their_size` for creatures: one number, seen in two places, copied by the game
+/// rather than kept in step by hand.
+///
+/// So editing `beetle_radius` in the editor and pressing Ctrl+Enter widens every beetle in the
+/// garden on the next frame, which is what putting a number in a file a player can edit is for.
+/// What it does **not** move is where the garden was laid out: `spawn_world` is a `Startup`
+/// system and scatters trees and creatures with the stand-ins below, an hour of play before the
+/// first blade is eaten in any case.
+#[derive(Resource)]
+struct Bodies {
+    beetle: f32,
+    rabbit: f32,
+    tree: f32,
+    rock: f32,
+}
+
+impl Default for Bodies {
+    /// The game's own, for the frames before `world.rb` has spoken and for a garden whose
+    /// `world.rb` will not compile.
+    fn default() -> Self {
+        Bodies { beetle: BEETLE_RADIUS, rabbit: RABBIT_RADIUS, tree: TREE_RADIUS, rock: ROCK_RADIUS }
+    }
+}
+
+impl Bodies {
+    fn of(&self, species: Species) -> f32 {
+        match species {
+            Species::Beetle => self.beetle,
+            Species::Rabbit => self.rabbit,
+        }
+    }
+
+    /// The side of one cell of `separate`'s neighbour grid: [`CELL`], or twice the largest body,
+    /// whichever is more. **Derived, not chosen** — a cell narrower than a body's width is a pair
+    /// that touches and is sorted into cells that never look at each other, which is what the
+    /// comment on [`CELL`] has always said the number was for. With the rules as they ship this
+    /// answers [`CELL`] exactly.
+    fn cell(&self) -> f32 {
+        let widest = self.beetle.max(self.rabbit).max(self.tree).max(self.rock);
+        CELL.max(2.0 * widest)
     }
 }
 
@@ -2628,8 +2736,10 @@ fn main() {
         // W1: the seeds `world.rb` asked for, the cost of its pass, and why it has no rules where
         // it has none
         .init_resource::<Sprouts>()
-        // and the two distances it keeps that the game builds a place out of (2026-09-18)
+        // and the three distances it keeps that the game sweeps or builds a place with
+        // (2026-09-18, and `touch_reach` since S5b-4), and the four bodies (S5b-4)
         .init_resource::<Reaches>()
+        .init_resource::<Bodies>()
         .init_resource::<WorldMeter>()
         .init_resource::<WorldTrouble>()
         .init_resource::<WorldPrelude>()
@@ -2774,6 +2884,16 @@ fn main() {
             (plants_wear_their_size, note_the_rules, sprout_plants)
                 .after(RubevySet::<World>::tick())
                 .after(RubevySet::Answer),
+        )
+        // `bodies_wear_the_rules` is `plants_wear_their_size`'s shape for the other number the
+        // rules hand over that is also written onto an entity: how wide a body is (S5b-4). It is
+        // ordered after the set the handover is *read* in rather than with the three above,
+        // because that is the edge it actually needs and because giving the three of them a new
+        // edge is giving Bevy a new sync point to put somewhere (S7's lesson, and the reason the
+        // window checks were flaky).
+        .add_systems(
+            Update,
+            bodies_wear_the_rules.after(RubevySet::<World>::answer()),
         )
         .add_systems(Update, watch_minds.after(RubevySet::Answer))
         // W1: what one pass of `world.rb` costs, round the set that runs it
@@ -3103,6 +3223,7 @@ fn spawn_world(
     loading: Option<Res<Loading>>,
     place: Res<Place>,
     built: Res<Furniture>,
+    bodies: Res<Bodies>,
     light: Res<Light>,
 ) {
     let look = look.as_deref();
@@ -3186,9 +3307,9 @@ fn spawn_world(
             continue;
         }
         if tree {
-            spawn_tree(&mut commands, look, at);
+            spawn_tree(&mut commands, look, &bodies, at);
         } else {
-            spawn_rock(&mut commands, look, at, dice.between(built.rock_squash[0], built.rock_squash[1]));
+            spawn_rock(&mut commands, look, &bodies, at, dice.between(built.rock_squash[0], built.rock_squash[1]));
         }
         solid.push((at, radius));
     }
@@ -3220,7 +3341,7 @@ fn spawn_world(
         // has moved, and then "somebody ate within 10 s" says nothing about walking or about the
         // contact test. The positions are kept in hand because the plants above are still
         // commands and are not in the world to be queried yet.
-        let radius = radius_of(species);
+        let radius = bodies.of(species);
         let mut at = Vec2::ZERO;
         for _ in 0..built.tries {
             at = Vec2::new(dice.between(-half_w + 2.0, half_w - 2.0), dice.between(-half_d + 2.0, half_d - 2.0));
@@ -3238,13 +3359,13 @@ fn spawn_world(
         let hunger = dice.between(built.hunger[0], built.hunger[1]);
         // no two creatures alike, so that `Genome#mix` has something to average
         let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
-        let entity = spawn_creature(&mut commands, look, species, at, hunger, genome, None);
+        let entity = spawn_creature(&mut commands, look, &bodies, species, at, hunger, genome, None);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, species);
     }
 
     if keep_clear {
         let entity =
-            spawn_creature(&mut commands, look, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle), None);
+            spawn_creature(&mut commands, look, &bodies, Species::Beetle, fasting_at, 3.0, Genome::of(Species::Beetle), None);
         commands.entity(entity).insert(Fasting);
         info!("selftest: a beetle with no behaviour and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
@@ -3254,7 +3375,7 @@ fn spawn_world(
         // the species' own genome, not a rolled one: the check below is written for a beetle
         // that sees exactly eight units, and a rolled `Sight` of 6.6 would be testing the dice
         let probe =
-            spawn_creature(&mut commands, look, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle), None);
+            spawn_creature(&mut commands, look, &bodies, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle), None);
         commands.entity(probe).insert(Probe { dinner });
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, probe, Species::Beetle);
         info!(
@@ -3371,6 +3492,7 @@ fn plant_the_meadow(
     trouble: Res<WorldTrouble>,
     place: Res<Place>,
     built: Res<Furniture>,
+    bodies: Res<Bodies>,
 ) {
     // the rules have spoken, or the game knows they never will
     if !reaches.told && trouble.0.is_none() {
@@ -3388,7 +3510,7 @@ fn plant_the_meadow(
     // how far from its blade a creature may be and still eat it (`world.rb`: `arm = reach + cap * 0.5`)
     let arm = reaches.eat + half_blade;
     // √(mate_reach² − (half a blade)²), and the two beetles' own bodies under it
-    let touching = 2.0 * BEETLE_RADIUS;
+    let touching = 2.0 * bodies.beetle;
     let widest = (reaches.mate * reaches.mate - half_blade * half_blade).max(0.0).sqrt();
     let apart = (touching + widest.max(touching)) * 0.5;
     // outside the arm, inside the shorter sight, and inside the ground the corner owns; in the
@@ -3406,7 +3528,7 @@ fn plant_the_meadow(
         let blade = corner + along * apart * side;
         spawn_plant(&mut commands, look, blade, built.plant_max, i == 0);
         let lover =
-            spawn_creature(&mut commands, look, Species::Beetle, blade + toward * start, 45.0, genome, None);
+            spawn_creature(&mut commands, look, &bodies, Species::Beetle, blade + toward * start, 45.0, genome, None);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
     }
     info!(
@@ -3453,10 +3575,10 @@ fn spawn_plant(commands: &mut Commands, look: Option<&Look>, at: Vec2, size: f32
 
 /// A tree, and a `Collider` that does not move. `Tree`, not `Plant` — walking into grass is
 /// eating, walking into a tree is not.
-fn spawn_tree(commands: &mut Commands, look: Option<&Look>, at: Vec2) {
+fn spawn_tree(commands: &mut Commands, look: Option<&Look>, bodies: &Bodies, at: Vec2) {
     let mut tree = commands.spawn((
         Tree,
-        Collider { radius: TREE_RADIUS },
+        Collider { radius: bodies.tree },
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
     ));
@@ -3472,10 +3594,10 @@ fn spawn_tree(commands: &mut Commands, look: Option<&Look>, at: Vec2) {
 
 /// A rock: the same immovable circle, and a boulder squashed a little so that nine of them do
 /// not look like nine of one thing.
-fn spawn_rock(commands: &mut Commands, look: Option<&Look>, at: Vec2, squash: f32) {
+fn spawn_rock(commands: &mut Commands, look: Option<&Look>, bodies: &Bodies, at: Vec2, squash: f32) {
     let mut rock = commands.spawn((
         Rock,
-        Collider { radius: ROCK_RADIUS },
+        Collider { radius: bodies.rock },
         Transform::from_xyz(at.x, 0.0, at.y),
         Visibility::default(),
     ));
@@ -3493,19 +3615,13 @@ fn spawn_rock(commands: &mut Commands, look: Option<&Look>, at: Vec2, squash: f3
     }
 }
 
-fn radius_of(species: Species) -> f32 {
-    match species {
-        Species::Beetle => BEETLE_RADIUS,
-        Species::Rabbit => RABBIT_RADIUS,
-    }
-}
-
 /// A creature: the same split. The entity's `Transform` is position and facing and nothing else,
 /// which is what a brain reads and writes; the model is a child — which is exactly why G0a swapped
 /// six primitives for six `.glb` files without a single component changing.
 fn spawn_creature(
     commands: &mut Commands,
     look: Option<&Look>,
+    bodies: &Bodies,
     species: Species,
     at: Vec2,
     hunger: f32,
@@ -3520,7 +3636,7 @@ fn spawn_creature(
         // its own because that is what `answer_garden` reads to decide how far `garden.nearest`
         // may look, and what a script reads with `me[:Sight]`.
         Sight(genome.sight),
-        Collider { radius: radius_of(species) },
+        Collider { radius: bodies.of(species) },
         Breeding { ready_at: 0.0, partner: Entity::PLACEHOLDER },
         Memory,
         Transform::from_xyz(at.x, 0.0, at.y),
@@ -4231,6 +4347,7 @@ fn separate(
     mut world: ResMut<ScriptWorld>,
     mut bumps: ResMut<Bumps>,
     place: Res<Place>,
+    bodies: Res<Bodies>,
     mut movers: Query<(Entity, &Collider, &mut Transform), With<Creature>>,
     fixed: Query<(Entity, &Collider, &Transform), Without<Creature>>,
 ) {
@@ -4258,13 +4375,16 @@ fn separate(
     }
 
     let mut touching: Vec<(Entity, Entity)> = Vec::new();
+    // the grid the pairs are found in, wide enough for the widest body the rules have named
+    // ([`Bodies::cell`])
+    let cell_side = bodies.cell();
     for pass in 0..place.separate_passes {
         let mut grid: bevy::platform::collections::HashMap<(i32, i32), Vec<usize>> = default();
         for (i, p) in at.iter().enumerate() {
-            grid.entry(((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)).or_default().push(i);
+            grid.entry(((p.x / cell_side).floor() as i32, (p.y / cell_side).floor() as i32)).or_default().push(i);
         }
         for i in 0..at.len() {
-            let cell = ((at[i].x / CELL).floor() as i32, (at[i].y / CELL).floor() as i32);
+            let cell = ((at[i].x / cell_side).floor() as i32, (at[i].y / cell_side).floor() as i32);
             for dx in -1..=1 {
                 for dz in -1..=1 {
                     let Some(near) = grid.get(&(cell.0 + dx, cell.1 + dz)) else { continue };
@@ -4411,6 +4531,49 @@ fn plants_wear_their_size(mut plants: Query<(&Plant, &mut Transform), Changed<Pl
     }
 }
 
+/// **Every body in the garden is the width the rules said it is** (S5b-4).
+///
+/// The four radii are `world.rb`'s and arrive once through `garden.rules` ([`Bodies`]), but a
+/// radius is not only read where it is used: it is written onto the entity as a [`Collider`],
+/// because that is what [`separate`] walks and what the fourth check measures. So the handover
+/// has to reach what is already standing about — the ten creatures `spawn_world` put down before
+/// the world's script had run a line, and everything alive when somebody presses `Ctrl+Enter` on
+/// a `world.rb` that says a beetle is wider than it was.
+///
+/// It is [`plants_wear_their_size`]'s job in the other direction, and it costs what that costs:
+/// the `Res<Bodies>::is_changed` is one comparison in a frame where nothing was handed over,
+/// which is every frame but the first and the ones an edit lands in. What it writes then is one
+/// float per creature, per tree and per rock.
+///
+/// A creature born after the handover already has the right body ([`spawn_creature`] reads the
+/// same resource), so this is only ever catching up the ones that were built first.
+fn bodies_wear_the_rules(
+    bodies: Res<Bodies>,
+    mut creatures: Query<(&Creature, &mut Collider)>,
+    mut trees: Query<&mut Collider, (With<Tree>, Without<Creature>)>,
+    mut rocks: Query<&mut Collider, (With<Rock>, Without<Creature>, Without<Tree>)>,
+) {
+    if !bodies.is_changed() {
+        return;
+    }
+    // `Mut::set_if_neq` rather than a plain write, so that a handover that restates the numbers
+    // — which is what every `Ctrl+Enter` on an unchanged `world.rb` is — marks nothing changed
+    let wear = |collider: &mut Mut<Collider>, radius: f32| {
+        if collider.radius != radius {
+            collider.radius = radius;
+        }
+    };
+    for (creature, mut collider) in &mut creatures {
+        wear(&mut collider, bodies.of(creature.species));
+    }
+    for mut collider in &mut trees {
+        wear(&mut collider, bodies.tree);
+    }
+    for mut collider in &mut rocks {
+        wear(&mut collider, bodies.rock);
+    }
+}
+
 /// The seeds `world.rb` asked for this frame, put in the ground.
 ///
 /// **Where a seed may land is the garden's furniture; whether one lands is the rule.** So the
@@ -4430,13 +4593,16 @@ fn sprout_plants(
     built: Res<Furniture>,
     plants: Query<&Transform, With<Plant>>,
 ) {
-    for _ in 0..std::mem::take(&mut asked.0) {
+    let gap = asked.gap;
+    for _ in 0..std::mem::take(&mut asked.asked) {
         let at = Vec2::new(
             dice.between(-place.half_w() + 1.0, place.half_w() - 1.0),
             dice.between(-place.half_d() + 1.0, place.half_d() - 1.0),
         );
-        // not on top of another one
-        if plants.iter().any(|t| Vec2::new(t.translation.x, t.translation.z).distance(at) < 1.5) {
+        // not on top of another one. **How close is on top of is the rules'** (S5b-4,
+        // `world.rb`'s `sprout_gap`); the walk over every blade in the field is this system's,
+        // for the reason `world.rb`'s own first paragraph gives.
+        if plants.iter().any(|t| Vec2::new(t.translation.x, t.translation.z).distance(at) < gap) {
             continue;
         }
         let round = dice.roll() < built.round_chance;
@@ -4662,6 +4828,7 @@ fn startle(
     mut contacts: ResMut<Contacts>,
     mut test: Option<ResMut<SelfTest>>,
     field: Res<Place>,
+    reaches: Res<Reaches>,
     creatures: Query<(Entity, &Creature, &Transform, &Velocity)>,
 ) {
     let now = time.elapsed_secs();
@@ -4677,7 +4844,7 @@ fn startle(
         }
         let here = Vec2::new(at.translation.x, at.translation.z);
         for (rabbit, there) in &rabbits {
-            if here.distance(*there) <= TOUCH_REACH {
+            if here.distance(*there) <= reaches.touch {
                 touching.push((*rabbit, beetle));
                 if !contacts.0.contains(&(*rabbit, beetle)) {
                     world.publish(Some(beetle), "touched", Answer::Entity(*rabbit));
@@ -4758,6 +4925,7 @@ fn children_arrive(
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
+    bodies: Res<Bodies>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut test: Option<ResMut<SelfTest>>,
 ) {
@@ -4770,7 +4938,7 @@ fn children_arrive(
             birth.at.y.clamp(-place.half_d() + 1.0, place.half_d() - 1.0),
         );
         let child =
-            spawn_creature(&mut commands, look.as_deref(), birth.species, at, hunger, birth.genome, birth.parent);
+            spawn_creature(&mut commands, look.as_deref(), &bodies, birth.species, at, hunger, birth.genome, birth.parent);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, child, birth.species);
         info!(
             "a {} was born at {now:.1} s ({}) — {}",
@@ -5152,16 +5320,30 @@ fn answer_spawn<M: 'static>(
 }
 
 /// What `world.rb` hands the game once, at the start: **the numbers a rule keeps but the game
-/// has to build or draw with**. There are five of them, and the test for whether one belongs
-/// here is whether the thing that needs it is Rust: the sun is drawn here, a creature's body is
-/// made here, and the selftest's meadow corner is *placed* here (2026-09-18) — which is what the
-/// last two are for, and the reason they are a handover rather than a copy of two numbers in this
-/// source.
+/// has to build, draw or sweep with**. The test for whether one belongs here is whether the
+/// thing that needs it is Rust: the sun is drawn here, a creature's body is made here, the
+/// selftest's meadow corner is *placed* here (2026-09-18), and two of the garden's sweeps are
+/// walks over every pair of things in the field, which is the one kind of loop `world.rb`'s own
+/// first paragraph says Ruby should not be writing sixty times a second.
+///
+/// **S5b-4 added six**: `touch_reach` (what `startle` sweeps for), `sprout_gap` (what
+/// `sprout_plants` sweeps for) and the four bodies. The rule for all six is the one the older
+/// five follow — **the number is the rules', the walk is the game's** — and it is why they are a
+/// handover rather than a question asked per creature or per seed: `garden.rules` crosses the
+/// boundary once, in the world's script's first line.
 ///
 /// Every field is an `Option` and `#[serde(default)]`, so a `world.rb` that says nothing about
-/// the sun, or about children, or about how close is close enough, is not an error — it leaves
-/// the game on its own numbers ([`DAY_LENGTH`], [`CHILD_HUNGER`], [`POP_MAX`], [`REACH`],
-/// [`MATE_REACH`]), which is also what a `world.rb` that will not compile leaves it on.
+/// the sun, or about children, or about how wide a beetle is, is not an error — it leaves the
+/// game on its own numbers ([`DAY_LENGTH`], [`CHILD_HUNGER`], [`POP_MAX`], [`REACH`],
+/// [`TOUCH_REACH`], [`MATE_REACH`], [`SPROUT_GAP`], [`Bodies::default`]), which is also what a
+/// `world.rb` that will not compile leaves it on, and what an **older `world.rb`** does: a file
+/// saved out of the editor before this stage names none of the six, and `run_world` sends only
+/// the keys the world it is running actually has (`world_prelude.rb`).
+///
+/// `deny_unknown_fields` is not set here, and that is the older decision of the two: this Hash is
+/// built by `run_world` out of the world's own methods rather than written out by the player, so
+/// there is no key for a player to misspell — what a player misspells is a *method name*, and
+/// then the world simply does not have that number and the game keeps its own.
 #[derive(Deserialize, Debug, Default)]
 struct RuleBook {
     #[serde(default)]
@@ -5173,7 +5355,19 @@ struct RuleBook {
     #[serde(default)]
     reach: Option<f32>,
     #[serde(default)]
+    touch_reach: Option<f32>,
+    #[serde(default)]
     mate_reach: Option<f32>,
+    #[serde(default)]
+    sprout_gap: Option<f32>,
+    #[serde(default)]
+    beetle_radius: Option<f32>,
+    #[serde(default)]
+    rabbit_radius: Option<f32>,
+    #[serde(default)]
+    tree_radius: Option<f32>,
+    #[serde(default)]
+    rock_radius: Option<f32>,
 }
 
 /// **The question the world's script asks that costs no frame at all** (W1): `garden.within`.
@@ -5346,7 +5540,10 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
     let mut day_length: Option<f32> = None;
     let mut child_hunger: Option<f32> = None;
     let mut pop_max: Option<usize> = None;
-    let mut reaches: Option<(Option<f32>, Option<f32>)> = None;
+    let mut reaches: Option<(Option<f32>, Option<f32>, Option<f32>)> = None;
+    let mut sprout_gap: Option<f32> = None;
+    // the four bodies in the order `Bodies` keeps them: beetle, rabbit, tree, rock
+    let mut bodies: Option<[Option<f32>; 4]> = None;
     // W2: what the rules said this frame, carried out of the world's VM and into the creatures'
     // below. It is collected rather than published on the spot because publishing needs the
     // *other* `ScriptWorld`, and this scope is holding the world's.
@@ -5369,7 +5566,9 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                     let asked = request
                         .value(0)
                         .ok_or_else(|| {
-                            "rules wants a Hash: day_length:, child_hunger:, pop_max:, reach:, mate_reach:"
+                            "rules wants a Hash: day_length:, child_hunger:, pop_max:, reach:, \
+                             touch_reach:, mate_reach:, sprout_gap:, beetle_radius:, \
+                             rabbit_radius:, tree_radius:, rock_radius:"
                                 .to_string()
                         })
                         .and_then(|v| {
@@ -5412,15 +5611,55 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                             // three are. **Both are taken together**, even where one is `nil`:
                             // the pair is what says "the rules have spoken" ([`Reaches::told`]),
                             // and a `world.rb` that names neither still says that much.
-                            for (n, what) in [(book.reach, "reach"), (book.mate_reach, "mate_reach")] {
+                            //
+                            // **S5b-4 puts `touch_reach` in with them**, and it is refused on the
+                            // same line for the same shape of reason: a touch of no distance is a
+                            // rabbit that can never startle a beetle, which is the sixth check's
+                            // whole subject.
+                            for (n, what) in [
+                                (book.reach, "reach"),
+                                (book.touch_reach, "touch_reach"),
+                                (book.mate_reach, "mate_reach"),
+                            ] {
                                 if let Some(n) = n
                                     && n <= 0.0
                                 {
                                     wrong = Some(format!("a {what} of {n} is no distance at all"));
                                 }
                             }
+                            // **A body of no width is not a body** (S5b-4): `separate` divides by
+                            // the distance between two circles and a circle of nothing is one
+                            // nothing is ever inside, so a garden of them is one where creatures
+                            // walk through trees. A negative one is worse — the push would be
+                            // away from contact. The gap between blades may be nothing (grass
+                            // that may come up anywhere, which is a garden somebody might want)
+                            // and may not be less.
+                            for (n, what) in [
+                                (book.beetle_radius, "beetle"),
+                                (book.rabbit_radius, "rabbit"),
+                                (book.tree_radius, "tree"),
+                                (book.rock_radius, "rock"),
+                            ] {
+                                if let Some(n) = n
+                                    && n <= 0.0
+                                {
+                                    wrong = Some(format!("a {what} of {n} across is not a body"));
+                                }
+                            }
+                            if let Some(n) = book.sprout_gap
+                                && n < 0.0
+                            {
+                                wrong = Some(format!("a sprout_gap of {n} is not a distance"));
+                            }
                             if wrong.is_none() {
-                                reaches = Some((book.reach, book.mate_reach));
+                                reaches = Some((book.reach, book.touch_reach, book.mate_reach));
+                                sprout_gap = book.sprout_gap;
+                                bodies = Some([
+                                    book.beetle_radius,
+                                    book.rabbit_radius,
+                                    book.tree_radius,
+                                    book.rock_radius,
+                                ]);
                             }
                             match wrong {
                                 Some(why) => scripts.answer(&request, Answer::Text(why)),
@@ -5491,7 +5730,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
         world.resource_mut::<Births>().waiting.extend(newborn);
     }
     if seeds > 0 {
-        world.resource_mut::<Sprouts>().0 += seeds;
+        world.resource_mut::<Sprouts>().asked += seeds;
     }
     // W2. **The one place the two VMs touch.** What the rules said goes into the creatures'
     // queues here — the same `publish` `startle` and `day_night` use, from the same side of the
@@ -5597,15 +5836,43 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
             births.cap = cap;
         }
     }
-    if let Some((eat, mate)) = reaches {
+    if let Some((eat, touch, mate)) = reaches {
         let mut reaches = world.resource_mut::<Reaches>();
         if let Some(eat) = eat {
             reaches.eat = eat;
+        }
+        if let Some(touch) = touch {
+            reaches.touch = touch;
         }
         if let Some(mate) = mate {
             reaches.mate = mate;
         }
         reaches.told = true;
+    }
+    if let Some(gap) = sprout_gap {
+        world.resource_mut::<Sprouts>().gap = gap;
+    }
+    // **and the bodies** (S5b-4). Written only where the rules named one, so that a `world.rb`
+    // that says what a beetle is and nothing about trees leaves the trees as they were. Taking
+    // the resource mutably is what [`bodies_wear_the_rules`] watches for, so a handover that
+    // changes nothing — the rules restated, which is every `Ctrl+Enter` — still costs one pass
+    // over the bodies and no write to any of them.
+    if let Some([beetle, rabbit, tree, rock]) = bodies
+        && [beetle, rabbit, tree, rock].iter().any(Option::is_some)
+    {
+        let mut bodies = world.resource_mut::<Bodies>();
+        if let Some(n) = beetle {
+            bodies.beetle = n;
+        }
+        if let Some(n) = rabbit {
+            bodies.rabbit = n;
+        }
+        if let Some(n) = tree {
+            bodies.tree = n;
+        }
+        if let Some(n) = rock {
+            bodies.rock = n;
+        }
     }
     if let Some(why) = refused
         && let Some(mut test) = world.get_resource_mut::<SelfTest>()
@@ -6167,6 +6434,7 @@ fn load_world(
     // says why), so they are rolled again here — out of the same two settings `spawn_world`
     // rolls them from, or a garden read back would wear numbers the store no longer holds
     built: Res<Furniture>,
+    bodies: Res<Bodies>,
     old: Query<Entity, Or<(With<Plant>, With<Tree>, With<Rock>, With<Creature>)>>,
 ) {
     let save = loading.save.clone();
@@ -6187,16 +6455,17 @@ fn load_world(
         spawn_plant(&mut commands, look, Vec2::from(plant.at), plant.size, dice.roll() < built.round_chance);
     }
     for at in &save.trees {
-        spawn_tree(&mut commands, look, Vec2::from(*at));
+        spawn_tree(&mut commands, look, &bodies, Vec2::from(*at));
     }
     for at in &save.rocks {
-        spawn_rock(&mut commands, look, Vec2::from(*at), dice.between(built.rock_squash[0], built.rock_squash[1]));
+        spawn_rock(&mut commands, look, &bodies, Vec2::from(*at), dice.between(built.rock_squash[0], built.rock_squash[1]));
     }
     let mut pending = Vec::new();
     for creature in &save.creatures {
         let entity = spawn_creature(
             &mut commands,
             look,
+            &bodies,
             creature.species,
             Vec2::from(creature.at),
             creature.hunger,
@@ -7314,6 +7583,71 @@ mod tests {
         assert!((phase - 0.75).abs() < 1e-5, "{phase}");
         let up = (phase * std::f32::consts::TAU).sin();
         assert!(up < -0.999, "{up}");
+    }
+
+    /// `ruby/world.rb` as it ships, for the test below. It is read at compile time rather than
+    /// off the disk so that the test says the same thing wherever it is run from — and in a
+    /// browser build there is no disk to read it off at all.
+    const WORLD_RB: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/ruby/world.rb"));
+
+    /// `def <name> = <number>` out of `world.rb`, which is the shape every number in that file
+    /// is written in.
+    fn what_world_rb_says(name: &str) -> f32 {
+        for line in WORLD_RB.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("def ") else { continue };
+            let Some((said, value)) = rest.split_once('=') else { continue };
+            if said.trim() != name {
+                continue;
+            }
+            let value = value.trim().split_whitespace().next().unwrap_or_default();
+            return value.parse().unwrap_or_else(|_| panic!("{name}: {value:?} is not a number"));
+        }
+        panic!("ruby/world.rb has no `def {name} = …`");
+    }
+
+    /// **The stand-ins are not a second opinion about the rules** (S5b-4).
+    ///
+    /// Eight numbers of the garden's play live in `ruby/world.rb` and are handed over once by
+    /// `garden.rules`; this source keeps one of each as the value a garden runs on *before* the
+    /// rules have spoken, and for ever in a garden whose `world.rb` will not compile — which is
+    /// a garden this game deliberately goes on running ([`WorldTrouble`]).
+    ///
+    /// Two numbers for one fact is what this stage exists to remove, and the reason this pair
+    /// stays is written above each constant. What can be had instead of removing it is this:
+    /// the two are pinned together, so that a `world.rb` edited in the repository and a stand-in
+    /// left behind is a failing test rather than a garden that plays differently for its first
+    /// frame than for its second. (It says nothing about a `world.rb` a *player* has edited —
+    /// that one is supposed to differ, and the whole point of the handover is that it may.)
+    #[test]
+    fn the_stand_ins_are_what_world_rb_says() {
+        let reaches = Reaches::default();
+        assert_eq!(reaches.eat, what_world_rb_says("reach"));
+        assert_eq!(reaches.touch, what_world_rb_says("touch_reach"));
+        assert_eq!(reaches.mate, what_world_rb_says("mate_reach"));
+        assert_eq!(Sprouts::default().gap, what_world_rb_says("sprout_gap"));
+        let bodies = Bodies::default();
+        assert_eq!(bodies.beetle, what_world_rb_says("beetle_radius"));
+        assert_eq!(bodies.rabbit, what_world_rb_says("rabbit_radius"));
+        assert_eq!(bodies.tree, what_world_rb_says("tree_radius"));
+        assert_eq!(bodies.rock, what_world_rb_says("rock_radius"));
+        let births = Births::default();
+        assert_eq!(births.hunger, what_world_rb_says("child_hunger"));
+        assert_eq!(births.cap, what_world_rb_says("pop_max") as usize);
+    }
+
+    /// **The neighbour grid is never narrower than a body** (S5b-4). With the rules as they ship
+    /// it is [`CELL`] exactly, which is what every measurement of `separate` was taken on; a
+    /// `world.rb` that makes a tree three units wide gets a grid that can still find it.
+    #[test]
+    fn the_grid_is_wide_enough_for_the_widest_body() {
+        assert_eq!(Bodies::default().cell(), CELL);
+        let wide = Bodies { tree: 3.0, ..Bodies::default() };
+        assert_eq!(wide.cell(), 6.0);
+        // and a garden of very small creatures does not get a grid so fine that it costs more
+        // cells than it saves comparisons
+        let small = Bodies { beetle: 0.05, rabbit: 0.05, tree: 0.05, rock: 0.05 };
+        assert_eq!(small.cell(), CELL);
     }
 }
 
