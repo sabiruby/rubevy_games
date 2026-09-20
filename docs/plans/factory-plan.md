@@ -12,13 +12,32 @@
 
 ```bash
 cd /home/kishima/book/kishima
-git -C rubevy_games worktree add ../rubevy_games-wt-factory -b factory main   # S1〜S4 が main に入ってから
-cd rubevy_games-wt-factory && cargo test --workspace
+git -C rubevy_games worktree add ../rubevy_games-wt-factory -b factory main   # S1〜S8 と S5b は main に入っている（2026-09-21）
+cd rubevy_games-wt-factory && cargo build --workspace --all-targets && cargo test --workspace   # 警告 0、60 passed
 ```
 
-作法は `/home/kishima/book/.claude/agents/implementer.md` と `/home/kishima/book/CLAUDE.md`。段階ごとに 1 コミット、push しない、main に触らない、
+作法は `/home/kishima/book/.claude/agents/implementer.md` と `/home/kishima/book/CLAUDE.md`。段階ごとに 1 コミット以上、push しない、main に触らない、
 過程は `docs/worklog/` に書きながら。**Docker Desktop を起動しない。**
-素材の下見は調査のときの scratchpad にあったが消えている前提で、F0a で取り直す（URL は 3.6）。
+
+**2026-09-21 の時点で使えるもの**（計画を書いた後にできたもの。名前はここが正しい）:
+
+- 共有 crate は 2 つ: `rubevy_egui`（`Editor`・`EditorLayout`・`EditorColors`・`VmInspector`・`InspectStyle`・`CodePanel`・`Watch`・`ViewInsets`）と
+  `games_shell`（`platform`・`checks`・`Args`・`Settings`・`remembered`・`PanelSettingsPlugin`・`Guide`・`Hud`・`ArenaPlugin`・
+  `CameraPlugin::showing(half_height)`・`CameraView`・`CameraControls`・`WorldClick`・`Lens`・マクロ `crate_dir!`）。`rubevy-arena` はもう無い。
+- rubevy（main）: `Program`・`in_the_authors_lines`・`replace_script`・`EmbeddedHost`・`ScriptWorld::require_from`・build ヘルパ `rubevy-build`、
+  `Rubevy.resource` / `set_resource`、`Rubevy.rejected_writes`、`Rubevy.next_frame` / `each_frame`、任意の層 `rubevy::layers::CAMERA`（`Rubevy::Camera`）、
+  `ScriptWorld::{queue_limit, dropped, last_frame, loaded_programs, broken_programs, max_depth}`、`Rubevy.subscribe(name, limit:)`。
+  `frame_time` は本当の上限。計測器 `examples/how_many_scripts` / `how_many_subscribers`、`docs/verification/scale.md`、`docs/numbers.md`。
+  **games の `Cargo.lock` は rubevy `d347711`（R10 まで）を指している。F0 の最初に rubevy の今の main へ上げる**（S7 がやった手順: `cargo update -p rubevy`、
+  6 通りの走行が一覧と一致、`web/build.sh all` + Playwright）。
+- sabiruby（main）: `sabiruby_serde::declare`（`Declarations::<T>::install(&mut vm).define(&mut vm, "item")` → `load_and_run` → `take`、`expose`）。
+  games の `[patch.crates-io]` は sabiruby の git を見ているが lock の rev は古い（`7be7b86`）。**F2 の最初に sabiruby の rev を上げる**（`pages.yml` が lock から rev を grep して
+  Playground のコンパイラを同じ VM から建てるので、上げたら CI まで見る）。
+- 道具と確認: `web/games.sh`（ゲームを足すのは 1 語 + 値 1 組）+ `web/page.html.in`、`web/build.sh`（`CARGO_TARGET_DIR` を見る）、`docker/run.sh`（`<GAME>_` の環境変数を全部渡す、`--example`、
+  target の volume は worktree ごと）、`tools/fixedlines.sh` と `docs/verification/selftest-lines.md`（**確認の基準は行の一覧**。3 本目の一覧もここに足す）、
+  ブラウザのつまみ `?selftest&<name>=<value>`（PC の `<GAME>_<NAME>` と同じ名前で `games_shell::checks` が読む）、`docs/numbers.md`（数を足したら行を足す）。
+- 確認の作法で分かったこと: 前後は行の集合で比べる／計測は交互に 2 巡以上・別の target・`md5sum`／混み具合は `vmstat` の idle／判定は秒ではなく条件で待ち、上限は導く／
+  `Query` の並び順に依る比較を書かない／「設定にした」と「設定が効いている」は別の主張／`cargo build --workspace --all-targets`（`--all-targets` が無いと example を見ない）。
 
 ---
 
@@ -208,7 +227,8 @@ end
 
 | 段階 | 状況 |
 |---|---|
-| F0〜F6 | 未着手（2026-09-20、計画のみ。rubevy R0〜R9 と共有 crate S1〜S4 が先。R10・S5 は並行） |
+| F0・F0a | 実行中（2026-09-21。前提の rubevy R0〜R11 と共有 crate S1〜S8・S5b は main に入った） |
+| F1〜F6 | 未着手 |
 
 ## 7. 気づいた点（段階の報告から本体が集める）
 
