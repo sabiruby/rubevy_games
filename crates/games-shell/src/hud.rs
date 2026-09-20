@@ -24,7 +24,94 @@ pub struct ScriptPanel {
     pub budget: u64,
 }
 
-pub struct HudPlugin;
+// ---------------------------------------------------------------------------------------------
+// The numbers (S5b-1). The `const`s name the defaults; the settings are `HudStyle`, which a game
+// hands `HudPlugin::styled` or a player changes through the `key=value` store.
+// ---------------------------------------------------------------------------------------------
+
+/// How many characters wide the budget bar is. **Source unknown**.
+pub const BAR_TICKS: u64 = 16;
+
+/// The size of the one status line, and of a script's panel under it. **Source unknown** for
+/// both.
+pub const LINE_FONT: f32 = 15.0;
+pub const PANEL_FONT: f32 = 13.0;
+
+/// How far the box sits from the top left of the window, how much padding it has inside, and the
+/// gap between two of its lines. **Source unknown** for all three.
+pub const MARGIN: f32 = 8.0;
+pub const PADDING: f32 = 8.0;
+pub const ROW_GAP: f32 = 3.0;
+
+/// **Every number the HUD has**, in one resource a game can hand [`HudPlugin::styled`] or write
+/// into while it runs. The box itself is built at startup, so its margins are read once; the bar
+/// is redrawn every frame and follows [`HudStyle::bar_ticks`] straight away.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct HudStyle {
+    /// [`BAR_TICKS`]
+    pub bar_ticks: u64,
+    /// [`LINE_FONT`]
+    pub line_font: f32,
+    /// [`PANEL_FONT`]
+    pub panel_font: f32,
+    /// [`MARGIN`]
+    pub margin: f32,
+    /// [`PADDING`]
+    pub padding: f32,
+    /// [`ROW_GAP`]
+    pub row_gap: f32,
+}
+
+impl Default for HudStyle {
+    fn default() -> Self {
+        HudStyle {
+            bar_ticks: BAR_TICKS,
+            line_font: LINE_FONT,
+            panel_font: PANEL_FONT,
+            margin: MARGIN,
+            padding: PADDING,
+            row_gap: ROW_GAP,
+        }
+    }
+}
+
+impl HudStyle {
+    /// **What a player left in the `key=value` store** ([`crate::Settings`]).
+    ///
+    /// | key | field |
+    /// |---|---|
+    /// | `hud_line_font` | [`HudStyle::line_font`] |
+    /// | `hud_panel_font` | [`HudStyle::panel_font`] |
+    /// | `hud_margin` | [`HudStyle::margin`] |
+    /// | `hud_bar_ticks` | [`HudStyle::bar_ticks`] |
+    ///
+    /// A key that is not there leaves the field alone.
+    pub fn read_from(&mut self, settings: &crate::Settings) {
+        let take = |key: &str, slot: &mut f32| {
+            if let Some(value) = settings.number(key) {
+                *slot = value;
+            }
+        };
+        take("hud_line_font", &mut self.line_font);
+        take("hud_panel_font", &mut self.panel_font);
+        take("hud_margin", &mut self.margin);
+        if let Some(value) = settings.number("hud_bar_ticks") {
+            self.bar_ticks = value.max(0.0) as u64;
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct HudPlugin {
+    pub style: HudStyle,
+}
+
+impl HudPlugin {
+    /// The HUD at a size of the game's choosing.
+    pub fn styled(style: HudStyle) -> HudPlugin {
+        HudPlugin { style }
+    }
+}
 
 #[derive(Component)]
 struct HudLine;
@@ -39,21 +126,22 @@ struct HudRoot(Entity);
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Hud>()
+            .insert_resource(self.style.clone())
             .add_systems(Startup, spawn_hud)
             .add_systems(PostUpdate, (update_line, update_panels));
     }
 }
 
-fn spawn_hud(mut commands: Commands) {
+fn spawn_hud(mut commands: Commands, style: Res<HudStyle>) {
     let root = commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: px(8.0),
-                left: px(8.0),
+                top: px(style.margin),
+                left: px(style.margin),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(8.0)),
-                row_gap: px(3.0),
+                padding: UiRect::all(px(style.padding)),
+                row_gap: px(style.row_gap),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.82)),
@@ -62,7 +150,7 @@ fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         HudLine,
         Text::new(""),
-        TextFont { font_size: bevy::text::FontSize::Px(15.0), ..default() },
+        TextFont { font_size: bevy::text::FontSize::Px(style.line_font), ..default() },
         TextColor(Color::srgb(0.95, 0.95, 1.0)),
         TextLayout::no_wrap(),
         ChildOf(root),
@@ -87,13 +175,14 @@ fn update_line(hud: Res<Hud>, mut q: Query<&mut Text, With<HudLine>>) {
 fn update_panels(
     mut commands: Commands,
     root: Res<HudRoot>,
+    style: Res<HudStyle>,
     panels: Query<(Entity, &ScriptPanel)>,
     mut texts: Query<(&PanelText, &mut Text)>,
 ) {
     let mut seen: Vec<Entity> = Vec::new();
     for (owner, mut text) in texts.iter_mut().map(|(p, t)| (p.0, t)) {
         if let Ok((_, panel)) = panels.get(owner) {
-            **text = render(panel);
+            **text = render(panel, style.bar_ticks);
             seen.push(owner);
         } else {
             **text = String::new();
@@ -105,8 +194,8 @@ fn update_panels(
         }
         commands.spawn((
             PanelText(entity),
-            Text::new(render(panel)),
-            TextFont { font_size: bevy::text::FontSize::Px(13.0), ..default() },
+            Text::new(render(panel, style.bar_ticks)),
+            TextFont { font_size: bevy::text::FontSize::Px(style.panel_font), ..default() },
             TextColor(Color::srgb(0.82, 0.86, 0.92)),
             TextLayout::no_wrap(),
             ChildOf(root.0),
@@ -115,10 +204,33 @@ fn update_panels(
     }
 }
 
-fn render(p: &ScriptPanel) -> String {
+fn render(p: &ScriptPanel, ticks: u64) -> String {
     let bar = {
-        let filled = if p.budget == 0 { 0 } else { (p.spent * 16 / p.budget).min(16) as usize };
-        format!("[{}{}]", "#".repeat(filled), "-".repeat(16 - filled))
+        let filled = if p.budget == 0 { 0 } else { (p.spent * ticks / p.budget).min(ticks) };
+        format!("[{}{}]", "#".repeat(filled as usize), "-".repeat((ticks - filled) as usize))
     };
     format!("{:<14} {:<9} {bar} {:>7} insn  {}", p.name, p.state, p.spent, p.at)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The bar is as many characters as the setting says** (S5b-1), and the default draws
+    /// exactly the sixteen it always did.
+    #[test]
+    fn the_bar_is_as_wide_as_it_was_asked_to_be() {
+        let half = ScriptPanel { spent: 500, budget: 1000, ..ScriptPanel::default() };
+        let line = render(&half, BAR_TICKS);
+        assert!(line.contains(&format!("[{}{}]", "#".repeat(8), "-".repeat(8))), "{line}");
+
+        let wide = render(&half, 32);
+        assert!(wide.contains(&format!("[{}{}]", "#".repeat(16), "-".repeat(16))), "{wide}");
+        // a script with no budget draws an empty bar rather than dividing by it
+        let idle = ScriptPanel { spent: 40, budget: 0, ..ScriptPanel::default() };
+        assert!(render(&idle, BAR_TICKS).contains(&"-".repeat(16)));
+        // and one over its budget fills the bar and no more
+        let over = ScriptPanel { spent: 4000, budget: 1000, ..ScriptPanel::default() };
+        assert!(over.spent > over.budget && render(&over, BAR_TICKS).contains(&"#".repeat(16)));
+    }
 }

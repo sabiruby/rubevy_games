@@ -189,7 +189,72 @@ impl Guide {
     pub const HINT: &'static str = "H: help / 操作説明";
 }
 
-pub struct GuidePlugin;
+// ---------------------------------------------------------------------------------------------
+// The numbers (S5b-1). The `const`s name the defaults; the settings are `GuideStyle`.
+// ---------------------------------------------------------------------------------------------
+
+/// How big the panel stands before anybody drags it, and how tall it may grow.
+///
+/// **Cited, and not measured**: the first picture of G6 had the key table cut off half way down
+/// on a 900-pixel window, so it was widened to this (`docs/plans/garden-plan.md`, "2 枚目では
+/// キー表が下で切れていたので `default_size([640, 820])` に"). Nothing says why 860 is the
+/// ceiling.
+pub const SIZE: [f32; 2] = [640.0, 820.0];
+pub const MAX_HEIGHT: f32 = 860.0;
+
+/// **Every number the guide has**, in one resource a game can hand [`GuidePlugin::styled`] or a
+/// player can change through the `key=value` store ([`GuideStyle::read_from`]). The key colour is
+/// here too, since it is the one colour this panel chooses for itself.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct GuideStyle {
+    /// [`SIZE`]
+    pub size: [f32; 2],
+    /// [`MAX_HEIGHT`]
+    pub max_height: f32,
+    /// [`KEYCOL`]
+    pub key_color: (u8, u8, u8),
+}
+
+impl Default for GuideStyle {
+    fn default() -> Self {
+        GuideStyle { size: SIZE, max_height: MAX_HEIGHT, key_color: KEYCOL }
+    }
+}
+
+impl GuideStyle {
+    /// **What a player left in the `key=value` store** ([`crate::Settings`]).
+    ///
+    /// | key | field |
+    /// |---|---|
+    /// | `guide_width` | [`GuideStyle::size`]`[0]` |
+    /// | `guide_height` | [`GuideStyle::size`]`[1]` |
+    /// | `guide_max_height` | [`GuideStyle::max_height`] |
+    ///
+    /// The colour is not among them, for the reason the camera's keys are not: a colour in a text
+    /// file needs a parser, and a game may still set it.
+    pub fn read_from(&mut self, settings: &crate::Settings) {
+        let take = |key: &str, slot: &mut f32| {
+            if let Some(value) = settings.number(key) {
+                *slot = value;
+            }
+        };
+        take("guide_width", &mut self.size[0]);
+        take("guide_height", &mut self.size[1]);
+        take("guide_max_height", &mut self.max_height);
+    }
+}
+
+#[derive(Default)]
+pub struct GuidePlugin {
+    pub style: GuideStyle,
+}
+
+impl GuidePlugin {
+    /// The guide at a size of the game's choosing.
+    pub fn styled(style: GuideStyle) -> GuidePlugin {
+        GuidePlugin { style }
+    }
+}
 
 impl Plugin for GuidePlugin {
     fn build(&self, app: &mut App) {
@@ -197,6 +262,7 @@ impl Plugin for GuidePlugin {
             app.add_plugins(EguiPlugin::default());
         }
         app.init_resource::<Guide>()
+            .insert_resource(self.style.clone())
             .add_systems(Update, guide_keys)
             // the font has to be in the context before anything draws with it, and `install_font`
             // does nothing after the first frame
@@ -250,7 +316,8 @@ fn install_font(mut contexts: EguiContexts, mut done: Local<bool>) {
 }
 
 /// The colour of a key's name in the table, and of the language that is not being shown.
-const KEYCOL: egui::Color32 = egui::Color32::from_rgb(255, 226, 150);
+/// **Source unknown** (`docs/numbers.md` §1.4).
+pub const KEYCOL: (u8, u8, u8) = (255, 226, 150);
 
 /// The two buttons, in their own languages: nobody has to know the word "Japanese" in English or
 /// the word "English" in Japanese to find the one they want. They are the first thing in the
@@ -265,6 +332,7 @@ const FOOT_JA: &str = "H か ? でこの説明を閉じます";
 fn draw_guide(
     mut contexts: EguiContexts,
     mut guide: ResMut<Guide>,
+    style: Res<GuideStyle>,
     mut settings: Option<ResMut<crate::settings::Settings>>,
 ) {
     if !guide.open {
@@ -273,6 +341,8 @@ fn draw_guide(
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let mut open = true;
     let lang = guide.lang;
+    let (r, g, b) = style.key_color;
+    let keycol = egui::Color32::from_rgb(r, g, b);
     let title = match lang {
         GuideLang::En => guide.title_en.clone(),
         GuideLang::Ja => guide.title_ja.clone(),
@@ -294,8 +364,8 @@ fn draw_guide(
         // tall enough for the paragraphs and the whole key table without scrolling on a
         // 900-pixel window: the first picture of this had the key list cut off half way down,
         // and a key list you have to find the scrollbar for is a key list nobody reads
-        .default_size([640.0, 820.0])
-        .max_height(860.0)
+        .default_size(style.size)
+        .max_height(style.max_height)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         // in front of everything. Both games open the editor and the VM panel at startup, and
         // the first picture taken of this had the guide behind all three of them — an
@@ -330,7 +400,7 @@ fn draw_guide(
                         .show(ui, |ui| {
                             for row in &guide.keys {
                                 ui.label(
-                                    egui::RichText::new(&row.keys).monospace().color(KEYCOL).strong(),
+                                    egui::RichText::new(&row.keys).monospace().color(keycol).strong(),
                                 );
                                 ui.label(match lang {
                                     GuideLang::En => &row.en,
@@ -360,5 +430,35 @@ fn draw_guide(
         });
     if !open {
         guide.open = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A number in the store changes the panel and leaves the rest alone** (S5b-1). The two
+    /// halves of the size are separate keys because a panel that is too wide and a panel that is
+    /// too tall are two different complaints.
+    #[test]
+    fn the_store_changes_the_size_and_leaves_the_rest() {
+        let path = std::env::temp_dir().join("games-shell-guide-settings-test.txt");
+        let _ = std::fs::remove_file(&path);
+        fn read(path: &std::path::Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        }
+        fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        }
+        let mut settings = crate::Settings::load(&path, "a test", read, write);
+        settings.set("guide_height", "420");
+
+        let mut style = GuideStyle::default();
+        style.read_from(&settings);
+        assert_eq!(style.size[1], 420.0);
+        assert_eq!(style.size[0], SIZE[0], "a key nobody wrote leaves the default alone");
+        assert_eq!(style.max_height, MAX_HEIGHT);
+        assert_eq!(style.key_color, KEYCOL, "and the colour is not in the store at all");
+        let _ = std::fs::remove_file(&path);
     }
 }

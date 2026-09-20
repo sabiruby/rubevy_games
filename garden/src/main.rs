@@ -1645,7 +1645,11 @@ fn main() {
                 VmInspectorPlugin,
                 // G6: the `H` panel, and with it the Japanese font every egui panel in the game
                 // now has as a fallback (`games_shell::guide`)
-                GuidePlugin,
+                GuidePlugin::default(),
+                // S5b-1: whatever the player left in `garden.settings.txt` about the panels —
+                // how big the editor is, how big its letters are, how deep the VM panel looks.
+                // Each panel knows its own keys; this is the wiring.
+                games_shell::PanelSettingsPlugin,
             ))
             // G6. A picture is asked for one thing, and the panel sits over the middle of the
             // window — which would be that thing. So a `--shot` run starts with it shut unless
