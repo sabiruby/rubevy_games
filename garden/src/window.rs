@@ -1189,6 +1189,9 @@ pub struct WindowTest {
     original: String,
     /// the same for `world.rb` (W3)
     world_original: String,
+    /// **the day the edited rules are to say**, which is half of whatever `world.rb` was really
+    /// carrying when the check read it (S5b-5) rather than a second copy of the 60 it ships with
+    day_length: f32,
     /// instructions every creature had run together, for the pause check
     insn: u64,
     /// ticks until the earliest sleeper is due, sampled on the first frame of the pause
@@ -1365,6 +1368,24 @@ impl WindowTest {
     }
 }
 
+/// **`day_length` as `ruby/world.rb` writes it** (S5b-5), so that a check about what the file
+/// says reads the file rather than a number somebody typed twice.
+///
+/// It is not one of the `def name = number` lines the rest of that file is written in: it is a
+/// word and a number, said once inside `world do` and handed over at the start
+/// (`garden.rules(day_length:)`), because the sun is drawn in Rust.
+fn day_length_in(text: &str) -> Option<f32> {
+    text.lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("day_length "))
+        .find_map(|rest| rest.split_whitespace().next()?.parse().ok())
+}
+
+/// The same line, written back — how the check edits the text it has just read.
+fn day_length_line(value: f32) -> String {
+    format!("day_length {value:.1}")
+}
+
 /// **What a step is waiting for that is not a length of time** (S7).
 ///
 /// A check that has just restarted a script is not waiting for the world to move on; it is
@@ -1474,11 +1495,31 @@ pub fn scheduler_frames(budgets: &crate::Budgets) -> u32 {
 /// **Measured** (S6, `docs/worklog/2026-09-20-window-check-flakes.md` §4.4) and structural.
 const STRUCTURAL_FRAMES: u32 = 2;
 
-/// What one frame of the creatures' VM buys, in instructions. **Measured** (S6): with
-/// `frame_time` cut to 300 µs the VM got through 1,708 instructions in its slowest frame
-/// (`s6/ft300.log`, f59), which is 5.7 instructions per microsecond, so a full 8 ms frame buys
-/// about 45,600. It is a number about *this machine's* wall clock, which is why it is the check's
-/// and not a setting: a check is allowed to know how fast the machine it is running on is.
+/// What one frame of the creatures' VM buys, in instructions. It is a number about *this
+/// machine's* wall clock, which is why it is the check's and not a setting: a check is allowed to
+/// know how fast the machine it is running on is.
+///
+/// **There are two measurements of it, and this is the slower one** (S5b-5):
+///
+/// | | how it was measured | rate | 8 ms buys |
+/// |---|---|---|---|
+/// | S6 | `frame_time` cut to **300 µs**, the VM's slowest frame in that run: 1,708 instructions (`s6/ft300.log`, f59 — two beetles' first pass of 854 each) | 5.7 insn/µs | **45,600** |
+/// | S5b-3 | the capped garden at its **own 8 ms**, three runs of a minute | 6.85 insn/µs | 54,800 |
+///
+/// The difference is the condition, not the machine: a frame cut to 300 µs pays the cost of
+/// starting and stopping the tick over a twenty-seventh of the work, so the rate it measures is
+/// the rate of a *short* frame. The garden's own frames are the second row, and they are quicker.
+///
+/// **The slower rate is the one to keep**, and the reason is which way this number's error hurts.
+/// It divides the budget to say how many frames a check may wait, so a number that is too **big**
+/// makes the wait too short and produces a FAIL for a VM that was merely being slow — a false
+/// FAIL, the thing S6 and S7 were called in to remove. A number that is too small only makes a
+/// check wait longer before it says what it was going to say. So the rate that buys *less* per
+/// frame is the safe side, and 45,600 is it.
+///
+/// **At the budget the game ships with the two agree anyway**: `ceil(41,000 / 45,600)` and
+/// `ceil(41,000 / 54,800)` are both 1, so [`scheduler_frames`] is 3 either way. The choice only
+/// shows above 45,600 of budget, which is `script_budget` in somebody's `garden.settings.txt`.
 const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 
 /// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
@@ -1864,9 +1905,24 @@ pub fn window_selftest(
                 editor.choices.iter().any(|c| c.label.starts_with("world.rb")),
                 "the editor has a third file, and it is not a creature",
             );
-            ok(sky.day_length == 60.0, "the day is what world.rb says it is");
+            // **What the file says, read out of the file** (S5b-5). This was `sky.day_length ==
+            // 60.0` and the edit below was a text replacement of the literal `day_length 60.0`,
+            // so a `world.rb` whose day had been made longer would have failed a check whose own
+            // sentence says it is about what `world.rb` says — and the edit would quietly have
+            // replaced nothing. Both halves read the number the file is really carrying now. It
+            // is the shape S5b-4 took out of the mutation rate and S5b-2 out of Battle's turn
+            // rate; this stage went looking for the rest of it.
+            let said = day_length_in(&editor.text);
+            ok(
+                said.is_some_and(|n| sky.day_length == n),
+                &format!("the day is what world.rb says it is ({said:?})"),
+            );
             test.world_original = platform::read(&ruby.0.join(crate::WORLD_FILE)).unwrap_or_default();
-            editor.text = editor.text.replace("day_length 60.0", "day_length 30.0");
+            // and the edit is that number halved — any other number would do, and half of it is
+            // the one that is easiest to recognise in a log beside the original
+            let (was, half) = (said.unwrap_or(sky.day_length), said.unwrap_or(sky.day_length) * 0.5);
+            test.day_length = half;
+            editor.text = editor.text.replace(&day_length_line(was), &day_length_line(half));
             ok(editor.changed(), "typing in the rules marks them edited");
             keys.release(KeyCode::F3);
             // the keys themselves this time, not `Editor::action`: `rubevy-egui`'s panel reads
@@ -1882,7 +1938,7 @@ pub fn window_selftest(
             // things the waits after Apply and Revert on a *creature* wait for (S7). These two
             // had simply not failed yet.
             test.at = now;
-            test.turn = Turn::TheDayIs(30.0);
+            test.turn = Turn::TheDayIs(test.day_length);
             // and one frame in front of the VM's own, because this step asks with a key rather
             // than by setting `Editor::action`: the egui pass is where `Ctrl+Enter` is read
             // ([`WindowTest::spare`]). The first run with the wait in it took exactly three
@@ -1894,11 +1950,12 @@ pub fn window_selftest(
             keys.release(KeyCode::Enter);
             keys.release(KeyCode::ControlLeft);
             ok(
-                sky.day_length == 30.0,
+                sky.day_length == test.day_length,
                 "Ctrl+Enter: the garden is running the edited rules, without stopping",
             );
+            let half = day_length_line(test.day_length);
             ok(
-                brains.world().is_some_and(|t| t.contains("day_length 30.0")),
+                brains.world().is_some_and(|t| t.contains(&half)),
                 "the rules the editor applied are the ones in memory",
             );
             ok(
@@ -1910,10 +1967,10 @@ pub fn window_selftest(
             test.step = 13;
             // and the same wait the other way round: the file's own `day_length` back again
             test.at = now;
-            test.turn = Turn::TheDayIs(60.0);
+            test.turn = Turn::TheDayIs(test.day_length * 2.0);
         }
         13 => {
-            ok(sky.day_length == 60.0, "Revert puts the file's rules back");
+            ok(sky.day_length == test.day_length * 2.0, "Revert puts the file's rules back");
             ok(editor.text == test.world_original, "Revert shows world.rb again");
             ok(brains.world().is_none(), "and nothing is running a text of its own");
             // --- and the wheel, which is the other thing a panel takes (2026-09-18) ---
@@ -1991,5 +2048,27 @@ pub fn window_selftest(
             test.step = 18;
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{day_length_in, day_length_line};
+
+    /// **The check reads the file's own number** (S5b-5), and it reads the shape `ruby/world.rb`
+    /// really writes it in — a word and a number inside `world do`, not one of the
+    /// `def name = number` lines the rest of that file uses.
+    const WORLD_RB: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/ruby/world.rb"));
+
+    #[test]
+    fn the_rules_check_reads_the_day_out_of_the_rules() {
+        assert_eq!(day_length_in(WORLD_RB), Some(60.0));
+        // and what it writes back is a line of the same shape, which is what the edit replaces
+        assert!(WORLD_RB.contains(&day_length_line(60.0)));
+        let edited = WORLD_RB.replace(&day_length_line(60.0), &day_length_line(30.0));
+        assert_eq!(day_length_in(&edited), Some(30.0));
+        assert_ne!(edited, WORLD_RB, "the replacement has to have replaced something");
+        // a text with nothing to say says nothing, rather than a number nobody wrote
+        assert_eq!(day_length_in("world do\nend\n"), None);
     }
 }

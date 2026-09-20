@@ -1973,7 +1973,9 @@ standing on. `GARDEN_SELFTEST=1` adds the checks the plan asks for, printed as `
 `selftest: FAIL` lines the way sabibots does. Four are about the world (G0):
 
 1. **somebody ate within 10 s** — the world has to be dense enough, and the contact test has to work.
-2. **night arrived by 60 s** — the clock, and the publish on the flip.
+2. **night arrived within a day** — the clock, and the publish on the flip. The day is
+   `world.rb`'s `day_length` as the run is really running it, not a copy of the 60 the file
+   ships with (S5b-5).
 3. **the starved creature's entity is gone** — the despawn path.
 4. **nothing walked through anything** — over every frame of the run, no two colliders' centres
    came closer than 90% of the sum of their radii, where at least one of the two is a creature.
@@ -1992,7 +1994,8 @@ its components, does not get its answers, or does not hear an event:
    read the answer's `[:Transform][:translation]` and wrote `me[:Velocity]`.
 
    **A run in which a rabbit walked into the probe before it got there says so and measures
-   nothing** — a third verdict, `selftest: n/a`, which is neither ok nor FAIL. The corner is only
+   nothing** — a third verdict, `selftest: --`, which is neither ok nor FAIL (it was spelled `n/a`
+   until 2026-09-21; both games write `--` now). The corner is only
    kept clear when the world is laid out, and nothing keeps a rabbit out of it later; when one
    arrives, the beetle's own `on(:touched)` turns it away from the plant at `DASH` and holds the
    wheel for half a second, and a rabbit that stays touches it again every half second so that it
@@ -2169,7 +2172,7 @@ and one is about the genome (G2), which is the whole round trip in a single line
    All three are ordinary, not rare: five ninety-second runs made 1 to 7 rabbit pairings each, and
    a pairing in the night turned up in two of ten such runs without anything being arranged. Shown
    deliberately — a garden of nothing but rabbits for the first, a garden put to sleep for the
-   second — the check says `n/a` where the old counting said `FAIL a child was born … (none was,
+   second — the check says `--` where the old counting said `FAIL a child was born … (none was,
    from 5 pairings)` and `FAIL … (none was, from 22 pairings)`
    (`docs/worklog/2026-09-18-check-holes.md`).
 
@@ -2246,7 +2249,7 @@ Rabbit 114v0   hunger  89.7  age  84.9  at ( -14.8,   -0.7)  v (  0.0,   0.0)   
 9 × Beetle: mean genome speed 2.13, sight 8.5, appetite 1.04 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
 4 × Rabbit: mean genome speed 3.59, sight 11.9, appetite 0.94 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
 selftest: ok   somebody ate within 10 s (first at 0.55 s)
-selftest: ok   night arrived by 60 s (at 25.20 s)
+selftest: ok   night arrived within a day of 60 s (at 25.20 s)
 selftest: ok   the starved creature's entity is gone (115v0 starved at 1.89 s)
 selftest: ok   nothing walked through anything over 5364 frames (closest pair 0.995 of the radii, 0 frames under 0.9)
 selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.79 s)
@@ -2273,9 +2276,9 @@ naming the gene that was not there.
 
 **Forty ninety-second runs of the build of 2026-09-18**, eight at a time, after checks 4, 5 and 7
 were mended: **no FAIL of any kind**, and one run out of the forty printed the fifth check as
-`n/a` because a rabbit really did walk into the probe (at 1.63 s, and it never got closer than
-1.9 — the shape the survey measured). The closest any two colliders came was between 0.981 and
-1.000 of the sum of their radii, with 0.998 at the median and no frame under 0.9 in any run; the
+`--` (spelled `n/a` at the time) because a rabbit really did walk into the probe (at 1.63 s,
+and it never got closer than 1.9 — the shape the survey measured). The closest any two
+colliders came was between 0.981 and 1.000 of the sum of their radii, with 0.998 at the median and no frame under 0.9 in any run; the
 fastest anything moved a second after nightfall was 0.000 in all forty.
 
 **Five ninety-second runs and sixty-four twenty-second ones of the build after the meadow corner

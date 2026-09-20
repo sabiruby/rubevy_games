@@ -28,7 +28,7 @@
 set -euo pipefail
 grep -oh 'selftest: .*' "$@" \
   | sed 's/ color: [a-z#].*$//' \
-  | grep -E 'selftest: (ok  |FAIL|--  |n/a |done)' \
+  | grep -E 'selftest: (ok  |FAIL|--  |done)' \
   | grep -v 'of the hit at' \
   | grep -v 'the rules paired two of a species' \
   | grep -v 'measured nothing' \

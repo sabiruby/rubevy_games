@@ -53,7 +53,7 @@ a page to exit to, `games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
 |---|---|
 | `ok  ` | measured, and it is what it should be |
 | `FAIL` | measured, and it is not |
-| `--  ` / `n/a ` | **the run did not put the check in a position to measure anything.** Not a pass and not a failure. Battle writes `--`, the garden writes both (`--` for the pairings it cannot count, `n/a` for a probe something walked into) |
+| `--  ` | **the run did not put the check in a position to measure anything.** Not a pass and not a failure — the pairing that could not be counted, the probe something walked into. **Both games write `--`** since S5b-5; the garden used to write `n/a` in one of its two places, which was two spellings of one verdict in one game |
 | `done` | the checks are finished and the page keeps running |
 
 A line whose verdict may move between runs is marked in the lists below. There is exactly one,
@@ -182,7 +182,7 @@ selftest: ok   a child was born whose genome is its parents' mixed and mutated (
 selftest: ok   a hungry creature with a plant in sight reached it (from N away, at N s)
 selftest: ok   a save with the wrong version is refused (/tmp/garden-from-another-version.json: saved with version N, this garden reads N)
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
-selftest: ok   night arrived by N s (at N s)
+selftest: ok   night arrived within a day of N s (at N s)
 selftest: ok   nothing walked through anything over N frames (closest pair N of the radii, N frames under N)
 selftest: ok   somebody ate within N s (first at N s)
 selftest: ok   the creatures were asleep a second after night fell (N of them, newborns aside, fastest N at N s)

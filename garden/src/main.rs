@@ -7300,8 +7300,13 @@ fn stop_when_over(
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
         // and the third verdict: a check the run put itself in no position to answer. It is not
         // a pass — nothing was proved — and it is not a failure either, and a line that said
-        // either of those would be a lie about what the run saw (2026-09-18)
-        let unmeasured = |what: String| info!("selftest: n/a  {what}");
+        // either of those would be a lie about what the run saw (2026-09-18).
+        //
+        // **It is written `--`, as Battle writes it and as the pairings below write it** (S5b-5).
+        // It used to be `n/a` here and `--` four lines away, two spellings of one verdict in one
+        // game, which is one more thing for a reader of a run to work out and one more pattern
+        // for `tools/fixedlines.sh` to carry.
+        let unmeasured = |what: String| info!("selftest: --   {what}");
         ok(
             test.ate_at.is_some_and(|t| t <= 10.0),
             match test.ate_at {
@@ -7309,11 +7314,18 @@ fn stop_when_over(
                 None => "somebody ate within 10 s (nobody ate at all)".into(),
             },
         );
+        // **How long a day is, asked of the run rather than written down again** (S5b-5). The
+        // threshold is one turn of the sun, and one turn of the sun is `world.rb`'s
+        // `day_length` — which reaches the game as `Sky::day_length` (`garden.rules`). It was
+        // written here as `60.0`, a copy of the value the file happens to ship with, so a
+        // `world.rb` edited to a longer day would have failed this check for being obeyed. It is
+        // the shape S5b-4 took out of the mutation rate and S5b-2 out of Battle's turn rate.
+        let a_day = sky.day_length;
         ok(
-            test.night_at.is_some_and(|t| t <= 60.0),
+            test.night_at.is_some_and(|t| t <= a_day),
             match test.night_at {
-                Some(t) => format!("night arrived by 60 s (at {t:.2} s)"),
-                None => "night arrived by 60 s (it never did)".into(),
+                Some(t) => format!("night arrived within a day of {a_day:.0} s (at {t:.2} s)"),
+                None => format!("night arrived within a day of {a_day:.0} s (it never did)"),
             },
         );
         match test.starved {
