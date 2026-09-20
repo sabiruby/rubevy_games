@@ -1205,6 +1205,31 @@ pub struct WindowTest {
     phase: f32,
     /// how far back the camera stood before a wheel message was written (2026-09-18)
     distance: f32,
+    /// **and whether egui was holding the pointer in that same frame** (S5b-5).
+    ///
+    /// The two wheel checks are about one moment: a notch of the wheel, at a place, with a panel
+    /// drawn there or not. Whether egui had the pointer is half of what that moment was, so it
+    /// is read where the wheel is turned rather than where the verdict is written — a fifth of a
+    /// second later, by which time egui may have taken the pointer or let it go for reasons of
+    /// its own. Reading it late is what made `and with the panel closed the same wheel in the
+    /// same place zooms` fail in four runs of eighty-eight with eight of them at once, both
+    /// before S7's changes and after them (`docs/worklog/2026-09-20-window-check-fixes.md`).
+    held: bool,
+    /// **and whether the editor was in fact drawn in that frame** (S5b-5).
+    ///
+    /// The control step of the wheel checks shuts the editor and then turns the wheel where the
+    /// editor used to be, so its whole premise is that nothing is drawn there. The game can take
+    /// that premise away between the two: `choose_watched` opens the editor when the creature
+    /// being looked at dies, and a creature starving in that second or two is the garden's own
+    /// business. A run where that happened has not failed the thing being checked and has not
+    /// passed it either — it is the third verdict.
+    shown: bool,
+    /// **and what egui's answer was made of, in that same frame** (S5b-5) — `wants_pointer_input`
+    /// and `is_pointer_over_area` apart, and whether the editor was open. It is printed only
+    /// where the verdict is a FAIL, as a stage direction: a run that fails one of these two
+    /// checks has to say *which* of egui's two answers was true, or the next person measures it
+    /// all over again.
+    held_detail: String,
 }
 
 /// **A pointer the checks can put where they like, and a wheel they can turn** (2026-09-18).
@@ -1238,12 +1263,42 @@ impl FakePointer<'_, '_> {
         self.egui.as_ref().is_some_and(|e| e.wants_pointer_input() || e.is_pointer_over_area())
     }
 
-    /// The middle of the editor panel, where it stands before anybody drags it (the panel's own
-    /// setting, so the check is not guessing the rectangle).
+    /// The same, taken apart, for a failing check to print (S5b-5).
+    fn egui_answers(&self) -> String {
+        match self.egui.as_ref() {
+            Some(e) => format!(
+                "wants_pointer_input={} is_pointer_over_area={}",
+                e.wants_pointer_input(),
+                e.is_pointer_over_area()
+            ),
+            None => "egui is not in this run".into(),
+        }
+    }
+
+    /// **A point inside the editor's rectangle, near the edge that moves when the width does**
+    /// (S5b-5).
+    ///
+    /// It used to be the middle of the rectangle, and S5b-1 found what that is worth: the panel
+    /// is pinned to the right of the window, so the middle of the rectangle the *settings*
+    /// describe is inside the panel whatever width the panel really has. A run where
+    /// `editor_width` had been ignored altogether would have passed — the check would have been
+    /// pointing at a rectangle nobody drew and hitting the panel anyway. (The author ran it with
+    /// `editor_width=1400` by hand to get round that, which is the check asking to be mended.)
+    ///
+    /// So the point is taken from the rectangle's **inner edge** — one `margin` inside the left
+    /// side, which is the one side that moves when the width changes — and half way down. A panel
+    /// narrower than the settings say does not reach it.
+    ///
+    /// **It is held to the right half of the window.** The two other panels are at the left (the
+    /// HUD at the top, the VM inspector at the bottom), and the control step of the wheel checks
+    /// needs a point with *nothing* under it once the editor is shut. The clamp only bites for an
+    /// editor more than half the window wide, and there the check has already said what it can
+    /// about the width.
     fn over_the_editor(&self) -> Option<Vec2> {
         let (_, window) = self.windows.iter().next()?;
         let (margin, width, height) = (self.editor.margin, self.editor.width, self.editor.height);
-        Some(Vec2::new(window.width() - margin - width * 0.5, margin + height * 0.5))
+        let inner_edge = window.width() - margin - width + margin;
+        Some(Vec2::new(inner_edge.max(window.width() * 0.5), margin + height * 0.5))
     }
 
     /// Which window the forged input is about: the primary one, which is the only one these
@@ -1992,6 +2047,10 @@ pub fn window_selftest(
         }
         14 => {
             test.distance = pointing.orbit.distance;
+            // both halves of the moment, read in the frame the notch is written in
+            // ([`WindowTest::held`])
+            test.held = pointing.egui_has_it();
+            test.held_detail = format!("{} editor.open={}", pointing.egui_answers(), editor.open);
             pointing.turn_the_wheel();
             test.step = 15;
             test.at = now + 0.2;
@@ -2000,15 +2059,16 @@ pub fn window_selftest(
             // the two halves are in one line on purpose: "the camera did not move" is only worth
             // anything if the pointer really was over the panel, and a run where egui had let go
             // of it would otherwise pass by doing nothing
-            let held = pointing.egui_has_it();
+            let held = test.held;
             let moved = pointing.orbit.distance != test.distance;
-            ok(
-                held && !moved,
-                &format!(
-                    "the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
-                    test.distance, pointing.orbit.distance
-                ),
+            let what = format!(
+                "the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                test.distance, pointing.orbit.distance
             );
+            if !(held && !moved) {
+                info!("selftest: in the frame the wheel was turned: {}", test.held_detail);
+            }
+            ok(held && !moved, &what);
             // the control: the same wheel, at the same place, with nothing drawn there. Only the
             // editor has to go — the HUD is at the top left and the VM panel at the bottom left,
             // and neither reaches the middle of the editor's rectangle.
@@ -2021,20 +2081,35 @@ pub fn window_selftest(
         }
         16 => {
             test.distance = pointing.orbit.distance;
+            test.held = pointing.egui_has_it();
+            test.shown = editor.open;
+            test.held_detail = format!("{} editor.open={}", pointing.egui_answers(), editor.open);
             pointing.turn_the_wheel();
             test.step = 17;
             test.at = now + 0.2;
         }
         17 => {
-            let held = pointing.egui_has_it();
+            let held = test.held;
             let moved = pointing.orbit.distance != test.distance;
-            ok(
-                !held && moved,
-                &format!(
-                    "and with the panel closed the same wheel in the same place zooms (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
-                    test.distance, pointing.orbit.distance
-                ),
+            let what = format!(
+                "and with the panel closed the same wheel in the same place zooms (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                test.distance, pointing.orbit.distance
             );
+            // **The premise, before the verdict** ([`WindowTest::shown`]). This step shut the
+            // editor; if the game had opened it again by the time the wheel was turned then there
+            // *was* a panel under the pointer, and neither `ok` nor `FAIL` would be true of the
+            // run that happened.
+            if !test.shown && !(!held && moved) {
+                info!("selftest: in the frame the wheel was turned: {}", test.held_detail);
+            }
+            if test.shown {
+                info!(
+                    "selftest: --   {what}: the editor was open again when the wheel was turned — \
+                     the creature being watched died and `choose_watched` opened it"
+                );
+            } else {
+                ok(!held && moved, &what);
+            }
             editor.open = true;
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
