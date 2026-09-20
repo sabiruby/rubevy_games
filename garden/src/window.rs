@@ -79,10 +79,15 @@ pub use rubevy_egui::inspect::{vm_clock_end, vm_clock_start, VmClock, VmClockSet
 // ---------------------------------------------------------------------------------------------
 
 /// How near the ground under the cursor a creature has to be to be the one that was clicked.
-const CLICK_REACH: f32 = 1.6;
+///
+/// *Reason only*: "within about a body's width". The sentence and the number do not quite agree —
+/// a creature's radius is 0.40 to 0.50, so a body is 0.8 to 1.0 wide and this is nearer two of
+/// them — and neither S5a nor S5b-3 found a record of which was meant, so **the number is the
+/// default and the sentence is left as it was written** (`docs/numbers.md` §7-5).
+pub const CLICK_REACH: f32 = 1.6;
 /// How far the mouse may travel between press and release and still be a click rather than a drag
-/// of the camera.
-const CLICK_SLOP: f32 = 6.0;
+/// of the camera. *Reason only*: "a few pixels"; 6.0 itself is **unknown**.
+pub const CLICK_SLOP: f32 = 6.0;
 
 /// Click one to look at it, `Tab` for the next, `F1` hides the editor.
 ///
@@ -102,6 +107,7 @@ pub fn choose_watched(
     creatures: Query<(Entity, &Creature, &Transform)>,
     mut watched: ResMut<Watched>,
     mut editor: ResMut<Editor>,
+    eye: Res<crate::Eye>,
     mut pressed_at: Local<Option<Vec2>>,
 ) {
     let mut all: Vec<(Entity, Species)> = creatures.iter().map(|(e, c, _)| (e, c.species)).collect();
@@ -152,8 +158,8 @@ pub fn choose_watched(
     }
     if buttons.just_released(MouseButton::Left)
         && let (Some(down), Some(up)) = (pressed_at.take(), cursor)
-        && down.distance(up) <= CLICK_SLOP
-        && let Some(entity) = creature_under(up, &cameras, &creatures)
+        && down.distance(up) <= eye.click_slop
+        && let Some(entity) = creature_under(up, eye.click_reach, &cameras, &creatures)
     {
         watched.entity = Some(entity);
         watched.world = false;
@@ -177,6 +183,7 @@ pub fn choose_watched(
 /// The creature nearest to where a ray through `cursor` meets the ground.
 fn creature_under(
     cursor: Vec2,
+    reach: f32,
     cameras: &Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     creatures: &Query<(Entity, &Creature, &Transform)>,
 ) -> Option<Entity> {
@@ -188,7 +195,7 @@ fn creature_under(
     let mut best: Option<(Entity, f32)> = None;
     for (entity, _, place) in creatures {
         let span = here.distance(Vec2::new(place.translation.x, place.translation.z));
-        if span <= CLICK_REACH && best.is_none_or(|(_, b)| span < b) {
+        if span <= reach && best.is_none_or(|(_, b)| span < b) {
             best = Some((entity, span));
         }
     }
@@ -848,6 +855,18 @@ pub fn hud_rows(creatures: &Query<(Entity, &Creature, &Hunger, &Mind)>) -> Vec<H
     rows
 }
 
+/// **What the HUD draws itself with, as one system parameter** (S5b-3).
+///
+/// `draw_hud` was at fifteen of Bevy's sixteen and the numbers it wanted are two resources, so
+/// they travel as one — the answer `VmReport` and `FakePointer` already give to the same limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct HudLook<'w> {
+    /// the hunger bar: how big it is and where it changes colour
+    picture: Res<'w, crate::Picture>,
+    /// the night dial: how far it goes
+    light: Res<'w, crate::Light>,
+}
+
 /// The panel at the top left: the whole garden in one line, and one line per creature.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_hud(
@@ -866,6 +885,7 @@ pub fn draw_hud(
     trouble: Res<crate::WorldTrouble>,
     meter: Res<crate::WorldMeter>,
     rules: Res<ScriptWorld<crate::World>>,
+    look: HudLook,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let rows = hud_rows(&creatures);
@@ -945,7 +965,7 @@ pub fn draw_hud(
                         .color(amber),
                 );
             }
-            night_dial(ui, &mut dial, &mut settings);
+            night_dial(ui, &look.light, &mut dial, &mut settings);
             // The garden's own save, as two buttons (G5), **above** the list of creatures rather
             // than below it. The first version had them at the foot, beside the key hint, where
             // they read better — and in a browser at 1280×800 with fourteen creatures they were
@@ -1016,7 +1036,7 @@ pub fn draw_hud(
                             watched.world = false;
                             editor.open = true;
                         }
-                        hunger_bar(ui, row.hunger);
+                        hunger_bar(ui, &look.picture, row.hunger);
                         ui.label(
                             egui::RichText::new(format!("{:>6} insn/f", row.insn_per_frame))
                                 .monospace()
@@ -1076,13 +1096,14 @@ pub fn draw_hud(
 /// write and a line of log on every one of sixty frames a second would be neither.
 fn night_dial(
     ui: &mut egui::Ui,
+    light: &crate::Light,
     dial: &mut crate::NightDial,
     settings: &mut Option<bevy::prelude::ResMut<games_shell::Settings>>,
 ) {
     let mut value = dial.0;
     let slider = ui
         .add(
-            egui::Slider::new(&mut value, crate::NIGHT_DIAL_MIN..=crate::NIGHT_DIAL_MAX)
+            egui::Slider::new(&mut value, light.dial_min..=light.dial_max)
                 .fixed_decimals(2)
                 .text("night"),
         )
@@ -1102,18 +1123,19 @@ fn night_dial(
 
 /// 0 is dead, 100 is stuffed. Green while it is comfortable, amber under the line a beetle's own
 /// script goes looking for grass at, red near the end.
-fn hunger_bar(ui: &mut egui::Ui, hunger: f32) {
+fn hunger_bar(ui: &mut egui::Ui, picture: &crate::Picture, hunger: f32) {
     let share = (hunger / crate::HUNGER_MAX).clamp(0.0, 1.0);
-    let color = if hunger < 20.0 {
+    let color = if hunger < picture.hunger_low {
         egui::Color32::from_rgb(220, 90, 80)
-    } else if hunger < 55.0 {
+    } else if hunger < picture.hunger_warn {
         egui::Color32::from_rgb(230, 180, 80)
     } else {
         egui::Color32::from_rgb(120, 200, 120)
     };
     // one cell of the grid: the bar and the number beside it
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 11.0), egui::Sense::hover());
+        let (rect, _) = ui
+            .allocate_exact_size(egui::vec2(picture.hunger_bar[0], picture.hunger_bar[1]), egui::Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, 2.0, egui::Color32::from_gray(48));
         let mut filled = rect;
@@ -1144,6 +1166,10 @@ pub struct WindowTest {
     turn: Turn,
     /// and how many frames it has been waiting for it
     waited: u32,
+    /// and how many it may wait — [`scheduler_frames`], worked out from the budget the run is
+    /// actually giving the creatures' VM (S5b-3). It is kept here rather than read in
+    /// `window_selftest`, which is at Bevy's sixteen parameters.
+    frames: u32,
     /// every beetle there was when Apply was pressed, so that the one born in that very frame
     /// can be told from them (S7)
     beetles_before: Vec<Entity>,
@@ -1236,8 +1262,8 @@ impl FakePointer<'_, '_> {
 impl WindowTest {
     /// Starts once the garden has been running for `at` seconds — long enough for every creature
     /// to have a task and for the editor to be showing one.
-    pub fn after(at: f32) -> WindowTest {
-        WindowTest { at, ..WindowTest::default() }
+    pub fn after(at: f32, budgets: &crate::Budgets) -> WindowTest {
+        WindowTest { at, frames: scheduler_frames(budgets), ..WindowTest::default() }
     }
 
     /// **The frame the editor pressed Apply** — the one frame a forced birth has to land in
@@ -1258,7 +1284,7 @@ impl WindowTest {
 /// Revert flaked (`docs/worklog/2026-09-20-window-check-flakes.md`, cause B).
 ///
 /// So the step says what it is waiting **for**, the wait ends the moment it has it, and
-/// [`SCHEDULER_FRAMES`] is where it gives up and judges anyway — which is a FAIL, and a true
+/// [`scheduler_frames`] is where it gives up and judges anyway — which is a FAIL, and a true
 /// one: the VM has had turns to hand out and has not handed one to a task that is ready, or egui
 /// has had the pointer put on it and has not noticed.
 #[derive(Default, PartialEq, Eq, Clone, Copy)]
@@ -1313,7 +1339,30 @@ enum Turn {
 /// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
 /// in is the frame egui knows. Seven is the largest of the three, and one number is better than
 /// three.
-const SCHEDULER_FRAMES: u32 = 7;
+///
+/// **S5b-3: it is worked out from the budget the run is really giving, not from 200,000.** S7
+/// wrote rubevy's default into the sum as a literal, which was right on the day and wrong the
+/// moment the budget became something anybody could change (`script_budget` in
+/// `garden.settings.txt`): a run given ten times the budget would have been judged after the
+/// same seven frames, which is a quarter of what it was promised. The two parts of the sum keep
+/// their own sources — [`STRUCTURAL_FRAMES`] is measured in S6 and cannot be shortened,
+/// [`INSTRUCTIONS_A_FRAME_BUYS`] is S6's measurement of the wall clock — and what is new is that
+/// the division is done at startup instead of in a comment.
+pub fn scheduler_frames(budgets: &crate::Budgets) -> u32 {
+    STRUCTURAL_FRAMES + (budgets.creature as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
+}
+
+/// The two frames a restart costs whatever the VM is allowed: the `Script` lands at the end of
+/// the frame that asked for it, and rubevy makes a task of it and runs it on the next.
+/// **Measured** (S6, `docs/worklog/2026-09-20-window-check-flakes.md` §4.4) and structural.
+const STRUCTURAL_FRAMES: u32 = 2;
+
+/// What one frame of the creatures' VM buys, in instructions. **Measured** (S6): with
+/// `frame_time` cut to 300 µs the VM got through 1,708 instructions in its slowest frame
+/// (`s6/ft300.log`, f59), which is 5.7 instructions per microsecond, so a full 8 ms frame buys
+/// about 45,600. It is a number about *this machine's* wall clock, which is why it is the check's
+/// and not a setting: a check is allowed to know how fast the machine it is running on is.
+const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 
 /// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
 /// cannot otherwise arrange, made to happen on purpose so that a check can watch it.
@@ -1391,7 +1440,8 @@ pub fn window_selftest(
     // one is about a frame of somebody else's: a step that has just restarted a script waits
     // here until every one of those tasks has run an instruction, and a step that has just moved
     // the pointer waits until egui knows where it is — however many frames the machine needs to
-    // get there, and giving up after [`SCHEDULER_FRAMES`].
+    // get there, and giving up after [`scheduler_frames`], which `WindowTest::after` worked out
+    // from the budget this run is giving.
     if test.turn != Turn::NotWaiting {
         let came_round = match test.turn {
             Turn::NotWaiting => true,
@@ -1404,7 +1454,7 @@ pub fn window_selftest(
             Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
         };
         test.waited += 1;
-        if !came_round && test.waited < SCHEDULER_FRAMES {
+        if !came_round && test.waited < test.frames {
             return;
         }
         // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict
@@ -1493,7 +1543,7 @@ pub fn window_selftest(
             // What it waits for is the check's own question, as the wait after Apply waits for
             // the check's own question there. That is not the check proving itself: the thing
             // being judged is **within how much of the VM's time it happened**, which is what
-            // `SCHEDULER_FRAMES` says and what a FAIL here now means.
+            // [`scheduler_frames`] says and what a FAIL here now means.
             test.turn = Turn::AMeterMoved;
         }
         4 => {
