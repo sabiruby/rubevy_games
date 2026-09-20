@@ -1170,6 +1170,18 @@ pub struct WindowTest {
     /// actually giving the creatures' VM (S5b-3). It is kept here rather than read in
     /// `window_selftest`, which is at Bevy's sixteen parameters.
     frames: u32,
+    /// **and the frames that come before the VM's, where there are any** (S5b-5).
+    ///
+    /// [`scheduler_frames`] counts from the moment something was asked of the VM. A step that
+    /// asks by pressing a key has one frame in front of that which is nobody's scheduler:
+    /// `rubevy-egui`'s panel reads `Ctrl+Enter` in the egui pass, so `Editor::action` is not set
+    /// until the frame after the one the check pressed it in, and `do_editor_actions` takes it
+    /// the frame after that. It is the same frame [`Turn::EguiHasThePointer`] is entirely about,
+    /// counted here because it comes *before* the wait rather than being the wait.
+    ///
+    /// Set beside the `turn` it belongs to and cleared with it. It is only ever 0 or 1, and the
+    /// 1 is that frame.
+    spare: u32,
     /// every beetle there was when Apply was pressed, so that the one born in that very frame
     /// can be told from them (S7)
     beetles_before: Vec<Entity>,
@@ -1177,6 +1189,9 @@ pub struct WindowTest {
     original: String,
     /// the same for `world.rb` (W3)
     world_original: String,
+    /// **the day the edited rules are to say**, which is half of whatever `world.rb` was really
+    /// carrying when the check read it (S5b-5) rather than a second copy of the 60 it ships with
+    day_length: f32,
     /// instructions every creature had run together, for the pause check
     insn: u64,
     /// ticks until the earliest sleeper is due, sampled on the first frame of the pause
@@ -1190,6 +1205,31 @@ pub struct WindowTest {
     phase: f32,
     /// how far back the camera stood before a wheel message was written (2026-09-18)
     distance: f32,
+    /// **and whether egui was holding the pointer in that same frame** (S5b-5).
+    ///
+    /// The two wheel checks are about one moment: a notch of the wheel, at a place, with a panel
+    /// drawn there or not. Whether egui had the pointer is half of what that moment was, so it
+    /// is read where the wheel is turned rather than where the verdict is written — a fifth of a
+    /// second later, by which time egui may have taken the pointer or let it go for reasons of
+    /// its own. Reading it late is what made `and with the panel closed the same wheel in the
+    /// same place zooms` fail in four runs of eighty-eight with eight of them at once, both
+    /// before S7's changes and after them (`docs/worklog/2026-09-20-window-check-fixes.md`).
+    held: bool,
+    /// **and whether the editor was in fact drawn in that frame** (S5b-5).
+    ///
+    /// The control step of the wheel checks shuts the editor and then turns the wheel where the
+    /// editor used to be, so its whole premise is that nothing is drawn there. The game can take
+    /// that premise away between the two: `choose_watched` opens the editor when the creature
+    /// being looked at dies, and a creature starving in that second or two is the garden's own
+    /// business. A run where that happened has not failed the thing being checked and has not
+    /// passed it either — it is the third verdict.
+    shown: bool,
+    /// **and what egui's answer was made of, in that same frame** (S5b-5) — `wants_pointer_input`
+    /// and `is_pointer_over_area` apart, and whether the editor was open. It is printed only
+    /// where the verdict is a FAIL, as a stage direction: a run that fails one of these two
+    /// checks has to say *which* of egui's two answers was true, or the next person measures it
+    /// all over again.
+    held_detail: String,
 }
 
 /// **A pointer the checks can put where they like, and a wheel they can turn** (2026-09-18).
@@ -1215,6 +1255,10 @@ pub struct FakePointer<'w, 's> {
     /// game — or a player's `garden.settings.txt` — may have asked for a panel of another size,
     /// and a check that read the default would then be pointing at a rectangle nobody drew.
     editor: Res<'w, rubevy_egui::EditorLayout>,
+    /// **and the guide, which is drawn in the middle of the window over everything else**
+    /// (S5b-5). It starts open, nothing in these checks shuts it, and the control step of the
+    /// wheel checks needs a point with nothing under it — see [`FakePointer::hide_the_guide`].
+    guide: Option<ResMut<'w, games_shell::Guide>>,
 }
 
 impl FakePointer<'_, '_> {
@@ -1223,12 +1267,62 @@ impl FakePointer<'_, '_> {
         self.egui.as_ref().is_some_and(|e| e.wants_pointer_input() || e.is_pointer_over_area())
     }
 
-    /// The middle of the editor panel, where it stands before anybody drags it (the panel's own
-    /// setting, so the check is not guessing the rectangle).
+    /// **Shut the guide before the wheel is turned** (S5b-5).
+    ///
+    /// The guide is anchored to the centre of the window and drawn in `Order::Foreground`, above
+    /// every other panel, and it is open when a game starts (`games_shell::Guide`). Nothing in
+    /// these checks shuts it, so until now the two wheel checks were relying on the aim point
+    /// falling outside it — which it did, by 150 pixels, for as long as the point was the middle
+    /// of the editor's rectangle. Taking the point to the rectangle's inner edge put it inside
+    /// the guide instead, and the control step failed three runs out of three with
+    /// `is_pointer_over_area=true` and the editor shut: the panel under the pointer was the
+    /// guide.
+    ///
+    /// It is set rather than typed (`H` toggles it) because the step wants it *shut*, not
+    /// *changed*, and because the same step already puts `Editor::open` where it wants it. What
+    /// it buys is that neither wheel check depends on where the guide happens to be.
+    fn hide_the_guide(&mut self) {
+        if let Some(guide) = self.guide.as_mut() {
+            guide.open = false;
+        }
+    }
+
+    /// The same, taken apart, for a failing check to print (S5b-5).
+    fn egui_answers(&self) -> String {
+        match self.egui.as_ref() {
+            Some(e) => format!(
+                "wants_pointer_input={} is_pointer_over_area={}",
+                e.wants_pointer_input(),
+                e.is_pointer_over_area()
+            ),
+            None => "egui is not in this run".into(),
+        }
+    }
+
+    /// **A point inside the editor's rectangle, near the edge that moves when the width does**
+    /// (S5b-5).
+    ///
+    /// It used to be the middle of the rectangle, and S5b-1 found what that is worth: the panel
+    /// is pinned to the right of the window, so the middle of the rectangle the *settings*
+    /// describe is inside the panel whatever width the panel really has. A run where
+    /// `editor_width` had been ignored altogether would have passed — the check would have been
+    /// pointing at a rectangle nobody drew and hitting the panel anyway. (The author ran it with
+    /// `editor_width=1400` by hand to get round that, which is the check asking to be mended.)
+    ///
+    /// So the point is taken from the rectangle's **inner edge** — one `margin` inside the left
+    /// side, which is the one side that moves when the width changes — and half way down. A panel
+    /// narrower than the settings say does not reach it.
+    ///
+    /// **It is held to the right half of the window.** The two other panels are at the left (the
+    /// HUD at the top, the VM inspector at the bottom), and the control step of the wheel checks
+    /// needs a point with *nothing* under it once the editor is shut. The clamp only bites for an
+    /// editor more than half the window wide, and there the check has already said what it can
+    /// about the width.
     fn over_the_editor(&self) -> Option<Vec2> {
         let (_, window) = self.windows.iter().next()?;
         let (margin, width, height) = (self.editor.margin, self.editor.width, self.editor.height);
-        Some(Vec2::new(window.width() - margin - width * 0.5, margin + height * 0.5))
+        let inner_edge = window.width() - margin - width + margin;
+        Some(Vec2::new(inner_edge.max(window.width() * 0.5), margin + height * 0.5))
     }
 
     /// Which window the forged input is about: the primary one, which is the only one these
@@ -1259,6 +1353,85 @@ impl FakePointer<'_, '_> {
     }
 }
 
+/// **The two VMs, as one system parameter** (S5b-5).
+///
+/// `window_selftest` was at fifteen of Bevy's sixteen and the pause is about **both** VMs — `P`
+/// takes the budget off the creatures' and off the world's together ([`inspect_keys`]) — so the
+/// two travel as one rather than as the fifteenth and the sixteenth. It is the answer
+/// [`FakePointer`] and `crate::VmReport` give to the same limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BothVms<'w> {
+    /// every creature's script
+    creatures: Res<'w, ScriptWorld>,
+    /// `ruby/world.rb` (W1)
+    rules: Res<'w, ScriptWorld<crate::World>>,
+}
+
+/// **What two samples of "one value per creature" say about each other** (S5b-5).
+///
+/// The pause checks used to be `places() == test.places`, a `Vec` compared with `Vec`, which
+/// compares **the order the creatures came out of the `Query` in** as well as the values. That
+/// order is per archetype, so one creature moving to another archetype between the two samples —
+/// rubevy hanging a `ScriptTask` on it, `dress_animations` hanging an `Animated`, an `Eating`
+/// that was on its way when the world stopped — made a still world look like a moving one. S8
+/// reproduced it by adding an empty marker to one creature and nothing else: one run in one
+/// (`docs/worklog/2026-09-20-writes-landing-in-a-pause.md`).
+///
+/// So the sample is looked up **by entity**, and what comes out is said in three parts, because
+/// they are three different pieces of news: a creature that is not there any more, a creature
+/// that was not there before, and a creature whose value moved. There is **no tolerance** —
+/// equality is what the check means, and a threshold here would be a number with nothing behind
+/// it.
+struct Changes {
+    /// entities in the first sample and not in the second
+    gone: Vec<Entity>,
+    /// entities in the second and not in the first
+    fresh: Vec<Entity>,
+    /// entities in both whose value is not the same, as "who: was -> is"
+    moved: Vec<String>,
+}
+
+impl Changes {
+    /// Whether the same creatures are in both samples, whatever their values did.
+    fn same_creatures(&self) -> bool {
+        self.gone.is_empty() && self.fresh.is_empty()
+    }
+
+    /// The names for a sentence, or nothing at all when there is nothing to say.
+    fn cast(&self) -> String {
+        match (self.gone.len(), self.fresh.len()) {
+            (0, 0) => String::new(),
+            _ => format!(" (gone: {:?}; new: {:?})", self.gone, self.fresh),
+        }
+    }
+
+    fn what_moved(&self) -> String {
+        if self.moved.is_empty() { String::new() } else { format!(" ({})", self.moved.join("; ")) }
+    }
+}
+
+fn what_changed<T: PartialEq + std::fmt::Debug>(
+    before: &[(Entity, T)],
+    after: &[(Entity, T)],
+) -> Changes {
+    let mut changes = Changes { gone: Vec::new(), fresh: Vec::new(), moved: Vec::new() };
+    for (entity, was) in before {
+        match after.iter().find(|(e, _)| e == entity) {
+            None => changes.gone.push(*entity),
+            Some((_, now)) if now != was => {
+                changes.moved.push(format!("{entity}: {was:?} -> {now:?}"))
+            }
+            Some(_) => {}
+        }
+    }
+    for (entity, _) in after {
+        if !before.iter().any(|(e, _)| e == entity) {
+            changes.fresh.push(*entity);
+        }
+    }
+    changes
+}
+
 impl WindowTest {
     /// Starts once the garden has been running for `at` seconds — long enough for every creature
     /// to have a task and for the editor to be showing one.
@@ -1274,6 +1447,24 @@ impl WindowTest {
     }
 }
 
+/// **`day_length` as `ruby/world.rb` writes it** (S5b-5), so that a check about what the file
+/// says reads the file rather than a number somebody typed twice.
+///
+/// It is not one of the `def name = number` lines the rest of that file is written in: it is a
+/// word and a number, said once inside `world do` and handed over at the start
+/// (`garden.rules(day_length:)`), because the sun is drawn in Rust.
+fn day_length_in(text: &str) -> Option<f32> {
+    text.lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("day_length "))
+        .find_map(|rest| rest.split_whitespace().next()?.parse().ok())
+}
+
+/// The same line, written back — how the check edits the text it has just read.
+fn day_length_line(value: f32) -> String {
+    format!("day_length {value:.1}")
+}
+
 /// **What a step is waiting for that is not a length of time** (S7).
 ///
 /// A check that has just restarted a script is not waiting for the world to move on; it is
@@ -1287,7 +1478,17 @@ impl WindowTest {
 /// [`scheduler_frames`] is where it gives up and judges anyway — which is a FAIL, and a true
 /// one: the VM has had turns to hand out and has not handed one to a task that is ready, or egui
 /// has had the pointer put on it and has not noticed.
-#[derive(Default, PartialEq, Eq, Clone, Copy)]
+///
+/// **S5b-5 took the last two seconds out** ([`Turn::TheDayIs`]). S7 changed the four waits that
+/// had flaked and left the two around `world.rb`'s own Apply and Revert at 0.6 s, saying they
+/// were the same shape and had simply not failed yet. They are the same shape, so they are the
+/// same wait now; **the seconds that are left in this file are the ones that mean seconds** — two
+/// seconds of a pause, half a second of walking, nine seconds of the VM going on running — and
+/// 0.2 s twice for a key that a frame of Bevy's input has to see.
+// `Eq` is not derived any more: [`Turn::TheDayIs`] carries the day length the rules are to have
+// said, which is the `f32` `Sky::day_length` is. Nothing here wants total equality — the one
+// comparison is against [`Turn::NotWaiting`].
+#[derive(Default, PartialEq, Clone, Copy)]
 enum Turn {
     /// nothing: the step's `at` is a length of the world's time and means what it says
     #[default]
@@ -1296,6 +1497,14 @@ enum Turn {
     RestartedBeetles,
     /// somebody's meter has moved, which only `world.rb`'s `each_frame` can do
     AMeterMoved,
+    /// **the rules that have just been applied are running** (S5b-5), said by the one number of
+    /// theirs that crosses the boundary: `garden.rules(day_length:)` is written into
+    /// [`crate::Sky`] by a world script that has just started, so the day being this long is
+    /// "these rules, running". It is the same wait as [`RestartedBeetles`](Turn::RestartedBeetles)
+    /// with one script instead of a dozen — Apply on `world.rb` replaces the rules' script
+    /// (`crate::wear_the_rules`), and what is left to wait for is rubevy making a task of it and
+    /// the scheduler giving it a turn
+    TheDayIs(f32),
     /// egui has taken the pointer the check moved over the editor — or let it go again when the
     /// panel was closed. **Not the VM**; the thing being waited for is bevy_egui learning where
     /// the pointer is, which takes a frame of its own (see the two wheel checks, steps 13-17)
@@ -1315,39 +1524,47 @@ enum Turn {
 ///   `RubevySet::Tick` runs it (two). S6 measured exactly this: a breath cut to one frame finds
 ///   the creature with no `ScriptTask` at all (`window-check-flakes.md` §4.4, two runs of two),
 ///   and `crate::NEWBORN_DEAF_FRAMES` is the same reckoning written down for newborns.
-/// * **Five more are one whole frame's budget of the VM's turns.** One frame of the creatures'
-///   VM buys `ScriptWorld::budget` instructions — rubevy's default 200,000 — or
-///   `ScriptWorld::frame_time`, rubevy's default 8 ms of wall clock, whichever runs out first.
-///   What 8 ms buys was measured in S6: with `frame_time` cut to 300 µs the VM got through
-///   1,708 instructions in its slowest frame (`s6/ft300.log`, f59 — two beetles' first pass of
-///   854 each), which is 5.7 instructions per microsecond, so a full 8 ms frame buys about
-///   45,600 and `ceil(200_000 / 45_600)` is five. Past that the VM has been handed a whole
-///   frame's allowance of turns without reaching a task that is ready to run, which is the
+/// * **The rest are one whole frame's budget of the VM's turns.** One frame of the creatures'
+///   VM buys `ScriptWorld::budget` instructions — the garden's own [`crate::CREATURE_BUDGET`],
+///   41,000 by default since S5b-5 — or `ScriptWorld::frame_time`, 8 ms of wall clock, whichever
+///   runs out first. What 8 ms buys was measured in S6: with `frame_time` cut to 300 µs the VM
+///   got through 1,708 instructions in its slowest frame (`s6/ft300.log`, f59 — two beetles'
+///   first pass of 854 each), which is 5.7 instructions per microsecond, so a full 8 ms frame
+///   buys about 45,600 and `ceil(41_000 / 45_600)` is one. Past that the VM has been handed a
+///   whole frame's allowance of turns without reaching a task that is ready to run, which is the
 ///   scheduler having stopped handing them out — the sabiruby 0.5.1 bug these checks are for
 ///   (`restart_species`) — rather than a machine that is merely busy.
 ///
 /// A machine that is sharing its CPU makes each frame longer, and that is the point: the same
-/// seven frames are 0.9 s on the quiet PC where a frame is 133 ms and 2.0 s on the loaded one
+/// three frames are 0.4 s on the quiet PC where a frame is 133 ms and 0.8 s on the loaded one
 /// where it is 280 ms (S6 §1.1, §1.2). A number of seconds cannot do that, which is what 0.6 s
 /// buying five frames on one machine and three on another was.
 ///
-/// The same seven cover the world's VM ([`Turn::AMeterMoved`]), where the reckoning comes out
+/// The same number covers the world's VM ([`Turn::AMeterMoved`]), where the reckoning comes out
 /// smaller: its script is resumed rather than made, so there are no structural frames, and its
-/// budget is 45,000 rather than 200,000 (`crate::install_world_answers`), so one frame's worth is
-/// one frame. And they cover [`Turn::EguiHasThePointer`], which is not the VM at all and wants
-/// **one** frame: bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
+/// budget is 45,000 (`crate::install_world_answers`), so one frame's worth is one frame. It also
+/// covers [`Turn::TheDayIs`] (S5b-5), where the world's script **is** made rather than resumed —
+/// Apply on `world.rb` replaces it — so that one wants the same two structural frames the
+/// creatures' restarts want, and `2 + ceil(45,000 / 45,600)` is three as well. And it covers
+/// [`Turn::EguiHasThePointer`], which is not the VM at all and wants **one** frame:
+/// bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
 /// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
-/// in is the frame egui knows. Seven is the largest of the three, and one number is better than
+/// in is the frame egui knows. This is the largest of the three, and one number is better than
 /// three.
 ///
-/// **S5b-3: it is worked out from the budget the run is really giving, not from 200,000.** S7
-/// wrote rubevy's default into the sum as a literal, which was right on the day and wrong the
-/// moment the budget became something anybody could change (`script_budget` in
+/// **S5b-3: it is worked out from the budget the run is really giving, not from a literal.** S7
+/// wrote rubevy's then-default 200,000 into the sum as a number, which was right on the day and
+/// wrong the moment the budget became something anybody could change (`script_budget` in
 /// `garden.settings.txt`): a run given ten times the budget would have been judged after the
 /// same seven frames, which is a quarter of what it was promised. The two parts of the sum keep
 /// their own sources — [`STRUCTURAL_FRAMES`] is measured in S6 and cannot be shortened,
 /// [`INSTRUCTIONS_A_FRAME_BUYS`] is S6's measurement of the wall clock — and what is new is that
 /// the division is done at startup instead of in a comment.
+///
+/// **S5b-5 moved the budget, so this moved with it**, which is the arrangement proving itself:
+/// `2 + ceil(41,000 / 45,600)` is **3** where it was 7. The checks are less patient than they
+/// were because the VM they are waiting on has less work it is allowed to do in a frame, and
+/// nothing here was edited to make that happen.
 pub fn scheduler_frames(budgets: &crate::Budgets) -> u32 {
     STRUCTURAL_FRAMES + (budgets.creature as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
 }
@@ -1357,11 +1574,31 @@ pub fn scheduler_frames(budgets: &crate::Budgets) -> u32 {
 /// **Measured** (S6, `docs/worklog/2026-09-20-window-check-flakes.md` §4.4) and structural.
 const STRUCTURAL_FRAMES: u32 = 2;
 
-/// What one frame of the creatures' VM buys, in instructions. **Measured** (S6): with
-/// `frame_time` cut to 300 µs the VM got through 1,708 instructions in its slowest frame
-/// (`s6/ft300.log`, f59), which is 5.7 instructions per microsecond, so a full 8 ms frame buys
-/// about 45,600. It is a number about *this machine's* wall clock, which is why it is the check's
-/// and not a setting: a check is allowed to know how fast the machine it is running on is.
+/// What one frame of the creatures' VM buys, in instructions. It is a number about *this
+/// machine's* wall clock, which is why it is the check's and not a setting: a check is allowed to
+/// know how fast the machine it is running on is.
+///
+/// **There are two measurements of it, and this is the slower one** (S5b-5):
+///
+/// | | how it was measured | rate | 8 ms buys |
+/// |---|---|---|---|
+/// | S6 | `frame_time` cut to **300 µs**, the VM's slowest frame in that run: 1,708 instructions (`s6/ft300.log`, f59 — two beetles' first pass of 854 each) | 5.7 insn/µs | **45,600** |
+/// | S5b-3 | the capped garden at its **own 8 ms**, three runs of a minute | 6.85 insn/µs | 54,800 |
+///
+/// The difference is the condition, not the machine: a frame cut to 300 µs pays the cost of
+/// starting and stopping the tick over a twenty-seventh of the work, so the rate it measures is
+/// the rate of a *short* frame. The garden's own frames are the second row, and they are quicker.
+///
+/// **The slower rate is the one to keep**, and the reason is which way this number's error hurts.
+/// It divides the budget to say how many frames a check may wait, so a number that is too **big**
+/// makes the wait too short and produces a FAIL for a VM that was merely being slow — a false
+/// FAIL, the thing S6 and S7 were called in to remove. A number that is too small only makes a
+/// check wait longer before it says what it was going to say. So the rate that buys *less* per
+/// frame is the safe side, and 45,600 is it.
+///
+/// **At the budget the game ships with the two agree anyway**: `ceil(41,000 / 45,600)` and
+/// `ceil(41,000 / 54,800)` are both 1, so [`scheduler_frames`] is 3 either way. The choice only
+/// shows above 45,600 of budget, which is `script_budget` in somebody's `garden.settings.txt`.
 const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 
 /// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
@@ -1410,7 +1647,7 @@ pub fn window_selftest(
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
     panel: Res<VmInspector>,
-    world: Res<ScriptWorld>,
+    vms: BothVms,
     sky: Res<Sky>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     minds: Query<(Entity, &Mind, Option<&ScriptTask>)>,
@@ -1427,7 +1664,7 @@ pub fn window_selftest(
         return;
     }
     let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
-    let spent = || tasks.iter().map(|t| world.vm.task_instructions(t.task())).sum::<u64>();
+    let spent = || tasks.iter().map(|t| vms.creatures.vm.task_instructions(t.task())).sum::<u64>();
     // the world in three numbers: where everybody is, what they have eaten, and the hour
     let places = || -> Vec<(Entity, Vec3)> { bodies.iter().map(|(e, t, _)| (e, t.translation)).collect() };
     let hunger = || -> Vec<(Entity, f32)> { bodies.iter().map(|(e, _, h)| (e, h.0)).collect() };
@@ -1451,10 +1688,11 @@ pub fn window_selftest(
             Turn::AMeterMoved => hunger()
                 .iter()
                 .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now)),
+            Turn::TheDayIs(want) => sky.day_length == want,
             Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
         };
         test.waited += 1;
-        if !came_round && test.waited < test.frames {
+        if !came_round && test.waited < test.frames + test.spare {
             return;
         }
         // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict
@@ -1465,6 +1703,7 @@ pub fn window_selftest(
         );
         test.turn = Turn::NotWaiting;
         test.waited = 0;
+        test.spare = 0;
     }
 
     match test.step {
@@ -1491,7 +1730,7 @@ pub fn window_selftest(
             // once the pause has taken hold, and not on the frame it was asked for: the scripts
             // and the rules of *that* frame had already run when the key was read
             test.insn = spent();
-            test.wake = world.vm.task_next_wakeup_ticks();
+            test.wake = vms.creatures.vm.task_next_wakeup_ticks();
             test.places = places();
             test.hunger = hunger();
             test.phase = sky.phase;
@@ -1503,18 +1742,51 @@ pub fn window_selftest(
             test.at = now + 2.0;
         }
         3 => {
-            ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
+            // **Both VMs** (S5b-5). `P` takes the budget off the creatures' and off the world's
+            // together (`inspect_keys`), and until now the check looked at one of them — a pause
+            // that had stopped the creatures and left `world.rb`'s VM running would have passed
+            // this line and then failed the three below with no word about why.
+            ok(
+                panel.paused && vms.creatures.budget == 0 && vms.rules.budget == 0,
+                "P pauses: both VMs' budgets are 0",
+            );
             ok(spent() == test.insn, "nothing ran while it was paused");
-            // the three the author asked for: **the world**, not only the VM
-            ok(places() == test.places, "2 s paused: every creature is where it was");
-            ok(hunger() == test.hunger, "2 s paused: nobody got hungrier");
+            // **The three the author asked for: the world, not only the VM** — and each of them
+            // said by entity rather than by comparing two `Vec`s ([`what_changed`], S5b-5).
+            //
+            // `P` stops **the rules of the garden, its clock and its two VMs**. It does not
+            // freeze Bevy's world, and it was never meant to: a creature can still be given a
+            // `ScriptTask`, an `Animated` or an `Eating` in the middle of a pause, which moves it
+            // from one archetype to another and so moves it in the order `Query::iter` hands the
+            // creatures over in. That is not the garden moving, and a check that compares two
+            // lists in order cannot tell the two apart (S8).
+            let where_they_are = what_changed(&test.places, &places());
+            let meters = what_changed(&test.hunger, &hunger());
+            ok(
+                where_they_are.same_creatures(),
+                &format!(
+                    "2 s paused: the same creatures are there{}",
+                    where_they_are.cast()
+                ),
+            );
+            ok(
+                where_they_are.moved.is_empty(),
+                &format!(
+                    "2 s paused: every creature is where it was{}",
+                    where_they_are.what_moved()
+                ),
+            );
+            ok(
+                meters.moved.is_empty(),
+                &format!("2 s paused: nobody got hungrier{}", meters.what_moved()),
+            );
             ok(sky.phase == test.phase, "2 s paused: the day did not turn");
             ok(panel.open && !panel.frames.is_empty(), "the VM panel has the creature's frames");
             ok(panel.heap.as_ref().is_some_and(|h| h.live > 0), "the panel has the heap counters");
             let what = "nothing that was sleeping woke on the resume frame";
             match test.wake {
                 Some(was) if was > 0 => {
-                    let left = world.vm.task_next_wakeup_ticks();
+                    let left = vms.creatures.vm.task_next_wakeup_ticks();
                     let same = left == Some(was);
                     info!(
                         "selftest: {} {what}: the next one is due in {was} ticks, as it was two seconds ago{}",
@@ -1547,21 +1819,23 @@ pub fn window_selftest(
             test.turn = Turn::AMeterMoved;
         }
         4 => {
-            ok(!panel.paused && world.budget > 0, "P again gives the budget back");
+            // both of them again, as the pause took both
+            ok(
+                !panel.paused && vms.creatures.budget > 0 && vms.rules.budget > 0,
+                "P again gives both budgets back",
+            );
             ok(spent() > test.insn, "the creatures are thinking again");
             // and the world with them. Positions are "somebody moved" rather than "everybody
             // did": a creature that is asleep, or one a handler has told to stand still, is
-            // allowed to be where it was.
-            let moved = places()
-                .iter()
-                .any(|(e, at)| test.places.iter().any(|(was, place)| was == e && place != at));
-            ok(moved, "and the garden moves again: somebody has walked");
+            // allowed to be where it was. This one is by entity too, and always was — a creature
+            // that arrived or left while the world was running is neither the news here nor a
+            // reason to say nobody walked.
+            let walked = !what_changed(&test.places, &places()).moved.is_empty();
+            ok(walked, "and the garden moves again: somebody has walked");
             // "changed", not "fell": a creature standing on a plant is *filling* its meter, and
             // over half a second the garden as a whole can go either way. What the check is about
             // is that `get_hungry` and `eat` are running again at all.
-            let meters = hunger()
-                .iter()
-                .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now));
+            let meters = !what_changed(&test.hunger, &hunger()).moved.is_empty();
             ok(meters, "the meters move again");
             ok(sky.phase > test.phase, "the day turns again");
             keys.release(KeyCode::KeyP);
@@ -1698,9 +1972,9 @@ pub fn window_selftest(
         // `day_length` is what it watches because it is the one rule that **crosses the boundary
         // as a number**: the sun is drawn in Rust and `garden.rules(day_length:)` is how the file
         // says how long a turn of it takes (`Sky::day_length`). Only a world script that has just
-        // started says it, so `Sky::day_length == 30` is "these rules are the ones running", with
-        // no window to wait for, no threshold and no statistics — where "the grass grew" or "a
-        // meter fell" would need all three.
+        // started says it, so the sun turning in the time the *edited* text asks for is "these
+        // rules are the ones running", with no window to wait for, no threshold and no
+        // statistics — where "the grass grew" or "a meter fell" would need all three.
         11 => {
             ok(
                 editor.file == "world.rb" && editor.text.contains("world do"),
@@ -1710,28 +1984,63 @@ pub fn window_selftest(
                 editor.choices.iter().any(|c| c.label.starts_with("world.rb")),
                 "the editor has a third file, and it is not a creature",
             );
-            ok(sky.day_length == 60.0, "the day is what world.rb says it is");
+            // **What the file says, read out of the file** (S5b-5). This was `sky.day_length ==
+            // 60.0` and the edit below was a text replacement of the literal `day_length 60.0`,
+            // so a `world.rb` whose day had been made longer would have failed a check whose own
+            // sentence says it is about what `world.rb` says — and the edit would quietly have
+            // replaced nothing. Both halves read the number the file is really carrying now. It
+            // is the shape S5b-4 took out of the mutation rate and S5b-2 out of Battle's turn
+            // rate; this stage went looking for the rest of it.
+            let said = day_length_in(&editor.text);
+            ok(
+                said.is_some_and(|n| sky.day_length == n),
+                &format!(
+                    "the day is what world.rb says it is ({})",
+                    match said {
+                        Some(n) => format!("{n:.1} s"),
+                        None => "and world.rb says nothing about it".into(),
+                    }
+                ),
+            );
             test.world_original = platform::read(&ruby.0.join(crate::WORLD_FILE)).unwrap_or_default();
-            editor.text = editor.text.replace("day_length 60.0", "day_length 30.0");
+            // and the edit is that number halved — any other number would do, and half of it is
+            // the one that is easiest to recognise in a log beside the original
+            let (was, half) = (said.unwrap_or(sky.day_length), said.unwrap_or(sky.day_length) * 0.5);
+            test.day_length = half;
+            editor.text = editor.text.replace(&day_length_line(was), &day_length_line(half));
             ok(editor.changed(), "typing in the rules marks them edited");
             keys.release(KeyCode::F3);
             // the keys themselves this time, not `Editor::action`: `rubevy-egui`'s panel reads
             // Ctrl+Enter in `PostUpdate` (the egui pass), so the action it sets is taken by
-            // `do_editor_actions` on the next frame — which is inside the breath below
+            // `do_editor_actions` on the next frame — which is inside the wait below
             keys.press(KeyCode::ControlLeft);
             keys.press(KeyCode::Enter);
             test.step = 12;
-            test.at = now + 0.6;
+            // **S5b-5: the last two waits that were still seconds.** 0.6 s is five frames on a
+            // quiet PC and three on a loaded one or in a browser, and what is wanted here is not
+            // a length of time at all: it is `do_editor_actions` taking the key's action, rubevy
+            // making a task of the new rules and the scheduler giving it a turn — the same three
+            // things the waits after Apply and Revert on a *creature* wait for (S7). These two
+            // had simply not failed yet.
+            test.at = now;
+            test.turn = Turn::TheDayIs(test.day_length);
+            // and one frame in front of the VM's own, because this step asks with a key rather
+            // than by setting `Editor::action`: the egui pass is where `Ctrl+Enter` is read
+            // ([`WindowTest::spare`]). The first run with the wait in it took exactly three
+            // frames, which is `scheduler_frames` to the frame — that is the wait being right up
+            // against its bound, not room to spare.
+            test.spare = 1;
         }
         12 => {
             keys.release(KeyCode::Enter);
             keys.release(KeyCode::ControlLeft);
             ok(
-                sky.day_length == 30.0,
+                sky.day_length == test.day_length,
                 "Ctrl+Enter: the garden is running the edited rules, without stopping",
             );
+            let half = day_length_line(test.day_length);
             ok(
-                brains.world().is_some_and(|t| t.contains("day_length 30.0")),
+                brains.world().is_some_and(|t| t.contains(&half)),
                 "the rules the editor applied are the ones in memory",
             );
             ok(
@@ -1741,10 +2050,12 @@ pub fn window_selftest(
             ok(!editor.changed(), "after Apply the text is what the world runs");
             editor.action = Some(EditorAction::Revert);
             test.step = 13;
-            test.at = now + 0.6;
+            // and the same wait the other way round: the file's own `day_length` back again
+            test.at = now;
+            test.turn = Turn::TheDayIs(test.day_length * 2.0);
         }
         13 => {
-            ok(sky.day_length == 60.0, "Revert puts the file's rules back");
+            ok(sky.day_length == test.day_length * 2.0, "Revert puts the file's rules back");
             ok(editor.text == test.world_original, "Revert shows world.rb again");
             ok(brains.world().is_none(), "and nothing is running a text of its own");
             // --- and the wheel, which is the other thing a panel takes (2026-09-18) ---
@@ -1752,6 +2063,7 @@ pub fn window_selftest(
             // Last rather than first because it moves the pointer, and every check above is
             // driven by keys and by `Editor::action` and would rather the pointer stayed where
             // the player left it.
+            pointing.hide_the_guide();
             let at = pointing.over_the_editor().unwrap_or_default();
             pointing.point_at(at);
             test.step = 14;
@@ -1766,6 +2078,10 @@ pub fn window_selftest(
         }
         14 => {
             test.distance = pointing.orbit.distance;
+            // both halves of the moment, read in the frame the notch is written in
+            // ([`WindowTest::held`])
+            test.held = pointing.egui_has_it();
+            test.held_detail = format!("{} editor.open={}", pointing.egui_answers(), editor.open);
             pointing.turn_the_wheel();
             test.step = 15;
             test.at = now + 0.2;
@@ -1774,15 +2090,16 @@ pub fn window_selftest(
             // the two halves are in one line on purpose: "the camera did not move" is only worth
             // anything if the pointer really was over the panel, and a run where egui had let go
             // of it would otherwise pass by doing nothing
-            let held = pointing.egui_has_it();
+            let held = test.held;
             let moved = pointing.orbit.distance != test.distance;
-            ok(
-                held && !moved,
-                &format!(
-                    "the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
-                    test.distance, pointing.orbit.distance
-                ),
+            let what = format!(
+                "the wheel over the editor scrolls the editor and not the garden (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                test.distance, pointing.orbit.distance
             );
+            if !(held && !moved) {
+                info!("selftest: in the frame the wheel was turned: {}", test.held_detail);
+            }
+            ok(held && !moved, &what);
             // the control: the same wheel, at the same place, with nothing drawn there. Only the
             // editor has to go — the HUD is at the top left and the VM panel at the bottom left,
             // and neither reaches the middle of the editor's rectangle.
@@ -1795,20 +2112,35 @@ pub fn window_selftest(
         }
         16 => {
             test.distance = pointing.orbit.distance;
+            test.held = pointing.egui_has_it();
+            test.shown = editor.open;
+            test.held_detail = format!("{} editor.open={}", pointing.egui_answers(), editor.open);
             pointing.turn_the_wheel();
             test.step = 17;
             test.at = now + 0.2;
         }
         17 => {
-            let held = pointing.egui_has_it();
+            let held = test.held;
             let moved = pointing.orbit.distance != test.distance;
-            ok(
-                !held && moved,
-                &format!(
-                    "and with the panel closed the same wheel in the same place zooms (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
-                    test.distance, pointing.orbit.distance
-                ),
+            let what = format!(
+                "and with the panel closed the same wheel in the same place zooms (egui holds the pointer: {held}; camera {:.2} -> {:.2})",
+                test.distance, pointing.orbit.distance
             );
+            // **The premise, before the verdict** ([`WindowTest::shown`]). This step shut the
+            // editor; if the game had opened it again by the time the wheel was turned then there
+            // *was* a panel under the pointer, and neither `ok` nor `FAIL` would be true of the
+            // run that happened.
+            if !test.shown && !(!held && moved) {
+                info!("selftest: in the frame the wheel was turned: {}", test.held_detail);
+            }
+            if test.shown {
+                info!(
+                    "selftest: --   {what}: the editor was open again when the wheel was turned — \
+                     the creature being watched died and `choose_watched` opened it"
+                );
+            } else {
+                ok(!held && moved, &what);
+            }
             editor.open = true;
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
@@ -1822,5 +2154,27 @@ pub fn window_selftest(
             test.step = 18;
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{day_length_in, day_length_line};
+
+    /// **The check reads the file's own number** (S5b-5), and it reads the shape `ruby/world.rb`
+    /// really writes it in — a word and a number inside `world do`, not one of the
+    /// `def name = number` lines the rest of that file uses.
+    const WORLD_RB: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/ruby/world.rb"));
+
+    #[test]
+    fn the_rules_check_reads_the_day_out_of_the_rules() {
+        assert_eq!(day_length_in(WORLD_RB), Some(60.0));
+        // and what it writes back is a line of the same shape, which is what the edit replaces
+        assert!(WORLD_RB.contains(&day_length_line(60.0)));
+        let edited = WORLD_RB.replace(&day_length_line(60.0), &day_length_line(30.0));
+        assert_eq!(day_length_in(&edited), Some(30.0));
+        assert_ne!(edited, WORLD_RB, "the replacement has to have replaced something");
+        // a text with nothing to say says nothing, rather than a number nobody wrote
+        assert_eq!(day_length_in("world do\nend\n"), None);
     }
 }

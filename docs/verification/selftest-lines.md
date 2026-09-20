@@ -53,12 +53,22 @@ a page to exit to, `games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
 |---|---|
 | `ok  ` | measured, and it is what it should be |
 | `FAIL` | measured, and it is not |
-| `--  ` / `n/a ` | **the run did not put the check in a position to measure anything.** Not a pass and not a failure. Battle writes `--`, the garden writes both (`--` for the pairings it cannot count, `n/a` for a probe something walked into) |
+| `--  ` | **the run did not put the check in a position to measure anything.** Not a pass and not a failure — the pairing that could not be counted, the probe something walked into. **Both games write `--`** since S5b-5; the garden used to write `n/a` in one of its two places, which was two spellings of one verdict in one game |
 | `done` | the checks are finished and the page keeps running |
 
-A line whose verdict may move between runs is marked in the lists below. There is exactly one,
-and it is marked because the alternative — leaving the check out of the comparison, which is
-what was done until 2026-09-20 — means never comparing it at all.
+A line whose verdict may move between runs is marked in the lists below, because the alternative
+— leaving the check out of the comparison, which is what was done until 2026-09-20 — means never
+comparing it at all. **There are three**, and S5b-5 added the third:
+
+* Battle's `the handler tasks of every robot that went down ended` is `ok` in a run long enough
+  for a robot with a handler to be destroyed and to have been down half a second, and `--` in one
+  that is not. It is marked again where the list itself is, below.
+* the garden's `nothing that was sleeping woke on the resume frame` is `ok` when something was
+  asleep with a deadline when the pause began and `--` when nothing was.
+* the garden's `and with the panel closed the same wheel in the same place zooms` is `--` when
+  the game opened the editor again before the wheel was turned — `choose_watched` does that when
+  the creature being watched dies, and a creature starving in that second is the garden's own
+  business. The run measured nothing about the wheel, which is neither a pass nor a failure.
 
 ---
 
@@ -182,17 +192,17 @@ selftest: ok   a child was born whose genome is its parents' mixed and mutated (
 selftest: ok   a hungry creature with a plant in sight reached it (from N away, at N s)
 selftest: ok   a save with the wrong version is refused (/tmp/garden-from-another-version.json: saved with version N, this garden reads N)
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
-selftest: ok   night arrived by N s (at N s)
+selftest: ok   night arrived within a day of N s (at N s)
 selftest: ok   nothing walked through anything over N frames (closest pair N of the radii, N frames under N)
 selftest: ok   somebody ate within N s (first at N s)
 selftest: ok   the creatures were asleep a second after night fell (N of them, newborns aside, fastest N at N s)
 selftest: ok   the rules can be taken away and given back while the world runs (from N s no meter fell for N s; N did, and afterwards hunger came back)
-selftest: ok   the rules in world.rb are running the world (the grass grew at N s, over N passes of `each_frame`)
+selftest: ok   the rules in world.rb are running the world (the grass grew at N s, over N frames they ran in)
 selftest: ok   the starved creature's entity is gone (NvN starved at N s)
 selftest: ok   what the world declares reaches a creature's memory (Beetle NvN had "wet" in its @memory at N s)
 ```
 
-## Garden, a window — 44 lines
+## Garden, a window — 45 lines
 
 `GARDEN_SELFTEST=1 docker/run.sh garden release`. The editor, the VM panel, the wheel, `P`, and
 `F3`'s third file — the rules of the world.
@@ -209,8 +219,9 @@ selftest: ok   FN shows it again
 selftest: ok   N s paused: every creature is where it was
 selftest: ok   N s paused: nobody got hungrier
 selftest: ok   N s paused: the day did not turn
-selftest: ok   P again gives the budget back
-selftest: ok   P pauses: the scripts' budget is N
+selftest: ok   N s paused: the same creatures are there
+selftest: ok   P again gives both budgets back
+selftest: ok   P pauses: both VMs' budgets are N
 selftest: ok   Revert puts every beetle back on the file
 selftest: ok   Revert puts the file's rules back
 selftest: ok   Revert shows the file again
@@ -230,7 +241,7 @@ selftest: ok   nothing was written
 selftest: ok   the VM panel has the creature's frames
 selftest: ok   the VM panel starts closed
 selftest: ok   the creatures are thinking again
-selftest: ok   the day is what world.rb says it is
+selftest: ok   the day is what world.rb says it is (N s)
 selftest: ok   the day turns again
 selftest: ok   the editor has a third file, and it is not a creature
 selftest: ok   the editor shows the file of the creature that was clicked
@@ -258,7 +269,7 @@ either game that arranges the world rather than watching it: the birth it is abo
 garden would otherwise win about once in a hundred runs, so the run forces one into that frame
 (`window::birth_in_the_apply_frame`, registered only by the checks).
 
-## Garden, a browser — 45 lines
+## Garden, a browser — 46 lines
 
 `…/garden/?selftest`. The window's list plus the `done` line.
 
@@ -275,8 +286,9 @@ selftest: ok   FN shows it again
 selftest: ok   N s paused: every creature is where it was
 selftest: ok   N s paused: nobody got hungrier
 selftest: ok   N s paused: the day did not turn
-selftest: ok   P again gives the budget back
-selftest: ok   P pauses: the scripts' budget is N
+selftest: ok   N s paused: the same creatures are there
+selftest: ok   P again gives both budgets back
+selftest: ok   P pauses: both VMs' budgets are N
 selftest: ok   Revert puts every beetle back on the file
 selftest: ok   Revert puts the file's rules back
 selftest: ok   Revert shows the file again
@@ -296,7 +308,7 @@ selftest: ok   nothing was written
 selftest: ok   the VM panel has the creature's frames
 selftest: ok   the VM panel starts closed
 selftest: ok   the creatures are thinking again
-selftest: ok   the day is what world.rb says it is
+selftest: ok   the day is what world.rb says it is (N s)
 selftest: ok   the day turns again
 selftest: ok   the editor has a third file, and it is not a creature
 selftest: ok   the editor shows the file of the creature that was clicked

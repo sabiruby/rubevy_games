@@ -401,7 +401,7 @@ is not there is the default — deleting a line is how to go back.
 | what | keys |
 |---|---|
 | the field and its walls | `field_width`, `field_depth`, `wall_margin`, `separate_passes` |
-| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_grown` (how big a blade this builds full-grown — **not** `world.rb`'s `plant_max`, which is where growth stops), `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart` |
+| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_grown` (how big a blade this builds full-grown — **not** `world.rb`'s `plant_max`, which is where growth stops), `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart`, `start_beetle_speed` / `_sight` / `_appetite`, `start_rabbit_speed` / `_sight` / `_appetite` (what a species is built with), `start_genome_spread` (how far a rolled one strays from it) |
 | the light | `light_moon_lux`, `light_night_ambient`, `light_night_sky_r` / `_g` / `_b`, `light_night_zenith`, `light_dawn_offset`, `light_dial_min` / `_max`, `light_day_lux` / `_span`, `light_day_ambient` / `_span`, `light_sun_lux`, `light_shadow_cascades` / `_near` / `_far` — and `night`, the slider in the panel |
 | the scenery past the wall | `horizon_half`, `sky_radius`, `sky_sides`, `sky_rings`, `fog_near`, `fog_depth`, `fog_color_r` / `_g` / `_b`, `fog_start`, `fog_end`, `edge_trees`, `edge_jitter`, `edge_out_min` / `_max`, `edge_scale_min` / `_max` |
 | how it is drawn | `window_width` / `window_height`, `look_ground_r` / `_g` / `_b`, `look_hunger_low`, `look_hunger_warn`, `look_hunger_bar_width` / `_height`, `look_tuft_scale`, `look_bush_scale`, `look_tree_scale`, `look_rock_scale`, `look_rock_squash`, `look_beetle_scale`, `look_rabbit_scale`, `look_walking_at`, `look_gait_blend_ms`, `look_beetle_model` |
@@ -423,9 +423,10 @@ script_budget=500000
 night's three (`light_moon_lux`, `light_night_ambient`, the sky's colour) are one measurement of
 44 of 255 taken together; `fog_depth` was measured at the default camera's 42 units and 49°, so
 `eye_pitch` and `eye_distance` move it too; `separate_passes` is four because three ninety-second
-runs at four never had a pair closer than 0.97 of their radii; `world_script_budget` is 1.74 times
-the worst frame of a full garden. Each says so in its own rustdoc, and `docs/numbers.md` §2 is the
-whole list with where every value came from — which, for about half of them, is nowhere.
+runs at four never had a pair closer than 0.97 of their radii; **both** script budgets are 1.74
+times the worst frame of a full garden — `world_script_budget` since W3 and `script_budget` since
+2026-09-21. Each says so in its own rustdoc, and `docs/numbers.md` §2 is the whole list with where
+every value came from — which, for about half of them, is nowhere.
 
 ### What the checks measure — the checks
 
@@ -433,8 +434,8 @@ The ten seconds somebody has to eat in, the half second a handler has to turn a 
 frames a newborn is deaf for: those are in `garden/src/main.rs` and `window.rs`, beside the check
 that uses them, because they are what is being measured rather than what the game plays by. Where
 a check needs one of the game's numbers it reads the game's — the window checks' patience is
-`2 + ceil(script_budget / 45,600)` frames, so a run given a bigger budget is given more frames to
-come round in.
+`2 + ceil(script_budget / 45,600)` frames, three with the budget as it ships, so a run given a
+bigger budget is given more frames to come round in.
 
 ## The world's own VM (W1, W2)
 
@@ -481,6 +482,11 @@ that is the **only** thing the rules ask that costs a frame (the table under **T
 so the count comes out exact: over a ninety-second run, 5,373 frames and 5,372 passes, the two
 missing ones being the script starting up.
 
+That is a fact about *these* rules, though, and not about the meter that counts them:
+`WorldMeter::ran_in` has one entry per frame the world's script ran in at all, and it was called
+`passes` until 2026-09-21 — a name that was true of the file that ships and would go on being
+printed at a `world.rb` it was not true of.
+
 `every 60 do |n| … end` is a second task in the same VM that only sleeps; the scheduler already
 has "a task asleep until a time", and it is the same clock that makes a creature's `sleep 0.2`
 mean something — so a pause stops the seasons too, and eleven seconds left of a season is eleven
@@ -509,12 +515,33 @@ field at 90 blades and 24 creatures on it:
 | instructions in one pass | 24,670 | 25,782 | 25,837 |
 | the world's tick | 2.65 ms | 4.60 ms | 4.86 ms |
 
-`budget = 45_000` is **1.74× the worst of those**, and a little under a quarter of the creatures'
-200,000 — which says in one number which of the two VMs is the guest. `frame_time` is left at
-rubevy's 8 ms: at about 9,300 instructions to the millisecond, 45,000 is roughly 4.8 ms, so **the
-instruction count is what bites first**, and that is the right way round. Instructions are a fact
-about the rules and are the same number in a browser several times slower; milliseconds are a fact
-about whichever machine is running them.
+`budget = 45_000` is **1.74× the worst of those**. `frame_time` is left at rubevy's 8 ms: at about
+9,300 instructions to the millisecond, 45,000 is roughly 4.8 ms, so **the instruction count is
+what bites first**, and that is the right way round. Instructions are a fact about the rules and
+are the same number in a browser several times slower; milliseconds are a fact about whichever
+machine is running them.
+
+**And the creatures' VM, the same way** (2026-09-21). It was the last number in this game running
+on a library default — rubevy's 200,000, whose own source rubevy records as unknown — and it was
+measured in the same seat: the caps put in `garden.settings.txt` (`start_plants=130`,
+`start_beetles=14`, `start_rabbits=10`, which is `pop_max`), three runs of a minute, 10,749
+frames.
+
+| | median | 99th frame in a hundred | worst |
+|---|---|---|---|
+| instructions in one frame | 362 | 3,954 | 23,686 |
+| the creatures' tick | 70 µs | 760 µs | 1.72 ms |
+
+The worst frame is the **first** one, where 24 scripts run their opening pass at once — all three
+runs spent the same number of instructions in it, to the instruction — and the worst frame after
+it is 4,955. `script_budget = 41_000` is **1.74× that 23,686, rounded to the nearest thousand**,
+which is the same margin and the same rounding the world's number got. It came out within a tenth
+of the rules' 45,000: two dozen creatures thinking and one pass of the rules cost about the same,
+which the old default hid.
+
+So a runaway script is now stopped inside one frame after a fifth of the instructions it used to
+be given, an ordinary frame never comes near either budget, and a garden whose creatures are given
+a genuinely heavier brain can say so in `script_budget`.
 
 (W1 chose the same number from a straight-line fit of cost against population, read off at a
 garden of twice the caps. W2's pairing is a search over the creatures that are full enough rather
@@ -1951,7 +1978,9 @@ standing on. `GARDEN_SELFTEST=1` adds the checks the plan asks for, printed as `
 `selftest: FAIL` lines the way sabibots does. Four are about the world (G0):
 
 1. **somebody ate within 10 s** — the world has to be dense enough, and the contact test has to work.
-2. **night arrived by 60 s** — the clock, and the publish on the flip.
+2. **night arrived within a day** — the clock, and the publish on the flip. The day is
+   `world.rb`'s `day_length` as the run is really running it, not a copy of the 60 the file
+   ships with (S5b-5).
 3. **the starved creature's entity is gone** — the despawn path.
 4. **nothing walked through anything** — over every frame of the run, no two colliders' centres
    came closer than 90% of the sum of their radii, where at least one of the two is a creature.
@@ -1970,7 +1999,8 @@ its components, does not get its answers, or does not hear an event:
    read the answer's `[:Transform][:translation]` and wrote `me[:Velocity]`.
 
    **A run in which a rabbit walked into the probe before it got there says so and measures
-   nothing** — a third verdict, `selftest: n/a`, which is neither ok nor FAIL. The corner is only
+   nothing** — a third verdict, `selftest: --`, which is neither ok nor FAIL (it was spelled `n/a`
+   until 2026-09-21; both games write `--` now). The corner is only
    kept clear when the world is laid out, and nothing keeps a rabbit out of it later; when one
    arrives, the beetle's own `on(:touched)` turns it away from the plant at `DASH` and holds the
    wheel for half a second, and a rabbit that stays touches it again every half second so that it
@@ -2096,14 +2126,14 @@ and one is about the genome (G2), which is the whole round trip in a single line
    `hungry_below` and wanders, and about one run in twenty that wander takes it off its blade
    before its meter reaches `mate_hunger`. It comes back when it is hungry again.
 
-   **A run in which the rules paired nobody says `n/a`** instead, in the shape check 5 has.
+   **A run in which the rules paired nobody says `--`** instead, in the shape check 5 has.
    `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no `"mate"`
    in it never asked this check its question. A pairing with **no child after it** is still a
    FAIL: that is the road from `on(:mate)` through `garden.spawn`, and it is this check's to
    report.
 
    ```
-   selftest: n/a  a child was born whose genome is its parents' mixed and mutated
+   selftest: --   a child was born whose genome is its parents' mixed and mutated
             (not measured: the rules paired nobody in the whole run who could have answered, so nothing asked `Genome#mix` anything)
    ```
 
@@ -2147,7 +2177,7 @@ and one is about the genome (G2), which is the whole round trip in a single line
    All three are ordinary, not rare: five ninety-second runs made 1 to 7 rabbit pairings each, and
    a pairing in the night turned up in two of ten such runs without anything being arranged. Shown
    deliberately — a garden of nothing but rabbits for the first, a garden put to sleep for the
-   second — the check says `n/a` where the old counting said `FAIL a child was born … (none was,
+   second — the check says `--` where the old counting said `FAIL a child was born … (none was,
    from 5 pairings)` and `FAIL … (none was, from 22 pairings)`
    (`docs/worklog/2026-09-18-check-holes.md`).
 
@@ -2224,7 +2254,7 @@ Rabbit 114v0   hunger  89.7  age  84.9  at ( -14.8,   -0.7)  v (  0.0,   0.0)   
 9 × Beetle: mean genome speed 2.13, sight 8.5, appetite 1.04 (its species' own is speed 2.20, sight 8.0, appetite 1.00)
 4 × Rabbit: mean genome speed 3.59, sight 11.9, appetite 0.94 (its species' own is speed 3.40, sight 12.0, appetite 1.00)
 selftest: ok   somebody ate within 10 s (first at 0.55 s)
-selftest: ok   night arrived by 60 s (at 25.20 s)
+selftest: ok   night arrived within a day of 60 s (at 25.20 s)
 selftest: ok   the starved creature's entity is gone (115v0 starved at 1.89 s)
 selftest: ok   nothing walked through anything over 5364 frames (closest pair 0.995 of the radii, 0 frames under 0.9)
 selftest: ok   a hungry creature with a plant in sight reached it (from 5.0 away, at 1.79 s)
@@ -2232,7 +2262,7 @@ selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (30/30)
 selftest: ok   the creatures were asleep a second after night fell (15 of them, newborns aside, fastest 0.000 at 26.21 s)
 selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.09 s: speed 2.161 vs 2.400/2.000, mean 2.200; sight 7.354 vs 9.000/7.000, mean 8.000; appetite 0.928 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [9 pairings, 3 children]
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
-selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5362 passes of `each_frame`)
+selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5362 frames they ran in)
 selftest: ok   the rules can be taken away and given back while the world runs (from 20.03 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
 selftest: ok   what the world declares reaches a creature's memory (Beetle 105v0 had "wet" in its @memory at 0.03 s)
 selftest: ok   a save with the wrong version is refused (garden-from-another-version.json: saved with version 99, this garden reads 1)
@@ -2251,9 +2281,9 @@ naming the gene that was not there.
 
 **Forty ninety-second runs of the build of 2026-09-18**, eight at a time, after checks 4, 5 and 7
 were mended: **no FAIL of any kind**, and one run out of the forty printed the fifth check as
-`n/a` because a rabbit really did walk into the probe (at 1.63 s, and it never got closer than
-1.9 — the shape the survey measured). The closest any two colliders came was between 0.981 and
-1.000 of the sum of their radii, with 0.998 at the median and no frame under 0.9 in any run; the
+`--` (spelled `n/a` at the time) because a rabbit really did walk into the probe (at 1.63 s,
+and it never got closer than 1.9 — the shape the survey measured). The closest any two
+colliders came was between 0.981 and 1.000 of the sum of their radii, with 0.998 at the median and no frame under 0.9 in any run; the
 fastest anything moved a second after nightfall was 0.000 in all forty.
 
 **Five ninety-second runs and sixty-four twenty-second ones of the build after the meadow corner

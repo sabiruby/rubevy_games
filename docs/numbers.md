@@ -216,7 +216,8 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 > `ruby/world.rb` を読んで 10 個の代役と突き合わせるので、**2 つの数が黙って食い違うことはない**。
 > **既定値は 1 つも動かしていない**（6 通りの走行が前後で同じ行を出す）。
 > 移さなかったのは §2.12 の種の遺伝子で、理由と 3 つの案は
-> `docs/worklog/2026-09-21-numbers-garden-play.md` §6（著者判断待ち）。
+> `docs/worklog/2026-09-21-numbers-garden-play.md` §6。**S5b-5 で決着した**: 著者の判断で案 A
+> ——`world.rb` ではなく `Furniture` の設定へ（分類 (b) → (c)、鍵 7 つ、既定値は据え置き）。
 
 ### 2.1 場（`Place`）
 
@@ -351,7 +352,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 |---|---|---|---|---|---|---|
 | 世界 VM の予算 `WORLD_BUDGET` | `main.rs:2349` | 45,000 命令 | ● | `Budgets::world`、`world_script_budget`（`install_world_answers` が書く） | (c) | **測った**（この repo でいちばん出どころのはっきりした数）: 上限（90 株・24 匹）の 392 フレームで最悪 25,837 命令・tick 4.86 ms、45,000 はその 1.74 倍。`docs/worklog/2026-09-17-garden-world.md`。**変えると 1.74 倍という余裕が別の話になる** |
 | 世界 VM の `frame_time` `WORLD_FRAME_TIME_MS` | `main.rs:2352` | 8 ms | ● | `Budgets::world_frame_time_ms`、`world_script_frame_time_ms`（0 以下で「壁時計の番人なし」） | (c) | **引用**: 命令数の方が先に効くので rubevy の既定と同じ数を据え置いた。**S5b-3 でゲームが自分の名前で持つようになった**（前は rubevy の既定のまま） |
-| 生き物 VM の予算 `CREATURE_BUDGET` | `main.rs:2367` | 200,000 命令 | ● | `Budgets::creature`、`script_budget`（**Battle と同じ鍵**） | (c) | **rubevy の既定を引き継いだ。rubevy 側の出どころは不明**（rubevy `docs/numbers.md`）。S5b-3 が上限の庭で**測った**が、**既定値は動かしていない**（測った分布と導ける案は `docs/worklog/2026-09-21-numbers-garden-settings.md` §4） |
+| 生き物 VM の予算 `CREATURE_BUDGET` | `main.rs:2367` | **41,000 命令**（2026-09-21 に 200,000 から動かした。著者判断・案 A） | ● | `Budgets::creature`、`script_budget`（**Battle と同じ鍵**） | (c) | **測った**: `41,000 = 1.74 × 23,686` を 1,000 の位に丸めた（式どおりなら 41,214）。23,686 は上限の庭（`start_plants=130`・`start_beetles=14`・`start_rabbits=10` = `pop_max` 24）を `--headless 60` で 3 回・10,749 フレーム測った最大で、**最初のフレーム**（24 体が一斉に走り出す。3 走行とも 1 命令まで同じ）。定常の最大は 4,955。1.74 は世界の VM の 45,000 ÷ その実測最大 25,837 という余裕の比の借用。丸め方は世界の 45,000 と同じ（1.74 × 25,837 = 44,956 → 45,000）。丸めた結果、比は 1.73 になる。測定は `docs/worklog/2026-09-21-numbers-garden-settings.md` §4、決着は `2026-09-21-checks-and-leftovers.md` §1。**前の 200,000 は rubevy の既定を引き継いだもので、rubevy 側の出どころは不明** |
 | 生き物 VM の `frame_time` `CREATURE_FRAME_TIME_MS` | `main.rs:2368` | 8 ms | ● | `Budgets::creature_frame_time_ms`、`script_frame_time_ms` | (c) | 同上（rubevy の既定を引き継いだ） |
 | `RESTORE_PATIENCE` | `main.rs:1905` | 5.0 秒 | ● | `Budgets::restore_patience`、`restore_patience` | (c) | *理由のみ*。5.0 自体は**不明** |
 | `SHORTEST_SLEEP` | `main.rs:6005` | 0.05 秒 | ● | `Budgets::shortest_sleep`、`shortest_sleep` | (c) | **引用**: `prelude.rb:438` の `sleep 0.05` と同じ数で、そちらは理由つき |
@@ -360,7 +361,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | `--shot` の既定 | `main.rs:2314-2315` | `shot.png` / 6.0 秒 | | 引数、または `shot_file` / `shot_seconds` | **(e)** | **不明**。Battle は 3.0 で食い違う（§7-7） |
 | `--at` の既定 | — | 無し（0 から） | | `at_seconds`（旗が勝つ）。`--at midnight` は `light_dawn_offset` から導く | **(e)** | S5b-3 が足した |
 | `--eye` の既定 | — | `Eye::distance` | | `eye_distance`（**写しを置かず、カメラの既定距離そのものを使う**） | **(e)** | S5b-3 |
-| 窓のチェックの上限フレーム数 | `window.rs:1352` | 7 = 2 + ceil(200,000 ÷ 45,600) | | **設定から計算する**（S5b-3）。`script_budget` を上げると上限も上がる | (d) | **導出**: `STRUCTURAL_FRAMES` 2（S6 で測った、構造で縮められない）＋ 1 フレームが買う `INSTRUCTIONS_A_FRAME_BUYS` 45,600（S6 の実測）で割った切り上げ |
+| 窓のチェックの上限フレーム数 | `window.rs:1352` | **3** = 2 + ceil(41,000 ÷ 45,600)（S5b-5 で予算が動いたので 7 から動いた。式は無編集） | | **設定から計算する**（S5b-3）。`script_budget` を上げると上限も上がる | (d) | **導出**: `STRUCTURAL_FRAMES` 2（S6 で測った、構造で縮められない）＋ 1 フレームが買う `INSTRUCTIONS_A_FRAME_BUYS` 45,600（S6 の実測）で割った切り上げ |
 | headless のフレーム間隔 | `main.rs:2521` | 1/60 s | ● | 直書き | (a) 60 Hz を模すという定義 | **導出** |
 | `Brains` の枠数 | `main.rs:1408, 1437` | 3（種 2 ＋ world） | | `const`（`Species::ALL.len()` から） | (a) 種を増やすと配列を伸ばす必要がある | **導出** |
 
@@ -374,12 +375,15 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 
 ### 2.11 selftest の閾値（(d)）
 
-**この節は S5b-3 が触っていない**（S5b-5 の仕事）。行番号だけ取り直した。
+**S5b-5 が見直した節である。** 変わったのは 3 行: 「夜が来た」の閾値が実値を読むようになり
+（`world.rb` の `day_length`）、窓の「規則」の段の 2 か所の `60.0` が**テキストから読む**形に
+なり（`day_length_in`）、上限フレーム数が予算に連れて 7 → 3 になった。**写しはこれで無い**
+——残りの 19 行は 1 つずつ見て、実値の写しではないことを確かめた。
 
 | 何を見るか | 位置 | 閾値 | 出どころ |
 |---|---|---|---|
 | 誰かが食べた | `main.rs:7266` | 10 秒以内 | **不明**（実測は 0.55 s） |
-| 夜が来た | `main.rs:7273` | 60 秒以内 | **導出**: `DAY_LENGTH` 1 周 |
+| 夜が来た | `main.rs` の `stop_when_over` | **`Sky::day_length` 1 周**（走行が実際に使っている値を読む） | **導出**。**S5b-5 で直した**——前は `60.0` の直書きで、一覧はそれを「`DAY_LENGTH` 1 周の導出」と記録していたが、実際には `world.rb` の `day_length` の**写し**だった（日を伸ばした `world.rb` は規則を守ったまま FAIL になる） |
 | すり抜けていない | `main.rs:7289` | 半径の和の 0.9 | **引用**: `garden-plan.md:67` |
 | 草に着いた | `main.rs:6926` | `REACH + 0.5` | **不明**（0.5 の余裕の理由） |
 | 向きが変わった | `main.rs:7002` | `dot < 0.7`（≈45°） | *理由のみ*「anything past a quarter turn is a different course」 |
@@ -395,30 +399,34 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 草が育った（12 番目の判定） | `main.rs:7404` | 2.0 秒以内 | **不明** |
 | 仕込みの断食甲虫 | `main.rs:3404` | 空腹 3.0 | **不明** |
 | 仕込みのプローブ | `main.rs:3414` | 空腹 40.0、草まで 5 単位 | *理由のみ* |
-| 仕込みのつがい | `main.rs:3568` | 空腹 45.0 | **不明** |
+| 仕込みのつがい | `main.rs:3568` | 空腹 45.0 | **不明**。`START_HUNGER` の下端と同じ数だが、どちらの記録にも繋いだ形跡が無い——**偶然として扱う**（§7-6 の 55.0 と同じ扱い。S5b-5 が見直して確認） |
 | `meadow_at`（隅の位置） | `main.rs:3445` | 壁から 6.0 | *理由のみ*（他の 2 つの仕込みから離れた場所）。**S5b-3 で `const` から `fn` になった** — 畑の広さから導くため |
 | `MEADOW_CLEAR` | `main.rs:3454` | 8.0 | **引用**: G2 から `clear_of_fixtures` が使っていた数に名前を付けただけ |
 | つがいの隅の幾何 | `main.rs:3546-3557` | 規則の `reach` / `mate_reach` / `plant_max` から組む | **導出**: 不等式ごと rustdoc に書いてある |
 | 窓のチェックの開始 | `main.rs:2963` | 3.0 秒 | **不明** |
 | 窓のチェックの上限フレーム数 | `window.rs:1352` | `scheduler_frames(&budgets)` | **導出**（§2.9 の行） |
 | `STRUCTURAL_FRAMES` | `window.rs:1358` | 2 | **測った**（S6 §4.4） |
-| `INSTRUCTIONS_A_FRAME_BUYS` | `window.rs:1365` | 45,600 | **測った**（S6: 5.7 命令/µs × 8,000 µs）。S5b-3 の上限の庭では 6.85 命令/µs で、同じ桁 |
+| 窓の「規則」の段の日の長さ | `window.rs` の step 11・12・13 | **`editor.text` から読む**（`day_length_in`）。編集はその半分 | **導出**。**S5b-5 で直した**——前は `60.0` の直書きと `"day_length 60.0"` の文字列置換で、日を変えた `world.rb` では**置換が何にも当たらず**、その後の判定が「Apply が効かない」と嘘の FAIL を出す形だった |
+| `INSTRUCTIONS_A_FRAME_BUYS` | `window.rs:1365` | 45,600 | **測った**（S6: `frame_time` を 300 µs に絞った走行の最小フレーム 1,708 命令 = 5.7 命令/µs × 8,000 µs）。**実測は 2 つある**: S5b-3 が上限の庭を本来の 8 ms で測ると 6.85 命令/µs = 54,800。差は機械ではなく条件（300 µs のフレームは tick の出入りの費用を 27 分の 1 の仕事で払う＝「短いフレームの速さ」）。**遅い方を採る**——この数は予算を割って「何フレーム待ってよいか」を出すので、**大きすぎると待ちが短くなり偽の FAIL が出る**（S6・S7 が消しに来たもの）。小さすぎても判定が遅れるだけ。なお既定の予算 41,000 では `ceil` がどちらも 1 で、`scheduler_frames` は 3 で一致する（差が出るのは予算 45,600 超から）。S5b-5 で rustdoc に 2 つの条件を書いた |
 
 ### 2.12 遺伝子（`genome.rs`）
 
-**S5b-4 も移していない。著者判断待ち**（3 案は `docs/worklog/2026-09-21-numbers-garden-play.md` §6）。
+**S5b-5 で `Furniture` の設定になった**（著者判断: 担当の案 A。分類は (b) → **(c)**）。
+鍵は `start_beetle_speed` / `_sight` / `_appetite`、`start_rabbit_speed` / `_sight` / `_appetite`、
+`start_genome_spread` の 7 つ。**既定値は 1 つも動かしていない。**
 
-理由は 1 行で言える: **この 3 行を読むのは `spawn_world`（`Startup`）だけ**で、`garden.rules` が
-届くのは最初の `Update` である。`world.rb` に書けるようにしても**その数はどの走行でも 1 度も
-使われない**——「エディタで変えられるのに何も起きない数」を 7 つ作ることになる。体の半径が
-移せたのは、半径が `Collider` としてエンティティに載っていて、渡されたあとで書き直せるから
-（`bodies_wear_the_rules`）。**読み手がいつ読むかが、移せるかどうかを決める。**
+`world.rb` に移さなかった理由は 1 行で言える: **この 3 行を読むのは `spawn_world`（`Startup`）
+だけ**で、`garden.rules` が届くのは最初の `Update` である。`world.rb` に書けるようにしても
+**その数はどの走行でも 1 度も使われない**——「エディタで変えられるのに何も起きない数」を 7 つ
+作ることになる。体の半径が移せたのは、半径が `Collider` としてエンティティに載っていて、
+渡されたあとで書き直せるから（`bodies_wear_the_rules`）。**読み手がいつ読むかが、移せるかどうかを
+決める。** 庭を建てるときに 1 度だけ読む数は、株の数や個体の数と同じ「最初の家具」である。
 
 | 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
 |---|---|---|---|---|---|---|
-| 甲虫の種 | `genome.rs:65` | speed 2.2 / sight 8.0 / appetite 1.0 | | `const` 相当（`match`） | (b) 遊びの数。**移していない**（上） | **不明** |
-| ウサギの種 | `genome.rs:66` | 3.4 / 12.0 / 1.0 | | 同上 | (b)。**移していない** | **不明** |
-| `SPREAD` | `genome.rs:56` | 0.18 | | `const` | (b)。**移していない** | **不明** |
+| 甲虫の種 `genome::BEETLE` | `genome.rs` | speed 2.2 / sight 8.0 / appetite 1.0 | | `Furniture::beetle`、`start_beetle_speed` / `_sight` / `_appetite` | **(c)** | speed・sight は **不明**（G1 が書いた）。appetite 1.0 は **導出**: `world.rb` の `hunger_rate` に掛かるので、1 は「G1 が走らせた世界そのもの」 |
+| ウサギの種 `genome::RABBIT` | `genome.rs` | 3.4 / 12.0 / 1.0 | | `Furniture::rabbit`、`start_rabbit_speed` / `_sight` / `_appetite` | **(c)** | 同上（**不明** ／ 導出） |
+| `SPREAD` | `genome.rs` | 0.18 | | `Furniture::genome_spread`、`start_genome_spread` | **(c)** | *理由のみ*「甲虫が甲虫でなくなるほどではなく、2 親に平均する差はある」。0.18 自体は **不明** |
 | 遺伝子の上下限 | `genome.rs:230-232` | speed 0.2〜8.0、sight 1.0〜24.0、appetite 0.2〜4.0 | | 直書き | (a) `garden.spawn` が受け取る値の検査 | **不明**（範囲の理由） |
 | `mutate` の既定 | `genome.rs:179` | 0.5 | | 直書き（定数が引けないときの保険） | (a) | **不明** |
 
@@ -432,13 +440,45 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 設定 | どこ | `Settings` の鍵 | 既定値 |
 |---|---|---|---|
 | `Place` | `main.rs`（Resource。`main` が `PreStartup` より前に読む） | `field_width` / `field_depth` / `wall_margin` / `separate_passes` | 40 / 30 / 0.5 / 4 |
-| `Furniture` | 同上 | `start_plants` / `plant_min` / `plant_grown` / `start_beetles` / `start_rabbits` / `start_trees` / `start_rocks` / `start_hunger_min` / `start_hunger_max` / `start_tries` / `start_round_chance` / `start_rock_squash_min` / `_max` / `start_solid_apart` / `start_grass_off_solid` / `start_creature_off_grass` / `start_creature_off_solid` / `start_creatures_apart` | 55 / 0.18 / 1.4 / 6 / 4 / 7 / 9 / 45 / 90 / 40 / 0.35 / 0.8 / 1.25 / 1.5 / 1.2 / 2.5 / 0.6 / 2.0 |
+| `Furniture` | 同上 | `start_plants` / `plant_min` / `plant_grown` / `start_beetles` / `start_rabbits` / `start_trees` / `start_rocks` / `start_hunger_min` / `start_hunger_max` / `start_tries` / `start_round_chance` / `start_rock_squash_min` / `_max` / `start_solid_apart` / `start_grass_off_solid` / `start_creature_off_grass` / `start_creature_off_solid` / `start_creatures_apart` / **`start_beetle_speed` / `_sight` / `_appetite` / `start_rabbit_speed` / `_sight` / `_appetite` / `start_genome_spread`**（S5b-5） | 55 / 0.18 / 1.4 / 6 / 4 / 7 / 9 / 45 / 90 / 40 / 0.35 / 0.8 / 1.25 / 1.5 / 1.2 / 2.5 / 0.6 / 2.0 / **2.2 / 8.0 / 1.0 / 3.4 / 12.0 / 1.0 / 0.18** |
 | `Light` | 同上 | `light_dawn_offset` / `light_moon_lux` / `light_night_ambient` / `light_night_sky_r` / `_g` / `_b` / `light_night_zenith` / `light_dial_min` / `light_dial_max` / `light_day_lux` / `light_day_lux_span` / `light_day_ambient` / `light_day_ambient_span` / `light_sun_lux` / `light_shadow_cascades` / `light_shadow_near` / `light_shadow_far` | 0.08 / 950 / 190 / 0.14 / 0.18 / 0.36 / 0.55 / 0.5 / 2.0 / 1200 / 9000 / 120 / 260 / 8000 / 2 / 24 / 70 |
 | `Scenery` | 同上 | `horizon_half` / `sky_radius` / `sky_sides` / `sky_rings` / `fog_near` / `fog_depth` / `fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end` / `edge_trees` / `edge_jitter` / `edge_out_min` / `_max` / `edge_scale_min` / `_max` | 300 / 500 / 12 / 4 / 14 / 45 / 0.35 / 0.5 / 0.7 / 60 / 220 / 16 / 0.4 / 4 / 15 / 1.7 / 3.1 |
 | `Picture` | 同上（模型の倍率とアニメの 2 つは `Look` が持ち運ぶ） | `window_width` / `window_height` / `look_ground_r` / `_g` / `_b` / `look_hunger_low` / `look_hunger_warn` / `look_hunger_bar_width` / `_height` / `look_tuft_scale` / `look_bush_scale` / `look_tree_scale` / `look_rock_scale` / `look_rock_squash` / `look_beetle_scale` / `look_rabbit_scale` / `look_walking_at` / `look_gait_blend_ms` / `look_beetle_model` | 1600 / 900 / 0.36 / 0.46 / 0.25 / 20 / 55 / 64 / 11 / 2.2 / 2.6 / 2.2 / 3.4 / 3.0 / 0.55 / 0.75 / 0.2 / 180 / `models/animal-crab.glb` |
 | `Eye` | 同上 | `eye_pitch` / `eye_distance` / `eye_zoom_per_notch` / `eye_zoom_min` / `eye_zoom_max` / `eye_pan_per_pixel` / `eye_pan_per_second` / `eye_pan_limit` / `eye_turn_per_pixel` / `eye_pitch_min` / `eye_pitch_max` / `eye_click_reach` / `eye_click_slop` | 0.85 / 42 / 1.10 / 6 / 110 / 0.0016 / 0.9 / 8 / 0.005 / 0.12 / 1.45 / 1.6 / 6 |
-| `Budgets` | 同上 | `script_budget` / `script_frame_time_ms` / `world_script_budget` / `world_script_frame_time_ms` / `restore_patience` / `shortest_sleep` / `heat_decay` | 200,000 / 8 / 45,000 / 8 / 5.0 / 0.05 / 0.985 |
+| `Budgets` | 同上 | `script_budget` / `script_frame_time_ms` / `world_script_budget` / `world_script_frame_time_ms` / `restore_patience` / `shortest_sleep` / `heat_decay` | **41,000**（S5b-5。S5b-3 の時点では 200,000） / 8 / 45,000 / 8 / 5.0 / 0.05 / 0.985 |
 | 旗の既定 | `main` が直接読む | `headless_seconds` / `shot_file` / `shot_seconds` / `at_seconds` / `save_file` | 10 / `shot.png` / 6 / （無し） / `garden.save.json` |
+
+### 2.14 S5b-5 の最後の網が拾った数（**一覧に無かった**）
+
+S5a の網は `const` と名前のある数に寄っていた。**S5b-5 で数値リテラルを含む行を機械的に
+拾い直した**（`const` 宣言と `impl Default` の中を除いた「関数の本体に直接書かれた数」だけを
+見る形。箱庭 220 行・Battle 191 行・共有 crate 70 行）。**既に知られていた抜け**（S5b-2・S5b-3 の
+気づき）と、そこで新しく見つかったものを合わせてここに挙げる。
+
+**分類だけ付けて、移していない。** 移すのは既定値を触らない仕事とはいえ、この段階（判定の側）の
+範囲の外で、しかも 1 件ずつ「誰がいつ読むか」を見ないと移し先が決まらない
+（S5b-4 が遺伝子で学んだこと）。次の段階の材料である。
+
+| 名前 | 位置 | 値 | 分類案 | 出どころ |
+|---|---|---|---|---|
+| **昼の空の色の傾き一式** | `main.rs` の `sky_colors` | 地平 `0.35 + 0.15n` / `0.5 + 0.22n` / `0.7 + 0.22n`、天頂 `0.15 + 0.11n` / `0.33 + 0.21n` / `0.64 + 0.24n`（`n` は太陽の高さ） | (c) | **不明**。夜の同じ形の 3 つは G6b が**測って**決めて一覧にも入っているのに、昼は 1 つも入っていなかった |
+| 昼の太陽の色 | `main.rs` の `day_night` | `1.0` / `0.72 + 0.24n` / `0.45 + 0.5n` | (c) | **不明**（「低い太陽は橙、高い太陽は白」という理由のみ） |
+| 夜の月の色 | 同上 | `(0.62, 0.70, 1.0)` | (c) | *理由のみ*「青くて太陽よりずっと弱い」 |
+| 環境光の色（昼・夜） | 同上 | `(0.7, 0.8, 1.0)` / `(0.45, 0.54, 0.85)` | (c) | **不明** |
+| **空の勾配の押し上げ** | `main.rs` の `horizon_look` | `t * 1.25 - 0.1` | (c) | *理由のみ*「地平の帯は霧と同じ色に見えてほしいので、登り始めを少し上にずらす」。1.25 と 0.1 は**不明** |
+| **最初の草の大きさの下限** | `main.rs` の `spawn_world` | 0.3（`plant_grown` までの一様乱数の下端） | (c) | **不明**。`plant_min` 0.18 は*芽*の大きさで別の数（S5b-3 の気づき） |
+| 空の板の色 | `main.rs` の `spawn_world` | `(0.42, 0.62, 0.86)` | (c) | **不明** |
+| 弾のスプライトの倍率 | `sabibots/src/main.rs:2630` | `0.7 + 0.6 × power` | (c) | **不明**（S5b-2 の気づき。移していない） |
+| 砲塔のスプライト | `:482` | `1.1 × 2.6`、色 3 つ | (c) | **不明** |
+| 名札の字 | `:871, 874` | 44 px、倍率 0.045、影の透明度 0.75 | (c) | **不明** |
+| 撃破機の灰色 | `:460, 504` | `(0.7, 0.7, 0.7)` / `(0.45, 0.45, 0.45)` | (c) | **不明** |
+| 記録板の色 | `:909-913, 1059, 1090-1094` | 6 色 | (c) | **不明** |
+| 影のずらし | `:917` | 0.12 | (c) | **不明** |
+| **z 座標一式** | `:874, 1059 ほか` | 0.0（床）／1.0（機体）／1.5／2.0（弾）／3.0／5.0・5.1（バー）／6.0・6.1（名札と影） | **(a)** 重なりの順序。**数そのものより順序が不変量** | **不明**（間隔の理由） |
+| 爆発の色の褪せ | `:2895` | `1.0 - t` | (a) 線形の褪せ | **導出** |
+
+**数え方**: この節の 14 行は §6 の合計に足していない——「1 件」の粒度が上の表と違う
+（「色の傾き一式」は 6 つの数である）。**次の段階で 1 つずつ数えて足す。**
 
 ## 3. Garden（Ruby）
 
@@ -621,7 +661,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 名札の高さ `NAMEPLATE_LIFT` | `main.rs:248` | `robot_radius × 2.25` | ● | `look_nameplate_lift` | (c) | **不明** |
 | 爆発 `BLAST_DOWN` / `BLAST_HIT` | `main.rs:253-254` | ×3.5・0.7 秒 ／ ×0.6・0.25 秒 | ● | `look_blast_down` / `_span`、`look_blast_hit` / `_span` | (c) | **不明**。damage の割り算は `damage_max` を読むようになった（`/16.0` の写しが消えた） |
 | 窓の大きさ `WINDOW` | `main.rs:274` | 1600×900 | | `window_width` / `window_height` | (c) | **不明** |
-| VM の予算 | rubevy の既定 200,000 | — | ● | `script_budget` | (c) | **Battle はどこでも設定していない**（rubevy の既定のまま。rubevy 自身が「出どころ不明」と書いている）。S5b-2 は**値を選ばず**、設定できるようにしただけ |
+| VM の予算 | rubevy の既定 200,000 | — | ● | `script_budget` | (c) | **Battle はどこでも設定していない**（rubevy の既定のまま。rubevy 自身が「出どころ不明」と書いている）。S5b-2 は**値を選ばず**、設定できるようにしただけ。**S5b-5 でも動かしていない**——箱庭は上限の庭に座って測ってから 41,000 を選んだが、**Battle は測っていない**（試合の上限は「機体 2 台」だが、`each_frame` の中身も `matches/*.rb` の作りも箱庭とは別物で、箱庭の数を持ってくる理由が無い）。測ってから決める |
 | VM の `frame_time` | rubevy の既定 8 ms | — | ● | `script_frame_time_ms` | (c) | **不明**（同上。rubevy の 8 ms も「出どころ不明」と書かれている） |
 | `--headless` の既定 | `main.rs:584` | 10.0 秒 | | 引数、または `headless_seconds` | (c)→(e) | **不明** |
 | `--shot` の既定 | `main.rs:585-586` | `shot.png` / 3.0 秒 | | 引数、または `shot_file` / `shot_seconds` | (c)→(e) | **不明**（箱庭は 6.0。§7-7） |
@@ -630,7 +670,11 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | スクリプトの優先度 | `main.rs:2012, 2163, 2241` | 本体 100 / 試合 10 / 差し替え 128 | | 直書き | (a) 順序の約束。`prelude.rb:295` の `+20` と組で効く | **不明**（100/10/128 の理由） |
 | `localStorage` の接頭辞 | `platform.rs:37` | `"sabibots:"` | | `const` | **(a)** 変えると利用者のセーブが消える | **引用**: `docs/plans/shared-crate-plan.md:162` |
 
-### 4.6 selftest の閾値（(d)。**S5b-5 で見直す。ここでは触っていない**）
+> **Battle の一覧に無い数**は §2.14 の後半にまとめて挙げた（弾のスプライトの倍率、砲塔、
+> 名札、撃破機の灰色、記録板の色、z 座標一式）。S5b-5 の最後の網が拾ったもので、
+> **分類だけ付けて移していない。**
+
+### 4.6 selftest の閾値（(d)。**S5b-5 で見直した**）
 
 | 何を見るか | 位置 | 閾値 | 出どころ |
 |---|---|---|---|
@@ -716,8 +760,8 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 分類 | 件数 | S5b-3 の後から |
 |---|---|---|
 | (a) 不変量 | 30 | 変わらず（`CELL` は `const` のまま「下限」になった） |
-| (b) 遊びの数 → Ruby 側 | 38 | 変わらず。**うち 6 件が S5b-4 で移り終えた**（箱庭の `world.rb` へ）。残る (b) は種の遺伝子 3 件（§2.12、著者判断待ち）と体の寸法の組（§8-3） |
-| (c) 動かす側の数 → `Settings` / 引数 | 110 | 変わらず |
+| (b) 遊びの数 → Ruby 側 | **35** | **−3**: 種の遺伝子 3 件が S5b-5 で **(c)** に移った（§2.12。`world.rb` では 1 度も読まれない数になるため、`Furniture` の設定へ）。**6 件は S5b-4 で `world.rb` へ移り終えている**。残る (b) は体の寸法の組（§8-3）|
+| (c) 動かす側の数 → `Settings` / 引数 | **113** | **+3**（種の遺伝子。S5b-5 で `Furniture` の 7 鍵になった）|
 | (d) selftest の閾値 | 32 | 変わらず（子の遺伝子の 1 行が「写し」から「VM から読む」になっただけ） |
 | (e) 既に Ruby か設定から変えられる | 75 | **+4**（`world.rb` に増えた 4 行） |
 | **合計** | **285** | **+4** |
@@ -731,10 +775,10 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 S5b-2 で**両側が同じ 1 つの数を読む**ようになったので跨いでいない。
 
 **(b) のうち Battle の 32 件は、もう「移す候補」ではなく移し終えたもの**（`Match::MODEL`）。
-箱庭の分は S5b-4 が 6 件を `world.rb` へ移した。**移し終わっていない (b) は 4 件**——
-種の遺伝子 2 行と `SPREAD`（§2.12。移しても効かないので著者判断待ち）と、体の寸法と模型の
-倍率の組（§8-3。半径は `world.rb` へ行き、倍率は `garden.settings.txt` に残ったので、
-**2 つで 1 組の数が 2 つの場所に分かれた** — 片方だけ動かすと当たりと見た目がずれる）。
+箱庭の分は S5b-4 が 6 件を `world.rb` へ移した。**移し終わっていない (b) は 1 件**——
+体の寸法と模型の倍率の組（§8-3。半径は `world.rb` へ行き、倍率は `garden.settings.txt` に
+残ったので、**2 つで 1 組の数が 2 つの場所に分かれた** — 片方だけ動かすと当たりと見た目がずれる）。
+種の遺伝子 3 件は S5b-5 で (c) になった（§2.12）。
 
 **毎フレーム読まれる数は 112 件**（全体の 40%）。Battle の機体模型 20 件はこの数に入ったままだが、
 **読んでいるのは Rust で、`Res<TheMatch>` のフィールドを読むだけ**——Ruby に問うのは
@@ -766,11 +810,14 @@ S5a が心配していた測定は要らなかった。
 
 **「測った」が 14 → 17 に増えたのは、既にあった測定に名前が付いたぶん**である
 （`SEPARATE_PASSES`、世界 VM の予算、夜の 3 つを 1 行ずつ数え直した）。
-**S5b-3 が新しく取った測定**——上限の庭に座った生き物 VM の 1 フレーム——は、
-**既定値を動かしていないので数の出どころにはなっていない**: 200,000 の出どころは今も
-「rubevy の既定を引き継いだ、rubevy 側は不明」である。測った分布は
-`docs/worklog/2026-09-21-numbers-garden-settings.md` §4 にあり、そこから導ける案は
-著者の判断待ち。
+**S5b-3 が新しく取った測定**——上限の庭に座った生き物 VM の 1 フレーム——は、S5b-3 の時点では
+「既定値を動かしていないので数の出どころになっていない」ものだった。**S5b-5 で出どころになった**:
+著者が案 A を選び、`script_budget` の既定は `1.74 × 23,686` を丸めた 41,000 になり、
+出どころの欄は「rubevy の既定を引き継いだ、rubevy 側は不明」から「測った」に変わった。
+**箱庭の 2 本の VM はこれで両方とも測って決めた数になった。** Battle の `script_budget` は
+200,000（rubevy の既定）のままで、そちらは**測っていない**——§4.5 にそう書いてある。測った分布は
+`docs/worklog/2026-09-21-numbers-garden-settings.md` §4、決着は
+`docs/worklog/2026-09-21-checks-and-leftovers.md` §1。
 
 Battle の 2 つを分けて数えるのをやめたのは、**数の住所が言語で分かれなくなった**ため:
 機体の模型 32 件はいまや `sabibots/ruby/match_prelude.rb` にあり、それを読むのは Rust である。
@@ -1021,8 +1068,10 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
     数ではないが **(a) 不変量**として入れた（変えると利用者のセーブが消える）。
     「数の一覧」に文字列を入れるかは迷った — 計画書 §5 の罠にこの 2 つが名指しで挙がっているので入れた。
 
-11. **（S5b-4）種の遺伝子 `Genome::of` と `SPREAD`**（`genome.rs:56,65-66`）。
-    分類は **(b)** のままだが、**移していない。著者判断待ち。**
+11. **（S5b-4）種の遺伝子 `Genome::of` と `SPREAD`**（`genome.rs`）。
+    **決着（S5b-5、著者判断: 案 A）**: 分類を **(b) → (c)** にし、`Furniture` の設定にした
+    （`start_beetle_speed` / `_sight` / `_appetite`、`start_rabbit_speed` / `_sight` / `_appetite`、
+    `start_genome_spread`。既定値は据え置き）。以下は判断の前の材料である。
     理由は分類の迷いではなく、**移し先が無い**ことである: この 3 行を読むのは `spawn_world`
     （`Startup`）だけで、`garden.rules` が届くのは最初の `Update` ——つまり `world.rb` に書けるように
     しても**その数はどの走行でも 1 度も使われない**。体の半径が移せたのは、半径が `Collider` として

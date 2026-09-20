@@ -720,6 +720,24 @@ pub struct Furniture {
     pub creature_off_grass: f32,
     pub creature_off_solid: f32,
     pub creatures_apart: f32,
+    /// **What each species is built with** ([`Genome::of`]) and how far a rolled one may stray
+    /// from it ([`genome::SPREAD`]).
+    ///
+    /// They are the garden's furniture and not its rules, which is a change of mind (S5b-5). S5b-4
+    /// set out to put them in `ruby/world.rb` with the rest of the numbers of play and found that
+    /// it could not: `spawn_world` is a `Startup` system and `garden.rules` does not reach the
+    /// game until the first `Update`, so a `beetle_speed` written in the rules would be **read by
+    /// nothing, in any run**. What decides where a number can live is who reads it and when
+    /// (`docs/worklog/2026-09-21-numbers-garden-play.md` §6). A number read once, while the world
+    /// is being built, belongs with the other numbers read once while the world is being built —
+    /// the count of plants, the count of creatures, how hungry they start.
+    ///
+    /// It says nothing about what a creature's genome may become afterwards: `Genome#mix` and
+    /// `Genome#mutate` are the species' own Ruby, and `garden.spawn` takes whatever genome a
+    /// script hands it.
+    pub beetle: Genome,
+    pub rabbit: Genome,
+    pub genome_spread: f32,
 }
 
 impl Default for Furniture {
@@ -741,6 +759,9 @@ impl Default for Furniture {
             creature_off_grass: CREATURE_OFF_GRASS,
             creature_off_solid: CREATURE_OFF_SOLID,
             creatures_apart: CREATURES_APART,
+            beetle: genome::BEETLE,
+            rabbit: genome::RABBIT,
+            genome_spread: genome::SPREAD,
         }
     }
 }
@@ -750,7 +771,8 @@ impl Furniture {
     /// `start_rocks`, `start_hunger_min` / `start_hunger_max`, `start_tries`,
     /// `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`,
     /// `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`,
-    /// `start_creatures_apart`.
+    /// `start_creatures_apart`, `start_beetle_speed` / `_sight` / `_appetite`,
+    /// `start_rabbit_speed` / `_sight` / `_appetite`, `start_genome_spread`.
     fn read_from(&mut self, settings: &games_shell::Settings) {
         let count = |key: &str, slot: &mut usize| {
             if let Some(value) = settings.number(key) {
@@ -778,6 +800,22 @@ impl Furniture {
         take(settings, "start_creature_off_grass", &mut self.creature_off_grass);
         take(settings, "start_creature_off_solid", &mut self.creature_off_solid);
         take(settings, "start_creatures_apart", &mut self.creatures_apart);
+        take(settings, "start_beetle_speed", &mut self.beetle.speed);
+        take(settings, "start_beetle_sight", &mut self.beetle.sight);
+        take(settings, "start_beetle_appetite", &mut self.beetle.appetite);
+        take(settings, "start_rabbit_speed", &mut self.rabbit.speed);
+        take(settings, "start_rabbit_sight", &mut self.rabbit.sight);
+        take(settings, "start_rabbit_appetite", &mut self.rabbit.appetite);
+        take(settings, "start_genome_spread", &mut self.genome_spread);
+    }
+
+    /// The genome this garden builds one of that species with — [`Genome::of`] with the store's
+    /// answer where there is one.
+    pub fn genome(&self, species: Species) -> Genome {
+        match species {
+            Species::Beetle => self.beetle,
+            Species::Rabbit => self.rabbit,
+        }
     }
 }
 
@@ -1573,8 +1611,17 @@ const SPROUT_GAP: f32 = 1.5;
 struct WorldMeter {
     /// `ScriptStats::instructions` at the end of the last frame
     last_instructions: u64,
-    /// what a pass cost, one entry per frame in which the script ran at all
-    passes: Vec<u64>,
+    /// **what the rules cost in each frame they ran in at all** — one entry per such frame, and
+    /// the name says that rather than "passes" (S5b-5).
+    ///
+    /// The two are the same number for the rules as they are written: the script waits on
+    /// `Rubevy.ask("frame")`, which is the only thing it asks that costs a frame, so one frame is
+    /// one pass of `each_frame` and a run counts 5,372 of them in 5,373 frames (`docs/garden.md`).
+    /// But that is a fact about *these* rules and not about the measurement: a `world.rb` that
+    /// asks two questions costing a frame, or one whose pass does not finish inside a frame,
+    /// would still make one entry here per frame it ran in. The old name claimed the fact the
+    /// rules happen to have; this one claims what is counted.
+    ran_in: Vec<u64>,
     /// the last of them, which is the figure the HUD draws (W3). The list above is for choosing a
     /// budget after the run; this is what the rules cost *now*, beside what the creatures cost
     /// now, which is the comparison the panel is for.
@@ -1593,12 +1640,12 @@ struct WorldMeter {
 }
 
 impl WorldMeter {
-    /// The middle pass. `None` until one has been measured.
+    /// The middle frame's worth. `None` until one has been measured.
     fn median(&self) -> Option<u64> {
-        if self.passes.is_empty() {
+        if self.ran_in.is_empty() {
             return None;
         }
-        let mut sorted = self.passes.clone();
+        let mut sorted = self.ran_in.clone();
         sorted.sort_unstable();
         Some(sorted[sorted.len() / 2])
     }
@@ -2318,11 +2365,12 @@ const SHOT_SECONDS: f32 = 6.0;
 /// time** (S5b-3).
 ///
 /// The garden runs two VMs — `ruby/world.rb` in one and every creature's script in the other —
-/// and until now only one of them had a number anybody could point at. See
-/// [`WORLD_BUDGET`] and [`CREATURE_BUDGET`] for where each came from; the short of it is that the
-/// world's was measured at the garden's own caps and the creatures' is rubevy's default, carried
-/// here under the game's own name so that it can be said out loud and so that
-/// `window::SCHEDULER_FRAMES` can be worked out from it instead of writing 200,000 a second time.
+/// and until S5b-3 only one of them had a number anybody could point at. See [`WORLD_BUDGET`] and
+/// [`CREATURE_BUDGET`] for where each came from; the short of it is that **both are measured at
+/// the garden's own caps now** — the creatures' was rubevy's default until S5b-5 — and that both
+/// are carried here under the game's own name so that they can be said out loud and so that
+/// `window::scheduler_frames` can be worked out from one of them instead of writing the number a
+/// second time.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct Budgets {
     /// [`WORLD_BUDGET`] / [`WORLD_FRAME_TIME_MS`]
@@ -2351,20 +2399,54 @@ const WORLD_BUDGET: u64 = 45_000;
 /// measured in W3 (about 9,300 instructions per millisecond) 45,000 is roughly 4.8 ms.
 const WORLD_FRAME_TIME_MS: f32 = 8.0;
 
-/// **The creatures' share of a frame** (S5b-3, and S6 before it).
+/// **The creatures' share of a frame, measured** (S5b-5, off S5b-3's measurement).
 ///
-/// 200,000 instructions and 8 ms are **rubevy's defaults, inherited** — the garden had never
-/// said anything about them, which S6 noticed while working out where a check's wait should come
-/// from: one VM's budget was measured and written down and the other, the one with a dozen tasks
-/// in it, was whatever the library happened to ship. rubevy's own source for the two is
-/// **unknown** (rubevy `docs/numbers.md`); naming them here does not make them better-founded,
-/// it makes them visible and changeable.
+/// It was 200,000 until 2026-09-21: **rubevy's default, inherited** — the garden had never said
+/// anything about it, which S6 noticed while working out where a check's wait should come from.
+/// One VM's budget was measured and written down ([`WORLD_BUDGET`]) and the other, the one with a
+/// dozen tasks in it, was whatever the library happened to ship, and rubevy's own source for the
+/// number is **unknown** (rubevy `docs/numbers.md`).
 ///
-/// S5b-3 sat in the fullest garden the rules allow and measured what the creatures' VM actually
-/// spends; the figures and what could be derived from them are in
-/// `docs/worklog/2026-09-21-numbers-garden-settings.md` §4. **The default was not moved** —
-/// choosing a number off that measurement is the author's to do, as the world's 45,000 was.
-const CREATURE_BUDGET: u64 = 200_000;
+/// **41,000 is `1.74 × 23,686`, rounded to the nearest thousand** (author's decision,
+/// 2026-09-21). Both halves of that are borrowed rather than chosen:
+///
+/// * **23,686 instructions is the worst frame the creatures' VM was measured at.** S5b-3 sat in
+///   the fullest garden the rules allow — `start_plants=130`, `start_beetles=14`,
+///   `start_rabbits=10` in `garden.settings.txt`, which is `world.rb`'s own `pop_max` of 24 — and
+///   ran `--headless 60` three times, 10,749 frames (`2026-09-21-numbers-garden-settings.md` §4).
+///   The worst frame is the **first** one, where all 24 scripts run their opening pass at once,
+///   and all three runs spent the same number of instructions in it to the instruction. The worst
+///   frame after that is 4,955.
+/// * **1.74 is the margin the world's VM was given**, which is 45,000 ÷ its own measured worst of
+///   25,837 ([`WORLD_BUDGET`]). Reusing it says the two VMs are trusted to the same degree rather
+///   than that a second margin was felt out.
+///
+/// `1.74 × 23,686` is 41,214, and the thousand it is rounded to is the rounding the world's
+/// number already had (`1.74 × 25,837` = 44,956 → 45,000). Rounding down leaves the margin at
+/// 41,000 ÷ 23,686 = **1.73**, which is the one place this number is not exactly the world's
+/// reckoning.
+///
+/// **The seat was sat in again before this was written** (S5b-5, six runs of the capped garden,
+/// 10,777 frames): the opening frame now costs **23,912**, the same number in all three runs as
+/// before, and the 226 it gained is S5b-4's `mutation_rate 0.1` in `beetle.rb` — a line every
+/// beetle reads in its first pass. So the margin the shipped number really carries is 41,000 ÷
+/// 23,912 = **1.71**. The default is the author's 41,000 and not a third number worked out here;
+/// what the re-measurement is for is that nothing in this paragraph is a quotation of a figure
+/// nobody has seen since.
+///
+/// **What it buys**: a runaway script — a loop with no `sleep` in it — is stopped inside one
+/// frame after a fifth of the instructions it used to be allowed, and no frame of an ordinary run
+/// comes near it (the worst measured is 58% of it, and that frame happens once). **What it
+/// costs**: a garden whose creatures are given a genuinely heavier brain than these can meet it,
+/// and the answer to that is `script_budget` in `garden.settings.txt` — which is also why moving
+/// it is safe to do at all.
+///
+/// [`window::scheduler_frames`] is worked out from this, so the checks' patience moved with it:
+/// 2 + ceil(41,000 / 45,600) is **3** frames where it was 7.
+const CREATURE_BUDGET: u64 = 41_000;
+/// rubevy's own 8 ms, **left where it is**: at the caps the creatures' VM's worst tick was 1.72 ms
+/// and the two VMs together took 30% of a frame at 60 Hz (S5b-3 §4), so there is a measurement
+/// saying it is not tight and none saying what a tighter number should be.
 const CREATURE_FRAME_TIME_MS: f32 = 8.0;
 
 /// How fast the editor's heat fades, per frame. *Reason only* — the heat is there so that a line
@@ -3005,9 +3087,9 @@ fn main() {
     // VM's arrangement lives; this one has no such system, and a plugin's resource can only be
     // written once the plugin has been added.
     //
-    // The default is rubevy's own number carried under the garden's name — see
-    // [`CREATURE_BUDGET`]. Saying it here rather than leaving it to the library is what lets
-    // `window::scheduler_frames` divide by it instead of writing 200,000 a second time.
+    // The default is the garden's own measured number since S5b-5 — see [`CREATURE_BUDGET`].
+    // Saying it here rather than leaving it to the library is what lets
+    // `window::scheduler_frames` divide by it instead of writing the number a second time.
     {
         let mut world = app.world_mut().resource_mut::<ScriptWorld>();
         world.budget = budgets.creature;
@@ -3394,7 +3476,7 @@ fn spawn_world(
         taken.push(at);
         let hunger = dice.between(built.hunger[0], built.hunger[1]);
         // no two creatures alike, so that `Genome#mix` has something to average
-        let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
+        let genome = Genome::roll(built.genome(species), built.genome_spread, |lo, hi| dice.between(lo, hi));
         let entity = spawn_creature(&mut commands, look, &bodies, species, at, hunger, genome, None);
         give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, entity, species);
     }
@@ -5478,9 +5560,14 @@ fn install_world_answers(
     //
     // `45_000` is **1.74 times the worst of those**: the rules can be rewritten into half as much
     // work again before the budget is anything a player meets, and a rule that has run away — a
-    // loop with no `sleep` in it — is stopped inside one frame either way. It is a little under a
-    // quarter of the creatures' VM's 200,000, which says in one number which of the two VMs is the
-    // guest here.
+    // loop with no `sleep` in it — is stopped inside one frame either way.
+    //
+    // **It used to be a little under a quarter of the creatures' 200,000**, which was read here as
+    // saying in one number which of the two VMs was the guest. That reading is gone: S5b-5 gave
+    // the creatures' VM the same treatment — its own worst frame times this same 1.74 — and the
+    // two numbers came out within a tenth of each other, 45,000 and 41,000 ([`CREATURE_BUDGET`]).
+    // The rules and two dozen creatures cost about the same, and neither is the guest; what the
+    // old comparison was measuring was the size of an inherited default.
     //
     // W1 chose the same number a different way, and W3 had to take the reasoning back: it fitted
     // `262 + 159 × plants + 280 × creatures` over a run (residual 0.9%) and read the law off at a
@@ -5980,7 +6067,7 @@ fn world_clock_end(
     if pass > 0 {
         meter.most = meter.most.max(pass);
         meter.last_pass = pass;
-        meter.passes.push(pass);
+        meter.ran_in.push(pass);
     }
 }
 
@@ -7197,8 +7284,8 @@ fn stop_when_over(
         // what a frame can cost is `VM` above plus `world` here, and these are the numbers the
         // world's own budget was chosen from.
         info!(
-            "hud: the world's rules — {} passes of `each_frame`, {} instructions at the median and {} at the most (of {}); the world's tick {:.2} ms at the median, {:.2} at the 99th frame in a hundred, {:.2} at the most / {:.1} ms{}",
-            vms.meter.passes.len(),
+            "hud: the world's rules — {} frames they ran in, {} instructions at the median and {} at the most (of {}); the world's tick {:.2} ms at the median, {:.2} at the 99th frame in a hundred, {:.2} at the most / {:.1} ms{}",
+            vms.meter.ran_in.len(),
             match vms.meter.median() {
                 Some(n) => n.to_string(),
                 None => "–".into(),
@@ -7260,8 +7347,13 @@ fn stop_when_over(
         let ok = |cond: bool, what: String| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
         // and the third verdict: a check the run put itself in no position to answer. It is not
         // a pass — nothing was proved — and it is not a failure either, and a line that said
-        // either of those would be a lie about what the run saw (2026-09-18)
-        let unmeasured = |what: String| info!("selftest: n/a  {what}");
+        // either of those would be a lie about what the run saw (2026-09-18).
+        //
+        // **It is written `--`, as Battle writes it and as the pairings below write it** (S5b-5).
+        // It used to be `n/a` here and `--` four lines away, two spellings of one verdict in one
+        // game, which is one more thing for a reader of a run to work out and one more pattern
+        // for `tools/fixedlines.sh` to carry.
+        let unmeasured = |what: String| info!("selftest: --   {what}");
         ok(
             test.ate_at.is_some_and(|t| t <= 10.0),
             match test.ate_at {
@@ -7269,11 +7361,18 @@ fn stop_when_over(
                 None => "somebody ate within 10 s (nobody ate at all)".into(),
             },
         );
+        // **How long a day is, asked of the run rather than written down again** (S5b-5). The
+        // threshold is one turn of the sun, and one turn of the sun is `world.rb`'s
+        // `day_length` — which reaches the game as `Sky::day_length` (`garden.rules`). It was
+        // written here as `60.0`, a copy of the value the file happens to ship with, so a
+        // `world.rb` edited to a longer day would have failed this check for being obeyed. It is
+        // the shape S5b-4 took out of the mutation rate and S5b-2 out of Battle's turn rate.
+        let a_day = sky.day_length;
         ok(
-            test.night_at.is_some_and(|t| t <= 60.0),
+            test.night_at.is_some_and(|t| t <= a_day),
             match test.night_at {
-                Some(t) => format!("night arrived by 60 s (at {t:.2} s)"),
-                None => "night arrived by 60 s (it never did)".into(),
+                Some(t) => format!("night arrived within a day of {a_day:.0} s (at {t:.2} s)"),
+                None => format!("night arrived within a day of {a_day:.0} s (it never did)"),
             },
         );
         match test.starved {
@@ -7401,15 +7500,15 @@ fn stop_when_over(
         // — a file that can be taken away and given back while the world runs, which no `const`
         // in this source ever was.
         ok(
-            test.grew_at.is_some_and(|t| t <= 2.0) && !vms.meter.passes.is_empty(),
+            test.grew_at.is_some_and(|t| t <= 2.0) && !vms.meter.ran_in.is_empty(),
             match test.grew_at {
                 Some(t) => format!(
-                    "the rules in world.rb are running the world (the grass grew at {t:.2} s, over {} passes of `each_frame`)",
-                    vms.meter.passes.len()
+                    "the rules in world.rb are running the world (the grass grew at {t:.2} s, over {} frames they ran in)",
+                    vms.meter.ran_in.len()
                 ),
                 None => format!(
-                    "the rules in world.rb are running the world (nothing ever grew, over {} passes of `each_frame`)",
-                    vms.meter.passes.len()
+                    "the rules in world.rb are running the world (nothing ever grew, over {} frames they ran in)",
+                    vms.meter.ran_in.len()
                 ),
             },
         );
@@ -7590,6 +7689,8 @@ mod tests {
         settings.set("eye_distance", "20");
         settings.set("script_budget", "500000");
         settings.set("world_script_frame_time_ms", "0");
+        settings.set("start_beetle_speed", "5.5");
+        settings.set("start_genome_spread", "0.0");
 
         let mut place = Place::default();
         place.read_from(&settings);
@@ -7601,6 +7702,19 @@ mod tests {
         built.read_from(&settings);
         assert_eq!(built.plants, 9);
         assert_eq!(built.trees, TREES);
+        // **the species' own three numbers are the garden's furniture** (S5b-5): what is written
+        // moves, what is not is the species' own, and a spread of nothing rolls the base itself
+        assert_eq!(built.genome(Species::Beetle).speed, 5.5);
+        assert_eq!(built.genome(Species::Beetle).sight, genome::BEETLE.sight);
+        assert_eq!(built.genome(Species::Rabbit), genome::RABBIT);
+        assert_eq!(built.genome_spread, 0.0);
+        assert_eq!(
+            Genome::roll(built.genome(Species::Beetle), built.genome_spread, |lo, hi| {
+                assert_eq!((lo, hi), (1.0, 1.0));
+                1.0
+            }),
+            built.genome(Species::Beetle)
+        );
 
         let mut light = Light::default();
         light.read_from(&settings);
@@ -7669,11 +7783,14 @@ mod tests {
     /// `2 + ceil(budget / 45,600)` and wrote 200,000 into the sum as a number; now that the
     /// budget is `script_budget` in the store, the sum has to be done against what the run was
     /// actually given or the check judges a slow VM as a broken one.
+    ///
+    /// S5b-5 is where that stopped being hypothetical: [`CREATURE_BUDGET`] went from 200,000 to
+    /// 41,000 and this went from 7 to 3 with no edit of its own.
     #[test]
     fn a_bigger_budget_buys_the_checks_more_frames() {
         let budgets = Budgets::default();
-        // what it has always been, and what `docs/verification/selftest-lines.md` was recorded at
-        assert_eq!(window::scheduler_frames(&budgets), 7);
+        // `2 + ceil(41,000 / 45,600)`, which is what the default budget now buys
+        assert_eq!(window::scheduler_frames(&budgets), 3);
         // five times the budget is five times the frames a restart may take to come round
         let rich = Budgets { creature: 1_000_000, ..Budgets::default() };
         assert_eq!(window::scheduler_frames(&rich), 2 + 22);
