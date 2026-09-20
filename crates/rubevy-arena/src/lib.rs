@@ -1,6 +1,9 @@
 //! The 2D floor the games here stand on. Three things, none of them game-specific:
 //!
 //! * [`ArenaPlugin`] — a 2D camera that shows a square arena whatever the window size is.
+//! * [`camera`] — the other camera: one the player drags, wheels and walks about a world bigger
+//!   than the window, and [`ViewInsets`], the pixels a panel covers, which is what either camera
+//!   reads to keep what matters out from under it.
 //! * [`Hud`] — the line of text at the top, and the per-script panel below it.
 //! * [`CodePanel`] — the script a game is showing, with the line it stands on marked.
 //! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game,
@@ -28,6 +31,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 pub mod args;
+pub mod camera;
 pub mod checks;
 pub mod code;
 pub mod editor;
@@ -37,6 +41,10 @@ pub mod inspect;
 pub mod platform;
 pub mod settings;
 pub use args::Args;
+pub use camera::{
+    CameraControls, CameraHome, CameraKeys, CameraPlugin, CameraSet, CameraView, Lens, PanCamera,
+    ViewInsets, WorldClick,
+};
 pub use code::{CodePanel, CodePanelPlugin};
 pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin, Highlighter};
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin};
@@ -81,6 +89,7 @@ impl Plugin for ArenaPlugin {
         app.insert_resource(self.size)
             .insert_resource(ArenaView { framed: self.size.0, follow_shrink: self.follow_shrink })
             .insert_resource(ClearColor(self.floor))
+            .init_resource::<ViewInsets>()
             .add_systems(Startup, spawn_camera)
             .add_systems(PostUpdate, follow_arena);
     }
@@ -104,33 +113,50 @@ fn view_of(half: f32) -> bevy::camera::ScalingMode {
     bevy::camera::ScalingMode::AutoMin { min_width: seen * 2.0, min_height: seen * 2.0 }
 }
 
+/// How much world the window holds and what one pixel of it is worth, for an arena of this half
+/// width. The `+ 3.0` is [`view_of`]'s: the floor shown past the wall.
+fn seen_by(half: f32, window: Vec2) -> (f32, f32) {
+    let seen = half + 3.0;
+    let aspect = window.x / window.y.max(1.0);
+    let visible_width = seen * 2.0 * aspect.max(1.0);
+    (visible_width, visible_width / window.x.max(1.0))
+}
+
 /// A match that closes the arena in changes [`ArenaSize`]; the view follows it, so the fight
-/// fills the window as the field gets smaller. While the editor is open the view slides so the
-/// arena sits in the part of the window the editor does not cover.
+/// fills the window as the field gets smaller. Where a panel covers part of the window
+/// ([`ViewInsets`]) the view slides, so the arena sits in the middle of what is left.
+///
+/// **It used to read `Res<Editor>` and slide by 16% of the window** — half of "the editor is
+/// about a third of it on the right", which is a guess about a panel written into a camera. The
+/// same sentence said twice: the panel now says how many pixels it covers and this takes half of
+/// them, so a camera that has never heard of an editor puts the arena in the same place. On the
+/// window both games open, 1600 by 900, the editor covers 528 pixels — 33% rather than the 32%
+/// the old fraction stood for, which is the whole of the difference (`seen_by`'s test).
 fn follow_arena(
     size: Res<ArenaSize>,
     view: Res<ArenaView>,
-    editor: Option<Res<Editor>>,
+    insets: Res<ViewInsets>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Projection, &mut Transform), With<Camera2d>>,
 ) {
-    let editor_open = editor.as_ref().is_some_and(|e| e.open);
-    let editor_changed = editor.as_ref().is_some_and(|e| e.is_changed());
-    if !(size.is_changed() || editor_changed) {
+    if !(size.is_changed() || insets.is_changed()) {
         return;
     }
     // with following off, the view stays framed on the arena as it started
     let half = if view.follow_shrink { size.0 } else { view.framed };
-    let aspect = windows.iter().next().map(|w| w.width() / w.height().max(1.0)).unwrap_or(16.0 / 9.0);
-    let seen = half + 3.0;
-    let visible_width = seen * 2.0 * aspect.max(1.0);
-    // the editor is about a third of the window on the right: centre the arena in the rest
-    let slide = if editor_open { visible_width * 0.16 } else { 0.0 };
+    let window = windows
+        .iter()
+        .next()
+        .map(|w| Vec2::new(w.width(), w.height()))
+        .unwrap_or(Vec2::new(16.0, 9.0));
+    let (_, world_per_px) = seen_by(half, window);
+    let slide = insets.shift(world_per_px);
     for (mut projection, mut transform) in &mut cameras {
         if let Projection::Orthographic(ortho) = &mut *projection {
             ortho.scaling_mode = view_of(half);
         }
-        transform.translation.x = slide;
+        transform.translation.x = slide.x;
+        transform.translation.y = slide.y;
     }
 }
 
@@ -204,4 +230,46 @@ impl Watch {
 /// but a game that reloads a single file wants the whole of it in hand.)
 pub fn read_script(path: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The 16% said again, as pixels.** The old line slid the arena by `visible_width * 0.16`
+    /// whenever the editor was open, which was half of "the editor is about a third of the
+    /// window": a third covered, so the middle of the rest is a sixth of the window from the
+    /// middle. The new line takes half of however many pixels the panel says it covers, so the
+    /// first assertion is the old number and the new rule agreeing exactly on the window the old
+    /// one was talking about.
+    #[test]
+    fn the_slide_is_half_of_whatever_is_covered() {
+        let window = Vec2::new(1600.0, 900.0);
+        let (visible_width, world_per_px) = seen_by(ArenaSize::default().0, window);
+
+        let a_third = ViewInsets { right: window.x / 3.0, ..ViewInsets::NONE };
+        let slide = a_third.shift(world_per_px).x;
+        assert!((slide - visible_width / 6.0).abs() < 1e-3, "{slide} vs {}", visible_width / 6.0);
+
+        // and the editor as it actually stands, which is what sabibots will now see: 528 pixels
+        // of a 1600-wide window is 33%, where 0.16 stood for 32%
+        let editor = ViewInsets { right: editor::MARGIN + editor::WIDTH, ..ViewInsets::NONE };
+        let now = editor.shift(world_per_px).x;
+        let before = visible_width * 0.16;
+        assert!(now > before, "the real editor is wider than the guess: {now} vs {before}");
+        assert!(
+            (now - before) / visible_width < 0.006,
+            "and by half a per cent of the window, not more: {now} vs {before}"
+        );
+        // in world units, on the window both games open
+        assert!((now - 20.533).abs() < 1e-2, "{now}");
+        assert!((before - 19.911).abs() < 1e-2, "{before}");
+    }
+
+    /// Nothing covered, nothing moved — a closed editor leaves the arena in the middle.
+    #[test]
+    fn nothing_covered_leaves_the_arena_where_it_was() {
+        let (_, world_per_px) = seen_by(ArenaSize::default().0, Vec2::new(1600.0, 900.0));
+        assert_eq!(ViewInsets::NONE.shift(world_per_px), Vec2::ZERO);
+    }
 }

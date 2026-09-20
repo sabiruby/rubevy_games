@@ -46,8 +46,8 @@ use bevy::prelude::*;
 // only moment a loaded material can be replaced (`tint_species`).
 use bevy::world_serialization::WorldInstanceReady;
 use rubevy::{
-    in_the_authors_lines, Answer, Arg, MrbAsset, Program, RubevyPlugin, RubevySet, Script,
-    ScriptTask, ScriptWorld,
+    in_the_authors_lines, replace_script, Answer, Arg, MrbAsset, Program, RubevyPlugin, RubevySet,
+    Script, ScriptTask, ScriptWorld,
 };
 use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
@@ -2803,11 +2803,9 @@ fn wear_the_rules(
     handle: Handle<MrbAsset>,
     prelude_lines: u32,
 ) {
-    commands
-        .entity(entity)
-        .remove::<ScriptTask<World>>()
-        .remove::<rubevy::ScriptDone<World>>()
-        .insert(Script::<World>::for_vm(handle).with_name("world"));
+    // S3: the same three lines `restart_species` gave to rubevy in S2, on the world's VM this
+    // time — `replace_script` is generic in the VM, so the `World` marker rides along
+    replace_script(commands, entity, Script::<World>::for_vm(handle).with_name("world"));
     // the new program may have a prelude of a different length (`world_prelude.rb` saved), and
     // the panel's line numbers are worked out from it every frame
     commands.insert_resource(WorldPrelude(prelude_lines));

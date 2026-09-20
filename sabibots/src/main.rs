@@ -2301,12 +2301,9 @@ fn reload_changed(
                 continue;
             };
             fresh.push((entity, platform::read(&robot.file).unwrap_or_default()));
-            // dropping ScriptTask and giving the entity a new Script starts it over
-            commands
-                .entity(entity)
-                .remove::<rubevy::ScriptTask>()
-                .remove::<rubevy::ScriptDone>()
-                .insert(Script::new(handle).with_name(&robot.name).with_priority(128));
+            // the same three lines the editor's Apply goes through, and for the same reason: this
+            // is a robot starting over with another brain (S3, the leftover S2 named)
+            restart(&mut commands, entity, &robot.name, handle);
             hud.line = format!("{} reloaded", robot.name);
             info!("reloaded {}", robot.name);
         }

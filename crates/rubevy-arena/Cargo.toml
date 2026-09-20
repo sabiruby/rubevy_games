@@ -20,6 +20,12 @@ bevy_egui.workspace = true
 notify = "8"
 sabiruby-compiler.workspace = true
 
+# S3: `examples/camera.rs` opens a window of its own, which the games ask for in their own
+# manifests (`bevy = { features = ["multi_threaded", "x11"] }`) and this crate — a library — does
+# not. A dev-dependency asks for it for the example and for nothing that is built into a game.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+bevy = { workspace = true, features = ["multi_threaded", "x11"] }
+
 # G6b: `navigator.language`, so the guide opens in the language the browser was asked for. The PC
 # build reads `LANG` out of the environment, which needs nothing (`src/settings.rs`).
 # S1: and, with `platform` and `checks` here, the rest of what a page is asked — `Storage` for the
