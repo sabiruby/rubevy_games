@@ -351,7 +351,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 |---|---|---|---|---|---|---|
 | 世界 VM の予算 `WORLD_BUDGET` | `main.rs:2349` | 45,000 命令 | ● | `Budgets::world`、`world_script_budget`（`install_world_answers` が書く） | (c) | **測った**（この repo でいちばん出どころのはっきりした数）: 上限（90 株・24 匹）の 392 フレームで最悪 25,837 命令・tick 4.86 ms、45,000 はその 1.74 倍。`docs/worklog/2026-09-17-garden-world.md`。**変えると 1.74 倍という余裕が別の話になる** |
 | 世界 VM の `frame_time` `WORLD_FRAME_TIME_MS` | `main.rs:2352` | 8 ms | ● | `Budgets::world_frame_time_ms`、`world_script_frame_time_ms`（0 以下で「壁時計の番人なし」） | (c) | **引用**: 命令数の方が先に効くので rubevy の既定と同じ数を据え置いた。**S5b-3 でゲームが自分の名前で持つようになった**（前は rubevy の既定のまま） |
-| 生き物 VM の予算 `CREATURE_BUDGET` | `main.rs:2367` | 200,000 命令 | ● | `Budgets::creature`、`script_budget`（**Battle と同じ鍵**） | (c) | **rubevy の既定を引き継いだ。rubevy 側の出どころは不明**（rubevy `docs/numbers.md`）。S5b-3 が上限の庭で**測った**が、**既定値は動かしていない**（測った分布と導ける案は `docs/worklog/2026-09-21-numbers-garden-settings.md` §4） |
+| 生き物 VM の予算 `CREATURE_BUDGET` | `main.rs:2367` | **41,000 命令**（2026-09-21 に 200,000 から動かした。著者判断・案 A） | ● | `Budgets::creature`、`script_budget`（**Battle と同じ鍵**） | (c) | **測った**: `41,000 = 1.74 × 23,686` を 1,000 の位に丸めた（式どおりなら 41,214）。23,686 は上限の庭（`start_plants=130`・`start_beetles=14`・`start_rabbits=10` = `pop_max` 24）を `--headless 60` で 3 回・10,749 フレーム測った最大で、**最初のフレーム**（24 体が一斉に走り出す。3 走行とも 1 命令まで同じ）。定常の最大は 4,955。1.74 は世界の VM の 45,000 ÷ その実測最大 25,837 という余裕の比の借用。丸め方は世界の 45,000 と同じ（1.74 × 25,837 = 44,956 → 45,000）。丸めた結果、比は 1.73 になる。測定は `docs/worklog/2026-09-21-numbers-garden-settings.md` §4、決着は `2026-09-21-checks-and-leftovers.md` §1。**前の 200,000 は rubevy の既定を引き継いだもので、rubevy 側の出どころは不明** |
 | 生き物 VM の `frame_time` `CREATURE_FRAME_TIME_MS` | `main.rs:2368` | 8 ms | ● | `Budgets::creature_frame_time_ms`、`script_frame_time_ms` | (c) | 同上（rubevy の既定を引き継いだ） |
 | `RESTORE_PATIENCE` | `main.rs:1905` | 5.0 秒 | ● | `Budgets::restore_patience`、`restore_patience` | (c) | *理由のみ*。5.0 自体は**不明** |
 | `SHORTEST_SLEEP` | `main.rs:6005` | 0.05 秒 | ● | `Budgets::shortest_sleep`、`shortest_sleep` | (c) | **引用**: `prelude.rb:438` の `sleep 0.05` と同じ数で、そちらは理由つき |
@@ -360,7 +360,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | `--shot` の既定 | `main.rs:2314-2315` | `shot.png` / 6.0 秒 | | 引数、または `shot_file` / `shot_seconds` | **(e)** | **不明**。Battle は 3.0 で食い違う（§7-7） |
 | `--at` の既定 | — | 無し（0 から） | | `at_seconds`（旗が勝つ）。`--at midnight` は `light_dawn_offset` から導く | **(e)** | S5b-3 が足した |
 | `--eye` の既定 | — | `Eye::distance` | | `eye_distance`（**写しを置かず、カメラの既定距離そのものを使う**） | **(e)** | S5b-3 |
-| 窓のチェックの上限フレーム数 | `window.rs:1352` | 7 = 2 + ceil(200,000 ÷ 45,600) | | **設定から計算する**（S5b-3）。`script_budget` を上げると上限も上がる | (d) | **導出**: `STRUCTURAL_FRAMES` 2（S6 で測った、構造で縮められない）＋ 1 フレームが買う `INSTRUCTIONS_A_FRAME_BUYS` 45,600（S6 の実測）で割った切り上げ |
+| 窓のチェックの上限フレーム数 | `window.rs:1352` | **3** = 2 + ceil(41,000 ÷ 45,600)（S5b-5 で予算が動いたので 7 から動いた。式は無編集） | | **設定から計算する**（S5b-3）。`script_budget` を上げると上限も上がる | (d) | **導出**: `STRUCTURAL_FRAMES` 2（S6 で測った、構造で縮められない）＋ 1 フレームが買う `INSTRUCTIONS_A_FRAME_BUYS` 45,600（S6 の実測）で割った切り上げ |
 | headless のフレーム間隔 | `main.rs:2521` | 1/60 s | ● | 直書き | (a) 60 Hz を模すという定義 | **導出** |
 | `Brains` の枠数 | `main.rs:1408, 1437` | 3（種 2 ＋ world） | | `const`（`Species::ALL.len()` から） | (a) 種を増やすと配列を伸ばす必要がある | **導出** |
 
@@ -437,7 +437,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | `Scenery` | 同上 | `horizon_half` / `sky_radius` / `sky_sides` / `sky_rings` / `fog_near` / `fog_depth` / `fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end` / `edge_trees` / `edge_jitter` / `edge_out_min` / `_max` / `edge_scale_min` / `_max` | 300 / 500 / 12 / 4 / 14 / 45 / 0.35 / 0.5 / 0.7 / 60 / 220 / 16 / 0.4 / 4 / 15 / 1.7 / 3.1 |
 | `Picture` | 同上（模型の倍率とアニメの 2 つは `Look` が持ち運ぶ） | `window_width` / `window_height` / `look_ground_r` / `_g` / `_b` / `look_hunger_low` / `look_hunger_warn` / `look_hunger_bar_width` / `_height` / `look_tuft_scale` / `look_bush_scale` / `look_tree_scale` / `look_rock_scale` / `look_rock_squash` / `look_beetle_scale` / `look_rabbit_scale` / `look_walking_at` / `look_gait_blend_ms` / `look_beetle_model` | 1600 / 900 / 0.36 / 0.46 / 0.25 / 20 / 55 / 64 / 11 / 2.2 / 2.6 / 2.2 / 3.4 / 3.0 / 0.55 / 0.75 / 0.2 / 180 / `models/animal-crab.glb` |
 | `Eye` | 同上 | `eye_pitch` / `eye_distance` / `eye_zoom_per_notch` / `eye_zoom_min` / `eye_zoom_max` / `eye_pan_per_pixel` / `eye_pan_per_second` / `eye_pan_limit` / `eye_turn_per_pixel` / `eye_pitch_min` / `eye_pitch_max` / `eye_click_reach` / `eye_click_slop` | 0.85 / 42 / 1.10 / 6 / 110 / 0.0016 / 0.9 / 8 / 0.005 / 0.12 / 1.45 / 1.6 / 6 |
-| `Budgets` | 同上 | `script_budget` / `script_frame_time_ms` / `world_script_budget` / `world_script_frame_time_ms` / `restore_patience` / `shortest_sleep` / `heat_decay` | 200,000 / 8 / 45,000 / 8 / 5.0 / 0.05 / 0.985 |
+| `Budgets` | 同上 | `script_budget` / `script_frame_time_ms` / `world_script_budget` / `world_script_frame_time_ms` / `restore_patience` / `shortest_sleep` / `heat_decay` | **41,000**（S5b-5。S5b-3 の時点では 200,000） / 8 / 45,000 / 8 / 5.0 / 0.05 / 0.985 |
 | 旗の既定 | `main` が直接読む | `headless_seconds` / `shot_file` / `shot_seconds` / `at_seconds` / `save_file` | 10 / `shot.png` / 6 / （無し） / `garden.save.json` |
 
 ## 3. Garden（Ruby）
@@ -621,7 +621,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 名札の高さ `NAMEPLATE_LIFT` | `main.rs:248` | `robot_radius × 2.25` | ● | `look_nameplate_lift` | (c) | **不明** |
 | 爆発 `BLAST_DOWN` / `BLAST_HIT` | `main.rs:253-254` | ×3.5・0.7 秒 ／ ×0.6・0.25 秒 | ● | `look_blast_down` / `_span`、`look_blast_hit` / `_span` | (c) | **不明**。damage の割り算は `damage_max` を読むようになった（`/16.0` の写しが消えた） |
 | 窓の大きさ `WINDOW` | `main.rs:274` | 1600×900 | | `window_width` / `window_height` | (c) | **不明** |
-| VM の予算 | rubevy の既定 200,000 | — | ● | `script_budget` | (c) | **Battle はどこでも設定していない**（rubevy の既定のまま。rubevy 自身が「出どころ不明」と書いている）。S5b-2 は**値を選ばず**、設定できるようにしただけ |
+| VM の予算 | rubevy の既定 200,000 | — | ● | `script_budget` | (c) | **Battle はどこでも設定していない**（rubevy の既定のまま。rubevy 自身が「出どころ不明」と書いている）。S5b-2 は**値を選ばず**、設定できるようにしただけ。**S5b-5 でも動かしていない**——箱庭は上限の庭に座って測ってから 41,000 を選んだが、**Battle は測っていない**（試合の上限は「機体 2 台」だが、`each_frame` の中身も `matches/*.rb` の作りも箱庭とは別物で、箱庭の数を持ってくる理由が無い）。測ってから決める |
 | VM の `frame_time` | rubevy の既定 8 ms | — | ● | `script_frame_time_ms` | (c) | **不明**（同上。rubevy の 8 ms も「出どころ不明」と書かれている） |
 | `--headless` の既定 | `main.rs:584` | 10.0 秒 | | 引数、または `headless_seconds` | (c)→(e) | **不明** |
 | `--shot` の既定 | `main.rs:585-586` | `shot.png` / 3.0 秒 | | 引数、または `shot_file` / `shot_seconds` | (c)→(e) | **不明**（箱庭は 6.0。§7-7） |
@@ -766,11 +766,14 @@ S5a が心配していた測定は要らなかった。
 
 **「測った」が 14 → 17 に増えたのは、既にあった測定に名前が付いたぶん**である
 （`SEPARATE_PASSES`、世界 VM の予算、夜の 3 つを 1 行ずつ数え直した）。
-**S5b-3 が新しく取った測定**——上限の庭に座った生き物 VM の 1 フレーム——は、
-**既定値を動かしていないので数の出どころにはなっていない**: 200,000 の出どころは今も
-「rubevy の既定を引き継いだ、rubevy 側は不明」である。測った分布は
-`docs/worklog/2026-09-21-numbers-garden-settings.md` §4 にあり、そこから導ける案は
-著者の判断待ち。
+**S5b-3 が新しく取った測定**——上限の庭に座った生き物 VM の 1 フレーム——は、S5b-3 の時点では
+「既定値を動かしていないので数の出どころになっていない」ものだった。**S5b-5 で出どころになった**:
+著者が案 A を選び、`script_budget` の既定は `1.74 × 23,686` を丸めた 41,000 になり、
+出どころの欄は「rubevy の既定を引き継いだ、rubevy 側は不明」から「測った」に変わった。
+**箱庭の 2 本の VM はこれで両方とも測って決めた数になった。** Battle の `script_budget` は
+200,000（rubevy の既定）のままで、そちらは**測っていない**——§4.5 にそう書いてある。測った分布は
+`docs/worklog/2026-09-21-numbers-garden-settings.md` §4、決着は
+`docs/worklog/2026-09-21-checks-and-leftovers.md` §1。
 
 Battle の 2 つを分けて数えるのをやめたのは、**数の住所が言語で分かれなくなった**ため:
 機体の模型 32 件はいまや `sabibots/ruby/match_prelude.rb` にあり、それを読むのは Rust である。

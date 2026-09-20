@@ -2318,11 +2318,12 @@ const SHOT_SECONDS: f32 = 6.0;
 /// time** (S5b-3).
 ///
 /// The garden runs two VMs — `ruby/world.rb` in one and every creature's script in the other —
-/// and until now only one of them had a number anybody could point at. See
-/// [`WORLD_BUDGET`] and [`CREATURE_BUDGET`] for where each came from; the short of it is that the
-/// world's was measured at the garden's own caps and the creatures' is rubevy's default, carried
-/// here under the game's own name so that it can be said out loud and so that
-/// `window::SCHEDULER_FRAMES` can be worked out from it instead of writing 200,000 a second time.
+/// and until S5b-3 only one of them had a number anybody could point at. See [`WORLD_BUDGET`] and
+/// [`CREATURE_BUDGET`] for where each came from; the short of it is that **both are measured at
+/// the garden's own caps now** — the creatures' was rubevy's default until S5b-5 — and that both
+/// are carried here under the game's own name so that they can be said out loud and so that
+/// `window::scheduler_frames` can be worked out from one of them instead of writing the number a
+/// second time.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct Budgets {
     /// [`WORLD_BUDGET`] / [`WORLD_FRAME_TIME_MS`]
@@ -2351,20 +2352,54 @@ const WORLD_BUDGET: u64 = 45_000;
 /// measured in W3 (about 9,300 instructions per millisecond) 45,000 is roughly 4.8 ms.
 const WORLD_FRAME_TIME_MS: f32 = 8.0;
 
-/// **The creatures' share of a frame** (S5b-3, and S6 before it).
+/// **The creatures' share of a frame, measured** (S5b-5, off S5b-3's measurement).
 ///
-/// 200,000 instructions and 8 ms are **rubevy's defaults, inherited** — the garden had never
-/// said anything about them, which S6 noticed while working out where a check's wait should come
-/// from: one VM's budget was measured and written down and the other, the one with a dozen tasks
-/// in it, was whatever the library happened to ship. rubevy's own source for the two is
-/// **unknown** (rubevy `docs/numbers.md`); naming them here does not make them better-founded,
-/// it makes them visible and changeable.
+/// It was 200,000 until 2026-09-21: **rubevy's default, inherited** — the garden had never said
+/// anything about it, which S6 noticed while working out where a check's wait should come from.
+/// One VM's budget was measured and written down ([`WORLD_BUDGET`]) and the other, the one with a
+/// dozen tasks in it, was whatever the library happened to ship, and rubevy's own source for the
+/// number is **unknown** (rubevy `docs/numbers.md`).
 ///
-/// S5b-3 sat in the fullest garden the rules allow and measured what the creatures' VM actually
-/// spends; the figures and what could be derived from them are in
-/// `docs/worklog/2026-09-21-numbers-garden-settings.md` §4. **The default was not moved** —
-/// choosing a number off that measurement is the author's to do, as the world's 45,000 was.
-const CREATURE_BUDGET: u64 = 200_000;
+/// **41,000 is `1.74 × 23,686`, rounded to the nearest thousand** (author's decision,
+/// 2026-09-21). Both halves of that are borrowed rather than chosen:
+///
+/// * **23,686 instructions is the worst frame the creatures' VM was measured at.** S5b-3 sat in
+///   the fullest garden the rules allow — `start_plants=130`, `start_beetles=14`,
+///   `start_rabbits=10` in `garden.settings.txt`, which is `world.rb`'s own `pop_max` of 24 — and
+///   ran `--headless 60` three times, 10,749 frames (`2026-09-21-numbers-garden-settings.md` §4).
+///   The worst frame is the **first** one, where all 24 scripts run their opening pass at once,
+///   and all three runs spent the same number of instructions in it to the instruction. The worst
+///   frame after that is 4,955.
+/// * **1.74 is the margin the world's VM was given**, which is 45,000 ÷ its own measured worst of
+///   25,837 ([`WORLD_BUDGET`]). Reusing it says the two VMs are trusted to the same degree rather
+///   than that a second margin was felt out.
+///
+/// `1.74 × 23,686` is 41,214, and the thousand it is rounded to is the rounding the world's
+/// number already had (`1.74 × 25,837` = 44,956 → 45,000). Rounding down leaves the margin at
+/// 41,000 ÷ 23,686 = **1.73**, which is the one place this number is not exactly the world's
+/// reckoning.
+///
+/// **The seat was sat in again before this was written** (S5b-5, six runs of the capped garden,
+/// 10,777 frames): the opening frame now costs **23,912**, the same number in all three runs as
+/// before, and the 226 it gained is S5b-4's `mutation_rate 0.1` in `beetle.rb` — a line every
+/// beetle reads in its first pass. So the margin the shipped number really carries is 41,000 ÷
+/// 23,912 = **1.71**. The default is the author's 41,000 and not a third number worked out here;
+/// what the re-measurement is for is that nothing in this paragraph is a quotation of a figure
+/// nobody has seen since.
+///
+/// **What it buys**: a runaway script — a loop with no `sleep` in it — is stopped inside one
+/// frame after a fifth of the instructions it used to be allowed, and no frame of an ordinary run
+/// comes near it (the worst measured is 58% of it, and that frame happens once). **What it
+/// costs**: a garden whose creatures are given a genuinely heavier brain than these can meet it,
+/// and the answer to that is `script_budget` in `garden.settings.txt` — which is also why moving
+/// it is safe to do at all.
+///
+/// [`window::scheduler_frames`] is worked out from this, so the checks' patience moved with it:
+/// 2 + ceil(41,000 / 45,600) is **3** frames where it was 7.
+const CREATURE_BUDGET: u64 = 41_000;
+/// rubevy's own 8 ms, **left where it is**: at the caps the creatures' VM's worst tick was 1.72 ms
+/// and the two VMs together took 30% of a frame at 60 Hz (S5b-3 §4), so there is a measurement
+/// saying it is not tight and none saying what a tighter number should be.
 const CREATURE_FRAME_TIME_MS: f32 = 8.0;
 
 /// How fast the editor's heat fades, per frame. *Reason only* — the heat is there so that a line
@@ -3005,9 +3040,9 @@ fn main() {
     // VM's arrangement lives; this one has no such system, and a plugin's resource can only be
     // written once the plugin has been added.
     //
-    // The default is rubevy's own number carried under the garden's name — see
-    // [`CREATURE_BUDGET`]. Saying it here rather than leaving it to the library is what lets
-    // `window::scheduler_frames` divide by it instead of writing 200,000 a second time.
+    // The default is the garden's own measured number since S5b-5 — see [`CREATURE_BUDGET`].
+    // Saying it here rather than leaving it to the library is what lets
+    // `window::scheduler_frames` divide by it instead of writing the number a second time.
     {
         let mut world = app.world_mut().resource_mut::<ScriptWorld>();
         world.budget = budgets.creature;
@@ -5478,9 +5513,14 @@ fn install_world_answers(
     //
     // `45_000` is **1.74 times the worst of those**: the rules can be rewritten into half as much
     // work again before the budget is anything a player meets, and a rule that has run away — a
-    // loop with no `sleep` in it — is stopped inside one frame either way. It is a little under a
-    // quarter of the creatures' VM's 200,000, which says in one number which of the two VMs is the
-    // guest here.
+    // loop with no `sleep` in it — is stopped inside one frame either way.
+    //
+    // **It used to be a little under a quarter of the creatures' 200,000**, which was read here as
+    // saying in one number which of the two VMs was the guest. That reading is gone: S5b-5 gave
+    // the creatures' VM the same treatment — its own worst frame times this same 1.74 — and the
+    // two numbers came out within a tenth of each other, 45,000 and 41,000 ([`CREATURE_BUDGET`]).
+    // The rules and two dozen creatures cost about the same, and neither is the guest; what the
+    // old comparison was measuring was the size of an inherited default.
     //
     // W1 chose the same number a different way, and W3 had to take the reasoning back: it fitted
     // `262 + 159 × plants + 280 × creatures` over a run (residual 0.9%) and read the law off at a
@@ -7669,11 +7709,14 @@ mod tests {
     /// `2 + ceil(budget / 45,600)` and wrote 200,000 into the sum as a number; now that the
     /// budget is `script_budget` in the store, the sum has to be done against what the run was
     /// actually given or the check judges a slow VM as a broken one.
+    ///
+    /// S5b-5 is where that stopped being hypothetical: [`CREATURE_BUDGET`] went from 200,000 to
+    /// 41,000 and this went from 7 to 3 with no edit of its own.
     #[test]
     fn a_bigger_budget_buys_the_checks_more_frames() {
         let budgets = Budgets::default();
-        // what it has always been, and what `docs/verification/selftest-lines.md` was recorded at
-        assert_eq!(window::scheduler_frames(&budgets), 7);
+        // `2 + ceil(41,000 / 45,600)`, which is what the default budget now buys
+        assert_eq!(window::scheduler_frames(&budgets), 3);
         // five times the budget is five times the frames a restart may take to come round
         let rich = Budgets { creature: 1_000_000, ..Budgets::default() };
         assert_eq!(window::scheduler_frames(&rich), 2 + 22);

@@ -423,9 +423,10 @@ script_budget=500000
 night's three (`light_moon_lux`, `light_night_ambient`, the sky's colour) are one measurement of
 44 of 255 taken together; `fog_depth` was measured at the default camera's 42 units and 49°, so
 `eye_pitch` and `eye_distance` move it too; `separate_passes` is four because three ninety-second
-runs at four never had a pair closer than 0.97 of their radii; `world_script_budget` is 1.74 times
-the worst frame of a full garden. Each says so in its own rustdoc, and `docs/numbers.md` §2 is the
-whole list with where every value came from — which, for about half of them, is nowhere.
+runs at four never had a pair closer than 0.97 of their radii; **both** script budgets are 1.74
+times the worst frame of a full garden — `world_script_budget` since W3 and `script_budget` since
+2026-09-21. Each says so in its own rustdoc, and `docs/numbers.md` §2 is the whole list with where
+every value came from — which, for about half of them, is nowhere.
 
 ### What the checks measure — the checks
 
@@ -433,8 +434,8 @@ The ten seconds somebody has to eat in, the half second a handler has to turn a 
 frames a newborn is deaf for: those are in `garden/src/main.rs` and `window.rs`, beside the check
 that uses them, because they are what is being measured rather than what the game plays by. Where
 a check needs one of the game's numbers it reads the game's — the window checks' patience is
-`2 + ceil(script_budget / 45,600)` frames, so a run given a bigger budget is given more frames to
-come round in.
+`2 + ceil(script_budget / 45,600)` frames, three with the budget as it ships, so a run given a
+bigger budget is given more frames to come round in.
 
 ## The world's own VM (W1, W2)
 
@@ -509,12 +510,33 @@ field at 90 blades and 24 creatures on it:
 | instructions in one pass | 24,670 | 25,782 | 25,837 |
 | the world's tick | 2.65 ms | 4.60 ms | 4.86 ms |
 
-`budget = 45_000` is **1.74× the worst of those**, and a little under a quarter of the creatures'
-200,000 — which says in one number which of the two VMs is the guest. `frame_time` is left at
-rubevy's 8 ms: at about 9,300 instructions to the millisecond, 45,000 is roughly 4.8 ms, so **the
-instruction count is what bites first**, and that is the right way round. Instructions are a fact
-about the rules and are the same number in a browser several times slower; milliseconds are a fact
-about whichever machine is running them.
+`budget = 45_000` is **1.74× the worst of those**. `frame_time` is left at rubevy's 8 ms: at about
+9,300 instructions to the millisecond, 45,000 is roughly 4.8 ms, so **the instruction count is
+what bites first**, and that is the right way round. Instructions are a fact about the rules and
+are the same number in a browser several times slower; milliseconds are a fact about whichever
+machine is running them.
+
+**And the creatures' VM, the same way** (2026-09-21). It was the last number in this game running
+on a library default — rubevy's 200,000, whose own source rubevy records as unknown — and it was
+measured in the same seat: the caps put in `garden.settings.txt` (`start_plants=130`,
+`start_beetles=14`, `start_rabbits=10`, which is `pop_max`), three runs of a minute, 10,749
+frames.
+
+| | median | 99th frame in a hundred | worst |
+|---|---|---|---|
+| instructions in one frame | 362 | 3,954 | 23,686 |
+| the creatures' tick | 70 µs | 760 µs | 1.72 ms |
+
+The worst frame is the **first** one, where 24 scripts run their opening pass at once — all three
+runs spent the same number of instructions in it, to the instruction — and the worst frame after
+it is 4,955. `script_budget = 41_000` is **1.74× that 23,686, rounded to the nearest thousand**,
+which is the same margin and the same rounding the world's number got. It came out within a tenth
+of the rules' 45,000: two dozen creatures thinking and one pass of the rules cost about the same,
+which the old default hid.
+
+So a runaway script is now stopped inside one frame after a fifth of the instructions it used to
+be given, an ordinary frame never comes near either budget, and a garden whose creatures are given
+a genuinely heavier brain can say so in `script_budget`.
 
 (W1 chose the same number from a straight-line fit of cost against population, read off at a
 garden of twice the caps. W2's pairing is a search over the creatures that are full enough rather

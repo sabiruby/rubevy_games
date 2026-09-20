@@ -1315,39 +1315,44 @@ enum Turn {
 ///   `RubevySet::Tick` runs it (two). S6 measured exactly this: a breath cut to one frame finds
 ///   the creature with no `ScriptTask` at all (`window-check-flakes.md` §4.4, two runs of two),
 ///   and `crate::NEWBORN_DEAF_FRAMES` is the same reckoning written down for newborns.
-/// * **Five more are one whole frame's budget of the VM's turns.** One frame of the creatures'
-///   VM buys `ScriptWorld::budget` instructions — rubevy's default 200,000 — or
-///   `ScriptWorld::frame_time`, rubevy's default 8 ms of wall clock, whichever runs out first.
-///   What 8 ms buys was measured in S6: with `frame_time` cut to 300 µs the VM got through
-///   1,708 instructions in its slowest frame (`s6/ft300.log`, f59 — two beetles' first pass of
-///   854 each), which is 5.7 instructions per microsecond, so a full 8 ms frame buys about
-///   45,600 and `ceil(200_000 / 45_600)` is five. Past that the VM has been handed a whole
-///   frame's allowance of turns without reaching a task that is ready to run, which is the
+/// * **The rest are one whole frame's budget of the VM's turns.** One frame of the creatures'
+///   VM buys `ScriptWorld::budget` instructions — the garden's own [`crate::CREATURE_BUDGET`],
+///   41,000 by default since S5b-5 — or `ScriptWorld::frame_time`, 8 ms of wall clock, whichever
+///   runs out first. What 8 ms buys was measured in S6: with `frame_time` cut to 300 µs the VM
+///   got through 1,708 instructions in its slowest frame (`s6/ft300.log`, f59 — two beetles'
+///   first pass of 854 each), which is 5.7 instructions per microsecond, so a full 8 ms frame
+///   buys about 45,600 and `ceil(41_000 / 45_600)` is one. Past that the VM has been handed a
+///   whole frame's allowance of turns without reaching a task that is ready to run, which is the
 ///   scheduler having stopped handing them out — the sabiruby 0.5.1 bug these checks are for
 ///   (`restart_species`) — rather than a machine that is merely busy.
 ///
 /// A machine that is sharing its CPU makes each frame longer, and that is the point: the same
-/// seven frames are 0.9 s on the quiet PC where a frame is 133 ms and 2.0 s on the loaded one
+/// three frames are 0.4 s on the quiet PC where a frame is 133 ms and 0.8 s on the loaded one
 /// where it is 280 ms (S6 §1.1, §1.2). A number of seconds cannot do that, which is what 0.6 s
 /// buying five frames on one machine and three on another was.
 ///
-/// The same seven cover the world's VM ([`Turn::AMeterMoved`]), where the reckoning comes out
+/// The same number covers the world's VM ([`Turn::AMeterMoved`]), where the reckoning comes out
 /// smaller: its script is resumed rather than made, so there are no structural frames, and its
-/// budget is 45,000 rather than 200,000 (`crate::install_world_answers`), so one frame's worth is
-/// one frame. And they cover [`Turn::EguiHasThePointer`], which is not the VM at all and wants
-/// **one** frame: bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
+/// budget is 45,000 (`crate::install_world_answers`), so one frame's worth is one frame. And it
+/// covers [`Turn::EguiHasThePointer`], which is not the VM at all and wants **one** frame:
+/// bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
 /// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
-/// in is the frame egui knows. Seven is the largest of the three, and one number is better than
+/// in is the frame egui knows. This is the largest of the three, and one number is better than
 /// three.
 ///
-/// **S5b-3: it is worked out from the budget the run is really giving, not from 200,000.** S7
-/// wrote rubevy's default into the sum as a literal, which was right on the day and wrong the
-/// moment the budget became something anybody could change (`script_budget` in
+/// **S5b-3: it is worked out from the budget the run is really giving, not from a literal.** S7
+/// wrote rubevy's then-default 200,000 into the sum as a number, which was right on the day and
+/// wrong the moment the budget became something anybody could change (`script_budget` in
 /// `garden.settings.txt`): a run given ten times the budget would have been judged after the
 /// same seven frames, which is a quarter of what it was promised. The two parts of the sum keep
 /// their own sources — [`STRUCTURAL_FRAMES`] is measured in S6 and cannot be shortened,
 /// [`INSTRUCTIONS_A_FRAME_BUYS`] is S6's measurement of the wall clock — and what is new is that
 /// the division is done at startup instead of in a comment.
+///
+/// **S5b-5 moved the budget, so this moved with it**, which is the arrangement proving itself:
+/// `2 + ceil(41,000 / 45,600)` is **3** where it was 7. The checks are less patient than they
+/// were because the VM they are waiting on has less work it is allowed to do in a frame, and
+/// nothing here was edited to make that happen.
 pub fn scheduler_frames(budgets: &crate::Budgets) -> u32 {
     STRUCTURAL_FRAMES + (budgets.creature as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
 }
