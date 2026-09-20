@@ -1461,6 +1461,28 @@ impl Brains {
         self.wearing[species.index()].as_ref()
     }
 
+    /// **The first program of a species, compiled once** (S5b-4, from rubevy's R2).
+    ///
+    /// [`give_mind`] used to compile the species' file for **every creature it made** — six
+    /// beetles at startup, and one more on every birth — and hand each of them its own
+    /// `Handle<MrbAsset>`. rubevy's R2 made the *irep* one copy in the VM, but
+    /// `Assets<MrbAsset>` still held the same bytes once per creature, and there is no reason
+    /// for a program to be stored a dozen times because a dozen creatures are running it.
+    ///
+    /// So the first creature of a species puts what it compiled here, and every creature after
+    /// it wears the same handle — which is what [`restart_species`](window::restart_species) has
+    /// always done after an edit. It is **generation 0**: no hand-over has happened, nobody is
+    /// behind, and `hand_over` still numbers the first edit 1.
+    fn first_program(
+        &mut self,
+        species: Species,
+        handle: Handle<MrbAsset>,
+        prelude_lines: u32,
+        in_memory: bool,
+    ) {
+        self.wearing[species.index()] = Some(Wearing { handle, prelude_lines, in_memory, generation: 0 });
+    }
+
     pub fn text(&self, species: Species) -> Option<&String> {
         self.applied[species.index()].as_ref()
     }
@@ -3230,7 +3252,7 @@ fn spawn_world(
     mut commands: Commands,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
-    brains: Res<Brains>,
+    mut brains: ResMut<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
     selftest: Option<Res<SelfTest>>,
@@ -3374,7 +3396,7 @@ fn spawn_world(
         // no two creatures alike, so that `Genome#mix` has something to average
         let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
         let entity = spawn_creature(&mut commands, look, &bodies, species, at, hunger, genome, None);
-        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, species);
+        give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, entity, species);
     }
 
     if keep_clear {
@@ -3391,7 +3413,7 @@ fn spawn_world(
         let probe =
             spawn_creature(&mut commands, look, &bodies, Species::Beetle, probe_at, 40.0, Genome::of(Species::Beetle), None);
         commands.entity(probe).insert(Probe { dinner });
-        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, probe, Species::Beetle);
+        give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, probe, Species::Beetle);
         info!(
             "selftest: a hungry beetle at ({:.1}, {:.1}) with one plant {:.1} away",
             probe_at.x,
@@ -3501,7 +3523,7 @@ fn plant_the_meadow(
     mut commands: Commands,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
-    brains: Res<Brains>,
+    mut brains: ResMut<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     reaches: Res<Reaches>,
     trouble: Res<WorldTrouble>,
@@ -3544,7 +3566,7 @@ fn plant_the_meadow(
         spawn_plant(&mut commands, look, blade, built.plant_grown, i == 0);
         let lover =
             spawn_creature(&mut commands, look, &bodies, Species::Beetle, blade + toward * start, 45.0, genome, None);
-        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
+        give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, lover, Species::Beetle);
     }
     info!(
         "selftest: two hungry beetles {apart:.2} apart, each {start:.2} behind a blade of its own at ({:.1}, {:.1}) — from the rules' reach {:.2} and mate_reach {:.2}{}",
@@ -3735,26 +3757,41 @@ fn tint_species(
 fn give_mind(
     commands: &mut Commands,
     ruby: &Path,
-    brains: &Brains,
+    brains: &mut Brains,
     mrb: &mut Assets<MrbAsset>,
     entity: Entity,
     species: Species,
 ) {
+    // **Compiled once per species, not once per creature** (S5b-4, rubevy's R2). The first
+    // creature of a species compiles its file and leaves what it made in `Brains`
+    // ([`Brains::first_program`]); every creature after it — and every child born for the rest
+    // of the run — is handed that same `Handle<MrbAsset>`, which is what the editor's Apply has
+    // always handed the whole species.
+    //
     // G4: a species whose file has been rewritten in the editor and not saved runs the text that
     // was applied, and so does anything born into it afterwards — the brain belongs to the
-    // species, not to the creature, because the file does.
-    let applied = brains.text(species);
-    let compiled = match applied {
-        Some(text) => compile_source(ruby, species.file(), text, mrb),
-        None => compile(ruby, &brains.path(ruby, species), mrb),
-    };
-    let (handle, prelude_lines) = match compiled {
-        Ok(it) => it,
-        Err(why) => {
-            error!("{why}");
-            return;
+    // species, not to the creature, because the file does. That is why there is nothing to
+    // invalidate here: every path that changes what a species is running goes through
+    // `Brains::hand_over`, which replaces this.
+    if brains.wearing(species).is_none() {
+        let applied = brains.text(species).cloned();
+        let compiled = match applied.as_deref() {
+            Some(text) => compile_source(ruby, species.file(), text, mrb),
+            None => compile(ruby, &brains.path(ruby, species), mrb),
+        };
+        match compiled {
+            Ok((handle, prelude_lines)) => {
+                brains.first_program(species, handle, prelude_lines, applied.is_some())
+            }
+            Err(why) => {
+                error!("{why}");
+                return;
+            }
         }
-    };
+    }
+    let Some(worn) = brains.wearing(species) else { return };
+    let (handle, prelude_lines, in_memory, generation) =
+        (worn.handle.clone(), worn.prelude_lines, worn.in_memory, worn.generation);
     let name = format!("{} {}", species.name(), entity);
     commands.entity(entity).insert((
         Script::new(handle).with_name(&name).with_priority(100),
@@ -3766,12 +3803,12 @@ fn give_mind(
             frames: 0,
             at: String::new(),
             prelude_lines,
-            in_memory: applied.is_some(),
+            in_memory,
             // S7: what the species is wearing *now*. A creature born in a frame where the editor
             // has already applied is born on the new program and is not behind; one born earlier
             // in a frame where the editor applies later carries the old number and is caught up
             // on the next frame.
-            generation: brains.generation(species),
+            generation,
             own_line: None,
             heat: Vec::new(),
             ran_frame: 0,
@@ -4939,7 +4976,7 @@ fn children_arrive(
     mut newborns: ResMut<Newborns>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
-    brains: Res<Brains>,
+    mut brains: ResMut<Brains>,
     bodies: Res<Bodies>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut test: Option<ResMut<SelfTest>>,
@@ -4954,7 +4991,7 @@ fn children_arrive(
         );
         let child =
             spawn_creature(&mut commands, look.as_deref(), &bodies, birth.species, at, hunger, birth.genome, birth.parent);
-        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, child, birth.species);
+        give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, child, birth.species);
         info!(
             "a {} was born at {now:.1} s ({}) — {}",
             birth.species.name(),
@@ -6496,7 +6533,7 @@ fn load_world(
     mut newborns: ResMut<Newborns>,
     look: Option<Res<Look>>,
     ruby: Res<RubyDir>,
-    brains: Res<Brains>,
+    mut brains: ResMut<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
     // S5b-3: a rock's squash and whether a blade is a bush are not in the save (`GardenSave`
@@ -6551,7 +6588,7 @@ fn load_world(
             genome: creature.genome,
             parent: None,
         });
-        give_mind(&mut commands, &ruby.0, &brains, &mut mrb, entity, creature.species);
+        give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, entity, creature.species);
         // it has a body and no ears yet, which is the whole of what a newborn is here
         newborns.waiting.push((entity, 0));
         if !creature.memory.is_null() {
