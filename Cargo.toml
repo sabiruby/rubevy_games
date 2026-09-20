@@ -26,6 +26,11 @@ bevy = { version = "0.19.1", default-features = false, features = [
 # rubevy stays a git dependency: it moves every day here, and the games are not to be pinned to
 # whatever is on crates.io.
 rubevy = { git = "https://github.com/sabiruby/rubevy" }
+# The build-script half of the same repository (a second package beside rubevy): it walks a
+# directory of `.rb` files and writes the table the browser build includes. It is a
+# build-dependency and names nothing at all — a build script that named rubevy would build Bevy a
+# second time for every game here — so it is kept beside rubevy rather than under it.
+rubevy-build = { git = "https://github.com/sabiruby/rubevy" }
 # The SabiRuby crates are named by version, exactly as rubevy names them, and `[patch.crates-io]`
 # at the bottom of this file sends all of them to git. Writing it any other way puts two VMs in
 # the binary — rubevy asks crates.io for `sabiruby`, so a git `sabiruby` here would be a second,

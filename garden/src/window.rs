@@ -18,7 +18,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
-use rubevy::{MrbAsset, Script, ScriptTask, ScriptWorld};
+use rubevy::{replace_script, MrbAsset, Script, ScriptTask, ScriptWorld};
 use rubevy_arena::{Editor, EditorAction, VmInspector, Watch};
 
 use crate::{
@@ -313,7 +313,7 @@ pub fn show_code(
 ///
 /// It used to be `not applied: beetle.rb would not compile (see the log)`, and the log had a line
 /// number that was the prelude's length out — 600 where the author's file has 118. The number is
-/// right now (`crate::in_the_authors_lines`), so the status can carry it: the first error, whole,
+/// right now (rubevy's `in_the_authors_lines`), so the status can carry it: the first error, whole,
 /// in the panel the typing was done in. The rest of them, if there were several, are still in the
 /// log, and the caller logs the whole thing either way.
 fn first_trouble(why: &str) -> &str {
@@ -542,11 +542,14 @@ fn restart_species(
         mind.spent = 0;
         mind.frames = 0;
         mind.restart();
-        commands
-            .entity(entity)
-            .remove::<ScriptTask>()
-            .remove::<rubevy::ScriptDone>()
-            .insert(Script::new(handle.clone()).with_name(&mind.name).with_priority(100));
+        // S2: the three lines this was — `ScriptTask` off, `ScriptDone` off, the new `Script` on
+        // — are rubevy's `replace_script` (R6). Forgetting the `ScriptDone` is the invisible
+        // half: a creature whose script had run to its end could never be given another one.
+        replace_script(
+            commands,
+            entity,
+            Script::new(handle.clone()).with_name(&mind.name).with_priority(100),
+        );
         n += 1;
     }
     n

@@ -13,6 +13,12 @@
 //! * [`VmInspector`] — the frames, registers and heap of the selected script, read out of the VM.
 //! * [`Watch`] — the Ruby directory, watched: saving a file tells the game to start that script
 //!   again. Editing a robot's brain and seeing it change without restarting is the point.
+//! * [`platform`] — what differs between a PC build and a browser build: a file or a
+//!   `localStorage` key, the compiler linked in or the page's, a clock for the dice.
+//! * [`checks`] — how a run is asked for its `selftest`, and why a page does not exit when it is
+//!   done.
+//! * [`Args`] — the flags both games take (`--headless`, `--shot`, `--vm`, `--lang`), with every
+//!   default left to the caller.
 //!
 //! Bevy's version is pinned once in the workspace; the version-dependent parts of a game live
 //! here, so bumping Bevy is one crate's problem rather than every game's.
@@ -21,18 +27,22 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 
+pub mod args;
+pub mod checks;
 pub mod code;
 pub mod editor;
 pub mod guide;
 pub mod hud;
 pub mod inspect;
+pub mod platform;
 pub mod settings;
+pub use args::Args;
 pub use code::{CodePanel, CodePanelPlugin};
 pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin, Highlighter};
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
 pub use inspect::{VmClock, VmInspector, VmInspectorPlugin, Waiting};
-pub use settings::Settings;
+pub use settings::{remembered, Settings};
 
 /// Half the width of the square the camera shows, in world units.
 #[derive(Resource, Debug, Clone, Copy)]

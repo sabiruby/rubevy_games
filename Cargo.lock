@@ -4277,9 +4277,12 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "js-sys",
  "notify",
  "rubevy",
  "sabiruby",
+ "sabiruby-compiler",
+ "wasm-bindgen",
  "web-sys",
 ]
 
