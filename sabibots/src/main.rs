@@ -391,7 +391,8 @@ struct Robot {
     hp: f32,
     cooldown: f32,
     velocity: Vec2,
-    /// what its brain last set: -1 (full reverse) to 1 (full ahead), and -1 to 1 of TURN_RATE
+    /// what its brain last set: -1 (full reverse) to 1 (full ahead), and -1 to 1 of the match's
+    /// turning rate
     throttle: f32,
     turn: f32,
     /// the turret's world angle, and where it has been told to point
