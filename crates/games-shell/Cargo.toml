@@ -1,23 +1,25 @@
 [package]
-name = "rubevy-arena"
+name = "games-shell"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The 2D floor the games in this repository stand on: a camera, sprites, a HUD, and reloading the Ruby that drives them"
+description = "The shell the games in this repository share: the platform split, the checks, the flags, the guide, the settings and the cameras"
+# This one is for the games here and says so in its name; `rubevy-egui` beside it is the part an
+# outside rubevy user would want. Nothing to publish.
+publish = false
 
 [dependencies]
 bevy.workspace = true
-rubevy.workspace = true
-sabiruby.workspace = true
 bevy_egui.workspace = true
+# S4a: `ViewInsets` — the pixels a panel covers, which both cameras here read. It belongs to the
+# crate whose editor writes it. The dependency goes this way only.
+rubevy-egui.workspace = true
 
-# watching the Ruby directory for edits: there is no directory to watch in a browser.
-# S1: and the Ruby compiler, which `platform::compile` and `platform::highlight` are on a PC —
+# the Ruby compiler, which `platform::compile` and `platform::highlight` are on a PC —
 # both games already had it as a dependency of their own for exactly those two functions, so
-# naming it here moves the lines rather than adding anything to a build.
+# naming it here moves the lines rather than adding anything to a build (S1).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-notify = "8"
 sabiruby-compiler.workspace = true
 
 # S3: `examples/camera.rs` opens a window of its own, which the games ask for in their own

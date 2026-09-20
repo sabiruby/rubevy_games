@@ -2,14 +2,14 @@
 //!
 //! Every string the `H` panel shows for the garden is here, English and Japanese side by side,
 //! and nothing else is: the window it is drawn in, the keys that open it and the Japanese font
-//! are `rubevy-arena`'s ([`rubevy_arena::guide`]). Editing the wording means editing this file
+//! are `games-shell`'s ([`games_shell::guide`]). Editing the wording means editing this file
 //! and nothing else — that is what it is for.
 //!
 //! **After editing the Japanese, re-cut the font**: `tools/subset-font.sh`. The font in the
 //! binary carries only the characters these strings use, so a word with a character that was not
 //! here before would be drawn as a blank box until the subset is made again. The script reads
-//! this file, `sabibots/src/guide_text.rs` and `crates/rubevy-arena/src/guide.rs`, and writes
-//! `crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf`. `docs/garden.md` says so too.
+//! this file, `sabibots/src/guide_text.rs` and `crates/games-shell/src/guide.rs`, and writes
+//! `crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf`. `docs/garden.md` says so too.
 //!
 //! The author played the browser build knowing what every key did, and still wrote down "there is
 //! no explanation in the game" — which is the one complaint a reader of `docs/garden.md` can
@@ -19,7 +19,7 @@
 //! are Ruby and that the editor rewrites them while the garden runs, which is the whole point of the
 //! game and the one thing a player would never guess.
 
-use rubevy_arena::Guide;
+use games_shell::Guide;
 
 /// What the `H` panel says about the garden.
 pub fn guide() -> Guide {

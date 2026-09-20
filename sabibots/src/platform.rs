@@ -11,14 +11,14 @@
 //! And **how the checks are asked for** (2026-09-18): `SABIBOTS_SELFTEST` on a PC, `?selftest` in
 //! the page's address.
 //!
-//! **Since S1 both halves of all of that are `rubevy_arena::platform` and `rubevy_arena::checks`,
+//! **Since S1 both halves of all of that are `games_shell::platform` and `games_shell::checks`,
 //! and what is left here is this game's own names**: the `localStorage` prefix, the `ruby/` files
 //! the browser's binary carries, the names the page gives its two bridges, and wrappers thin
 //! enough that `platform::read` still means what it meant in every caller.
 
 use std::path::{Path, PathBuf};
 
-use rubevy_arena::platform;
+use games_shell::platform;
 
 // **The `ruby/` files, built into the browser's binary** by `build.rs`: a page has no directory
 // to read from.
@@ -43,10 +43,10 @@ const COMPILE_BRIDGE: &str = "sabibotsCompile";
 const HIGHLIGHT_BRIDGE: &str = "sabibotsHighlight";
 
 /// What the Save button says, since what it does differs; and a clock for the dice.
-pub use rubevy_arena::platform::{clock_seed, SAVE_LABEL};
+pub use games_shell::platform::{clock_seed, SAVE_LABEL};
 /// Whether the checks end the run when they are done — `true` on a PC, `false` in a page, which
 /// has nothing to exit to (`docs/web.md`, and the note on the constant).
-pub use rubevy_arena::checks::CHECKS_EXIT_WHEN_DONE;
+pub use games_shell::checks::CHECKS_EXIT_WHEN_DONE;
 
 /// **Where the panel's choices are kept (G6b)**: a small text file in the directory the game was
 /// started from, holding the one thing the Battle remembers — which language the guide opens in.
@@ -57,13 +57,13 @@ pub const SETTINGS_FILE: &str = "sabibots.settings.txt";
 /// Where the Ruby lives: next to the crate, from the workspace root or from the crate — and in a
 /// browser the bare name the built-in table's paths start with.
 pub fn ruby_dir() -> PathBuf {
-    rubevy_arena::crate_dir!("ruby", "sabibots/ruby")
+    games_shell::crate_dir!("ruby", "sabibots/ruby")
 }
 
 /// Where the sprites live. Bevy looks next to the executable by default, which is not where a
 /// workspace puts them; in a browser it is where `web/build.sh` copies them, beside the page.
 pub fn assets_dir() -> String {
-    rubevy_arena::crate_dir!("assets", "sabibots/assets").to_string_lossy().into_owned()
+    games_shell::crate_dir!("assets", "sabibots/assets").to_string_lossy().into_owned()
 }
 
 pub fn read(path: &Path) -> Result<String, String> {
@@ -94,5 +94,5 @@ pub fn highlight(src: &str) -> Vec<u8> {
 /// painted in the keyword colour, are all written by the checks and there was no way to ask for
 /// them there. The query string is the environment a page has.
 pub fn selftest_asked() -> bool {
-    rubevy_arena::checks::selftest_asked("SABIBOTS_SELFTEST")
+    games_shell::checks::selftest_asked("SABIBOTS_SELFTEST")
 }

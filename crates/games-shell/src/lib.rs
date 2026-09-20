@@ -1,21 +1,18 @@
-//! The 2D floor the games here stand on. Three things, none of them game-specific:
+//! **The shell the games in this repository share.** Not the panels — those are `rubevy-egui`,
+//! which this crate depends on — but everything a game here needs around them: what differs
+//! between a PC build and a browser build, how a run is asked for its checks, the flags, the
+//! in-game guide, the `key=value` store, the HUD, and two cameras.
 //!
 //! * [`ArenaPlugin`] — a 2D camera that shows a square arena whatever the window size is.
 //! * [`camera`] — the other camera: one the player drags, wheels and walks about a world bigger
-//!   than the window, and [`ViewInsets`], the pixels a panel covers, which is what either camera
-//!   reads to keep what matters out from under it.
+//!   than the window. Both of them read [`ViewInsets`] (`rubevy-egui`'s), the pixels a panel
+//!   covers, to keep what matters out from under it.
 //! * [`Hud`] — the line of text at the top, and the per-script panel below it.
-//! * [`CodePanel`] — the script a game is showing, with the line it stands on marked.
-//! * [`Editor`] — the same, editable, over egui: change a robot's brain without leaving the game,
-//!   in colour where the game hands it a [`Highlighter`].
 //! * [`Guide`] — the in-game explanation (G6), in English or Japanese, that `H` opens. The frame
 //!   and the Japanese font are here; the words are each game's, and G6b's `English | 日本語`
 //!   buttons pick which of the two is drawn.
 //! * [`Settings`] — the handful of `key=value` lines a game remembers between runs: the guide's
 //!   language, the garden's night dial. Where they are kept is the game's `platform.rs`.
-//! * [`VmInspector`] — the frames, registers and heap of the selected script, read out of the VM.
-//! * [`Watch`] — the Ruby directory, watched: saving a file tells the game to start that script
-//!   again. Editing a robot's brain and seeing it change without restarting is the point.
 //! * [`platform`] — what differs between a PC build and a browser build: a file or a
 //!   `localStorage` key, the compiler linked in or the page's, a clock for the dice.
 //! * [`checks`] — how a run is asked for its `selftest`, and why a page does not exit when it is
@@ -24,33 +21,33 @@
 //!   default left to the caller.
 //!
 //! Bevy's version is pinned once in the workspace; the version-dependent parts of a game live
-//! here, so bumping Bevy is one crate's problem rather than every game's.
-
-use std::path::{Path, PathBuf};
+//! here and in `rubevy-egui`, so bumping Bevy is two crates' problem rather than every game's.
+//!
+//! This crate and `rubevy-egui` were cut out of `rubevy-arena` (2026-09-20), whose name said
+//! "the walled square SabiRuby Battle fights in" and whose contents had long since stopped being
+//! that. The dependency goes one way only: the shell knows about the panels, and the panels know
+//! nothing about the shell.
 
 use bevy::prelude::*;
 
 pub mod args;
 pub mod camera;
 pub mod checks;
-pub mod code;
-pub mod editor;
 pub mod guide;
 pub mod hud;
-pub mod inspect;
 pub mod platform;
 pub mod settings;
 pub use args::Args;
 pub use camera::{
     CameraControls, CameraHome, CameraKeys, CameraPlugin, CameraSet, CameraView, Lens, PanCamera,
-    ViewInsets, WorldClick,
+    WorldClick,
 };
-pub use code::{CodePanel, CodePanelPlugin};
-pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin, Highlighter};
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin};
 pub use hud::{Hud, HudPlugin, ScriptPanel};
-pub use inspect::{VmClock, VmInspector, VmInspectorPlugin, Waiting};
 pub use settings::{remembered, Settings};
+/// The pixels a panel covers, which both cameras here read. It is `rubevy-egui`'s, because the
+/// panel that writes it is (`rubevy_egui::ViewInsets`); this is the same type under a second name.
+pub use rubevy_egui::ViewInsets;
 
 /// Half the width of the square the camera shows, in world units.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -122,6 +119,15 @@ fn seen_by(half: f32, window: Vec2) -> (f32, f32) {
     (visible_width, visible_width / window.x.max(1.0))
 }
 
+/// **Everything [`follow_arena`] reads.** Where the camera ends up is a function of exactly these
+/// three, so keeping the last one is what tells the system whether there is anything to do.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Placed {
+    half: f32,
+    window: Vec2,
+    insets: ViewInsets,
+}
+
 /// A match that closes the arena in changes [`ArenaSize`]; the view follows it, so the fight
 /// fills the window as the field gets smaller. Where a panel covers part of the window
 /// ([`ViewInsets`]) the view slides, so the arena sits in the middle of what is left.
@@ -132,16 +138,27 @@ fn seen_by(half: f32, window: Vec2) -> (f32, f32) {
 /// them, so a camera that has never heard of an editor puts the arena in the same place. On the
 /// window both games open, 1600 by 900, the editor covers 528 pixels — 33% rather than the 32%
 /// the old fraction stood for, which is the whole of the difference (`seen_by`'s test).
+///
+/// **When it recomputes** (S4a). It used to leave early unless [`ArenaSize`] or [`ViewInsets`]
+/// had changed, and it followed a window being resized only by accident: `Editor` counts as
+/// changed every frame it is drawn, so the old early return let nearly every frame through while
+/// the panel was open. What is actually wanted is "recompute when what the answer depends on has
+/// changed", and that is the three fields of [`Placed`] — the arena's size, the window, and the
+/// insets — kept from the last placement and compared. A resize now moves the view whether or not
+/// anything else did, and a still window with a still panel costs one comparison a frame.
+///
+/// (`Changed<Window>` would have been the obvious filter and is not the right one: winit writes
+/// the cursor's position into the same `Window` component on every mouse move
+/// (`bevy_winit::state`, `WindowEvent::CursorMoved`), so it is true whenever the pointer is
+/// moving and false while a window is resized with the pointer outside it.)
 fn follow_arena(
     size: Res<ArenaSize>,
     view: Res<ArenaView>,
     insets: Res<ViewInsets>,
     windows: Query<&Window>,
     mut cameras: Query<(&mut Projection, &mut Transform), With<Camera2d>>,
+    mut placed: Local<Option<Placed>>,
 ) {
-    if !(size.is_changed() || insets.is_changed()) {
-        return;
-    }
     // with following off, the view stays framed on the arena as it started
     let half = if view.follow_shrink { size.0 } else { view.framed };
     let window = windows
@@ -149,6 +166,11 @@ fn follow_arena(
         .next()
         .map(|w| Vec2::new(w.width(), w.height()))
         .unwrap_or(Vec2::new(16.0, 9.0));
+    let now = Placed { half, window, insets: *insets };
+    if *placed == Some(now) {
+        return;
+    }
+    *placed = Some(now);
     let (_, world_per_px) = seen_by(half, window);
     let slide = insets.shift(world_per_px);
     for (mut projection, mut transform) in &mut cameras {
@@ -158,78 +180,6 @@ fn follow_arena(
         transform.translation.x = slide.x;
         transform.translation.y = slide.y;
     }
-}
-
-/// A directory of `.rb` files, watched. In the browser build there is no directory: `new`
-/// answers `None` there, as it does anywhere the platform has no watcher. `changed()` answers the files written since the last
-/// call, so a game can restart exactly the scripts that changed.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Resource)]
-pub struct Watch {
-    pub dir: PathBuf,
-    rx: std::sync::Mutex<std::sync::mpsc::Receiver<PathBuf>>,
-    _watcher: Box<dyn notify::Watcher + Send + Sync>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Watch {
-    /// Watches `dir` and everything under it. Answers `None` where the platform has no watcher
-    /// (the game then simply does not reload).
-    pub fn new(dir: impl AsRef<Path>) -> Option<Watch> {
-        use notify::{RecursiveMode, Watcher};
-        let dir = dir.as_ref().to_path_buf();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let Ok(event) = res else { return };
-            if !matches!(event.kind, notify::EventKind::Modify(_) | notify::EventKind::Create(_)) {
-                return;
-            }
-            for path in event.paths {
-                if path.extension().is_some_and(|e| e == "rb") {
-                    let _ = tx.send(path);
-                }
-            }
-        })
-        .ok()?;
-        watcher.watch(&dir, RecursiveMode::Recursive).ok()?;
-        Some(Watch { dir, rx: std::sync::Mutex::new(rx), _watcher: Box::new(watcher) })
-    }
-
-    /// The `.rb` files written since the last call, without repeats.
-    pub fn changed(&self) -> Vec<PathBuf> {
-        let mut out: Vec<PathBuf> = Vec::new();
-        let Ok(rx) = self.rx.lock() else { return out };
-        while let Ok(p) = rx.try_recv() {
-            if !out.contains(&p) {
-                out.push(p);
-            }
-        }
-        out
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Resource)]
-pub struct Watch {
-    pub dir: PathBuf,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Watch {
-    pub fn new(_dir: impl AsRef<Path>) -> Option<Watch> {
-        None
-    }
-
-    pub fn changed(&self) -> Vec<PathBuf> {
-        Vec::new()
-    }
-}
-
-/// Reads a Ruby file and every file it `require`s from the same directory, in one string, so a
-/// game can hand the VM one program per script. (`require` itself works through rubevy's host,
-/// but a game that reloads a single file wants the whole of it in hand.)
-pub fn read_script(path: &Path) -> std::io::Result<String> {
-    std::fs::read_to_string(path)
 }
 
 #[cfg(test)]
@@ -253,7 +203,10 @@ mod tests {
 
         // and the editor as it actually stands, which is what sabibots will now see: 528 pixels
         // of a 1600-wide window is 33%, where 0.16 stood for 32%
-        let editor = ViewInsets { right: editor::MARGIN + editor::WIDTH, ..ViewInsets::NONE };
+        let editor = ViewInsets {
+            right: rubevy_egui::editor::MARGIN + rubevy_egui::editor::WIDTH,
+            ..ViewInsets::NONE
+        };
         let now = editor.shift(world_per_px).x;
         let before = visible_width * 0.16;
         assert!(now > before, "the real editor is wider than the guess: {now} vs {before}");
@@ -271,5 +224,44 @@ mod tests {
     fn nothing_covered_leaves_the_arena_where_it_was() {
         let (_, world_per_px) = seen_by(ArenaSize::default().0, Vec2::new(1600.0, 900.0));
         assert_eq!(ViewInsets::NONE.shift(world_per_px), Vec2::ZERO);
+    }
+
+    /// **A window that was resized asks for a new placement; a still one does not** (S4a).
+    ///
+    /// This is the condition `follow_arena` leaves early on, written out. Before S4a the window
+    /// was not part of it at all: the system followed a resize only because `Editor` reported
+    /// itself changed on every frame it was drawn, which let nearly every frame past the early
+    /// return while the panel was open — and which meant that a resize with the panel *closed*
+    /// was not followed.
+    #[test]
+    fn a_resize_asks_for_a_new_placement_and_a_still_window_does_not() {
+        let insets = ViewInsets { right: 528.0, ..ViewInsets::NONE };
+        let at = |window| Placed { half: 32.0, window, insets };
+        let wide = at(Vec2::new(1600.0, 900.0));
+
+        assert_eq!(wide, at(Vec2::new(1600.0, 900.0)), "nothing moved: nothing to do");
+        assert_ne!(wide, at(Vec2::new(1200.0, 900.0)), "the window was narrowed");
+        assert_ne!(wide, Placed { insets: ViewInsets::NONE, ..wide }, "the editor was closed");
+        assert_ne!(wide, Placed { half: 24.0, ..wide }, "the walls closed in");
+    }
+
+    /// **And a resize really does move the view**, which is what the placement is recomputed for
+    /// — with the one asymmetry worth knowing: it is the window's *height* that matters.
+    ///
+    /// [`view_of`] frames the height, so a pixel is worth `2 × (half + 3) / height` world units
+    /// whatever the width is. A shorter window makes every pixel worth more world, and the 528
+    /// the editor covers becomes more world to slide out from under; a wider window changes
+    /// nothing the transform has to say, because `AutoMin` widens the view on its own.
+    #[test]
+    fn it_is_the_height_of_the_window_that_moves_the_view() {
+        let insets = ViewInsets { right: 528.0, ..ViewInsets::NONE };
+        let slide = |window: Vec2| {
+            let (_, world_per_px) = seen_by(ArenaSize::default().0, window);
+            insets.shift(world_per_px).x
+        };
+        let tall = slide(Vec2::new(1600.0, 900.0));
+        let short = slide(Vec2::new(1600.0, 600.0));
+        assert!(short > tall * 1.4, "{short} vs {tall}");
+        assert!((slide(Vec2::new(1200.0, 900.0)) - tall).abs() < 1e-4, "the width is not it");
     }
 }

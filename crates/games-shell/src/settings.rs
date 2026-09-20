@@ -174,7 +174,7 @@ mod tests {
     /// one in headless Chromium instead (`docs/worklog/2026-09-17-garden-G6b.md`).
     #[test]
     fn remembers_across_a_run() {
-        let path = std::env::temp_dir().join("rubevy-arena-settings-test.txt");
+        let path = std::env::temp_dir().join("games-shell-settings-test.txt");
         let _ = std::fs::remove_file(&path);
 
         let mut first = Settings::load(&path, "a test", read, write);

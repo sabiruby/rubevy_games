@@ -35,7 +35,7 @@
 //! to fall back on either — the browser build is a wasm module with no access to the machine's
 //! fonts, and `fontdb`-style discovery would be a megabyte of code and a different answer on every
 //! machine. So the font is *in the binary*: [`CJK`], a subset of Noto Sans JP cut down to the
-//! characters this file and the two games' guides actually use (`crates/rubevy-arena/assets/fonts/`,
+//! characters this file and the two games' guides actually use (`crates/games-shell/assets/fonts/`,
 //! with its licence beside it; `CREDITS.md` and `docs/web.md` have the size).
 //!
 //! It goes in as a **fallback**, appended to both of egui's families rather than replacing them:
@@ -282,6 +282,11 @@ fn draw_guide(
         // language — and a window egui knows by its name would be a different window after the
         // click, dropped back at the middle of the screen at its default size. The id is the
         // thing that is the same window in both languages.
+        //
+        // **The old crate name is in the id** (S4a, 2026-09-20: `rubevy-arena` became
+        // `rubevy-egui` and `games-shell`). egui writes a window's position and size into its own
+        // memory under this id, and a player's memory has the old string in it; renaming it here
+        // would drop everybody's guide back at its default size and place for nothing.
         .id(egui::Id::new("rubevy-arena-guide"))
         .open(&mut open)
         .collapsible(false)

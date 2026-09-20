@@ -11,10 +11,10 @@
 #
 #   garden/src/guide_text.rs              the garden's words
 #   sabibots/src/guide_text.rs            SabiRuby Battle's words
-#   crates/rubevy-arena/src/guide.rs      the shared bits: the HUD's "H: help" hint, the footer
+#   crates/games-shell/src/guide.rs       the shared bits: the HUD's "H: help" hint, the footer
 #
-# It writes crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf, which is `include_bytes!`d
-# by `rubevy_arena::guide` — so `cargo build` after this, and `web/build.sh` for the pages. The
+# It writes crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf, which is `include_bytes!`d
+# by `games_shell::guide` — so `cargo build` after this, and `web/build.sh` for the pages. The
 # size is recorded in `docs/web.md` and the licence in `CREDITS.md`.
 #
 # Needs: python3 with fonttools (`python3 -m venv .venv && .venv/bin/pip install fonttools brotli`,
@@ -22,7 +22,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-OUT="$ROOT/crates/rubevy-arena/assets/fonts/NotoSansJP-Guide.subset.ttf"
+OUT="$ROOT/crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -31,7 +31,7 @@ if [ -z "$SRC" ]; then
   SRC="$WORK/NotoSansJP.ttf"
   echo "fetching Noto Sans JP from Google Fonts (SIL OFL 1.1; see CREDITS.md)"
   curl -sfL -o "$SRC" "https://github.com/google/fonts/raw/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf"
-  curl -sfL -o "$ROOT/crates/rubevy-arena/assets/fonts/OFL.txt" \
+  curl -sfL -o "$ROOT/crates/games-shell/assets/fonts/OFL.txt" \
     "https://github.com/google/fonts/raw/main/ofl/notosansjp/OFL.txt"
 fi
 [ -f "$SRC" ] || { echo "no such font: $SRC" >&2; exit 1; }
@@ -42,7 +42,7 @@ python3 - "$ROOT" > "$WORK/chars.txt" <<'PY'
 import sys, pathlib
 root = pathlib.Path(sys.argv[1])
 chars = {chr(c) for c in range(0x20, 0x7f)}
-for f in ["garden/src/guide_text.rs", "sabibots/src/guide_text.rs", "crates/rubevy-arena/src/guide.rs"]:
+for f in ["garden/src/guide_text.rs", "sabibots/src/guide_text.rs", "crates/games-shell/src/guide.rs"]:
     chars |= {c for c in (root / f).read_text(encoding="utf-8") if ord(c) >= 0xa0}
 sys.stdout.write("".join(sorted(chars)))
 sys.stderr.write(f"{len(chars)} characters in the guide\n")

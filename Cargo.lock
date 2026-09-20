@@ -2569,15 +2569,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "garden"
+name = "games-shell"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
  "js-sys",
+ "rubevy-egui",
+ "sabiruby-compiler",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "garden"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "games-shell",
+ "js-sys",
  "rubevy",
- "rubevy-arena",
  "rubevy-build",
+ "rubevy-egui",
  "sabiruby",
  "sabiruby-compiler",
  "sabiruby-serde",
@@ -4273,24 +4287,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rubevy-arena"
+name = "rubevy-build"
+version = "0.0.1"
+source = "git+https://github.com/sabiruby/rubevy#33d851a65b04914d222b934d932f1c7673e435af"
+
+[[package]]
+name = "rubevy-egui"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
- "js-sys",
  "notify",
  "rubevy",
  "sabiruby",
- "sabiruby-compiler",
- "wasm-bindgen",
- "web-sys",
 ]
-
-[[package]]
-name = "rubevy-build"
-version = "0.0.1"
-source = "git+https://github.com/sabiruby/rubevy#33d851a65b04914d222b934d932f1c7673e435af"
 
 [[package]]
 name = "rustc-hash"
@@ -4354,10 +4364,11 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_egui",
+ "games-shell",
  "js-sys",
  "rubevy",
- "rubevy-arena",
  "rubevy-build",
+ "rubevy-egui",
  "sabiruby",
  "sabiruby-compiler",
  "wasm-bindgen",

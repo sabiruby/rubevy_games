@@ -15,7 +15,10 @@ rubevy-build.workspace = true
 bevy.workspace = true
 rubevy.workspace = true
 sabiruby.workspace = true
-rubevy-arena.workspace = true
+# S4a: what was `rubevy-arena` until 2026-09-20. The panels are `rubevy-egui`'s, the arena
+# camera, the HUD, the guide and the platform split are `games-shell`'s.
+rubevy-egui.workspace = true
+games-shell.workspace = true
 bevy_egui.workspace = true
 
 # The PC build: the Ruby compiler (C) is linked in, Bevy runs on threads and opens an X11 or

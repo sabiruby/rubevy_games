@@ -25,7 +25,7 @@
 | G1 | 頭脳（Ruby）: `Entity#[]` と `find` と `subscribe` で書いた 2 種の生き物。反射は別タスク | 済み（`ed54e59`） |
 | G2 | `Genome`（マクロ）: Rust の構造体を Ruby のクラスに。混ぜる・変異・子を産む | 済み（`223fc0d`） |
 | G3 | セーブ/ロード（serde）: 世界と `@memory` を JSON に。`Serde<CreatureSpec>` で Ruby から型付きに生成 | 済み（`09e8a8c`） |
-| G4 | 窓: エディタ・VM パネル（`rubevy-arena`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 済み（`b520917`。6 つ目の判定は `fd67de4` で原因 2 つを直して 10/10） |
+| G4 | 窓: エディタ・VM パネル（`rubevy-egui`）を載せ、HUD に「1 判断あたりのフレーム数」と予算の消費 | 済み（`b520917`。6 つ目の判定は `fd67de4` で原因 2 つを直して 10/10） |
 | G5 | ブラウザ版（`web/` の仕組みを共有、Pages で公開） | 済み（`7d2f67d` 版番号・`10acb53` 2 ゲーム 1 サイト・`625ea59` ブラウザで直した鍵とボタン） |
 | G6 | 遊び心地（著者のブラウザ試遊 2026-09-17）: 夜が暗すぎる、ホイールのズームが 2 段階しか効かない、パン（スライド）が無い、ゲーム内の説明（英語 + 日本語） | 済み（`e4164e1` 夜・`f27d941` 視点・`1b8ffa8` 説明） |
 | G6b | 著者の 2 回目の試遊（2026-09-17）: 夜がまだ暗すぎる、説明は英日交互ではなくクリックで切り替え | 済み（`499355d` 設定の置き場所・`bbd89d6` 夜とスライダ・`c2b277f` 言語の切り替え） |
@@ -39,7 +39,7 @@
 
 ## 世界（G0）
 
-`garden/` を workspace に足す（`sabibots/` と同じ形: `Cargo.toml`、`src/main.rs`、`src/platform.rs` は sabibots のものを共有できるなら `rubevy-arena` に移す、`ruby/`、`assets/`）。
+`garden/` を workspace に足す（`sabibots/` と同じ形: `Cargo.toml`、`src/main.rs`、`src/platform.rs` は sabibots のものを共有できるなら共有 crate（今の `games-shell`）に移す、`ruby/`、`assets/`）。
 **3D**（著者の希望 2026-09-17: Bevy らしさを見せる）。`bevy_pbr` を workspace の features に足し、メッシュは Bevy の基本形状だけ
 （地面 `Plane3d`、草 `Cone`/`Sphere`、Beetle `Capsule3d`、Rabbit `Cuboid` + 耳）、色は `StandardMaterial`。G0 の時点ではアセットを持たない（G0a で `.glb` に置き換える）。
 **昼夜は `DirectionalLight` の回転 + 影 + 環境光の色**で見せる（夜に生き物が寝るのが画面で分かる）。カメラは斜め上から、マウスでオービット。
@@ -305,7 +305,7 @@ impl Genome {
 
 ## 窓（G4）
 
-`rubevy-arena` のエディタ（生き物のファイルを書き換えて即反映）と VM パネル（`F2`。`Vm::task_context` への置き換えは battle-followups で済み）を載せる。HUD: 生き物ごとに「1 判断のフレーム数」（`ask` の発行から答えまでを rubevy の stats から）、全体の VM 時間 / 8 ms。
+`rubevy-egui` のエディタ（生き物のファイルを書き換えて即反映）と VM パネル（`F2`。`Vm::task_context` への置き換えは battle-followups で済み）を載せる。HUD: 生き物ごとに「1 判断のフレーム数」（`ask` の発行から答えまでを rubevy の stats から）、全体の VM 時間 / 8 ms。
 `--shot` で 1 枚。
 
 **実装で分かったこと（G4、`docs/worklog/2026-09-17-garden-G4.md`、成果は `docs/garden.md` の「The window (G4)」）**:
@@ -346,7 +346,7 @@ impl Genome {
   （この 1 体 / 同じファイル全員）。箱庭はファイル＝**種**なので 2 つは同じ集合で、Apply は 1 つ。
   押すとその種が全部（同じフレームで。0.4 秒に 1 匹ずつ渡していたのは上の追記のとおり VM の
   バグ回避で、いまは無い）再起動し、**そのあと生まれる子にも配られる**（`Brains`）。
-  `rubevy-arena` に足したのは `Editor` の 4 フィールド（`apply_label` / `apply_all_label: Option`（None で描かない）/
+  `rubevy-egui` に足したのは `Editor` の 4 フィールド（`apply_label` / `apply_all_label: Option`（None で描かない）/
   `apply_key: Option<KeyCode>`（箱庭の `F5` は保存で埋まっている）/ `noun`）だけで、sabibots の変更は 1 行。
 * **「1 判断のフレーム数」は定義が仕事。** タスクが止まる理由は「聞いた」か「寝た」かの 2 つだけ。
   ゲームへの質問は `answer_garden` が答えた相手にフレーム番号を書く（`Mind::asked_frame`）ので
@@ -455,7 +455,7 @@ wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記�
 
 ## 遊び心地（G6）
 
-著者がブラウザで試遊して気になった 3 点（2026-09-17）。Battle にも同じものを載せる（共通部分は `rubevy-arena`）。
+著者がブラウザで試遊して気になった 3 点（2026-09-17）。Battle にも同じものを載せる（共通部分は共有 crate）。
 
 1. **夜が暗すぎる。** 夜の環境光と `DirectionalLight` の下限を上げ、月明かり相当に（生き物と木が輪郭で分かる。真夜中の `--shot` を撮って決める）。
    昼夜の「差」は残す（寝ているのが分かる程度）。数値は `docs/garden.md` に。
@@ -466,7 +466,7 @@ wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記�
    キー一覧（F1/F2/P/F5/F9/Tab/H、マウスの回転・パン・ズーム）。**英語 + 日本語の併記**。egui の既定フォントに日本語は無いので、
    CJK を含む軽いフォント（Noto Sans JP のサブセット。使う文字だけに絞れば数百 KB）を同梱して `FontDefinitions` に足す。
    同梱後の wasm 増分は測って記録する（著者判断 2026-09-17: 日本語フォント分のサイズ増加は許す。サブセット化はする）。
-   Battle にも同じパネル（内容は Battle 用）。共通の枠は `rubevy-arena` に。
+   Battle にも同じパネル（内容は Battle 用）。共通の枠は共有 crate に。
 
 確認: 夜の `--shot`、ブラウザでホイール 10 ノッチ・ドラッグ・パンの実測、`H` のパネルが両言語で読める `--shot`（日本語が豆腐でない）、既存の判定すべて。
 
@@ -507,7 +507,7 @@ wasm のサイズ（gzip 前後）を `docs/web.md` に Battle と並べて記�
    `--guide` を付けたときだけ開く（それが「日本語が豆腐でない」を確かめる撮り方）。
 
 **日本語の文面は下書き**で、著者が直す前提。直す場所は `garden/src/guide_text.rs` と
-`sabibots/src/guide_text.rs`（共通の 2 文字列だけ `crates/rubevy-arena/src/guide.rs`）、
+`sabibots/src/guide_text.rs`（共通の 2 文字列だけ `crates/games-shell/src/guide.rs`）、
 直したら `tools/subset-font.sh` → `cargo build` → `web/build.sh all`。
 
 ## 遊び心地・2 回目（G6b）
@@ -635,7 +635,7 @@ Rust の規則（成長・移動・腹減り・昼夜・繁殖・餓死）は走
 2. **VM パネル**: 既定で閉じる（`F2` で開く。`--shot` は `--vm` を付けたときだけ開く）。上半分を人向けに: 生き物の名前、**自分のファイルのフレームだけ**（`prelude.rb` や `(no debug info)` は「詳細」へ）、
    **待っている理由**（`on(:touched)` の出来事待ち / `sleep` / `ask` の答え待ち — `task_location` と待ち行から判定）、insn/frame、タスク数、VM 時間。
    レジスタ・ヒープ・context 一覧・全フレームは「詳細」の折りたたみ（既定で閉じる）。説明パネルの `F2` の行を「VM の中を見る — どの行で何を待っているか」に（英日）。
-   `rubevy-arena` の `VmInspector` を直し、Battle にも同じ見え方。
+   `rubevy-egui` の `VmInspector` を直し、Battle にも同じ見え方。
 
 確認: 両ゲームの headless selftest、窓の判定（garden 21 + 一時停止の新 1〜2 本）、`--shot --vm` の絵（`docs/vm-inspector.png` と箱庭側 1 枚）、フォント再サブセット（説明文の変更分）。
 

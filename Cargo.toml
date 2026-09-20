@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rubevy-arena", "garden", "sabibots"]
+members = ["crates/games-shell", "crates/rubevy-egui", "garden", "sabibots"]
 
 # One Bevy for the whole repository: a binary can only have one, and keeping the version in one
 # place is what makes bumping it a single edit for every game here.
@@ -44,7 +44,11 @@ sabiruby-compiler = { version = "0.2.3", features = ["host"] }
 # G3's save file: the `Vm` this converts values for is the one the scripts run in, which the
 # patch below is what guarantees.
 sabiruby-serde = "0.1.0"
-rubevy-arena = { path = "crates/rubevy-arena" }
+# S4a: what was `rubevy-arena` until 2026-09-20, split in two. `rubevy-egui` is the part an
+# outside rubevy user could want (the editor and the VM panel, over bevy_egui); `games-shell` is
+# the shell the games here share, and it is the one that depends on the other.
+rubevy-egui = { path = "crates/rubevy-egui" }
+games-shell = { path = "crates/games-shell" }
 # the in-game editor (the code panel); 0.42 is the one built for Bevy 0.19
 bevy_egui = { version = "0.42", default-features = false, features = ["render", "default_fonts"] }
 

@@ -49,7 +49,8 @@ use rubevy::{
     in_the_authors_lines, replace_script, Answer, Arg, MrbAsset, Program, RubevyPlugin, RubevySet,
     Script, ScriptTask, ScriptWorld,
 };
-use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
+use games_shell::GuidePlugin;
+use rubevy_egui::{EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
 use serde::{Deserialize, Serialize};
@@ -125,7 +126,7 @@ const NIGHT_SKY: [f32; 3] = [0.14, 0.18, 0.36];
 /// screen*. A brightness is not a fact about the code; it is a fact about a monitor in a room. So
 /// the slider in the Garden panel multiplies all three night quantities together — moonlight,
 /// ambient and sky — and the number it is left at is written to the log and remembered
-/// (`rubevy_arena::Settings`), so that the author can turn it until the night reads and tell us
+/// (`games_shell::Settings`), so that the author can turn it until the night reads and tell us
 /// one number to bake in here. Multiplying all three by one number is what makes that possible:
 /// two dials would be a design decision handed to somebody who asked a question.
 ///
@@ -1464,7 +1465,7 @@ end
 
 /// How long `--headless` runs when it is given no number, and what `--shot` writes to and waits
 /// for when it is given neither. **They are the values that were written into `main` here before
-/// S1**, moved out only because the parsing they were in is `rubevy_arena::Args`' now and the
+/// S1**, moved out only because the parsing they were in is `games_shell::Args`' now and the
 /// Battle's `--shot` waits a different three seconds; no run's behaviour turns on them, since
 /// every line in `docs/garden.md` passes its own number.
 const HEADLESS_SECONDS: f32 = 10.0;
@@ -1473,8 +1474,8 @@ const SHOT_SECONDS: f32 = 6.0;
 
 fn main() {
     // The flags both games take (`--headless`, `--shot`, `--vm`, `--lang`) are read by
-    // `rubevy_arena::Args`; the garden's own four are read off the same words below.
-    let args = rubevy_arena::Args::from_env();
+    // `games_shell::Args`; the garden's own four are read off the same words below.
+    let args = games_shell::Args::from_env();
     // `--headless N`: no window, N seconds, the world reported on stdout. It runs exactly the
     // same systems as the windowed one; only the drawing is missing.
     let headless = args.headless(HEADLESS_SECONDS);
@@ -1511,7 +1512,7 @@ fn main() {
     // `docs/garden.md` is taken. A player asks with `F2`.
     let wants_vm = args.has("--vm");
     // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
-    // player's own click is (`rubevy_arena::Settings`), and a picture asked for in Japanese on
+    // player's own click is (`games_shell::Settings`), and a picture asked for in Japanese on
     // the command line should not change what the next run shows a person.
     let lang_asked = args.value("--lang");
 
@@ -1545,8 +1546,8 @@ fn main() {
             // jump to the other, and a `--shot` of the night would be taken at the wrong
             // brightness. On a PC this is a file beside the save; in a browser it is a key in
             // the same local storage the save uses (`platform.rs`). The store and the language
-            // are `rubevy_arena::remembered`'s since S1; the dial is the garden's own.
-            let (settings, lang) = rubevy_arena::remembered(
+            // are `games_shell::remembered`'s since S1; the dial is the garden's own.
+            let (settings, lang) = games_shell::remembered(
                 platform::SETTINGS_FILE,
                 "garden: what the panel remembers. Delete a line to go back to the default.",
                 platform::read,
@@ -1577,7 +1578,7 @@ fn main() {
                 RubevyPlugin::default(),
                 // W1: and the world's own, as in the headless arm above
                 RubevyPlugin::<World>::for_vm(platform::assets_dir()),
-                // G4: the editor and the VM panel, both `rubevy-arena`'s — the same two SabiRuby
+                // G4: the editor and the VM panel, both `rubevy-egui`'s — the same two SabiRuby
                 // Battle uses. They bring `bevy_egui` between them.
                 //
                 // H2: with the lexer behind the editor's colours. Which lexer is `platform.rs`'s
@@ -1586,7 +1587,7 @@ fn main() {
                 EditorPlugin::with_highlighter(platform::highlight),
                 VmInspectorPlugin,
                 // G6: the `H` panel, and with it the Japanese font every egui panel in the game
-                // now has as a fallback (`rubevy_arena::guide`)
+                // now has as a fallback (`games_shell::guide`)
                 GuidePlugin,
             ))
             // G6. A picture is asked for one thing, and the panel sits over the middle of the
@@ -1772,7 +1773,7 @@ fn main() {
         // does not happen — the world's task is parked on `Rubevy.ask("frame")` either way, and
         // the delta it wakes with is one frame's and not the pause's.
         //
-        // `VmClockSet` is the pair of systems that time the creatures' tick (`rubevy-arena`). They
+        // `VmClockSet` is the pair of systems that time the creatures' tick (`rubevy-egui`). They
         // are ordered against `RubevySet::Tick` and would otherwise have had the world's tick
         // scheduled inside their window, which made the HUD's "VM 0.9 ms" read 2.1 — one VM's
         // figure against two VMs' work. Ordering the world's tick ahead of the pair puts each
@@ -4633,7 +4634,7 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
 
 /// What one pass of `world.rb` cost, measured round the set that runs it (W1).
 ///
-/// The two halves are `VmClock`'s (`rubevy-arena`), which is the creatures' VM's and takes
+/// The two halves are `VmClock`'s (`rubevy-egui`), which is the creatures' VM's and takes
 /// `ScriptWorld` by name; this one is the world's. Keeping them apart is the point of the
 /// measurement: the budgets are per VM and nothing caps them together, so what a frame can cost is
 /// the sum, and the only way to choose the second VM's share is to know what it spends.

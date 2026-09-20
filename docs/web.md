@@ -73,7 +73,7 @@ And outside that module:
 * each game's `Cargo.toml` adds per target what Bevy needs: `multi_threaded` and `x11` on a PC,
   `web` and `webgl2` in a browser (the workspace's Bevy has only what both share). The PC build
   also takes `sabiruby-compiler`; the browser build takes `wasm-bindgen`, `js-sys`, `web-sys`.
-* `rubevy-arena`'s `Watch` has a browser version whose `new` answers `None` (there is no directory
+* `rubevy-egui`'s `Watch` has a browser version whose `new` answers `None` (there is no directory
   to watch), so a game's reload system is the same code and simply never reloads. The garden says
   so out loud on start-up: `could not watch "ruby": saving a creature's file will not reload it`.
 * The window is given a canvas (`#sabibots` / `#garden`, `fit_canvas_to_parent`), which a PC
@@ -259,7 +259,7 @@ by a button — and egui's default fonts have no CJK at all, so a subset of Noto
 62,780 bytes at G6, 66,796 after G6b re-cut it, 65,904 after G7 renamed the words in it
 (four characters in, seven out) and **64,616** after G9 changed the `F2` and `P` rows
 (one character in — `く`, from 「続く」 — and six out), is
-`include_bytes!`d into `rubevy-arena` and added to egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
+`include_bytes!`d into `games-shell` and added to egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
 condition that the font be subset rather than shipped whole. Measured on the same machine and the
 same binaryen, all four numbers after `wasm-opt -Os`:
 
@@ -284,7 +284,7 @@ is what has to be run again when the Japanese is edited (`docs/garden.md`, `CRED
 `bevy_pbr`, `bevy_gltf`, `bevy_animation` and the glTF loader against Battle's sprites. The plan
 guessed 35–40 MB against "Battle's 30 MB"; both games are at the top of that. The figure recorded
 here at the time of the Battle's own build was 26.7 MB — the module has grown by 8 MB since, on
-an unchanged `web` profile, and what grew it (Bevy 0.19, `bevy_egui` 0.42, `rubevy-arena`) has
+an unchanged `web` profile, and what grew it (Bevy 0.19, `bevy_egui` 0.42, `rubevy-egui` and `games-shell`) has
 not been taken apart. Most of what is in there is Bevy's renderer.
 
 ## Checked in a browser

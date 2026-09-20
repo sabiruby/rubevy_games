@@ -1,5 +1,4 @@
-//! **A 2D camera a player can drive** (S3), and the two numbers a panel and a camera have to
-//! agree on ([`ViewInsets`]).
+//! **A 2D camera a player can drive** (S3).
 //!
 //! [`ArenaPlugin`](crate::ArenaPlugin) shows a square that always fits the window and never
 //! moves. That is right for a match in a walled arena and wrong for a world bigger than the
@@ -32,44 +31,10 @@
 
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
-
-// ---------------------------------------------------------------------------------------------
-// What is drawn over the window
-// ---------------------------------------------------------------------------------------------
-
-/// **How many pixels of each edge of the window something is drawn over**, so that a camera can
-/// put what matters in the part nobody is covering.
-///
-/// A panel writes it — [`EditorPlugin`](crate::EditorPlugin) writes the band its window covers —
-/// and a camera reads it. That is the whole of the arrangement, and it is why neither has to know
-/// the other: the arena camera used to read `Res<Editor>` and slide by a fraction of the window
-/// that stood for "the editor is about a third of it", which was a guess about a panel written
-/// into a camera.
-///
-/// The unit is logical pixels, the same ones [`Window::width`] and egui's points are in.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Default)]
-pub struct ViewInsets {
-    pub left: f32,
-    pub right: f32,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-impl ViewInsets {
-    /// Nothing covered.
-    pub const NONE: ViewInsets = ViewInsets { left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 };
-
-    /// **How far the camera has to move so that what it is aimed at sits in the middle of what is
-    /// still visible**, in world units, given how many world units a pixel is worth.
-    ///
-    /// Half of what is covered, towards the covered side: cover 528 pixels on the right and the
-    /// middle of the rest is 264 pixels to the left of the window's middle, so the camera looks
-    /// 264 pixels' worth further right. The `y` is the screen's top and bottom turned the world's
-    /// way up.
-    pub fn shift(&self, world_per_px: f32) -> Vec2 {
-        Vec2::new((self.right - self.left) * 0.5, (self.top - self.bottom) * 0.5) * world_per_px
-    }
-}
+// **What covers the window** is `rubevy-egui`'s, because the panel that writes it is
+// (`rubevy_egui::EditorPlugin`); a camera is only ever a reader of it (S4a). Re-exported so that
+// a game reaching for the camera's vocabulary finds it here, where it used to be defined.
+pub use rubevy_egui::ViewInsets;
 
 // ---------------------------------------------------------------------------------------------
 // The numbers
@@ -358,7 +323,7 @@ pub struct WorldClick {
 ///
 /// ```no_run
 /// # use bevy::prelude::*;
-/// # use rubevy_arena::camera::{CameraControls, CameraPlugin};
+/// # use games_shell::camera::{CameraControls, CameraPlugin};
 /// # let mut app = App::new();
 /// app.add_plugins(
 ///     // half the world the window shows from top to bottom, in world units
@@ -710,7 +675,7 @@ mod tests {
 
     #[test]
     fn the_store_changes_a_number_and_leaves_the_rest() {
-        let path = std::env::temp_dir().join("rubevy-arena-camera-settings-test.txt");
+        let path = std::env::temp_dir().join("games-shell-camera-settings-test.txt");
         let _ = std::fs::remove_file(&path);
         fn read(path: &std::path::Path) -> Result<String, String> {
             std::fs::read_to_string(path).map_err(|e| e.to_string())

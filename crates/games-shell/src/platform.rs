@@ -19,7 +19,7 @@
 //!   run time; [`js_sys::Reflect::get`] can, and looks the same function up on `window` by the
 //!   same name the page defines. No `unsafe` is involved either way.
 //! * **the crate's own directory**, for `ruby/` and `assets/` on a PC: `env!("CARGO_MANIFEST_DIR")`
-//!   in a shared crate would answer `crates/rubevy-arena`, so it is passed in by the
+//!   in a shared crate would answer `crates/games-shell`, so it is passed in by the
 //!   [`crate_dir!`](crate::crate_dir) macro, which expands where the game is compiled.
 //!
 //! Everything a game says about *itself* — the name of its save file, the sentence its Save
@@ -37,7 +37,7 @@ pub type RubyFiles = &'static [(&'static str, &'static str)];
 /// **Where the game's own `ruby/` or `assets/` is.** It takes `env!("CARGO_MANIFEST_DIR")` rather
 /// than reading it, because the value wanted is the *game's* manifest directory and a shared
 /// crate's `env!` would answer its own. [`crate_dir!`](crate::crate_dir) is the one line that
-/// passes it, so a game writes `rubevy_arena::crate_dir!("ruby", "garden/ruby")`.
+/// passes it, so a game writes `games_shell::crate_dir!("ruby", "garden/ruby")`.
 ///
 /// `from_root` is where to look when the crate's own directory is not there — the workspace root,
 /// which is where `cargo run -p garden` starts. In a browser there are no directories at all and
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn a_file_is_read_back_and_a_missing_directory_falls_back() {
         let dir = std::env::temp_dir();
-        let path = dir.join("rubevy-arena-platform-test.txt");
+        let path = dir.join("games-shell-platform-test.txt");
         let _ = std::fs::remove_file(&path);
 
         assert!(read("game:", &[], &path).is_err(), "a file that is not there says so");
