@@ -169,8 +169,9 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 | 段階 | 状況 |
 |---|---|
 | S1 | **済み**（2026-09-20、`shared-crate` の `8f836d4`）。`rubevy_arena::{platform, checks, args}` と `settings::remembered` / `Guide::opening`。2 本の `platform.rs` は 261 → 141 行、201 → 98 行（コメントと空行を除くと 121 → 51、103 → 33）。ブラウザの橋は `js_sys::Reflect` で unsafe 0。共有 crate に数は 1 つも置いていない（`--shot` / `--headless` の既定はゲームが渡す）。動きは不変: テスト 18 → 22、箱庭ヘッドレスの 13 件は本文まで一致、窓は 3 走行とも ok 43、ブラウザは 2 ゲームとも pageerror 0・requestfailed 0（garden ok 43、Battle は当たりに依らない 31 行）。計画に無かった判断 1 つ: PC の `compile` / `highlight` も共有側へ移したので `rubevy-arena` が PC で `sabiruby-compiler` に依存する。記録は `docs/worklog/2026-09-20-shared-platform.md` |
-| S2 | 実行中（rubevy の R6 `cb8bf00` を、切り離した worktree `rubevy-wt-r6` への一時の `[patch]` で使う。rubevy が push されるまで main に入れられない） |
-| S3〜S4 | 未着手 |
+| S2 | **済み**（2026-09-20、`shared-crate` の `cce11ba`。**rubevy が push されるまで GitHub の rubevy では通らない** — 一時の `[patch]` で `rubevy-wt-r6` を指して作った。`Cargo.lock` はコミットに入れていない。rubevy の push の後に本体が取り直す）。2 本の `build.rs` は 35 行 → `rubevy_build::Embed::new("ruby").write()`、build.rs → `include!` → 表を引く、の通しはブラウザの 2 ゲームが走ったことで確認。`Program::new` に替えて `prelude_lines` は前と同じ数（482 / 376 / 297）。**sabibots のエディタが著者の行番号を言う**: `scout.rb:68:5`（直す前なら 365）、ブラウザは `playground.rb:68:5`。selftest に 1 段足した。garden の `beetle.rb:136` / `world.rb:315` も今までどおり。動きは不変: テスト 22 → 21（減った 1 本は rubevy に移った）、箱庭はヘッドレス 13 行・窓 43 行・ブラウザ 43 行が完全一致、Battle は当たりに依らない行が窓 30 → 31・ブラウザ 31 → 32（増えたのは新しい判定だけ）、pageerror 0・requestfailed 0、`web/build.sh all` + `wasm-opt` 通る。記録は `docs/worklog/2026-09-20-rubevy-entry-points.md` |
+| S3 | 実行中 |
+| S4 | 未着手 |
 | S5a | **済み**（2026-09-20、`a0de41e` を main に取り込み）。`docs/numbers.md`: 数値リテラルを含む 1,246 行から **260 件**。分類案は (a) 不変量 33 / (b) 遊びの数 → Ruby 33 / (c) 動かす側 → Settings・引数 101 / (d) selftest の閾値 28 / (e) 既に変えられる 65。出どころは 測った 14 / 導出 18 / 引用 50 / 理由のみ 53 / **不明 125（48%）**。毎フレーム読まれる数 103 件。コードは無変更。記録は `docs/worklog/2026-09-20-numbers-inventory.md` |
 | S5b | **著者が一覧を見るのを待っている**（`docs/numbers.md` の §8「迷った数」10 件と下の 7 章） |
 
@@ -181,6 +182,10 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 
 | 日付・段階 | 気づいた点 | どこ | 属する先 | 状況（計画に足した／著者判断待ち／見送り・理由） |
 |---|---|---|---|---|
+| 09-20 S2 | `replace_script` に替えられる同じ 3 行があと 2 か所ある: garden の `wear_the_rules`（`Script::<World>` 版）と sabibots のファイル監視からの再読み込み。計画書 3.2 が 2 つしか名指ししていなかった | `garden/src/main.rs`、`sabibots/src/main.rs:2304-2308` | 計画書（S2 の書き漏らし） | 計画に足す: S3 の最初に替える |
+| 09-20 S2 | **`Program` にコンパイラへ渡すファイル名の置き場所が無い**。`name` は区切りコメント専用で、呼び出し側が同じ `name` を 2 回書く（片方だけ変えると食い違う）。`&str` 4 本は取り違えなかった（変数名がそのまま引数の順に並ぶ）。ビルダは要らない | rubevy `src/source.rs` | rubevy（API） | rubevy の計画 7 章に写す。直すなら `Program` が `name` を持って読めるように |
+| 09-20 S2 | Battle の「当たりに依らない行」の基準に、走行次第で入れ替わる行が混じっている（編集チェック中の当たりの除外行、撃破の有無で入れ替わる `handler tasks … ended` ⇄ `no robot with a handler was down long enough`） | `sabibots/src/main.rs:1308,1429`、`docs/README.md` の基準 | 確認の作法／本の素材 | **著者判断待ち**（小）: n/a の文面を 1 つに決めるか、基準の行を列挙して `docs/` に置くか |
+| 09-20 S2 | `web/build.sh` は `CARGO_TARGET_DIR` を見ない（`target/…` を相対で読むので、立てて呼ぶと落ちる）。`${CARGO_TARGET_DIR:-target}` で済む | `web/build.sh:48` | 道具 | 計画に足す: S4 で直す |
 | 09-20 S1 | **箱庭の窓のチェックに揺れがある**: 無改変の状態で 3 走行中 2 走行が 1 件ずつ FAIL（`Revert puts every beetle back on the file`、`every restarted beetle's new task has run`。どちらもエディタの Apply / Revert / 再起動の周り）。これまでの揺れの記録はヘッドレスだけで、窓側のこの 2 件は記録が無い。S1 の後の 3 走行は全部 ok 43 だったが、3 走行では何も言えない | `garden/src/window.rs` の窓のチェック。再現: コンテナのビルド直後に `GARDEN_SELFTEST=1` で release の garden を続けて 2 回 | ゲーム固有（箱庭の判定）。バグ候補 | **著者判断待ち**: 調査を別に立てるか（前の揺れと同じく、何十回か回して原因を割る） |
 | 09-20 S1 | Battle のヘッドレスは当たりの数が走行ごとに大きく振れる（25 秒で 20 発と 9 発）。selftest の**行数**は前後比較の基準にならず、「当たりに依らない行の集合」で比べる必要がある | `sabibots` の selftest | 本の素材／確認の作法 | 計画に足した: S2 以降の確認は行の集合で比べる。book の findings に写す |
 | 09-20 S1 | `rubevy-arena` が PC ビルドで `sabiruby-compiler` に依存するようになった（S1 の判断）。「共有 crate は画面・ファイル・ブラウザのもの」という線引きからは新顔 | `crates/rubevy-arena/Cargo.toml` | 共有 crate（構成） | **著者判断待ち**（`rubevy-arena` の構成見直しと一緒に） |
