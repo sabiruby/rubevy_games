@@ -434,3 +434,34 @@ S6 と S7 と同じ条件（窓の走行を **8 本同時**、docker、交互に
 
 S7 の記録（8 本同時 88 走行で `and with the panel closed …` が 4）と比べると、直す前の 6 件は
 その 4 件と同じ行で、内訳が 2 つに分かれていたことが今回分かった、という関係になる。
+
+---
+
+## 10. 狙う点を動かしたら、下に何が居るかが分かった
+
+B-5 で狙う点を矩形の真ん中（既定で x=1332）から内側の辺（x=1080）へ動かしたら、
+**窓の走行が 3/3 で落ちた**。前の版では出ていない形である。
+
+足しておいた stage direction が 1 発で答えを出した:
+
+```
+selftest: in the frame the wheel was turned: wants_pointer_input=true is_pointer_over_area=true editor.open=false
+selftest: FAIL and with the panel closed the same wheel in the same place zooms (… camera 42.00 -> 42.00)
+```
+
+**エディタは閉じている（`editor.open=false`）のに、egui は「何かの上にポインタが居る」と言う。**
+その何かは**説明のパネル**だった: `games_shell::Guide` は窓の中央に錨を下ろし、
+`Order::Foreground`（他の全パネルの上）で描かれ、**ゲームが始まった時点で開いている**。
+既定の大きさ 640×820 を 1600×900 の窓の中央に置くと x は 480〜1120 で、
+**新しい狙う点 1080 はその中**、古い狙う点 1332 は外である。
+
+つまり 2 つのホイールの判定は、**「狙う点が説明パネルの外に落ちる」ことに黙って寄りかかって
+いた**。150 px の余裕で。狙う点を動かすまで誰も知らなかったし、
+`guide_width` を設定で広げた人は同じ FAIL を見たはずである。
+
+直しは `FakePointer::hide_the_guide()`——ホイールの段に入る前に `Guide::open` を false にする。
+`H` を打つのではなく代入にしたのは、**欲しいのは「閉じていること」であって「切り替わること」
+ではない**から（同じ段が `Editor::open` を既に代入で扱っている）。`FakePointer` は
+`SystemParam` なので `window_selftest` の引数は 15 のままである。
+
+直した後の窓の走行は **3/3 で 45 行 FAIL 0**。

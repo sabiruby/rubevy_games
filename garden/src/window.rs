@@ -1255,12 +1255,36 @@ pub struct FakePointer<'w, 's> {
     /// game — or a player's `garden.settings.txt` — may have asked for a panel of another size,
     /// and a check that read the default would then be pointing at a rectangle nobody drew.
     editor: Res<'w, rubevy_egui::EditorLayout>,
+    /// **and the guide, which is drawn in the middle of the window over everything else**
+    /// (S5b-5). It starts open, nothing in these checks shuts it, and the control step of the
+    /// wheel checks needs a point with nothing under it — see [`FakePointer::hide_the_guide`].
+    guide: Option<ResMut<'w, games_shell::Guide>>,
 }
 
 impl FakePointer<'_, '_> {
     /// Whether egui is holding the pointer, as [`crate::orbit_camera`] asks it.
     fn egui_has_it(&self) -> bool {
         self.egui.as_ref().is_some_and(|e| e.wants_pointer_input() || e.is_pointer_over_area())
+    }
+
+    /// **Shut the guide before the wheel is turned** (S5b-5).
+    ///
+    /// The guide is anchored to the centre of the window and drawn in `Order::Foreground`, above
+    /// every other panel, and it is open when a game starts (`games_shell::Guide`). Nothing in
+    /// these checks shuts it, so until now the two wheel checks were relying on the aim point
+    /// falling outside it — which it did, by 150 pixels, for as long as the point was the middle
+    /// of the editor's rectangle. Taking the point to the rectangle's inner edge put it inside
+    /// the guide instead, and the control step failed three runs out of three with
+    /// `is_pointer_over_area=true` and the editor shut: the panel under the pointer was the
+    /// guide.
+    ///
+    /// It is set rather than typed (`H` toggles it) because the step wants it *shut*, not
+    /// *changed*, and because the same step already puts `Editor::open` where it wants it. What
+    /// it buys is that neither wheel check depends on where the guide happens to be.
+    fn hide_the_guide(&mut self) {
+        if let Some(guide) = self.guide.as_mut() {
+            guide.open = false;
+        }
     }
 
     /// The same, taken apart, for a failing check to print (S5b-5).
@@ -2033,6 +2057,7 @@ pub fn window_selftest(
             // Last rather than first because it moves the pointer, and every check above is
             // driven by keys and by `Editor::action` and would rather the pointer stayed where
             // the player left it.
+            pointing.hide_the_guide();
             let at = pointing.over_the_editor().unwrap_or_default();
             pointing.point_at(at);
             test.step = 14;
