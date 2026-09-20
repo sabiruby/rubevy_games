@@ -356,7 +356,8 @@ pub fn do_editor_actions(
                 }
             };
             brains.set(species, Some(text));
-            let n = restart_species(&mut commands, &mut minds, species, handle, lines, true);
+            brains.hand_over(species, handle, lines, true);
+            let n = restart_species(&mut commands, &mut minds, species, &brains);
             editor.applied(format!(
                 "{n} {}s restarted on it — in memory, and so is anything born into it. Save to keep it.",
                 species.name()
@@ -378,7 +379,8 @@ pub fn do_editor_actions(
                     return;
                 }
             };
-            restart_species(&mut commands, &mut minds, species, handle, lines, false);
+            brains.hand_over(species, handle, lines, false);
+            restart_species(&mut commands, &mut minds, species, &brains);
             editor.applied(format!("saved to {}", species.file()));
         }
         EditorAction::Revert => {
@@ -395,7 +397,8 @@ pub fn do_editor_actions(
                 }
             };
             brains.set(species, None);
-            restart_species(&mut commands, &mut minds, species, handle, lines, false);
+            brains.hand_over(species, handle, lines, false);
+            restart_species(&mut commands, &mut minds, species, &brains);
             editor.reset_to(source, format!("back to {}", species.file()));
         }
     }
@@ -517,42 +520,85 @@ fn do_world_actions(
 /// frame — one frame per task, so sixty frames for ten beetles
 /// (sabiruby `docs/worklog/2026-09-17-task-end-nil.md`). 0.5.1 tells the two apart, and the queue
 /// went with it: every creature of the species is handed over here, in the frame Apply was pressed.
+///
+/// **Every creature it can see** (S7). What it cannot see is a creature whose `Mind` was put in
+/// the `Commands` queue earlier in this same frame — a creature born in it — and that one used to
+/// be missed for good. It is not missed any more: the hand-over is numbered
+/// ([`crate::Wearing`]) and [`catch_up_minds`] gives the program to whoever is behind, on this
+/// frame or on the next one.
 fn restart_species(
     commands: &mut Commands,
     minds: &mut Query<(Entity, &mut Mind)>,
     species: Species,
-    handle: Handle<MrbAsset>,
-    prelude_lines: u32,
-    in_memory: bool,
+    brains: &Brains,
 ) -> usize {
+    let Some(wearing) = brains.wearing(species) else { return 0 };
     let mut n = 0;
     for (entity, mut mind) in minds.iter_mut() {
         if mind.species != species {
             continue;
         }
-        mind.in_memory = in_memory;
-        mind.prelude_lines = prelude_lines;
-        // everything the HUD says about this creature is about the script it is running, and
-        // that is about to be a different one: the heat, the line, what it has spent, and what a
-        // round trip has cost it all start again with the new brain
-        mind.heat.clear();
-        mind.own_line = None;
-        mind.at.clear();
-        mind.last_instructions = 0;
-        mind.spent = 0;
-        mind.frames = 0;
-        mind.restart();
-        // S2: the three lines this was — `ScriptTask` off, `ScriptDone` off, the new `Script` on
-        // — are rubevy's `replace_script` (R6). Forgetting the `ScriptDone` is the invisible
-        // half: a creature whose script had run to its end could never be given another one.
-        replace_script(
-            commands,
-            entity,
-            Script::new(handle.clone()).with_name(&mind.name).with_priority(100),
-        );
+        wear_mind(commands, entity, &mut mind, wearing);
         n += 1;
     }
     n
+}
+
+/// **One creature, handed the program its species is wearing.**
+///
+/// The body of what [`restart_species`] used to do inline, so that [`catch_up_minds`] does
+/// exactly the same thing to a creature that arrives after the hand-over has gone by.
+fn wear_mind(commands: &mut Commands, entity: Entity, mind: &mut Mind, wearing: &crate::Wearing) {
+    mind.in_memory = wearing.in_memory;
+    mind.prelude_lines = wearing.prelude_lines;
+    mind.generation = wearing.generation;
+    // everything the HUD says about this creature is about the script it is running, and
+    // that is about to be a different one: the heat, the line, what it has spent, and what a
+    // round trip has cost it all start again with the new brain
+    mind.heat.clear();
+    mind.own_line = None;
+    mind.at.clear();
+    mind.last_instructions = 0;
+    mind.spent = 0;
+    mind.frames = 0;
+    mind.restart();
+    // S2: the three lines this was — `ScriptTask` off, `ScriptDone` off, the new `Script` on
+    // — are rubevy's `replace_script` (R6). Forgetting the `ScriptDone` is the invisible
+    // half: a creature whose script had run to its end could never be given another one.
+    replace_script(commands, entity, Script::new(wearing.handle.clone()).with_name(&mind.name).with_priority(100));
+}
+
+/// **Whoever is behind their species' program, given it** (S7).
+///
+/// The hand-over in [`restart_species`] reaches every creature that is in the `Query` when the
+/// editor's button is taken. A creature born in that same frame is not: `children_arrive` builds
+/// its body and queues its `Mind` through `Commands`, and there is no ordering edge between that
+/// system and `do_editor_actions`, so Bevy puts no sync point between them and the `Mind` is
+/// still in the queue when the hand-over goes round. Before S7 that creature kept the program it
+/// was born with **for the rest of the run** — the editor said twelve beetles had been restarted
+/// and one of them was quietly running the other text
+/// (`docs/worklog/2026-09-20-window-check-flakes.md` §3).
+///
+/// Asking "is this creature behind?" every frame is the same question asked where it can be
+/// answered. It costs one comparison per creature per frame and it hands nothing over in a frame
+/// where nothing was applied, since every number matches. **It adds no number**: a generation is
+/// a count of hand-overs, not a threshold.
+///
+/// What it costs the creature that was missed is one frame: it runs the old program for the
+/// frame it was born in and is handed the new one on the next. That is the whole change in
+/// behaviour, and it is against never being handed it at all.
+pub fn catch_up_minds(mut commands: Commands, brains: Res<Brains>, mut minds: Query<(Entity, &mut Mind)>) {
+    for (entity, mut mind) in minds.iter_mut() {
+        let Some(wearing) = brains.wearing(mind.species) else { continue };
+        if mind.generation == wearing.generation {
+            continue;
+        }
+        info!(
+            "{} was born in the frame its species was handed a new program — handing it over now",
+            mind.name
+        );
+        wear_mind(&mut commands, entity, &mut mind, wearing);
+    }
 }
 
 /// A creature file saved from outside the game restarts that species, exactly as Save does — and
@@ -562,7 +608,7 @@ pub fn reload_changed(
     mut commands: Commands,
     watch: Option<Res<Watch>>,
     ruby: Res<RubyDir>,
-    brains: Res<Brains>,
+    mut brains: ResMut<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut minds: Query<(Entity, &mut Mind)>,
     mut editor: ResMut<Editor>,
@@ -627,7 +673,8 @@ pub fn reload_changed(
             {
                 editor.reset_to(source, "the file changed");
             }
-            let n = restart_species(&mut commands, &mut minds, species, handle, lines, false);
+            brains.hand_over(species, handle, lines, false);
+            let n = restart_species(&mut commands, &mut minds, species, &brains);
             info!("{} changed: {n} restarted", species.file());
         }
     }
@@ -1093,6 +1140,13 @@ fn hunger_bar(ui: &mut egui::Ui, hunger: f32) {
 pub struct WindowTest {
     step: usize,
     at: f32,
+    /// **What the next step is waiting for besides its clock** (S7, [`Turn`]).
+    turn: Turn,
+    /// and how many frames it has been waiting for it
+    waited: u32,
+    /// every beetle there was when Apply was pressed, so that the one born in that very frame
+    /// can be told from them (S7)
+    beetles_before: Vec<Entity>,
     /// what `beetle.rb` says on disk, to prove Apply did not touch it
     original: String,
     /// the same for `world.rb` (W3)
@@ -1181,6 +1235,117 @@ impl WindowTest {
     pub fn after(at: f32) -> WindowTest {
         WindowTest { at, ..WindowTest::default() }
     }
+
+    /// **The frame the editor pressed Apply** — the one frame a forced birth has to land in
+    /// ([`birth_in_the_apply_frame`]). Step 7 is the step that presses it and it sets `step` to
+    /// 8 as it goes, so the frame to look for is the first frame of step 8.
+    fn pressing_apply(&self) -> bool {
+        self.step == 8
+    }
+}
+
+/// **What a step is waiting for that is not a length of time** (S7).
+///
+/// A check that has just restarted a script is not waiting for the world to move on; it is
+/// waiting for **the VM's scheduler to give the new task a turn**, and that is counted in the
+/// VM's frames and not in seconds. The old wait was 0.6 s, which is five frames on a quiet PC,
+/// three on a PC that is sharing its CPU and three in a browser — one number standing for three
+/// different amounts of the thing actually wanted, which is why the checks around Apply and
+/// Revert flaked (`docs/worklog/2026-09-20-window-check-flakes.md`, cause B).
+///
+/// So the step says what it is waiting **for**, the wait ends the moment it has it, and
+/// [`SCHEDULER_FRAMES`] is where it gives up and judges anyway — which is a FAIL, and a true
+/// one: the VM has had turns to hand out and has not handed one to a task that is ready, or egui
+/// has had the pointer put on it and has not noticed.
+#[derive(Default, PartialEq, Eq, Clone, Copy)]
+enum Turn {
+    /// nothing: the step's `at` is a length of the world's time and means what it says
+    #[default]
+    NotWaiting,
+    /// every beetle's task has run an instruction — the restarted ones and anything born since
+    RestartedBeetles,
+    /// somebody's meter has moved, which only `world.rb`'s `each_frame` can do
+    AMeterMoved,
+    /// egui has taken the pointer the check moved over the editor — or let it go again when the
+    /// panel was closed. **Not the VM**; the thing being waited for is bevy_egui learning where
+    /// the pointer is, which takes a frame of its own (see the two wheel checks, steps 13-17)
+    EguiHasThePointer(bool),
+}
+
+/// **How many frames a check waits for the thing it is about before it judges anyway** (S7).
+/// Not a length of time, and not a number anybody picked. The case it is derived from is the
+/// dearest of the three, which is the VM's scheduler reaching a task that has just been made.
+///
+/// The wait it bounds ends the moment the thing waited for has happened, so this is reached only
+/// when it has not. It is the sum of two things that are each already fixed by something else:
+///
+/// * **Two frames are structural and cannot be shortened.** A restart hangs a new `Script` on the
+///   entity through `Commands`, so the component is not there until the end of the frame that
+///   asked for it (one); rubevy's `start_scripts` then makes a task out of it and
+///   `RubevySet::Tick` runs it (two). S6 measured exactly this: a breath cut to one frame finds
+///   the creature with no `ScriptTask` at all (`window-check-flakes.md` §4.4, two runs of two),
+///   and `crate::NEWBORN_DEAF_FRAMES` is the same reckoning written down for newborns.
+/// * **Five more are one whole frame's budget of the VM's turns.** One frame of the creatures'
+///   VM buys `ScriptWorld::budget` instructions — rubevy's default 200,000 — or
+///   `ScriptWorld::frame_time`, rubevy's default 8 ms of wall clock, whichever runs out first.
+///   What 8 ms buys was measured in S6: with `frame_time` cut to 300 µs the VM got through
+///   1,708 instructions in its slowest frame (`s6/ft300.log`, f59 — two beetles' first pass of
+///   854 each), which is 5.7 instructions per microsecond, so a full 8 ms frame buys about
+///   45,600 and `ceil(200_000 / 45_600)` is five. Past that the VM has been handed a whole
+///   frame's allowance of turns without reaching a task that is ready to run, which is the
+///   scheduler having stopped handing them out — the sabiruby 0.5.1 bug these checks are for
+///   (`restart_species`) — rather than a machine that is merely busy.
+///
+/// A machine that is sharing its CPU makes each frame longer, and that is the point: the same
+/// seven frames are 0.9 s on the quiet PC where a frame is 133 ms and 2.0 s on the loaded one
+/// where it is 280 ms (S6 §1.1, §1.2). A number of seconds cannot do that, which is what 0.6 s
+/// buying five frames on one machine and three on another was.
+///
+/// The same seven cover the world's VM ([`Turn::AMeterMoved`]), where the reckoning comes out
+/// smaller: its script is resumed rather than made, so there are no structural frames, and its
+/// budget is 45,000 rather than 200,000 (`crate::install_world_answers`), so one frame's worth is
+/// one frame. And they cover [`Turn::EguiHasThePointer`], which is not the VM at all and wants
+/// **one** frame: bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
+/// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
+/// in is the frame egui knows. Seven is the largest of the three, and one number is better than
+/// three.
+const SCHEDULER_FRAMES: u32 = 7;
+
+/// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
+/// cannot otherwise arrange, made to happen on purpose so that a check can watch it.
+///
+/// Before S7 a creature born in that frame was missed by the hand-over for good
+/// ([`catch_up_minds`]). It is a race: whether a birth falls in the one frame Apply is pressed is
+/// up to the garden, and S6 measured it hitting about once in a hundred runs on a quiet PC and
+/// once in sixteen in a browser — often enough to make the checks flake and far too rarely to be
+/// a check of anything. So the run makes it happen: one beetle is asked for in that frame, and
+/// step 8 looks at whether it is running the applied text.
+///
+/// **How, and why it is done this way.** The birth is asked for the way a script's `garden.spawn`
+/// asks for it — a [`Birth`] pushed onto [`crate::Births`] — and `children_arrive` builds the
+/// body and queues the `Mind` through `Commands`, in this same frame, exactly as a real birth
+/// does. Spawning the creature here instead does not reproduce anything: this system would then
+/// have `Commands` of its own, and `.before(children_arrive)` would make Bevy put a sync point
+/// between them, which flushes the queue and hands the hand-over the very `Mind` it is supposed
+/// to miss. S6 walked into that and wrote it down (§2). Writing a resource is not deferred, so
+/// nothing is inserted and `children_arrive` keeps the place in the schedule it really has.
+///
+/// It is registered only by the window's checks (`GARDEN_SELFTEST=1` with a window), so there is
+/// no way for it to add a beetle to anybody's garden.
+pub fn birth_in_the_apply_frame(test: Res<WindowTest>, mut births: ResMut<crate::Births>, mut done: Local<bool>) {
+    if *done || !test.pressing_apply() {
+        return;
+    }
+    *done = true;
+    births.waiting.push(crate::Birth {
+        species: Species::Beetle,
+        // the species' own three numbers: this beetle is about the frame it arrives in and
+        // nothing else, so it is the plainest beetle there is and no number is invented for it
+        genome: crate::Genome::of(Species::Beetle),
+        at: Vec2::ZERO,
+        parent: None,
+    });
+    info!("selftest: a beetle is being born in the frame Apply is pressed");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1216,6 +1381,37 @@ pub fn window_selftest(
     let a_beetle = || minds.iter().find(|(_, m, _)| m.species == Species::Beetle);
     let beetles = || minds.iter().filter(|(_, m, _)| m.species == Species::Beetle);
     let rabbits = || minds.iter().filter(|(_, m, _)| m.species == Species::Rabbit);
+
+    // **And then the wait that is not about time** (S7, [`Turn`]). The clock above is the world's
+    // — two seconds of a pause, half a second of walking — and it still means what it says. This
+    // one is about a frame of somebody else's: a step that has just restarted a script waits
+    // here until every one of those tasks has run an instruction, and a step that has just moved
+    // the pointer waits until egui knows where it is — however many frames the machine needs to
+    // get there, and giving up after [`SCHEDULER_FRAMES`].
+    if test.turn != Turn::NotWaiting {
+        let came_round = match test.turn {
+            Turn::NotWaiting => true,
+            Turn::RestartedBeetles => {
+                beetles().count() > 0 && beetles().all(|(_, m, _)| m.last_instructions > 0)
+            }
+            Turn::AMeterMoved => hunger()
+                .iter()
+                .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now)),
+            Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
+        };
+        test.waited += 1;
+        if !came_round && test.waited < SCHEDULER_FRAMES {
+            return;
+        }
+        // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict
+        info!(
+            "selftest: waited {} frame(s) for the thing the next check is about, and it {}",
+            test.waited,
+            if came_round { "happened" } else { "did not — judging it as it stands" },
+        );
+        test.turn = Turn::NotWaiting;
+        test.waited = 0;
+    }
 
     match test.step {
         // --- the keys first, while nothing has been restarted -------------
@@ -1282,6 +1478,19 @@ pub fn window_selftest(
             keys.press(KeyCode::KeyP);
             test.step = 4;
             test.at = now + 0.5;
+            // S7. Half a second is the world's own time and stays: the checks below are about a
+            // creature having *walked* and the sun having turned, which want a length of time.
+            // `the meters move again` is not like them — a meter is written by `world.rb`'s
+            // `each_frame` (`ruby/world.rb`), so what it wants is the world's VM to have been
+            // given a turn, and on a machine where half a second is three frames it was
+            // sometimes not given one (S6 §6, reproduced by cutting the world VM's `frame_time`
+            // to 20 µs). So the step waits for the half second *and* for a meter to move.
+            //
+            // What it waits for is the check's own question, as the wait after Apply waits for
+            // the check's own question there. That is not the check proving itself: the thing
+            // being judged is **within how much of the VM's time it happened**, which is what
+            // `SCHEDULER_FRAMES` says and what a FAIL here now means.
+            test.turn = Turn::AMeterMoved;
         }
         4 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
@@ -1340,18 +1549,35 @@ pub fn window_selftest(
             editor.text = editor.text.replace("sleep 0.2", "sleep 0.9");
             ok(editor.changed(), "typing marks the text edited");
             test.insn = spent();
+            test.beetles_before = beetles().map(|(e, _, _)| e).collect();
             editor.action = Some(EditorAction::Apply);
             // Every beetle is handed over in the frame `do_editor_actions` runs — there is no
-            // queue any more (see `restart_species`) — so this is a breath for the new tasks to
-            // be made and to run their first instructions, not a wait for a queue to drain.
+            // queue any more (see `restart_species`) — so what is left to wait for is the new
+            // tasks being made and given a turn, and that is counted in frames (S7). It used to
+            // be 0.6 s, which is five frames on one machine and three on another.
             test.step = 8;
-            test.at = now + 0.6;
+            test.at = now;
+            test.turn = Turn::RestartedBeetles;
         }
         8 => {
             let on_disk = platform::read(&brains.path(&ruby.0, Species::Beetle)).unwrap_or_default();
             let every = beetles().count();
             let applied = beetles().filter(|(_, m, _)| m.in_memory).count();
             ok(every > 0 && applied == every, "Apply restarts every beetle on the edited text");
+            // **The one that was born in the frame Apply was pressed** (S7). A beetle is forced
+            // into that frame on purpose ([`birth_in_the_apply_frame`]) because the frames a
+            // birth lands in are otherwise the garden's own business: before S7 that beetle was
+            // missed by the hand-over and ran the *other* text for the rest of the run, and the
+            // check above caught it in about one run in a hundred on a quiet machine and one in
+            // sixteen in a browser. It is a check of its own rather than a widening of the one
+            // above because it says which beetle and why, and because the sentence above is
+            // about Apply while this one is about the race.
+            let born_since: Vec<_> =
+                beetles().filter(|(e, _, _)| !test.beetles_before.contains(e)).collect();
+            ok(
+                !born_since.is_empty() && born_since.iter().all(|(_, m, _)| m.in_memory),
+                "a beetle born in the very frame of Apply is restarted too",
+            );
             ok(
                 brains.text(Species::Beetle).is_some_and(|t| t.contains("sleep 0.9")),
                 "a beetle born from now on is born running it",
@@ -1374,7 +1600,9 @@ pub fn window_selftest(
             ok(spent() > test.insn, "the whole VM is still running afterwards");
             editor.action = Some(EditorAction::Revert);
             test.step = 10;
-            test.at = now + 0.6;
+            test.at = now;
+            // S7: the same wait as after Apply, and for the same reason
+            test.turn = Turn::RestartedBeetles;
         }
         10 => {
             ok(
@@ -1473,7 +1701,14 @@ pub fn window_selftest(
             let at = pointing.over_the_editor().unwrap_or_default();
             pointing.point_at(at);
             test.step = 14;
-            test.at = now + 0.2;
+            test.at = now;
+            // **S7.** bevy_egui learns where the pointer is a frame after the `CursorMoved` was
+            // written (`PreUpdate` reads it, the egui pass sets `EguiWantsInput`), and 0.2 s is
+            // one frame on a machine running eight of these at once — so the wheel below used to
+            // be turned while egui had not yet taken the pointer, `orbit_camera` zoomed, and the
+            // check failed saying egui *did* hold it, which by then it did. Three of eight runs,
+            // measured 2026-09-20. Waiting for egui to have it says what the step means.
+            test.turn = Turn::EguiHasThePointer(true);
         }
         14 => {
             test.distance = pointing.orbit.distance;
@@ -1499,7 +1734,10 @@ pub fn window_selftest(
             // and neither reaches the middle of the editor's rectangle.
             editor.open = false;
             test.step = 16;
-            test.at = now + 0.2;
+            test.at = now;
+            // and the same the other way for the control: the panel is shut, and the wheel must
+            // not be turned until egui has let the pointer go
+            test.turn = Turn::EguiHasThePointer(false);
         }
         16 => {
             test.distance = pointing.orbit.distance;

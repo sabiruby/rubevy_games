@@ -1751,6 +1751,18 @@ fn brain_name(robot: &Robot) -> String {
 
 /// What the editor's buttons asked for. Nothing here writes a file except `Save`: applying runs
 /// the text in memory, so trying something in a match does not rewrite the project.
+///
+/// **Why `Apply to all` may go round a `Query` here when the garden's may not** (S7). The garden
+/// grew a generation number because a creature born in this very frame has a `Mind` that is still
+/// in the `Commands` queue, so the loop below cannot see it and it went on running the old brain
+/// for the rest of the run (`garden/src/window.rs`, `catch_up_minds`). A robot is never made
+/// while a match runs: the only thing that makes one is `start_match`, and the only thing that
+/// calls it is `restart_match`, which despawns **every** robot in the same frame first and clears
+/// the editor with them. So a `Robot` that this loop cannot see is a `Robot` that has no brain to
+/// be given yet and is about to be spawned with one from `KeptBrains`; there is no robot left
+/// running the wrong text, which is the thing the generation number is for. Giving Battle one
+/// would mean inventing the thing it would count — this game has no per-file program resource,
+/// because here the brain is a field of the robot — for a hole that cannot open.
 fn do_editor_actions(
     mut editor: ResMut<Editor>,
     watched: Res<Watched>,

@@ -487,6 +487,10 @@ pub struct Mind {
     // --- G4 ----------------------------------------------------------------
     /// It is running a text applied in the editor rather than what the file says.
     pub in_memory: bool,
+    /// **Which hand-over of its species' program it is wearing** (S7, [`Wearing`]). A creature
+    /// whose number is behind its species' is one the hand-over could not see, and
+    /// `window::catch_up_minds` gives it the program on the next frame.
+    pub generation: u32,
     /// the line of the creature's *own* file it is standing on, 1-based, for the editor's band
     pub own_line: Option<u32>,
     /// and where it has been spending its time, per line, decayed every frame: the editor shades
@@ -822,12 +826,65 @@ pub struct RubyDir(pub PathBuf);
 #[derive(Resource, Default)]
 pub struct Brains {
     applied: [Option<String>; 3],
+    /// **What every creature of a species is to be running now** (S7), per slot — the compiled
+    /// program the last hand-over put there, and the generation number that says which hand-over
+    /// it was. `None` in a slot is "nobody has been handed anything; whatever `give_mind`
+    /// compiled when the creature was born is right".
+    wearing: [Option<Wearing>; 3],
+}
+
+/// One hand-over: the program a species is to be wearing, and which hand-over it was.
+///
+/// **Why a generation number** (S7). `window::restart_species` goes round a `Query` and hands the
+/// new program to every creature it can see — and it cannot see a creature whose `Mind` is still
+/// in the `Commands` queue of the very frame Apply was pressed, which is what a creature born in
+/// that frame is (`children_arrive` and `do_editor_actions` have no ordering edge between them,
+/// so Bevy puts no sync point between them either). Such a creature was missed and went on
+/// running the *old* program for the rest of the run, which is the bug S6 found and reproduced
+/// (`docs/worklog/2026-09-20-window-check-flakes.md` §3).
+///
+/// A number the hand-over bumps and the creature carries turns "who was in the `Query`" into
+/// "who is behind", which can be asked again on any later frame — so a creature that was in the
+/// queue is caught on the next frame instead of never (`window::catch_up_minds`). It is a
+/// counter and not a threshold: there is no number to choose here.
+struct Wearing {
+    handle: Handle<MrbAsset>,
+    prelude_lines: u32,
+    /// it came from the editor rather than from the file (`Mind::in_memory`)
+    in_memory: bool,
+    /// hand-overs so far, starting at 1. A `Mind` born before any of them carries 0.
+    generation: u32,
 }
 
 impl Brains {
     /// Where the world's rules sit in `applied`: after the two species, whose slots are their own
     /// `index()`. It is also the id the editor's third button carries (`window::show_code`).
     pub const WORLD: usize = Species::ALL.len();
+
+    /// Which hand-over this species is on. 0 until the first one.
+    pub fn generation(&self, species: Species) -> u32 {
+        self.wearing[species.index()].as_ref().map_or(0, |w| w.generation)
+    }
+
+    /// **A species has been handed a new program**: Apply, Revert, Save, or the file changing on
+    /// disk. Returns the generation it is now on, which is what the creatures handed the program
+    /// in this frame are stamped with.
+    ///
+    /// The world's slot has no hand-over of its own and none is missing: the rules are worn by
+    /// one entity that is spawned at `Startup` and never again, so there is no `world.rb` script
+    /// that can be in the command queue while the editor applies (`wear_the_rules`), and the
+    /// timer tasks `every` made stop themselves in Ruby rather than being found by a `Query`
+    /// (`ruby/world_prelude.rb`).
+    fn hand_over(&mut self, species: Species, handle: Handle<MrbAsset>, prelude_lines: u32, in_memory: bool) -> u32 {
+        let generation = self.generation(species) + 1;
+        self.wearing[species.index()] = Some(Wearing { handle, prelude_lines, in_memory, generation });
+        generation
+    }
+
+    /// The program this species is to be wearing, if it has been handed one.
+    fn wearing(&self, species: Species) -> Option<&Wearing> {
+        self.wearing[species.index()].as_ref()
+    }
 
     pub fn text(&self, species: Species) -> Option<&String> {
         self.applied[species.index()].as_ref()
@@ -1639,6 +1696,23 @@ fn main() {
                     .chain()
                     .after(watch_minds),
             )
+            // **S7, and on purpose not in the chain above.** It hands its species' program to
+            // whoever the two systems above could not see — a creature whose `Mind` was still in
+            // the command queue when the hand-over went round the `Query`. It wants no ordering:
+            // it asks "is anybody behind?", which is true until it is answered and is as true on
+            // the next frame as on this one, so being a frame late costs the creature a frame and
+            // costs the reader nothing.
+            //
+            // **Chaining it cost something real.** Put at the end of that chain it is a system
+            // with `Commands` ordered after another, so Bevy adds an `ApplyDeferred` there, and
+            // that changes where the `Update` schedule is cut in two. The two wheel checks
+            // (`window_selftest` steps 13-17) turn on whether `orbit_camera` reads the forged
+            // `MouseWheel` in the frame it was written or the frame after — neither system is
+            // ordered against the other — and with the extra sync point, eight of sixteen runs
+            // on a machine running eight of them at once failed `the wheel over the editor
+            // scrolls the editor and not the garden`, against none of sixteen without it.
+            // Measured 2026-09-20; `docs/worklog/2026-09-20-window-check-fixes.md` §3.3.
+            .add_systems(Update, window::catch_up_minds)
             .add_systems(bevy_egui::EguiPrimaryContextPass, window::draw_hud);
             register_scene_types(&mut app);
             // a creature's file saved from outside restarts that species, as Save does
@@ -1921,6 +1995,15 @@ fn main() {
         app.insert_resource(window::WindowTest::after(3.0)).add_systems(
             Update,
             window::window_selftest.before(window::inspect_keys).before(window::choose_watched),
+        );
+        // S7: the one beetle the checks want born in the frame Apply is pressed. `.after` so it
+        // sees the step the check has just moved to, `.before(children_arrive)` so the birth is
+        // made in this frame — and no edge at all to `do_editor_actions`, because the whole
+        // point is that the new `Mind` is still in the command queue when the hand-over goes
+        // round (`window::birth_in_the_apply_frame`).
+        app.add_systems(
+            Update,
+            window::birth_in_the_apply_frame.after(window::window_selftest).before(children_arrive),
         );
     }
     if selftest {
@@ -2687,6 +2770,11 @@ fn give_mind(
             at: String::new(),
             prelude_lines,
             in_memory: applied.is_some(),
+            // S7: what the species is wearing *now*. A creature born in a frame where the editor
+            // has already applied is born on the new program and is not behind; one born earlier
+            // in a frame where the editor applies later carries the old number and is caught up
+            // on the next frame.
+            generation: brains.generation(species),
             own_line: None,
             heat: Vec::new(),
             ran_frame: 0,

@@ -192,7 +192,7 @@ selftest: ok   the starved creature's entity is gone (NvN starved at N s)
 selftest: ok   what the world declares reaches a creature's memory (Beetle NvN had "wet" in its @memory at N s)
 ```
 
-## Garden, a window — 43 lines
+## Garden, a window — 44 lines
 
 `GARDEN_SELFTEST=1 docker/run.sh garden release`. The editor, the VM panel, the wheel, `P`, and
 `F3`'s third file — the rules of the world.
@@ -217,6 +217,7 @@ selftest: ok   Revert shows the file again
 selftest: ok   Revert shows world.rb again
 selftest: ok   `def` in the listing is painted in the keyword colour (kind Some(N))
 selftest: ok   a beetle born from now on is born running it
+selftest: ok   a beetle born in the very frame of Apply is restarted too
 selftest: ok   after Apply the text is what the beetles run
 selftest: ok   after Apply the text is what the world runs
 selftest: ok   and nothing is running a text of its own
@@ -243,19 +244,23 @@ selftest: ok   typing in the rules marks them edited
 selftest: ok   typing marks the text edited
 ```
 
-**Three of these flake.** With nothing changed, `Revert puts every beetle back on the file`,
-`every restarted beetle's new task has run` and `Apply restarts every beetle on the edited text`
-have each been seen to FAIL now and then — two of them in two of three runs on 2026-09-20 (S1),
-the third in S3. All three are around the editor's Apply, Revert and restart. A FAIL on one of
-these three is not yet evidence of anything; a FAIL on any other line is. Counting them and
-finding the cause is stage S6 of `plans/shared-crate-plan.md`, and until it is done a run that
-fails one of the three is re-run and both runs are reported.
+**Four of these used to flake, and S7 mended what made them.** `Apply restarts every beetle on
+the edited text`, `Revert puts every beetle back on the file`, `every restarted beetle's new task
+has run` and `the meters move again` each FAILed now and then with nothing changed. S6 counted
+them and found two causes, and S7 (`worklog/2026-09-20-window-check-fixes.md`) mended both: a
+creature born in the frame Apply was pressed was missed by the hand-over for good, and the checks
+waited a number of **seconds** for something that is counted in the VM's **frames**. They wait for
+the thing itself now, up to a derived number of frames. **A FAIL on any line in this list is
+evidence of something**; there is no line here that is re-run and excused.
 
-## Garden, a browser — 44 lines
+`a beetle born in the very frame of Apply is restarted too` is S7's, and it is the only check in
+either game that arranges the world rather than watching it: the birth it is about is a race the
+garden would otherwise win about once in a hundred runs, so the run forces one into that frame
+(`window::birth_in_the_apply_frame`, registered only by the checks).
 
-`…/garden/?selftest`. The window's list plus the `done` line. The same three flake here: on
-2026-09-20 the first run of two FAILed `Revert puts every beetle back on the file` and the
-second matched this list exactly.
+## Garden, a browser — 45 lines
+
+`…/garden/?selftest`. The window's list plus the `done` line.
 
 ```
 selftest: done — the garden keeps running (a page has nothing to exit to)
@@ -278,6 +283,7 @@ selftest: ok   Revert shows the file again
 selftest: ok   Revert shows world.rb again
 selftest: ok   `def` in the listing is painted in the keyword colour (kind Some(N))
 selftest: ok   a beetle born from now on is born running it
+selftest: ok   a beetle born in the very frame of Apply is restarted too
 selftest: ok   after Apply the text is what the beetles run
 selftest: ok   after Apply the text is what the world runs
 selftest: ok   and nothing is running a text of its own
@@ -314,6 +320,11 @@ logs in the stage's scratchpad. Every list but Battle's two is byte-identical to
 produce when they are put through `tools/fixedlines.sh`; Battle's window and page lists have
 gained the `FN is Apply` line and Battle's headless list the `handler tasks …` line, which are
 the two things S4 changed.
+
+**S7 moved one line**, on 2026-09-20 on the same branch: the garden's window and page lists gained
+`a beetle born in the very frame of Apply is restarted too`, and nothing else in any of the six
+lists moved (`diff` empty on the other four). The garden's window went from 43 lines to 44 and its
+page from 44 to 45.
 
 A list is not a thing to be edited by hand when a run disagrees with it. Either the run found
 something or the change meant to add or remove a check — and then the list is re-made from a
