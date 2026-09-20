@@ -26,9 +26,11 @@ use bevy::prelude::*;
 pub mod code;
 pub mod editor;
 pub mod inspect;
-pub use code::{CodePanel, CodePanelPlugin};
-pub use editor::{Editor, EditorAction, EditorChoice, EditorPlugin, Highlighter};
-pub use inspect::{VmClock, VmInspector, VmInspectorPlugin, Waiting};
+pub use code::{CodePanel, CodePanelPlugin, CodeStyle};
+pub use editor::{
+    Editor, EditorAction, EditorChoice, EditorColors, EditorLayout, EditorPlugin, Highlighter,
+};
+pub use inspect::{InspectStyle, VmClock, VmInspector, VmInspectorPlugin, Waiting};
 
 /// **How many pixels of each edge of the window something is drawn over**, so that a camera can
 /// put what matters in the part nobody is covering.

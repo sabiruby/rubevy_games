@@ -13,6 +13,16 @@
 //! `sabiruby_compiler::highlight` on a PC and through the page's bridge in a browser, and which
 //! of the two is the game's `platform.rs` to know. A game that registers no highlighter, or a
 //! page too old to have the bridge, gets a table of zeroes and the listing it always had.
+//!
+//! **Where the numbers are** (S5b-1). How big the panel is and what size its letters are is
+//! [`EditorLayout`], a resource a game can hand the plugin, write into while it runs, or let a
+//! player change through the `key=value` store (`editor_*` keys,
+//! [`EditorLayout::read_from`]). What it is *painted* with is [`EditorColors`], which sits in
+//! [`Editor`] beside the panel's other words and marks, because a check that asks the panel
+//! which colour a byte was drawn in ([`drawn_kind`]) already has the [`Editor`] in its hand and
+//! cannot ask for a second resource beside it. The `const`s below are the names of the defaults
+//! and nothing else; each says in a line where its value came from, and where the answer is
+//! "nobody wrote it down", it says that.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -106,6 +116,10 @@ pub struct Editor {
     /// What one of the things being edited is called, for the hover texts: `script` by default,
     /// `robot` or `creature` where the game says so.
     pub noun: String,
+    /// **What the listing is painted with** ([`EditorColors`]). It is a field of the panel's
+    /// contents rather than a resource of its own so that [`drawn_kind`] — which a game's checks
+    /// call with the `Editor` they are already holding — needs nothing else.
+    pub colors: EditorColors,
 
     /// **What kind each byte of [`Editor::text`] is**, 0..=8, as
     /// `sabiruby_compiler::highlight` writes it (`docs/plans/editor-highlight-plan.md` §1 has
@@ -157,6 +171,7 @@ impl Default for Editor {
             apply_all_label: Some("Apply to all".into()),
             apply_key: None,
             noun: "script".into(),
+            colors: EditorColors::default(),
             kinds: Vec::new(),
             highlighted_for: None,
         }
@@ -261,15 +276,26 @@ pub struct Highlight(pub Highlighter);
 
 /// The panel. [`EditorPlugin::with_highlighter`] is how a game adds colour to it; plain
 /// `EditorPlugin` is the panel without any, which is what it was before H2.
+///
+/// How big it is is [`EditorPlugin::sized`]; what it is painted with is [`Editor::colors`],
+/// which a game writes in a `Startup` system beside the panel's other words (`noun`,
+/// `apply_label`), since that is where it says them already.
 #[derive(Default)]
 pub struct EditorPlugin {
     highlight: Option<Highlighter>,
+    layout: EditorLayout,
 }
 
 impl EditorPlugin {
     /// The panel, with the game's lexer behind its colours.
     pub fn with_highlighter(highlight: Highlighter) -> EditorPlugin {
-        EditorPlugin { highlight: Some(highlight) }
+        EditorPlugin { highlight: Some(highlight), layout: EditorLayout::default() }
+    }
+
+    /// The panel at a size of the game's choosing ([`EditorLayout`]).
+    pub fn sized(mut self, layout: EditorLayout) -> EditorPlugin {
+        self.layout = layout;
+        self
     }
 }
 
@@ -282,6 +308,7 @@ impl Plugin for EditorPlugin {
             app.insert_resource(Highlight(highlight));
         }
         app.init_resource::<Editor>()
+            .insert_resource(self.layout.clone())
             .init_resource::<crate::ViewInsets>()
             .add_systems(EguiPrimaryContextPass, draw_editor);
     }
@@ -290,6 +317,7 @@ impl Plugin for EditorPlugin {
 fn draw_editor(
     mut contexts: EguiContexts,
     mut editor: ResMut<Editor>,
+    layout: Res<EditorLayout>,
     highlight: Option<Res<Highlight>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut insets: ResMut<crate::ViewInsets>,
@@ -339,7 +367,9 @@ fn draw_editor(
     let apply_label = editor.apply_label.clone();
     let apply_all_label = editor.apply_all_label.clone();
     let noun = editor.noun.clone();
-    let amber = egui::Color32::from_rgb(240, 190, 90);
+    let colors = editor.colors.clone();
+    let amber = colors.amber;
+    let font = layout.font;
 
     // egui 0.36 grows panels inside a Ui; a window takes the context, and a movable one suits an
     // editor that shares the screen with the game. It starts at the top right; drag its title bar
@@ -349,23 +379,25 @@ fn draw_editor(
     let panel = egui::Window::new("Ruby")
         .collapsible(false)
         .resizable(true)
-        .default_width(WIDTH)
-        .default_height(HEIGHT)
-        .default_pos([right - MARGIN - WIDTH, MARGIN])
+        .default_width(layout.width)
+        .default_height(layout.height)
+        .default_pos([right - layout.margin - layout.width, layout.margin])
         .show(ctx, |ui| {
             // one button per thing the game offers; the one showing is marked
             if !choices.is_empty() {
                 ui.horizontal_wrapped(|ui| {
                     // big enough to hit without aiming
-                    ui.spacing_mut().button_padding = egui::vec2(10.0, 5.0);
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().button_padding =
+                        egui::vec2(layout.choice_padding[0], layout.choice_padding[1]);
+                    ui.spacing_mut().item_spacing.x = layout.choice_spacing;
                     for choice in &choices {
                         let (r, g, b) = choice.color;
                         let mut color = egui::Color32::from_rgb(r, g, b);
                         if choice.dim {
                             color = color.gamma_multiply(0.45);
                         }
-                        let text = egui::RichText::new(&choice.label).color(color).strong().size(16.0);
+                        let text =
+                            egui::RichText::new(&choice.label).color(color).strong().size(layout.choice_font);
                         if ui.add(egui::Button::selectable(selected == Some(choice.id), text)).clicked() {
                             editor.picked = Some(choice.id);
                         }
@@ -383,7 +415,8 @@ fn draw_editor(
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
+                ui.spacing_mut().button_padding =
+                    egui::vec2(layout.button_padding[0], layout.button_padding[1]);
                 if ui.add(egui::Button::new(&apply_label)).on_hover_text(format!("run this in the {noun} shown")).clicked() {
                     editor.action = Some(EditorAction::Apply);
                 }
@@ -407,7 +440,9 @@ fn draw_editor(
             // a listing does not wrap: one row of the gutter is one line of the file, and the line
             // the script is standing on has a band behind it
             let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-                ui.fonts_mut(|fonts| fonts.layout_job(listing(text.as_str(), &heat, &kinds)))
+                ui.fonts_mut(|fonts| {
+                    fonts.layout_job(listing(text.as_str(), &heat, &kinds, &colors, font))
+                })
             };
             egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
@@ -416,8 +451,9 @@ fn draw_editor(
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(gutter)
-                                .font(egui::FontId::monospace(FONT))
-                                .color(egui::Color32::from_rgb(120, 128, 140)),
+                                .font(egui::FontId::monospace(font))
+                                // the comment colour, by construction (`EditorColors::gutter`)
+                                .color(colors.gutter()),
                         )
                         .wrap_mode(egui::TextWrapMode::Extend),
                     );
@@ -433,7 +469,7 @@ fn draw_editor(
         });
 
     // **What the panel covers, for whatever camera is behind it** (S3, [`crate::ViewInsets`]).
-    // The band is measured from the panel's own rectangle rather than from `WIDTH` below,
+    // The band is measured from the panel's own rectangle rather than from [`EditorLayout`],
     // because egui may have grown it to fit its buttons and because the player may have dragged
     // or resized it; it is claimed on whichever side of the window the panel is nearer to, since
     // a panel that has been dragged to the left of the screen is covering the left.
@@ -449,7 +485,13 @@ fn draw_editor(
     insets.right = right_side;
 }
 
-const FONT: f32 = 13.0;
+// ---------------------------------------------------------------------------------------------
+// The numbers: how big it is (`EditorLayout`) and what it is painted with (`EditorColors`)
+// ---------------------------------------------------------------------------------------------
+
+/// The size of the letters in the listing and the gutter. **Source unknown**: it arrived with the
+/// panel and nobody wrote down why 13 (`docs/numbers.md` §1.2).
+pub const FONT: f32 = 13.0;
 
 /// **Where the editor stands before anybody drags it**, in egui points from the top right.
 ///
@@ -457,10 +499,119 @@ const FONT: f32 = 13.0;
 /// put a pointer *inside* the panel without a screen to look at: the garden's window checks drive
 /// the wheel over the editor to show that the camera does not take it
 /// (`garden/src/window.rs`, `window_selftest`). A test that guessed the rectangle would be
-/// testing its own guess.
+/// testing its own guess — which is also why the check reads the *setting* and not this default
+/// (S5b-1): a game that opened a wider panel would otherwise be checked against a rectangle it
+/// never drew.
+///
+/// **The values themselves have no recorded source** (`docs/numbers.md` §1.2): the reason the
+/// three are named is written down, the reason they are 8, 520 and 640 is not.
 pub const MARGIN: f32 = 8.0;
 pub const WIDTH: f32 = 520.0;
 pub const HEIGHT: f32 = 640.0;
+
+/// The choice buttons along the top: the padding round one, the gap between two, and the size of
+/// the label. *Reason only*, and it is the reason for all three: "big enough to hit without
+/// aiming" (`draw_editor`). No measurement.
+pub const CHOICE_PADDING: [f32; 2] = [10.0, 5.0];
+pub const CHOICE_SPACING: f32 = 6.0;
+pub const CHOICE_FONT: f32 = 16.0;
+
+/// The padding round the Apply / Save / Revert buttons. **Source unknown** beyond being smaller
+/// than the choice buttons' above.
+pub const BUTTON_PADDING: [f32; 2] = [8.0, 4.0];
+
+/// **How big the panel is and what size its letters are**, in one resource a game can hand
+/// [`EditorPlugin::sized`], write into while it runs, or let a player change through the
+/// `key=value` store ([`EditorLayout::read_from`]).
+///
+/// The defaults are the `const`s above, each of which says where its value came from.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct EditorLayout {
+    /// [`MARGIN`]
+    pub margin: f32,
+    /// [`WIDTH`]
+    pub width: f32,
+    /// [`HEIGHT`]
+    pub height: f32,
+    /// [`FONT`]
+    pub font: f32,
+    /// [`CHOICE_PADDING`]
+    pub choice_padding: [f32; 2],
+    /// [`CHOICE_SPACING`]
+    pub choice_spacing: f32,
+    /// [`CHOICE_FONT`]
+    pub choice_font: f32,
+    /// [`BUTTON_PADDING`]
+    pub button_padding: [f32; 2],
+}
+
+impl Default for EditorLayout {
+    fn default() -> Self {
+        EditorLayout {
+            margin: MARGIN,
+            width: WIDTH,
+            height: HEIGHT,
+            font: FONT,
+            choice_padding: CHOICE_PADDING,
+            choice_spacing: CHOICE_SPACING,
+            choice_font: CHOICE_FONT,
+            button_padding: BUTTON_PADDING,
+        }
+    }
+}
+
+impl EditorLayout {
+    /// **What a player left in a `key=value` store**, for the numbers a person can sensibly be
+    /// asked about: how big the panel is and how big its letters are. The store itself is the
+    /// game's (`games_shell::Settings`), which this crate does not depend on, so what comes in
+    /// here is a function that answers a key.
+    ///
+    /// | key | field |
+    /// |---|---|
+    /// | `editor_margin` | [`EditorLayout::margin`] |
+    /// | `editor_width` | [`EditorLayout::width`] |
+    /// | `editor_height` | [`EditorLayout::height`] |
+    /// | `editor_font` | [`EditorLayout::font`] |
+    /// | `editor_choice_font` | [`EditorLayout::choice_font`] |
+    /// | `editor_choice_spacing` | [`EditorLayout::choice_spacing`] |
+    ///
+    /// The two paddings are left out for the same reason the camera leaves its keys out: a pair
+    /// of numbers in a text file needs a parser, and a button's padding is not a thing a player
+    /// asks for by name. A game may still set them.
+    ///
+    /// A key that is not there leaves the field alone, which is what makes a store written by an
+    /// older build safe to read.
+    pub fn read_from(&mut self, number: impl Fn(&str) -> Option<f32>) {
+        let take = |key: &str, slot: &mut f32| {
+            if let Some(value) = number(key) {
+                *slot = value;
+            }
+        };
+        take("editor_margin", &mut self.margin);
+        take("editor_width", &mut self.width);
+        take("editor_height", &mut self.height);
+        take("editor_font", &mut self.font);
+        take("editor_choice_font", &mut self.choice_font);
+        take("editor_choice_spacing", &mut self.choice_spacing);
+    }
+}
+
+/// The colour of the heat band at its strongest, and how strong that is.
+///
+/// **Cited**: the band's colour is what the nine kinds below were measured against — composited
+/// at this alpha over egui's dark panel it makes (103, 77, 17), which is the second of the two
+/// backgrounds every colour was checked on. The alpha of 170 itself has **no recorded source**;
+/// the colours are measured *given* it.
+pub const HEAT_BAND: (u8, u8, u8) = (150, 110, 20);
+pub const HEAT_ALPHA: u8 = 170;
+
+/// Below this share of the hottest line, no band at all. *Reason only*: "a line passed through
+/// once is not a place".
+pub const HEAT_FLOOR: f32 = 0.1;
+
+/// `* edited`, and the list of scripts with edits not applied. *Reason only*: the warm end of the
+/// wheel is the heat's, and this mark means the same kind of thing.
+pub const AMBER: egui::Color32 = egui::Color32::from_rgb(240, 190, 90);
 
 /// **The nine kinds, as colours.** The index is the kind `sabiruby_compiler::highlight` writes:
 /// 0 anything else, 1 keyword, 2 string, 3 comment, 4 number, 5 symbol, 6 constant, 7 variable,
@@ -486,7 +637,15 @@ pub const HEIGHT: f32 = 640.0;
 /// `docs/worklog/2026-09-18-highlight.md`, "演算子は 8 になる"). A loud colour there would
 /// scribble over every line of the garden's scripts; a soft blue a shade off the body colour
 /// (ΔE 28 from 0) says "a name that is called" without shouting it.
-const KINDS: [egui::Color32; 9] = [
+///
+/// **Changing them breaks what was measured** (S5b-1). These nine are the one table in this
+/// crate with a measurement behind it, and the measurement is of the *set*: every colour at
+/// least 4.96 against the panel and 3.09 against the hottest band, and no two closer than
+/// ΔE 25.9 (`docs/worklog/2026-09-18-editor-highlight.md`). A game may put its own colours in
+/// [`EditorColors::kinds`] — and then none of those three sentences is true of them any more,
+/// and nothing here will notice. The same goes for changing [`HEAT_BAND`] or [`HEAT_ALPHA`],
+/// which is the background half of the same measurement.
+pub const KINDS: [egui::Color32; 9] = [
     egui::Color32::from_rgb(210, 214, 222), // 0 anything else — the body colour, unchanged
     egui::Color32::from_rgb(185, 145, 235), // 1 keyword — violet
     egui::Color32::from_rgb(150, 200, 130), // 2 string — green
@@ -498,9 +657,49 @@ const KINDS: [egui::Color32; 9] = [
     egui::Color32::from_rgb(140, 180, 230), // 8 method name — soft blue, the quiet one
 ];
 
-/// The colour a kind is painted in, and the body colour for anything the table does not name.
-pub fn kind_color(kind: u8) -> egui::Color32 {
-    KINDS.get(kind as usize).copied().unwrap_or(KINDS[0])
+/// **What the listing is painted with**, in one value a game can put in [`Editor::colors`].
+///
+/// The defaults are the `const`s above. Read the note on [`KINDS`] before changing them: those
+/// nine are the one table here with a measurement behind it, and it is a measurement of the set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditorColors {
+    /// [`KINDS`]
+    pub kinds: [egui::Color32; 9],
+    /// [`HEAT_BAND`]
+    pub heat_band: (u8, u8, u8),
+    /// [`HEAT_ALPHA`]
+    pub heat_alpha: u8,
+    /// [`HEAT_FLOOR`]
+    pub heat_floor: f32,
+    /// [`AMBER`]
+    pub amber: egui::Color32,
+}
+
+impl Default for EditorColors {
+    fn default() -> Self {
+        EditorColors {
+            kinds: KINDS,
+            heat_band: HEAT_BAND,
+            heat_alpha: HEAT_ALPHA,
+            heat_floor: HEAT_FLOOR,
+            amber: AMBER,
+        }
+    }
+}
+
+impl EditorColors {
+    /// The colour a kind is painted in, and the body colour for anything the table does not name.
+    pub fn of(&self, kind: u8) -> egui::Color32 {
+        self.kinds.get(kind as usize).copied().unwrap_or(self.kinds[0])
+    }
+
+    /// **The line numbers down the left.** It is the comment colour and not a fourth grey of its
+    /// own: a line number is the same kind of thing as a comment — there, weak, not in the way
+    /// (`editor-highlight-plan.md`). Written as this lookup rather than as a second copy of the
+    /// value so that a game that changes the comment colour does not leave the gutter behind.
+    pub fn gutter(&self) -> egui::Color32 {
+        self.of(3)
+    }
 }
 
 /// **Which kind the byte at `at` of the panel's text is painted with**, going the whole way
@@ -508,11 +707,13 @@ pub fn kind_color(kind: u8) -> egui::Color32 {
 /// say "`def` is drawn in the keyword colour" with this, without a pixel to look at. `None`
 /// where that byte is not in the listing at all.
 pub fn drawn_kind(editor: &Editor, at: usize) -> Option<u8> {
-    let job = listing(&editor.text, &editor.heat, &editor.kinds);
+    // the size of the letters does not decide which run a byte falls in, only how wide it is
+    // drawn, so the default is as good as the game's layout here
+    let job = listing(&editor.text, &editor.heat, &editor.kinds, &editor.colors, FONT);
     // `LayoutSection::byte_range` is a range of egui's `ByteIndex`, which is a byte offset
     let at = egui::text::ByteIndex(at);
     let section = job.sections.iter().find(|s| s.byte_range.contains(&at))?;
-    KINDS.iter().position(|c| *c == section.format.color).map(|k| k as u8)
+    editor.colors.kinds.iter().position(|c| *c == section.format.color).map(|k| k as u8)
 }
 
 /// The source as a layout: monospace, no wrapping, each line shaded by how much of the brain's
@@ -528,40 +729,47 @@ pub fn drawn_kind(editor: &Editor, at: usize) -> Option<u8> {
 /// default kind. **The runs are cut at character boundaries**, not at bytes: `append` takes a
 /// `&str` and a Japanese comment is three bytes a character, so the loop walks `char_indices`
 /// and a kind is the kind of a character's first byte (`editor-highlight-plan.md` §5.4).
-pub fn listing(text: &str, heat: &[f32], kinds: &[u8]) -> egui::text::LayoutJob {
+pub fn listing(
+    text: &str,
+    heat: &[f32],
+    kinds: &[u8],
+    colors: &EditorColors,
+    font: f32,
+) -> egui::text::LayoutJob {
     use egui::text::LayoutJob;
     let hottest = heat.iter().cloned().fold(0.0f32, f32::max).max(1e-6);
     let mut job = LayoutJob::default();
     job.wrap.max_width = f32::INFINITY;
+    let (r, g, b) = colors.heat_band;
     let mut at = 0; // where this line starts in `text`, which is where it starts in `kinds`
     for (i, line) in text.split_inclusive('\n').enumerate() {
         let share = heat.get(i).copied().unwrap_or(0.0) / hottest;
         // below a tenth of the hottest line, nothing: a line passed through once is not a place
-        let share = if share < 0.1 { 0.0 } else { share };
-        let alpha = (share * 170.0) as u8;
-        let band = egui::Color32::from_rgba_unmultiplied(150, 110, 20, alpha);
+        let share = if share < colors.heat_floor { 0.0 } else { share };
+        let alpha = (share * colors.heat_alpha as f32) as u8;
+        let band = egui::Color32::from_rgba_unmultiplied(r, g, b, alpha);
         let kind_at = |o: usize| kinds.get(at + o).copied().unwrap_or(0);
         let mut run = 0; // the byte in `line` the run being gathered started at
         let mut kind = kind_at(0);
         for (o, _) in line.char_indices() {
             let here = kind_at(o);
             if here != kind {
-                job.append(&line[run..o], 0.0, format(kind, band));
+                job.append(&line[run..o], 0.0, format(kind, band, colors, font));
                 run = o;
                 kind = here;
             }
         }
-        job.append(&line[run..], 0.0, format(kind, band));
+        job.append(&line[run..], 0.0, format(kind, band, colors, font));
         at += line.len();
     }
     job
 }
 
 /// One run of one kind, over whatever the heat put behind this line.
-fn format(kind: u8, band: egui::Color32) -> egui::text::TextFormat {
+fn format(kind: u8, band: egui::Color32, colors: &EditorColors, font: f32) -> egui::text::TextFormat {
     egui::text::TextFormat {
-        font_id: egui::FontId::monospace(FONT),
-        color: kind_color(kind),
+        font_id: egui::FontId::monospace(font),
+        color: colors.of(kind),
         background: band,
         ..Default::default()
     }
@@ -574,11 +782,12 @@ mod tests {
     /// What the panel would draw, run by run: the text of each section and the kind its colour
     /// stands for.
     fn runs(text: &str, kinds: &[u8]) -> Vec<(String, u8)> {
-        let job = listing(text, &[], kinds);
+        let colors = EditorColors::default();
+        let job = listing(text, &[], kinds, &colors, FONT);
         job.sections
             .iter()
             .map(|s| {
-                let kind = KINDS.iter().position(|c| *c == s.format.color).unwrap() as u8;
+                let kind = colors.kinds.iter().position(|c| *c == s.format.color).unwrap() as u8;
                 (job.text[s.byte_range.start.0..s.byte_range.end.0].to_string(), kind)
             })
             .collect()
@@ -642,6 +851,64 @@ mod tests {
             runs("def\n@b", &kinds),
             vec![("def".into(), 1), ("\n".into(), 0), ("@b".into(), 7)]
         );
+    }
+
+    /// **A number in the store changes the panel and leaves the rest alone** (S5b-1). The store
+    /// is the game's — `games_shell::Settings`, which this crate does not depend on — so what is
+    /// handed over is a function that answers a key, and this is one written by hand.
+    #[test]
+    fn the_store_changes_a_size_and_leaves_the_rest() {
+        let mut layout = EditorLayout::default();
+        layout.read_from(|key| match key {
+            "editor_width" => Some(720.0),
+            "editor_font" => Some(16.0),
+            _ => None,
+        });
+        assert_eq!(layout.width, 720.0);
+        assert_eq!(layout.font, 16.0);
+        assert_eq!(layout.height, HEIGHT, "a key nobody wrote leaves the default alone");
+        assert_eq!(layout.margin, MARGIN);
+        // and nothing at all in the store is the panel exactly as it was
+        let mut untouched = EditorLayout::default();
+        untouched.read_from(|_| None);
+        assert_eq!(untouched, EditorLayout::default());
+    }
+
+    /// **Changed colours are what the listing is painted with** — the whole of what making the
+    /// nine settable means, and the reason the note on [`KINDS`] says what it says: nothing here
+    /// measures the new ones.
+    #[test]
+    fn the_listing_is_painted_with_the_colours_it_was_given() {
+        let mut editor = Editor::default();
+        editor.text = "def a".into();
+        editor.kinds = vec![1, 1, 1, 0, 8];
+        assert_eq!(drawn_kind(&editor, 0), Some(1), "the default palette, as it always was");
+
+        let mine = egui::Color32::from_rgb(1, 2, 3);
+        editor.colors.kinds[1] = mine;
+        let job = listing(&editor.text, &editor.heat, &editor.kinds, &editor.colors, FONT);
+        assert_eq!(job.sections[0].format.color, mine, "`def` is drawn in the game's colour");
+        // and the kind is still read back out of it, because the lookup is the same table
+        assert_eq!(drawn_kind(&editor, 0), Some(1));
+        // the gutter follows the comment colour rather than keeping a copy of it
+        editor.colors.kinds[3] = mine;
+        assert_eq!(editor.colors.gutter(), mine);
+    }
+
+    /// The heat band is the other half of the measured pair, and it is settable too: at alpha 0
+    /// the hottest line has no band at all.
+    #[test]
+    fn the_heat_band_is_the_colour_and_the_strength_it_was_given() {
+        let text = "a\nb\n";
+        let heat = vec![0.0, 1.0];
+        let mut colors = EditorColors::default();
+        let banded = listing(text, &heat, &[], &colors, FONT);
+        let hot = banded.sections.last().unwrap().format.background;
+        assert_eq!(hot, egui::Color32::from_rgba_unmultiplied(150, 110, 20, HEAT_ALPHA));
+
+        colors.heat_alpha = 0;
+        let flat = listing(text, &heat, &[], &colors, FONT);
+        assert_eq!(flat.sections.last().unwrap().format.background.a(), 0, "no band at all");
     }
 
     /// The text a game shows can change under the panel; the classification follows it and is

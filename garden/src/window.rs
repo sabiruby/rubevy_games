@@ -1185,6 +1185,10 @@ pub struct FakePointer<'w, 's> {
     wheel: MessageWriter<'w, bevy::input::mouse::MouseWheel>,
     events: MessageWriter<'w, bevy::window::WindowEvent>,
     egui: Option<Res<'w, bevy_egui::input::EguiWantsInput>>,
+    /// **Where the editor actually is**, which since S5b-1 is a setting and not a constant: the
+    /// game — or a player's `garden.settings.txt` — may have asked for a panel of another size,
+    /// and a check that read the default would then be pointing at a rectangle nobody drew.
+    editor: Res<'w, rubevy_egui::EditorLayout>,
 }
 
 impl FakePointer<'_, '_> {
@@ -1193,12 +1197,12 @@ impl FakePointer<'_, '_> {
         self.egui.as_ref().is_some_and(|e| e.wants_pointer_input() || e.is_pointer_over_area())
     }
 
-    /// The middle of the editor panel, where it stands before anybody drags it
-    /// (`rubevy_egui::editor`'s own figures, so the check is not guessing the rectangle).
+    /// The middle of the editor panel, where it stands before anybody drags it (the panel's own
+    /// setting, so the check is not guessing the rectangle).
     fn over_the_editor(&self) -> Option<Vec2> {
         let (_, window) = self.windows.iter().next()?;
-        use rubevy_egui::editor::{HEIGHT, MARGIN, WIDTH};
-        Some(Vec2::new(window.width() - MARGIN - WIDTH * 0.5, MARGIN + HEIGHT * 0.5))
+        let (margin, width, height) = (self.editor.margin, self.editor.width, self.editor.height);
+        Some(Vec2::new(window.width() - margin - width * 0.5, margin + height * 0.5))
     }
 
     /// Which window the forged input is about: the primary one, which is the only one these
