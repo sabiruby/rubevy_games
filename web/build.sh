@@ -72,8 +72,12 @@ build_game() {
 
   rm -rf "$dir"
   mkdir -p "$dir/pkg" "$dir/compiler"
+  # where cargo put it: `target/` under the workspace unless CARGO_TARGET_DIR says otherwise,
+  # which is how a second build (a before-and-after measurement, or a run beside somebody
+  # else's) is kept out of the first one's way. Reading it relatively was a silent wrong file
+  # at best and "no such file" at worst.
   wasm-bindgen --target web --no-typescript --out-dir "$dir/pkg" --out-name game \
-    "target/wasm32-unknown-unknown/web/$game.wasm"
+    "${CARGO_TARGET_DIR:-$ROOT/target}/wasm32-unknown-unknown/web/$game.wasm"
   if command -v wasm-opt >/dev/null; then
     # the features Rust enables for wasm32-unknown-unknown; --all-features would also turn on
     # encodings browsers do not read yet (compact imports)
