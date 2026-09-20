@@ -63,10 +63,79 @@ use crate::genome::{Birth, CreatureSpec, Genome};
 // ---------------------------------------------------------------------------------------------
 
 /// 40 × 30, as the plan says, measured in world units (one unit is about a rabbit).
+///
+/// **Quoted**: `docs/plans/garden-plan.md`, "40×30 マスの草地". Why *those* two numbers rather
+/// than any other pair is not recorded anywhere, so the plan is the source and the size is the
+/// default ([`Place`]), not a fact about the game.
 const FIELD_W: f32 = 40.0;
 const FIELD_D: f32 = 30.0;
-const HALF_W: f32 = FIELD_W / 2.0;
-const HALF_D: f32 = FIELD_D / 2.0;
+/// How far inside the wall a creature is stopped, and where [`separate`] puts one that ended up
+/// outside. **Source unknown** — the same half unit has been written in `move_creatures` and
+/// `inside_the_walls` since G0.
+const WALL_MARGIN: f32 = 0.5;
+
+/// **How big the garden is, and what its walls do** (S5b-3).
+///
+/// The field used to be two `const`s and two more derived from them, which meant the one number
+/// the whole world is measured in could only be changed by rebuilding. It is a setting now:
+/// `field_width=60` in `garden.settings.txt` is a wider garden, with wider walls, a bigger lawn,
+/// the fixtures further apart and the camera allowed further out — because every one of those
+/// reads this resource rather than a constant of its own.
+///
+/// **Nothing about the *rules* is here.** How fast grass grows and how far a creature sees are
+/// `ruby/world.rb`'s; this is the shape of the room they happen in.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct Place {
+    /// [`FIELD_W`]
+    pub width: f32,
+    /// [`FIELD_D`]
+    pub depth: f32,
+    /// [`WALL_MARGIN`]
+    pub wall_margin: f32,
+    /// [`SEPARATE_PASSES`]
+    pub separate_passes: usize,
+}
+
+impl Default for Place {
+    fn default() -> Self {
+        Place {
+            width: FIELD_W,
+            depth: FIELD_D,
+            wall_margin: WALL_MARGIN,
+            separate_passes: SEPARATE_PASSES,
+        }
+    }
+}
+
+impl Place {
+    /// Half the field, which is what almost everything actually wants: the walls stand at ±this.
+    pub fn half_w(&self) -> f32 {
+        self.width / 2.0
+    }
+    pub fn half_d(&self) -> f32 {
+        self.depth / 2.0
+    }
+
+    /// `field_width` / `field_depth` / `wall_margin` / `separate_passes` in
+    /// `garden.settings.txt`. A key nobody wrote leaves its field alone, which is what makes a
+    /// store written by an older build safe to read.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        take(settings, "field_width", &mut self.width);
+        take(settings, "field_depth", &mut self.depth);
+        take(settings, "wall_margin", &mut self.wall_margin);
+        if let Some(value) = settings.number("separate_passes") {
+            self.separate_passes = value.max(0.0) as usize;
+        }
+    }
+}
+
+/// One `key=value` into one `f32`, for the seven resources below. A key that is not in the store
+/// leaves the field as it was; a key that is not a number is not one either.
+fn take(settings: &games_shell::Settings, key: &str, slot: &mut f32) {
+    if let Some(value) = settings.number(key) {
+        *slot = value;
+    }
+}
 
 /// One turn of the sun. Night is the half of it the sun spends under the ground.
 ///
@@ -78,13 +147,19 @@ const HALF_D: f32 = FIELD_D / 2.0;
 const DAY_LENGTH: f32 = 60.0;
 /// Where in that turn the world starts: a little after sunrise, so the first thing a run sees is
 /// daylight and the first `"night"` is something that arrives rather than something that was.
+/// *Reason only* — the sentence above is the record and 0.08 itself is **unknown**.
 const DAWN_OFFSET: f32 = 0.08;
 
 /// Midnight, on the world's clock, in the first turn of the sun: the phase where the sun is
-/// furthest under the ground is 0.75, and `phase = (now / DAY_LENGTH + DAWN_OFFSET).fract()`
-/// makes that `now = (0.75 - DAWN_OFFSET) * DAY_LENGTH`. `--at MIDNIGHT` is the darkest picture
+/// furthest under the ground is 0.75, and `phase = (now / DAY_LENGTH + dawn_offset).fract()`
+/// makes that `now = (0.75 - dawn_offset) * DAY_LENGTH`. `--at midnight` is the darkest picture
 /// the garden has.
-const MIDNIGHT: f32 = (0.75 - DAWN_OFFSET) * DAY_LENGTH;
+///
+/// **Derived, so it is a function and not a setting** (S5b-3): it moves with `light_dawn_offset`
+/// rather than being a second number that can disagree with it.
+fn midnight(light: &Light) -> f32 {
+    (0.75 - light.dawn_offset) * DAY_LENGTH
+}
 
 /// **How dark the night is (G6, and again in G6b).** The author played the browser build and
 /// could not see the creatures or the trees at night at all; G6 raised these to 400 and 55 and
@@ -112,11 +187,129 @@ const MIDNIGHT: f32 = (0.75 - DAWN_OFFSET) * DAY_LENGTH;
 /// the *creatures*, which are small, round and mostly in their own shadow.
 ///
 /// All three are multiplied by [`NightDial`], which is the author's own slider.
+///
+/// **These three are the measurement, and changing them throws it away** (S5b-3). Since
+/// `light_moon_lux`, `light_night_ambient` and `light_night_sky_r` / `_g` / `_b` can be written
+/// in `garden.settings.txt`, it is worth saying plainly what is lost: the mean ground luminance
+/// of **44 of 255 at midnight** was measured off a `--shot --at midnight` of *this* trio on
+/// 2026-09-18 (G6b), in the strip the panels do not cover, against a target of 40–50. It is a
+/// measurement of the three together — the moon draws the edges, the ambient fills the shadows
+/// and the sky is most of the picture — so moving any one of them makes 44 a number about a
+/// garden that no longer exists, and nothing in the code re-measures it.
 const MOON_LUX: f32 = 950.0;
 const NIGHT_AMBIENT: f32 = 190.0;
 /// The colour of the sky at night. It is not what the ground is lit by, but it is most of what a
 /// picture of a dark garden *is*, and the blue is where the night's colour comes from.
 const NIGHT_SKY: [f32; 3] = [0.14, 0.18, 0.36];
+
+/// The day's floor and how much the sun adds by noon, in lux, and the same pair for the ambient
+/// light that fills the shadows. *Reason only* for the first of the four — `main.rs` has called
+/// 1,200 "the day's floor, the sun on the horizon" since G6 — and **unknown** for the other
+/// three.
+const DAY_LUX: [f32; 2] = [1_200.0, 9_000.0];
+const DAY_AMBIENT: [f32; 2] = [120.0, 260.0];
+
+/// What the sun is built with before `day_night` has had a frame, and how much ground its shadows
+/// cover. The illuminance is overwritten on the first frame and is only ever seen if `day_night`
+/// is not running; the cascades are not touched again. **Source unknown**, all four.
+const SUN_LUX: f32 = 8_000.0;
+const SHADOW_CASCADES: u32 = 2;
+const SHADOW_NEAR: f32 = 24.0;
+const SHADOW_FAR: f32 = 70.0;
+
+/// **The light, as a setting** (S5b-3): the night the author was asked about, the day it turns
+/// into, and where in the turn a run begins.
+///
+/// The one number in here that was already a setting is the *dial* ([`NightDial`], the `night`
+/// key) — a multiplier over the three night quantities, put there in G6b so that the author
+/// could answer "how dark is your screen?" with one number. This resource is the rest of the
+/// same question: the quantities themselves, the range the dial may travel, and the day.
+///
+/// **Read before the first frame** (`main`), because a `--shot --at midnight` is taken at the
+/// brightness the store asked for and there is no second chance at it.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct Light {
+    /// [`DAWN_OFFSET`]
+    pub dawn_offset: f32,
+    /// [`MOON_LUX`] — **measured; see the note there before moving it**
+    pub moon_lux: f32,
+    /// [`NIGHT_AMBIENT`] — the same measurement
+    pub night_ambient: f32,
+    /// [`NIGHT_SKY`] — the same measurement
+    pub night_sky: [f32; 3],
+    /// [`NIGHT_ZENITH`]
+    pub night_zenith: f32,
+    /// [`NIGHT_DIAL_MIN`] / [`NIGHT_DIAL_MAX`]
+    pub dial_min: f32,
+    pub dial_max: f32,
+    /// [`DAY_LUX`]
+    pub day_lux: [f32; 2],
+    /// [`DAY_AMBIENT`]
+    pub day_ambient: [f32; 2],
+    /// [`SUN_LUX`]
+    pub sun_lux: f32,
+    /// [`SHADOW_CASCADES`] / [`SHADOW_NEAR`] / [`SHADOW_FAR`]
+    pub shadow_cascades: u32,
+    pub shadow_near: f32,
+    pub shadow_far: f32,
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Light {
+            dawn_offset: DAWN_OFFSET,
+            moon_lux: MOON_LUX,
+            night_ambient: NIGHT_AMBIENT,
+            night_sky: NIGHT_SKY,
+            night_zenith: NIGHT_ZENITH,
+            dial_min: NIGHT_DIAL_MIN,
+            dial_max: NIGHT_DIAL_MAX,
+            day_lux: DAY_LUX,
+            day_ambient: DAY_AMBIENT,
+            sun_lux: SUN_LUX,
+            shadow_cascades: SHADOW_CASCADES,
+            shadow_near: SHADOW_NEAR,
+            shadow_far: SHADOW_FAR,
+        }
+    }
+}
+
+impl Light {
+    /// | key | field |
+    /// |---|---|
+    /// | `light_dawn_offset` | where in the sun's turn a run starts |
+    /// | `light_moon_lux` / `light_night_ambient` / `light_night_sky_r` / `_g` / `_b` | **the measured night** |
+    /// | `light_night_zenith` | how much darker the top of the night sky is than its rim |
+    /// | `light_dial_min` / `light_dial_max` | how far the `night` slider goes |
+    /// | `light_day_lux` / `light_day_lux_span` | the day's floor and what noon adds |
+    /// | `light_day_ambient` / `light_day_ambient_span` | the same for the fill light |
+    /// | `light_sun_lux` | what the sun is built with |
+    /// | `light_shadow_cascades` / `light_shadow_near` / `light_shadow_far` | the shadow cascades |
+    ///
+    /// The night's colour is three keys rather than one string: S5b-1 kept colours out of the
+    /// store because reading one needs a parser, and three numbers need none.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        take(settings, "light_dawn_offset", &mut self.dawn_offset);
+        take(settings, "light_moon_lux", &mut self.moon_lux);
+        take(settings, "light_night_ambient", &mut self.night_ambient);
+        take(settings, "light_night_sky_r", &mut self.night_sky[0]);
+        take(settings, "light_night_sky_g", &mut self.night_sky[1]);
+        take(settings, "light_night_sky_b", &mut self.night_sky[2]);
+        take(settings, "light_night_zenith", &mut self.night_zenith);
+        take(settings, "light_dial_min", &mut self.dial_min);
+        take(settings, "light_dial_max", &mut self.dial_max);
+        take(settings, "light_day_lux", &mut self.day_lux[0]);
+        take(settings, "light_day_lux_span", &mut self.day_lux[1]);
+        take(settings, "light_day_ambient", &mut self.day_ambient[0]);
+        take(settings, "light_day_ambient_span", &mut self.day_ambient[1]);
+        take(settings, "light_sun_lux", &mut self.sun_lux);
+        if let Some(value) = settings.number("light_shadow_cascades") {
+            self.shadow_cascades = value.max(1.0) as u32;
+        }
+        take(settings, "light_shadow_near", &mut self.shadow_near);
+        take(settings, "light_shadow_far", &mut self.shadow_far);
+    }
+}
 
 /// **The dial (G6b): everything above, multiplied.**
 ///
@@ -201,6 +394,101 @@ const FOG_NEAR_MAX: f32 = 120.0;
 /// nothing can reach them: they are outside the wall `move_creatures` clamps to, and
 /// `garden.nearest(:Tree)` must go on meaning the seven trees that are in the garden.
 const EDGE_TREES: usize = 16;
+/// How the treeline is scattered: how far along its own step a tree may slide, how far out past
+/// the wall it stands, and how big it is. **Source unknown**, all three pairs.
+const EDGE_JITTER: f32 = 0.4;
+const EDGE_OUT: [f32; 2] = [4.0, 15.0];
+const EDGE_SCALE: [f32; 2] = [1.7, 3.1];
+
+/// What the fog is built with before `horizon_look` has had a frame — colour and the two
+/// distances. Both are overwritten on the first frame and are only ever seen if `horizon_look` is
+/// not running. **Source unknown**.
+const FOG_COLOR: [f32; 3] = [0.35, 0.5, 0.7];
+const FOG_AT_FIRST: [f32; 2] = [60.0, 220.0];
+
+/// **The scenery past the wall, as a setting** (S5b-3): the far ground, the dome, the fog and
+/// the treeline. All of it is the window's — a headless run builds none of it — and all of it is
+/// about the *picture* rather than about the garden, which is why it is (c) and not (b).
+///
+/// Three numbers of the horizon are **not** here and stay `const`, because changing them breaks
+/// something rather than changing it: [`HORIZON_DROP`] is the gap that stops two planes fighting
+/// over the same pixels, [`SKY_FLOOR`] is the rim being below the horizon the ground draws, and
+/// [`FOG_NEAR_MAX`] is the fog ending inside [`Scenery::horizon_half`] rather than past it.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct Scenery {
+    /// [`HORIZON_HALF`]
+    pub horizon_half: f32,
+    /// [`SKY_RADIUS`] / [`SKY_SIDES`] / [`SKY_RINGS`]
+    pub sky_radius: f32,
+    pub sky_sides: usize,
+    pub sky_rings: usize,
+    /// [`FOG_NEAR`] — **derived**; see the note there
+    pub fog_near: f32,
+    /// [`FOG_DEPTH`] — **measured**; see the note there
+    pub fog_depth: f32,
+    /// [`FOG_COLOR`] / [`FOG_AT_FIRST`]
+    pub fog_color: [f32; 3],
+    pub fog_at_first: [f32; 2],
+    /// [`EDGE_TREES`] / [`EDGE_JITTER`] / [`EDGE_OUT`] / [`EDGE_SCALE`]
+    pub edge_trees: usize,
+    pub edge_jitter: f32,
+    pub edge_out: [f32; 2],
+    pub edge_scale: [f32; 2],
+}
+
+impl Default for Scenery {
+    fn default() -> Self {
+        Scenery {
+            horizon_half: HORIZON_HALF,
+            sky_radius: SKY_RADIUS,
+            sky_sides: SKY_SIDES,
+            sky_rings: SKY_RINGS,
+            fog_near: FOG_NEAR,
+            fog_depth: FOG_DEPTH,
+            fog_color: FOG_COLOR,
+            fog_at_first: FOG_AT_FIRST,
+            edge_trees: EDGE_TREES,
+            edge_jitter: EDGE_JITTER,
+            edge_out: EDGE_OUT,
+            edge_scale: EDGE_SCALE,
+        }
+    }
+}
+
+impl Scenery {
+    /// `horizon_half`, `sky_radius` / `sky_sides` / `sky_rings`, `fog_near` / `fog_depth` /
+    /// `fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end`, `edge_trees` / `edge_jitter` /
+    /// `edge_out_min` / `edge_out_max` / `edge_scale_min` / `edge_scale_max`.
+    ///
+    /// The dome wants at least three sides and two rings to be a dome at all, and a count below
+    /// that is raised rather than refused — the store is a text file and this is the same
+    /// clamping `look_floor_pattern` does in Battle.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        take(settings, "horizon_half", &mut self.horizon_half);
+        take(settings, "sky_radius", &mut self.sky_radius);
+        if let Some(value) = settings.number("sky_sides") {
+            self.sky_sides = (value.max(3.0)) as usize;
+        }
+        if let Some(value) = settings.number("sky_rings") {
+            self.sky_rings = (value.max(2.0)) as usize;
+        }
+        take(settings, "fog_near", &mut self.fog_near);
+        take(settings, "fog_depth", &mut self.fog_depth);
+        take(settings, "fog_color_r", &mut self.fog_color[0]);
+        take(settings, "fog_color_g", &mut self.fog_color[1]);
+        take(settings, "fog_color_b", &mut self.fog_color[2]);
+        take(settings, "fog_start", &mut self.fog_at_first[0]);
+        take(settings, "fog_end", &mut self.fog_at_first[1]);
+        if let Some(value) = settings.number("edge_trees") {
+            self.edge_trees = value.max(0.0) as usize;
+        }
+        take(settings, "edge_jitter", &mut self.edge_jitter);
+        take(settings, "edge_out_min", &mut self.edge_out[0]);
+        take(settings, "edge_out_max", &mut self.edge_out[1]);
+        take(settings, "edge_scale_min", &mut self.edge_scale[0]);
+        take(settings, "edge_scale_max", &mut self.edge_scale[1]);
+    }
+}
 
 /// **The colour of a species (G8).** The author's other complaint was that a rabbit and a beetle
 /// are hard to tell apart, which they were: Kenney's Cube Pets share one palette and both animals
@@ -225,6 +513,132 @@ pub fn species_tint(species: Species) -> (f32, f32, f32) {
 /// repository**; they come from the same CC0 pack (`CREDITS.md`) and go beside this one.
 const BEETLE_MODEL: &str = "models/animal-crab.glb";
 
+/// The window the game opens. **Quoted, indirectly**: `--eye`'s note says "at the default 42 a
+/// beetle is thirty pixels across in a 1600-wide window", so the one number the camera's default
+/// distance was argued from is this one. 900 is **unknown**.
+const WINDOW: [f32; 2] = [1600.0, 900.0];
+
+/// The lawn. **Source unknown.**
+const GROUND_COLOR: [f32; 3] = [0.36, 0.46, 0.25];
+
+/// Where the hunger bar changes colour — red below the first, amber below the second, green
+/// above — and how big the bar is in the HUD. **Source unknown**, all four. 55.0 is the same
+/// number as `hungry_below` in `ruby/creatures/beetle.rb`, and the two are **not** connected:
+/// there is no record of that being meant, and S5a decided to treat it as a coincidence rather
+/// than invent the intention (`docs/numbers.md` §7-6).
+const HUNGER_LOW: f32 = 20.0;
+const HUNGER_WARN: f32 = 55.0;
+const HUNGER_BAR: [f32; 2] = [64.0, 11.0];
+
+/// How much a model is scaled up inside its child entity. Kenney's grass is about a quarter of a
+/// unit high and the animals are about one; a plant here is a tuft a beetle can hide in. The
+/// rock's three are one number squashed two ways. **Source unknown**, all of them.
+const TUFT_SCALE: f32 = 2.2;
+const BUSH_SCALE: f32 = 2.6;
+const TREE_SCALE: f32 = 2.2;
+const ROCK_SCALE: [f32; 2] = [3.4, 3.0];
+const BEETLE_SCALE: f32 = 0.55;
+const RABBIT_SCALE: f32 = 0.75;
+
+/// How fast a creature has to be going before it is walking rather than idling, and how long the
+/// blend from one clip to the other takes. **Source unknown**, both.
+const WALKING_AT: f32 = 0.2;
+const GAIT_BLEND_MS: u64 = 180;
+
+/// **How the garden is drawn, as against how it works** (S5b-3) — the shape of Battle's `Look`,
+/// and for the same reason: none of it changes what happens in the world, and all of it was
+/// written into the middle of a function where nobody could reach it.
+///
+/// The model scales are handed on to [`Look`] when `make_look` builds it, so that the four
+/// `spawn_*` helpers keep taking one `Option<&Look>` and a headless run — which has no `Look` at
+/// all — goes on never seeing them.
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub struct Picture {
+    /// [`WINDOW`] — read before the window is opened
+    pub window: [f32; 2],
+    /// [`GROUND_COLOR`]
+    pub ground_color: [f32; 3],
+    /// [`HUNGER_LOW`] / [`HUNGER_WARN`] / [`HUNGER_BAR`]
+    pub hunger_low: f32,
+    pub hunger_warn: f32,
+    pub hunger_bar: [f32; 2],
+    /// [`TUFT_SCALE`] / [`BUSH_SCALE`] / [`TREE_SCALE`] / [`ROCK_SCALE`] / [`BEETLE_SCALE`] /
+    /// [`RABBIT_SCALE`]
+    pub tuft_scale: f32,
+    pub bush_scale: f32,
+    pub tree_scale: f32,
+    pub rock_scale: [f32; 2],
+    pub beetle_scale: f32,
+    pub rabbit_scale: f32,
+    /// [`WALKING_AT`] / [`GAIT_BLEND_MS`]
+    pub walking_at: f32,
+    pub gait_blend_ms: u64,
+    /// [`BEETLE_MODEL`] — the one entry here that is not a number. It is in the store for the
+    /// reason its own note gives: swapping it is the whole of "put a different animal in the
+    /// garden", and `look_beetle_model=models/animal-bee.glb` spares a rebuild for it.
+    pub beetle_model: String,
+}
+
+impl Default for Picture {
+    fn default() -> Self {
+        Picture {
+            window: WINDOW,
+            ground_color: GROUND_COLOR,
+            hunger_low: HUNGER_LOW,
+            hunger_warn: HUNGER_WARN,
+            hunger_bar: HUNGER_BAR,
+            tuft_scale: TUFT_SCALE,
+            bush_scale: BUSH_SCALE,
+            tree_scale: TREE_SCALE,
+            rock_scale: ROCK_SCALE,
+            beetle_scale: BEETLE_SCALE,
+            rabbit_scale: RABBIT_SCALE,
+            walking_at: WALKING_AT,
+            gait_blend_ms: GAIT_BLEND_MS,
+            beetle_model: BEETLE_MODEL.to_string(),
+        }
+    }
+}
+
+impl Picture {
+    /// | key | field |
+    /// |---|---|
+    /// | `window_width` / `window_height` | [`Picture::window`] — the same two keys Battle uses |
+    /// | `look_ground_r` / `_g` / `_b` | the lawn |
+    /// | `look_hunger_low` / `look_hunger_warn` | where the meter changes colour |
+    /// | `look_hunger_bar_width` / `look_hunger_bar_height` | how big the meter is |
+    /// | `look_tuft_scale` / `look_bush_scale` / `look_tree_scale` | the plants and the trees |
+    /// | `look_rock_scale` / `look_rock_squash` | the boulders |
+    /// | `look_beetle_scale` / `look_rabbit_scale` | the animals |
+    /// | `look_walking_at` / `look_gait_blend_ms` | when a creature walks, and the blend |
+    /// | `look_beetle_model` | which `.glb` a beetle wears |
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        take(settings, "window_width", &mut self.window[0]);
+        take(settings, "window_height", &mut self.window[1]);
+        take(settings, "look_ground_r", &mut self.ground_color[0]);
+        take(settings, "look_ground_g", &mut self.ground_color[1]);
+        take(settings, "look_ground_b", &mut self.ground_color[2]);
+        take(settings, "look_hunger_low", &mut self.hunger_low);
+        take(settings, "look_hunger_warn", &mut self.hunger_warn);
+        take(settings, "look_hunger_bar_width", &mut self.hunger_bar[0]);
+        take(settings, "look_hunger_bar_height", &mut self.hunger_bar[1]);
+        take(settings, "look_tuft_scale", &mut self.tuft_scale);
+        take(settings, "look_bush_scale", &mut self.bush_scale);
+        take(settings, "look_tree_scale", &mut self.tree_scale);
+        take(settings, "look_rock_scale", &mut self.rock_scale[0]);
+        take(settings, "look_rock_squash", &mut self.rock_scale[1]);
+        take(settings, "look_beetle_scale", &mut self.beetle_scale);
+        take(settings, "look_rabbit_scale", &mut self.rabbit_scale);
+        take(settings, "look_walking_at", &mut self.walking_at);
+        if let Some(value) = settings.number("look_gait_blend_ms") {
+            self.gait_blend_ms = value.max(0.0) as u64;
+        }
+        if let Some(name) = settings.get("look_beetle_model") {
+            self.beetle_model = name.to_string();
+        }
+    }
+}
+
 /// **Plants — what is left here of them** (W1).
 ///
 /// How fast grass grows, how often a blade comes up and how many the field holds are rules, and
@@ -242,6 +656,120 @@ const PLANT_MAX: f32 = 1.4;
 /// Creatures
 const BEETLES: usize = 6;
 const RABBITS: usize = 4;
+
+/// How hungry a creature is when a new garden is built. **Source unknown.**
+const START_HUNGER: [f32; 2] = [45.0, 90.0];
+/// How many times a spot is rolled again before the thing being placed is given up on (trees and
+/// rocks) or put down where it last landed (creatures). **Source unknown.**
+const START_TRIES: usize = 40;
+/// How often a blade of grass is a round bush rather than a tuft, and how much a boulder is
+/// squashed. **Source unknown**, both.
+const ROUND_CHANCE: f32 = 0.35;
+const ROCK_SQUASH: [f32; 2] = [0.8, 1.25];
+/// The five distances a new garden is laid out by: how far two immovable things stand apart, how
+/// far a blade of grass keeps off one, and the three a creature keeps — off the grass, off the
+/// solid things, and off its neighbours. **Quoted** for the first: `docs/plans/garden-plan.md`,
+/// "岩どうしは押し戻さないので初期配置の側で 1.5 以上離している". The other four are **unknown**.
+const SOLID_APART: f32 = 1.5;
+const GRASS_OFF_SOLID: f32 = 1.2;
+const CREATURE_OFF_GRASS: f32 = 2.5;
+const CREATURE_OFF_SOLID: f32 = 0.6;
+const CREATURES_APART: f32 = 2.0;
+
+/// **What a new garden is built with** (S5b-3): the furniture, and the spacing it is laid out by.
+///
+/// It is (c) rather than (b) because none of it is a *rule* — the rules are `ruby/world.rb`'s and
+/// they take over on the first frame. This is the state of the world before any of them has run,
+/// which a person may want more or less of without having an opinion about how grass grows.
+///
+/// **A garden read back from a save uses none of it**: `load_world` builds the world out of the
+/// file, and the only thing from here it can still reach is [`Furniture::plant_max`], which
+/// `plant_the_meadow` plants the checks' corner at.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct Furniture {
+    /// [`PLANTS_AT_START`] / [`PLANT_MIN`] / [`PLANT_MAX`]
+    pub plants: usize,
+    pub plant_min: f32,
+    pub plant_max: f32,
+    /// [`BEETLES`] / [`RABBITS`] / [`TREES`] / [`ROCKS`]
+    pub beetles: usize,
+    pub rabbits: usize,
+    pub trees: usize,
+    pub rocks: usize,
+    /// [`START_HUNGER`] / [`START_TRIES`]
+    pub hunger: [f32; 2],
+    pub tries: usize,
+    /// [`ROUND_CHANCE`] / [`ROCK_SQUASH`]
+    pub round_chance: f32,
+    pub rock_squash: [f32; 2],
+    /// [`SOLID_APART`] / [`GRASS_OFF_SOLID`] / [`CREATURE_OFF_GRASS`] / [`CREATURE_OFF_SOLID`] /
+    /// [`CREATURES_APART`]
+    pub solid_apart: f32,
+    pub grass_off_solid: f32,
+    pub creature_off_grass: f32,
+    pub creature_off_solid: f32,
+    pub creatures_apart: f32,
+}
+
+impl Default for Furniture {
+    fn default() -> Self {
+        Furniture {
+            plants: PLANTS_AT_START,
+            plant_min: PLANT_MIN,
+            plant_max: PLANT_MAX,
+            beetles: BEETLES,
+            rabbits: RABBITS,
+            trees: TREES,
+            rocks: ROCKS,
+            hunger: START_HUNGER,
+            tries: START_TRIES,
+            round_chance: ROUND_CHANCE,
+            rock_squash: ROCK_SQUASH,
+            solid_apart: SOLID_APART,
+            grass_off_solid: GRASS_OFF_SOLID,
+            creature_off_grass: CREATURE_OFF_GRASS,
+            creature_off_solid: CREATURE_OFF_SOLID,
+            creatures_apart: CREATURES_APART,
+        }
+    }
+}
+
+impl Furniture {
+    /// `start_plants`, `plant_min`, `plant_max`, `start_beetles`, `start_rabbits`, `start_trees`,
+    /// `start_rocks`, `start_hunger_min` / `start_hunger_max`, `start_tries`,
+    /// `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`,
+    /// `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`,
+    /// `start_creatures_apart`.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        let count = |key: &str, slot: &mut usize| {
+            if let Some(value) = settings.number(key) {
+                *slot = value.max(0.0) as usize;
+            }
+        };
+        count("start_plants", &mut self.plants);
+        take(settings, "plant_min", &mut self.plant_min);
+        take(settings, "plant_max", &mut self.plant_max);
+        count("start_beetles", &mut self.beetles);
+        count("start_rabbits", &mut self.rabbits);
+        count("start_trees", &mut self.trees);
+        count("start_rocks", &mut self.rocks);
+        take(settings, "start_hunger_min", &mut self.hunger[0]);
+        take(settings, "start_hunger_max", &mut self.hunger[1]);
+        // one try is still a try; zero would leave a creature wherever `Vec2::ZERO` is
+        if let Some(value) = settings.number("start_tries") {
+            self.tries = value.max(1.0) as usize;
+        }
+        take(settings, "start_round_chance", &mut self.round_chance);
+        take(settings, "start_rock_squash_min", &mut self.rock_squash[0]);
+        take(settings, "start_rock_squash_max", &mut self.rock_squash[1]);
+        take(settings, "start_solid_apart", &mut self.solid_apart);
+        take(settings, "start_grass_off_solid", &mut self.grass_off_solid);
+        take(settings, "start_creature_off_grass", &mut self.creature_off_grass);
+        take(settings, "start_creature_off_solid", &mut self.creature_off_solid);
+        take(settings, "start_creatures_apart", &mut self.creatures_apart);
+    }
+}
+
 /// A full meter. The rule that fills it and the rule that empties it are `world.rb`'s
 /// (`hunger_max`, `hunger_rate`, `eat_rate`, `food_value`); this is here because the HUD draws a
 /// bar and a bar needs to know what full is.
@@ -754,6 +1282,19 @@ struct Look {
     /// the three clips of each animal, in one graph each
     beetle_gaits: Gaits,
     rabbit_gaits: Gaits,
+    /// **How big each model is drawn, carried from [`Picture`]** (S5b-3). It rides here rather
+    /// than being read where it is used because the four `spawn_*` helpers already take one
+    /// `Option<&Look>` and a headless run has none — which is exactly the set of places a model
+    /// scale is ever wanted. `make_look` copies the six in when it builds this.
+    tuft_scale: f32,
+    bush_scale: f32,
+    tree_scale: f32,
+    rock_scale: [f32; 2],
+    beetle_scale: f32,
+    rabbit_scale: f32,
+    /// and the two the animation wants (`animate_creatures`)
+    walking_at: f32,
+    gait_blend_ms: u64,
 }
 
 /// **The sky's mesh, and what colour it is standing at (G8).**
@@ -1243,9 +1784,30 @@ struct Orbit {
 
 impl Default for Orbit {
     fn default() -> Self {
-        Orbit { yaw: 0.0, pitch: 0.85, distance: 42.0, focus: Vec2::ZERO }
+        Orbit { yaw: 0.0, pitch: PITCH, distance: DISTANCE, focus: Vec2::ZERO }
     }
 }
+
+impl Orbit {
+    /// Where `Home` puts the camera back to — the setting's default rather than the constant's,
+    /// so that an eye moved in `garden.settings.txt` is the eye `Home` returns to.
+    fn home(eye: &Eye) -> Orbit {
+        Orbit { yaw: 0.0, pitch: eye.pitch, distance: eye.distance, focus: Vec2::ZERO }
+    }
+}
+
+/// Where the camera stands when nobody has said otherwise. **Quoted** for the distance (not for
+/// the number, for its effect): `--eye`'s note says "at the default 42 a beetle is thirty pixels
+/// across in a 1600-wide window". The pitch is quoted the same way — [`FOG_DEPTH`] was measured
+/// at "42 units out and 49° down", so the fog's measurement rests on this angle and moving it
+/// makes that measurement one about a different picture.
+const PITCH: f32 = 0.85;
+const DISTANCE: f32 = 42.0;
+/// How far a pixel of drag turns the camera, and how far up and down the pitch may go.
+/// **Source unknown**, all three.
+const TURN_PER_PIXEL: f32 = 0.005;
+const PITCH_MIN: f32 = 0.12;
+const PITCH_MAX: f32 = 1.45;
 
 /// **The wheel (G6).** The author played the browser build and found the wheel had two steps in
 /// it: all the way in, all the way out. The reason is in the unit a wheel message carries.
@@ -1277,6 +1839,85 @@ const PAN_PER_SECOND: f32 = 0.9;
 /// How far past the wall the eye may wander before it is stopped.
 const PAN_LIMIT: f32 = 8.0;
 
+/// **The eye, as a setting** (S5b-3): where the camera starts, how far it may go, and how fast
+/// the mouse and the keys move it.
+///
+/// This is the garden's 3D orbit and it has nothing to do with `games_shell::CameraControls`,
+/// which is the shared crate's pan-and-zoom 2D camera and is what Battle uses. The two hold some
+/// of the same numbers because S3 copied the reasoning out of here when it wrote that one; they
+/// are not the same camera, and the keys are `eye_*` rather than `camera_*` so that a reader of
+/// a `garden.settings.txt` is never in doubt about which of the two a line is addressed to.
+///
+/// [`PIXELS_PER_NOTCH`] is **not** here: it is not a preference but a fact about Chromium, and a
+/// build that read it from a file would let somebody make the browser's wheel disagree with the
+/// browser.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct Eye {
+    /// [`PITCH`] / [`DISTANCE`] — where the camera starts and what `Home` puts it back to
+    pub pitch: f32,
+    pub distance: f32,
+    /// [`ZOOM_PER_NOTCH`] / [`ZOOM_MIN`] / [`ZOOM_MAX`]
+    pub zoom_per_notch: f32,
+    pub zoom_min: f32,
+    pub zoom_max: f32,
+    /// [`PAN_PER_PIXEL`] / [`PAN_PER_SECOND`] / [`PAN_LIMIT`]
+    pub pan_per_pixel: f32,
+    pub pan_per_second: f32,
+    pub pan_limit: f32,
+    /// [`TURN_PER_PIXEL`] / [`PITCH_MIN`] / [`PITCH_MAX`]
+    pub turn_per_pixel: f32,
+    pub pitch_min: f32,
+    pub pitch_max: f32,
+    /// [`window::CLICK_REACH`] / [`window::CLICK_SLOP`] — picking a creature, which is the mouse
+    /// too
+    pub click_reach: f32,
+    pub click_slop: f32,
+}
+
+impl Default for Eye {
+    fn default() -> Self {
+        Eye {
+            pitch: PITCH,
+            distance: DISTANCE,
+            zoom_per_notch: ZOOM_PER_NOTCH,
+            zoom_min: ZOOM_MIN,
+            zoom_max: ZOOM_MAX,
+            pan_per_pixel: PAN_PER_PIXEL,
+            pan_per_second: PAN_PER_SECOND,
+            pan_limit: PAN_LIMIT,
+            turn_per_pixel: TURN_PER_PIXEL,
+            pitch_min: PITCH_MIN,
+            pitch_max: PITCH_MAX,
+            click_reach: window::CLICK_REACH,
+            click_slop: window::CLICK_SLOP,
+        }
+    }
+}
+
+impl Eye {
+    /// `eye_pitch`, `eye_distance`, `eye_zoom_per_notch`, `eye_zoom_min`, `eye_zoom_max`,
+    /// `eye_pan_per_pixel`, `eye_pan_per_second`, `eye_pan_limit`, `eye_turn_per_pixel`,
+    /// `eye_pitch_min`, `eye_pitch_max`, `eye_click_reach`, `eye_click_slop`.
+    ///
+    /// `--eye UNITS` still wins over `eye_distance` for the run it is given on, the way
+    /// `--headless N` wins over `headless_seconds`.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        take(settings, "eye_pitch", &mut self.pitch);
+        take(settings, "eye_distance", &mut self.distance);
+        take(settings, "eye_zoom_per_notch", &mut self.zoom_per_notch);
+        take(settings, "eye_zoom_min", &mut self.zoom_min);
+        take(settings, "eye_zoom_max", &mut self.zoom_max);
+        take(settings, "eye_pan_per_pixel", &mut self.pan_per_pixel);
+        take(settings, "eye_pan_per_second", &mut self.pan_per_second);
+        take(settings, "eye_pan_limit", &mut self.pan_limit);
+        take(settings, "eye_turn_per_pixel", &mut self.turn_per_pixel);
+        take(settings, "eye_pitch_min", &mut self.pitch_min);
+        take(settings, "eye_pitch_max", &mut self.pitch_max);
+        take(settings, "eye_click_reach", &mut self.click_reach);
+        take(settings, "eye_click_slop", &mut self.click_slop);
+    }
+}
+
 /// One wheel message as a number of notches, whatever unit it arrived in.
 fn notches_of(unit: bevy::input::mouse::MouseScrollUnit, y: f32) -> f32 {
     use bevy::input::mouse::MouseScrollUnit;
@@ -1287,8 +1928,8 @@ fn notches_of(unit: bevy::input::mouse::MouseScrollUnit, y: f32) -> f32 {
 }
 
 /// `notches` notches of wheel from `distance`, as a ratio, kept inside the range.
-fn zoom_by(distance: f32, notches: f32) -> f32 {
-    (distance * ZOOM_PER_NOTCH.powf(-notches)).clamp(ZOOM_MIN, ZOOM_MAX)
+fn zoom_by(eye: &Eye, distance: f32, notches: f32) -> f32 {
+    (distance * eye.zoom_per_notch.powf(-notches)).clamp(eye.zoom_min, eye.zoom_max)
 }
 
 /// One `"touched"` the sixth check is watching, and what the half second after it has shown.
@@ -1529,15 +2170,165 @@ const HEADLESS_SECONDS: f32 = 10.0;
 const SHOT_FILE: &str = "shot.png";
 const SHOT_SECONDS: f32 = 6.0;
 
+/// **What the two VMs are allowed in a frame, and the three other numbers about how a run keeps
+/// time** (S5b-3).
+///
+/// The garden runs two VMs — `ruby/world.rb` in one and every creature's script in the other —
+/// and until now only one of them had a number anybody could point at. See
+/// [`WORLD_BUDGET`] and [`CREATURE_BUDGET`] for where each came from; the short of it is that the
+/// world's was measured at the garden's own caps and the creatures' is rubevy's default, carried
+/// here under the game's own name so that it can be said out loud and so that
+/// `window::SCHEDULER_FRAMES` can be worked out from it instead of writing 200,000 a second time.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct Budgets {
+    /// [`WORLD_BUDGET`] / [`WORLD_FRAME_TIME_MS`]
+    pub world: u64,
+    pub world_frame_time_ms: f32,
+    /// [`CREATURE_BUDGET`] / [`CREATURE_FRAME_TIME_MS`]
+    pub creature: u64,
+    pub creature_frame_time_ms: f32,
+    /// [`RESTORE_PATIENCE`]
+    pub restore_patience: f32,
+    /// [`SHORTEST_SLEEP`]
+    pub shortest_sleep: f32,
+    /// [`HEAT_DECAY`]
+    pub heat_decay: f32,
+}
+
+/// **The world's share of a frame, measured** (W1/W3). The whole of the reckoning is in
+/// [`install_world_answers`], where it is applied: 45,000 is 1.74 times the worst frame of 392
+/// frames at the garden's own caps (90 blades, 24 creatures), measured 2026-09-17.
+///
+/// **Changing it throws that away**: the 1.74 is a margin over a measurement of *these* rules at
+/// *these* caps, and a `world.rb` rewritten into more work, or a `pop_max` raised, is a different
+/// measurement that nothing here re-takes.
+const WORLD_BUDGET: u64 = 45_000;
+/// rubevy's own 8 ms, left where it is because the instruction count bites first — at the rate
+/// measured in W3 (about 9,300 instructions per millisecond) 45,000 is roughly 4.8 ms.
+const WORLD_FRAME_TIME_MS: f32 = 8.0;
+
+/// **The creatures' share of a frame** (S5b-3, and S6 before it).
+///
+/// 200,000 instructions and 8 ms are **rubevy's defaults, inherited** — the garden had never
+/// said anything about them, which S6 noticed while working out where a check's wait should come
+/// from: one VM's budget was measured and written down and the other, the one with a dozen tasks
+/// in it, was whatever the library happened to ship. rubevy's own source for the two is
+/// **unknown** (rubevy `docs/numbers.md`); naming them here does not make them better-founded,
+/// it makes them visible and changeable.
+///
+/// S5b-3 sat in the fullest garden the rules allow and measured what the creatures' VM actually
+/// spends; the figures and what could be derived from them are in
+/// `docs/worklog/2026-09-21-numbers-garden-settings.md` §4. **The default was not moved** —
+/// choosing a number off that measurement is the author's to do, as the world's 45,000 was.
+const CREATURE_BUDGET: u64 = 200_000;
+const CREATURE_FRAME_TIME_MS: f32 = 8.0;
+
+/// How fast the editor's heat fades, per frame. *Reason only* — the heat is there so that a line
+/// a brain keeps coming back to stays lit; 0.985 itself is **unknown**.
+const HEAT_DECAY: f32 = 0.985;
+
+impl Default for Budgets {
+    fn default() -> Self {
+        Budgets {
+            world: WORLD_BUDGET,
+            world_frame_time_ms: WORLD_FRAME_TIME_MS,
+            creature: CREATURE_BUDGET,
+            creature_frame_time_ms: CREATURE_FRAME_TIME_MS,
+            restore_patience: RESTORE_PATIENCE,
+            shortest_sleep: SHORTEST_SLEEP,
+            heat_decay: HEAT_DECAY,
+        }
+    }
+}
+
+impl Budgets {
+    /// | key | field |
+    /// |---|---|
+    /// | `script_budget` / `script_frame_time_ms` | the creatures' VM — **the same two keys Battle uses** |
+    /// | `world_script_budget` / `world_script_frame_time_ms` | `ruby/world.rb`'s VM |
+    /// | `restore_patience` | how long a load waits for a script that is not starting |
+    /// | `shortest_sleep` | the gap the HUD reads as "it slept" |
+    /// | `heat_decay` | how fast the editor's heat fades |
+    ///
+    /// A `frame_time` of 0 or less means **no wall-clock guard at all**, which is what rubevy's
+    /// `Option<Duration>` says with `None`; it is the same reading Battle gives the key.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        let count = |key: &str, slot: &mut u64| {
+            if let Some(value) = settings.number(key) {
+                *slot = value.max(0.0) as u64;
+            }
+        };
+        count("script_budget", &mut self.creature);
+        take(settings, "script_frame_time_ms", &mut self.creature_frame_time_ms);
+        count("world_script_budget", &mut self.world);
+        take(settings, "world_script_frame_time_ms", &mut self.world_frame_time_ms);
+        take(settings, "restore_patience", &mut self.restore_patience);
+        take(settings, "shortest_sleep", &mut self.shortest_sleep);
+        take(settings, "heat_decay", &mut self.heat_decay);
+    }
+
+    /// One of the two as rubevy wants it: `None` where the number says there is to be no
+    /// wall-clock guard.
+    fn frame_time(ms: f32) -> Option<std::time::Duration> {
+        (ms > 0.0).then(|| std::time::Duration::from_secs_f32(ms / 1000.0))
+    }
+}
+
+/// Where F5 writes and F9 reads: `--save PATH` if a run was given one, else `save_file` in the
+/// store, else the game's own name (S5b-3). The flag wins over the store, as `--headless N` wins
+/// over `headless_seconds`.
+fn save_path(settings: &games_shell::Settings, save_to: Option<&str>) -> String {
+    save_to
+        .map(str::to_string)
+        .unwrap_or_else(|| settings.get("save_file").unwrap_or(platform::SAVE_FILE).to_string())
+}
+
 fn main() {
     // The flags both games take (`--headless`, `--shot`, `--vm`, `--lang`) are read by
     // `games_shell::Args`; the garden's own four are read off the same words below.
     let args = games_shell::Args::from_env();
+    // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
+    // player's own click is (`games_shell::Settings`), and a picture asked for in Japanese on
+    // the command line should not change what the next run shows a person.
+    let lang_asked = args.value("--lang");
+    // **The store, read before anything else** (S5b-3). G6b read it inside the windowed arm,
+    // because the only two things in it were the guide's language and the night's dial and a
+    // headless run has neither. Since S5b-3 the field's size, what a new garden is built with,
+    // what the two VMs are allowed in a frame and the flags' own defaults come out of the same
+    // file — and a headless run has all four — so it is read before the two arms rather than
+    // inside one of them. It is Battle's arrangement since S5b-2, for the same reason.
+    //
+    // `Settings::load` only ever reads; a store that is not there is an empty one, so a headless
+    // run that never had a `garden.settings.txt` is exactly what it was.
+    let (settings, lang) = games_shell::remembered(
+        platform::SETTINGS_FILE,
+        "garden: what the panel remembers. Delete a line to go back to the default.",
+        platform::read,
+        platform::write,
+        lang_asked.as_deref(),
+    );
+    let mut place = Place::default();
+    place.read_from(&settings);
+    let mut furniture = Furniture::default();
+    furniture.read_from(&settings);
+    let mut light = Light::default();
+    light.read_from(&settings);
+    let mut scenery = Scenery::default();
+    scenery.read_from(&settings);
+    let mut picture = Picture::default();
+    picture.read_from(&settings);
+    let mut eye_at = Eye::default();
+    eye_at.read_from(&settings);
+    let mut budgets = Budgets::default();
+    budgets.read_from(&settings);
     // `--headless N`: no window, N seconds, the world reported on stdout. It runs exactly the
     // same systems as the windowed one; only the drawing is missing.
-    let headless = args.headless(HEADLESS_SECONDS);
+    let headless = args.headless(settings.number("headless_seconds").unwrap_or(HEADLESS_SECONDS));
     // `--shot FILE [SECONDS]`: a window, a picture of it, and out.
-    let shot = args.shot(SHOT_FILE, SHOT_SECONDS);
+    let shot = args.shot(
+        settings.get("shot_file").unwrap_or(SHOT_FILE),
+        settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
+    );
     // `--at SECONDS`: **where the garden's clock stands when the picture is taken** — or, with no
     // `--shot`, where it starts. G6 wanted a picture of midnight, and waiting forty seconds for
     // one on lavapipe (which draws a shadowed PBR frame in about a second) is not a way to
@@ -1545,9 +2336,16 @@ fn main() {
     // else: the plants have grown as long as the run is old and the creatures are as hungry as
     // they have had time to get. Only the sun has moved. `--at MIDNIGHT` is the darkest one.
     // `--at midnight` is the one hour anybody asks for by name, so it has one.
+    //
+    // S5b-3: `at_seconds` in the store is the default of the flag — the hour a run starts at when
+    // nobody said on the command line — and the flag wins where it is given, as
+    // `headless_seconds` and `--headless N` do. The word `midnight` is worked out from
+    // `light_dawn_offset` rather than from a constant, so an hour moved in the store moves the
+    // name with it.
     let at = args
         .value("--at")
-        .and_then(|s| if s == "midnight" { Some(MIDNIGHT) } else { s.parse::<f32>().ok() });
+        .and_then(|s| if s == "midnight" { Some(midnight(&light)) } else { s.parse::<f32>().ok() })
+        .or_else(|| settings.number("at_seconds"));
     // `--eye UNITS`: **how far back the camera stands when the picture is taken.** The wheel's
     // range, on the command line, and nothing else — the same zoom `Home` puts back. G8 added it
     // for one job: three pictures of the same garden wearing three different beetles, close
@@ -1555,7 +2353,9 @@ fn main() {
     // default 42 a beetle is thirty pixels across in a 1600-wide window, which is a picture of a
     // decision nobody can make. It is a `--shot` flag in the way `--at` is: a run with a window
     // and a player has a wheel.
-    let eye = args.number("--eye").map(|d| d.clamp(ZOOM_MIN, ZOOM_MAX));
+    // S5b-3: its own default is `eye_distance` in the store — which is [`Eye::distance`], the one
+    // the camera starts at and `Home` goes back to, rather than a second number beside it.
+    let eye = args.number("--eye").map(|d| d.clamp(eye_at.zoom_min, eye_at.zoom_max));
     // `GARDEN_SELFTEST=1` on a PC, `?selftest` in the page's address (G5): a browser has no
     // environment, and the checks are what says from outside that the world is alive
     let selftest = platform::selftest_asked();
@@ -1568,10 +2368,6 @@ fn main() {
     // command line this is the asking — `--shot docs/garden-vm.png 14 --vm` is how the picture in
     // `docs/garden.md` is taken. A player asks with `F2`.
     let wants_vm = args.has("--vm");
-    // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
-    // player's own click is (`games_shell::Settings`), and a picture asked for in Japanese on
-    // the command line should not change what the next run shows a person.
-    let lang_asked = args.value("--lang");
 
     let mut app = App::new();
     match headless {
@@ -1598,22 +2394,14 @@ fn main() {
         }
         None => {
             // G6b. What the player chose last time: the guide's language and the night's dial.
-            // It is read here rather than in a system because both are wanted *before the first
-            // frame* — the guide opens by itself at startup and would show one language and then
-            // jump to the other, and a `--shot` of the night would be taken at the wrong
-            // brightness. On a PC this is a file beside the save; in a browser it is a key in
-            // the same local storage the save uses (`platform.rs`). The store and the language
-            // are `games_shell::remembered`'s since S1; the dial is the garden's own.
-            let (settings, lang) = games_shell::remembered(
-                platform::SETTINGS_FILE,
-                "garden: what the panel remembers. Delete a line to go back to the default.",
-                platform::read,
-                platform::write,
-                lang_asked.as_deref(),
-            );
+            // Both are wanted *before the first frame* — the guide opens by itself at startup and
+            // would show one language and then jump to the other, and a `--shot` of the night
+            // would be taken at the wrong brightness — which is why the store is read at the top
+            // of `main` and not in a system. On a PC it is a file beside the save; in a browser
+            // it is a key in the same local storage the save uses (`platform.rs`).
             let night = settings
                 .number("night")
-                .map(|n| n.clamp(NIGHT_DIAL_MIN, NIGHT_DIAL_MAX))
+                .map(|n| n.clamp(light.dial_min, light.dial_max))
                 .unwrap_or(1.0);
             app.add_plugins((
                 DefaultPlugins
@@ -1625,7 +2413,11 @@ fn main() {
                     .set(WindowPlugin {
                         primary_window: Some(Window {
                             title: "Garden".into(),
-                            resolution: (1600u32, 900u32).into(),
+                            resolution: (
+                                picture.window[0].max(1.0) as u32,
+                                picture.window[1].max(1.0) as u32,
+                            )
+                                .into(),
                             canvas: Some("#garden".into()),
                             fit_canvas_to_parent: true,
                             ..default()
@@ -1660,8 +2452,7 @@ fn main() {
                 guide_text::guide().opening(lang, shot.is_none() || args.has("--guide")),
             )
             .insert_resource(NightDial(night))
-            .insert_resource(settings)
-            .insert_resource(Orbit { distance: eye.unwrap_or(Orbit::default().distance), ..default() })
+            .insert_resource(Orbit { distance: eye.unwrap_or(eye_at.distance), ..Orbit::home(&eye_at) })
             .init_resource::<window::Watched>()
             .init_resource::<window::Paused>()
             // **Closed** (G9). It used to open with the game, which is a debugger thrown over the
@@ -1757,8 +2548,12 @@ fn main() {
 
     // G3. The file a save goes to: `--save`'s path, or the game's own name for F5 (on the web
     // that name is a `localStorage` key rather than a file — `platform.rs`).
+    // S5b-3: `save_file` in the store moves the name F5 writes to (and F9 reads back), the way
+    // `shot_file` moves `--shot`'s. **In a browser that name is a `localStorage` key**, so
+    // writing one is choosing a second garden to keep rather than renaming the first — the
+    // prefix `garden:` is not touched and the old key is still there.
     app.insert_resource(SaveFile {
-        path: save_to.clone().unwrap_or_else(|| platform::SAVE_FILE.to_string()),
+        path: save_path(&settings, save_to.as_deref()),
         on_exit: save_to.is_some(),
     })
     .init_resource::<SaveNow>()
@@ -1803,7 +2598,20 @@ fn main() {
         }
     }
 
-    app.insert_resource(Dice(platform::clock_seed()))
+    // **The seven the store may have moved** (S5b-3). They go in for both arms, because the field
+    // and the furniture are the headless run's world too, and the budgets are the headless run's
+    // VMs; only `Picture` and `Scenery` are wholly the window's, and a resource nothing reads
+    // costs a headless run nothing. The store itself goes in with them — the night dial writes
+    // back to it, and `PanelSettingsPlugin` reads it in `PreStartup`.
+    app.insert_resource(settings)
+        .insert_resource(place)
+        .insert_resource(furniture)
+        .insert_resource(light)
+        .insert_resource(scenery)
+        .insert_resource(picture)
+        .insert_resource(eye_at)
+        .insert_resource(budgets)
+        .insert_resource(Dice(platform::clock_seed()))
         .insert_resource(RubyDir(platform::ruby_dir()))
         .init_resource::<Brains>()
         // `--at` starts the sky ahead, and where a picture is asked for it counts back from the
@@ -1996,7 +2804,7 @@ fn main() {
         // `choose_watched` reads `F3` and `Tab`. A key pressed into `ButtonInput` after the system
         // that reads it has run in that frame is a key nobody ever sees — `just_pressed` is
         // cleared in the next frame's `PreUpdate`.
-        app.insert_resource(window::WindowTest::after(3.0)).add_systems(
+        app.insert_resource(window::WindowTest::after(3.0, &budgets)).add_systems(
             Update,
             window::window_selftest.before(window::inspect_keys).before(window::choose_watched),
         );
@@ -2034,6 +2842,20 @@ fn main() {
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
+    }
+    // **What the creatures' VM is allowed in a frame** (S5b-3), written after `RubevyPlugin` has
+    // made the `ScriptWorld` and before the first frame runs. The world's VM is set in
+    // `install_world_answers`, which is a `Startup` system because it is where the rest of that
+    // VM's arrangement lives; this one has no such system, and a plugin's resource can only be
+    // written once the plugin has been added.
+    //
+    // The default is rubevy's own number carried under the garden's name — see
+    // [`CREATURE_BUDGET`]. Saying it here rather than leaving it to the library is what lets
+    // `window::scheduler_frames` divide by it instead of writing 200,000 a second time.
+    {
+        let mut world = app.world_mut().resource_mut::<ScriptWorld>();
+        world.budget = budgets.creature;
+        world.frame_time = Budgets::frame_time(budgets.creature_frame_time_ms);
     }
     app.run();
 }
@@ -2091,12 +2913,16 @@ fn register_scene_types(app: &mut App) {
 /// Kenney's Cube Pets, which are node-animated (no skin) and carry `idle`, `walk` and `eat`
 /// among their eight clips. `assets/models/` has the two packs' own licence texts beside them,
 /// and `CREDITS.md` the sizes and the sources.
+#[allow(clippy::too_many_arguments)]
 fn make_look(
     mut commands: Commands,
     server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    place: Res<Place>,
+    picture: Res<Picture>,
+    scenery: Res<Scenery>,
 ) {
     // the clips of one glb, by their index in it: 0 static, 1 idle, 2 walk, 3 run, 4 eat, and
     // three the garden has no use for
@@ -2107,31 +2933,40 @@ fn make_look(
     };
     let scene = |file: &str| server.load(GltfAssetLabel::Scene(0).from_asset(file.to_string()));
 
+    let [r, g, b] = picture.ground_color;
     let turf = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.36, 0.46, 0.25),
+        base_color: Color::srgb(r, g, b),
         perceptual_roughness: 1.0,
         ..default()
     });
     let tree = scene("models/tree_default.glb");
 
     commands.insert_resource(Look {
-        ground: meshes.add(Plane3d::new(Vec3::Y, Vec2::new(HALF_W, HALF_D))),
+        ground: meshes.add(Plane3d::new(Vec3::Y, Vec2::new(place.half_w(), place.half_d()))),
         turf: turf.clone(),
         tuft: scene("models/grass.glb"),
         bush: scene("models/plant_bush.glb"),
         tree: tree.clone(),
         rock: scene("models/rock_smallA.glb"),
-        beetle: scene(BEETLE_MODEL),
+        beetle: scene(&picture.beetle_model),
         rabbit: scene("models/animal-bunny.glb"),
-        beetle_gaits: gaits(BEETLE_MODEL),
+        beetle_gaits: gaits(&picture.beetle_model),
         rabbit_gaits: gaits("models/animal-bunny.glb"),
+        tuft_scale: picture.tuft_scale,
+        bush_scale: picture.bush_scale,
+        tree_scale: picture.tree_scale,
+        rock_scale: picture.rock_scale,
+        beetle_scale: picture.beetle_scale,
+        rabbit_scale: picture.rabbit_scale,
+        walking_at: picture.walking_at,
+        gait_blend_ms: picture.gait_blend_ms,
     });
 
     // G8: the sky's mesh, made here because `make_look` is the windowed build's and nothing else
     // is. Its colours are written on the first frame by `horizon_look`, so the handle goes in
     // with none: a mesh with no `ATTRIBUTE_COLOR` is drawn with the material's own `base_color`,
     // which is the sky's mid blue, and one frame of that is what the first frame of a run is.
-    let (mesh, up) = sky_dome();
+    let (mesh, up) = sky_dome(&scenery);
     let mesh = meshes.add(mesh);
     commands.insert_resource(SkyDome { mesh: mesh.clone(), up, was: None });
 
@@ -2163,7 +2998,7 @@ fn make_look(
     // the ground past the wall: the field's own material, so the two are one lawn
     commands.spawn((
         Horizon,
-        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(HORIZON_HALF)))),
+        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(scenery.horizon_half)))),
         MeshMaterial3d(turf),
         Transform::from_xyz(0.0, HORIZON_DROP, 0.0),
         NotShadowCaster,
@@ -2172,13 +3007,14 @@ fn make_look(
     // from it here would move every tree, rock, plant and creature in the garden by a number of
     // draws that depends on whether there is a window.
     let mut dice = Dice(0x600D_5EED_0000_0008);
-    for i in 0..EDGE_TREES {
+    for i in 0..scenery.edge_trees {
         // once round the field's rim, one tree per step, each pushed out by a random amount and
         // slid along by up to half a step so the row is not a fence
-        let step = (i as f32 + dice.between(-0.4, 0.4)) / EDGE_TREES as f32;
-        let out = dice.between(4.0, 15.0);
-        let (x, z) = rim_at(step, out);
-        let scale = dice.between(1.7, 3.1);
+        let jitter = scenery.edge_jitter;
+        let step = (i as f32 + dice.between(-jitter, jitter)) / scenery.edge_trees as f32;
+        let out = dice.between(scenery.edge_out[0], scenery.edge_out[1]);
+        let (x, z) = rim_at(&place, step, out);
+        let scale = dice.between(scenery.edge_scale[0], scenery.edge_scale[1]);
         commands.spawn((
             WorldAssetRoot(tree.clone()),
             Transform::from_xyz(x, 0.0, z)
@@ -2190,8 +3026,8 @@ fn make_look(
 
 /// A point `out` units outside the field's wall, `t` of the way round it (0 is the middle of the
 /// `+Z` side). The rim is a rectangle, not a circle, because the field is.
-fn rim_at(t: f32, out: f32) -> (f32, f32) {
-    let (w, d) = (HALF_W + out, HALF_D + out);
+fn rim_at(place: &Place, t: f32, out: f32) -> (f32, f32) {
+    let (w, d) = (place.half_w() + out, place.half_d() + out);
     let side = t.rem_euclid(1.0) * 4.0;
     match side as u32 {
         0 => (w * (2.0 * side - 1.0), d),
@@ -2207,43 +3043,44 @@ fn rim_at(t: f32, out: f32) -> (f32, f32) {
 /// `(SKY_RINGS - 1) * SKY_SIDES * 2 + SKY_SIDES` = **84 triangles** on 49 vertices. The winding
 /// is not thought about and the normals are not looked at, because the material is `unlit` with
 /// `cull_mode: None` — a sky is the one surface in a game that is only ever a colour.
-fn sky_dome() -> (Mesh, Vec<f32>) {
+fn sky_dome(scenery: &Scenery) -> (Mesh, Vec<f32>) {
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::{Indices, PrimitiveTopology};
     use std::f32::consts::{FRAC_PI_2, TAU};
 
+    let (sides, rings, radius) = (scenery.sky_sides, scenery.sky_rings, scenery.sky_radius);
     let mut position: Vec<[f32; 3]> = Vec::new();
     let mut normal: Vec<[f32; 3]> = Vec::new();
     let mut up: Vec<f32> = Vec::new();
-    for ring in 0..SKY_RINGS {
-        let t = ring as f32 / SKY_RINGS as f32;
+    for ring in 0..rings {
+        let t = ring as f32 / rings as f32;
         let e = SKY_FLOOR + (FRAC_PI_2 - SKY_FLOOR) * t;
-        for side in 0..SKY_SIDES {
-            let a = side as f32 / SKY_SIDES as f32 * TAU;
+        for side in 0..sides {
+            let a = side as f32 / sides as f32 * TAU;
             let p = Vec3::new(e.cos() * a.cos(), e.sin(), e.cos() * a.sin());
-            position.push((p * SKY_RADIUS).to_array());
+            position.push((p * radius).to_array());
             normal.push((-p).to_array());
             up.push(t);
         }
     }
     let apex = position.len() as u32;
-    position.push([0.0, SKY_RADIUS, 0.0]);
+    position.push([0.0, radius, 0.0]);
     normal.push([0.0, -1.0, 0.0]);
     up.push(1.0);
 
     let mut index: Vec<u32> = Vec::new();
-    for ring in 0..SKY_RINGS - 1 {
-        for side in 0..SKY_SIDES {
-            let next = (side + 1) % SKY_SIDES;
-            let a = (ring * SKY_SIDES + side) as u32;
-            let b = (ring * SKY_SIDES + next) as u32;
-            let (c, d) = (a + SKY_SIDES as u32, b + SKY_SIDES as u32);
+    for ring in 0..rings - 1 {
+        for side in 0..sides {
+            let next = (side + 1) % sides;
+            let a = (ring * sides + side) as u32;
+            let b = (ring * sides + next) as u32;
+            let (c, d) = (a + sides as u32, b + sides as u32);
             index.extend_from_slice(&[a, c, b, b, c, d]);
         }
     }
-    for side in 0..SKY_SIDES {
-        let next = (side + 1) % SKY_SIDES;
-        let rim = ((SKY_RINGS - 1) * SKY_SIDES) as u32;
+    for side in 0..sides {
+        let next = (side + 1) % sides;
+        let rim = ((rings - 1) * sides) as u32;
         index.extend_from_slice(&[rim + side as u32, apex, rim + next as u32]);
     }
 
@@ -2264,8 +3101,12 @@ fn spawn_world(
     mut dice: ResMut<Dice>,
     selftest: Option<Res<SelfTest>>,
     loading: Option<Res<Loading>>,
+    place: Res<Place>,
+    built: Res<Furniture>,
+    light: Res<Light>,
 ) {
     let look = look.as_deref();
+    let (half_w, half_d) = (place.half_w(), place.half_d());
 
     // the ground: one plane, 40 × 30. It is the only mesh left that is not a model, because a
     // lawn made of Kenney's 1 × 1 grass tiles would be twelve hundred entities for a flat green.
@@ -2281,11 +3122,11 @@ fn spawn_world(
     // is set here is what does not change — that it casts shadows, and over how much ground.
     commands.spawn((
         Sun,
-        DirectionalLight { illuminance: 8_000.0, shadow_maps_enabled: true, ..default() },
+        DirectionalLight { illuminance: light.sun_lux, shadow_maps_enabled: true, ..default() },
         CascadeShadowConfigBuilder {
-            num_cascades: 2,
-            first_cascade_far_bound: 24.0,
-            maximum_distance: 70.0,
+            num_cascades: light.shadow_cascades as usize,
+            first_cascade_far_bound: light.shadow_near,
+            maximum_distance: light.shadow_far,
             ..default()
         }
         .build(),
@@ -2304,11 +3145,11 @@ fn spawn_world(
     // not eat: it is spawned in the far corner **with no script at all**, so it never moves, and
     // the grass is kept away from it. Everything else about it is an ordinary beetle — what it
     // lacks is a brain. (In G0 the same beetle was the one without the `Wander` component.)
-    let fasting_at = Vec2::new(-HALF_W + 3.0, -HALF_D + 3.0);
+    let fasting_at = Vec2::new(-half_w + 3.0, -half_d + 3.0);
     // and one that certainly has something to walk to: a hungry beetle in the other far corner
     // with one plant five units away, which is inside a beetle's `Sight` of eight and outside
     // everything else.
-    let probe_at = Vec2::new(HALF_W - 3.0, HALF_D - 3.0);
+    let probe_at = Vec2::new(half_w - 3.0, half_d - 3.0);
     let dinner_at = probe_at + Vec2::new(-4.0, -3.0);
     // and, for G2, a third corner: grass with a hungry beetle behind it, twice over. Nothing about
     // the rules is bent for it — the two walk to the grass because they are hungry, eat because
@@ -2320,21 +3161,23 @@ fn spawn_world(
         !keep_clear
             || (at.distance(fasting_at) > 6.0
                 && at.distance(probe_at) > 7.0
-                && at.distance(MEADOW_AT) > MEADOW_CLEAR)
+                && at.distance(meadow_at(&place)) > MEADOW_CLEAR)
     };
 
     // trees and rocks first: they never move, so everything else is placed around them. They are
     // kept apart from each other at the start, because the separation pass moves creatures only
     // and two rocks left inside one another would overlap for the whole run.
     let mut solid: Vec<(Vec2, f32)> = Vec::new();
-    for i in 0..(TREES + ROCKS) {
-        let tree = i < TREES;
+    for i in 0..(built.trees + built.rocks) {
+        let tree = i < built.trees;
         let radius = if tree { TREE_RADIUS } else { ROCK_RADIUS };
         let mut at = Vec2::ZERO;
         let mut room = false;
-        for _ in 0..40 {
-            at = Vec2::new(dice.between(-HALF_W + 2.0, HALF_W - 2.0), dice.between(-HALF_D + 2.0, HALF_D - 2.0));
-            if clear_of_fixtures(at) && solid.iter().all(|(p, r)| p.distance(at) > r + radius + 1.5) {
+        for _ in 0..built.tries {
+            at = Vec2::new(dice.between(-half_w + 2.0, half_w - 2.0), dice.between(-half_d + 2.0, half_d - 2.0));
+            if clear_of_fixtures(at)
+                && solid.iter().all(|(p, r)| p.distance(at) > r + radius + built.solid_apart)
+            {
                 room = true;
                 break;
             }
@@ -2345,49 +3188,54 @@ fn spawn_world(
         if tree {
             spawn_tree(&mut commands, look, at);
         } else {
-            spawn_rock(&mut commands, look, at, dice.between(0.8, 1.25));
+            spawn_rock(&mut commands, look, at, dice.between(built.rock_squash[0], built.rock_squash[1]));
         }
         solid.push((at, radius));
     }
 
     let mut grass: Vec<Vec2> = Vec::new();
-    for _ in 0..PLANTS_AT_START {
-        let at = Vec2::new(dice.between(-HALF_W + 1.0, HALF_W - 1.0), dice.between(-HALF_D + 1.0, HALF_D - 1.0));
+    for _ in 0..built.plants {
+        let at = Vec2::new(dice.between(-half_w + 1.0, half_w - 1.0), dice.between(-half_d + 1.0, half_d - 1.0));
         if !clear_of_fixtures(at) {
             continue;
         }
         // grass under a tree cannot be reached, so it is not put there
-        if solid.iter().any(|(p, r)| p.distance(at) < r + 1.2) {
+        if solid.iter().any(|(p, r)| p.distance(at) < r + built.grass_off_solid) {
             continue;
         }
-        let size = dice.between(0.3, PLANT_MAX);
-        let round = dice.roll() < 0.35;
+        // **0.3 is not in `docs/numbers.md`** and is left alone (S5b-3): the inventory has
+        // `plant_min` 0.18 — which is what a *sprout* starts at — and missed the different
+        // number a garden's first grass is scattered between. Moving a number the list does not
+        // have is how a stage widens itself, so it is reported instead (§7 of the list).
+        let size = dice.between(0.3, built.plant_max);
+        let round = dice.roll() < built.round_chance;
         spawn_plant(&mut commands, look, at, size, round);
         grass.push(at);
     }
 
     let mut taken: Vec<Vec2> = Vec::new();
-    for i in 0..(BEETLES + RABBITS) {
-        let species = if i < BEETLES { Species::Beetle } else { Species::Rabbit };
+    for i in 0..(built.beetles + built.rabbits) {
+        let species = if i < built.beetles { Species::Beetle } else { Species::Rabbit };
         // not standing on its dinner: a creature that starts inside a plant has eaten before it
         // has moved, and then "somebody ate within 10 s" says nothing about walking or about the
         // contact test. The positions are kept in hand because the plants above are still
         // commands and are not in the world to be queried yet.
         let radius = radius_of(species);
         let mut at = Vec2::ZERO;
-        for _ in 0..40 {
-            at = Vec2::new(dice.between(-HALF_W + 2.0, HALF_W - 2.0), dice.between(-HALF_D + 2.0, HALF_D - 2.0));
-            let clear_of_grass = grass.iter().all(|g| g.distance(at) > 2.5);
+        for _ in 0..built.tries {
+            at = Vec2::new(dice.between(-half_w + 2.0, half_w - 2.0), dice.between(-half_d + 2.0, half_d - 2.0));
+            let clear_of_grass = grass.iter().all(|g| g.distance(at) > built.creature_off_grass);
             // nothing starts inside anything: the separation pass would otherwise have a pileup
             // to undo on the first frame, and the overlap check looks at that frame too
-            let clear_of_solid = solid.iter().all(|(p, r)| p.distance(at) > r + radius + 0.6);
-            let clear_of_kin = taken.iter().all(|p: &Vec2| p.distance(at) > 2.0);
+            let clear_of_solid =
+                solid.iter().all(|(p, r)| p.distance(at) > r + radius + built.creature_off_solid);
+            let clear_of_kin = taken.iter().all(|p: &Vec2| p.distance(at) > built.creatures_apart);
             if clear_of_fixtures(at) && clear_of_grass && clear_of_solid && clear_of_kin {
                 break;
             }
         }
         taken.push(at);
-        let hunger = dice.between(45.0, 90.0);
+        let hunger = dice.between(built.hunger[0], built.hunger[1]);
         // no two creatures alike, so that `Genome#mix` has something to average
         let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
         let entity = spawn_creature(&mut commands, look, species, at, hunger, genome, None);
@@ -2400,7 +3248,7 @@ fn spawn_world(
         commands.entity(entity).insert(Fasting);
         info!("selftest: a beetle with no behaviour and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
-        let dinner = spawn_plant(&mut commands, look, dinner_at, PLANT_MAX, false);
+        let dinner = spawn_plant(&mut commands, look, dinner_at, built.plant_max, false);
         // hungry enough that its script goes looking rather than wandering (the beetle's own
         // threshold is 55), and far enough that getting there has to be walking
         // the species' own genome, not a rolled one: the check below is written for a beetle
@@ -2437,9 +3285,11 @@ fn spawn_world(
 /// units of field clear round it. Everything else about the corner — how far apart the two blades
 /// stand and how far behind them the two beetles start — comes out of the rules
 /// ([`plant_the_meadow`]).
-const MEADOW_AT: Vec2 = Vec2::new(-HALF_W + 6.0, HALF_D - 6.0);
+fn meadow_at(place: &Place) -> Vec2 {
+    Vec2::new(-place.half_w() + 6.0, place.half_d() - 6.0)
+}
 
-/// How much ground round [`MEADOW_AT`] `spawn_world` keeps empty of everything it scatters — grass,
+/// How much ground round [`meadow_at`] `spawn_world` keeps empty of everything it scatters — grass,
 /// trees, rocks and the garden's own creatures. It is the number `clear_of_fixtures` has had since
 /// G2, named here rather than changed, because [`plant_the_meadow`] has to build inside it: a blade
 /// of the field's own that stands nearer to one of the corner's beetles than the blade the corner
@@ -2487,7 +3337,7 @@ struct Meadow;
 /// stands and never walks; inside the smaller of the two genomes' `sight`, or `garden.nearest`
 /// does not find the blade to walk to; and inside the ground the corner owns, which is the one
 /// that was doing the damage. `spawn_world` keeps [`MEADOW_CLEAR`] of field empty round
-/// [`MEADOW_AT`], so the nearest blade of the field's own can be `MEADOW_CLEAR − (how far the
+/// [`meadow_at`], so the nearest blade of the field's own can be `MEADOW_CLEAR − (how far the
 /// beetle stands from the middle)` away — and if that is less than `start`, the beetle's own
 /// blade is *not* the nearest plant and `garden.nearest` sends it walking the other way:
 ///
@@ -2507,9 +3357,10 @@ struct Meadow;
 /// out at startup that the rules will never speak at all, and the corner then stands on the
 /// game's own [`REACH`] and [`MATE_REACH`].
 ///
-/// The size of a blade is the *garden's* number and not the rules': [`PLANT_MAX`] is what
+/// The size of a blade is the *garden's* number and not the rules': [`Furniture::plant_max`] is what
 /// `spawn_plant` is told to make these two, and `world.rb`'s `plant_max` is the cap its growth
 /// stops at. They are the same number today, and the corner is planted by whoever plants it.
+#[allow(clippy::too_many_arguments)]
 fn plant_the_meadow(
     mut commands: Commands,
     look: Option<Res<Look>>,
@@ -2518,6 +3369,8 @@ fn plant_the_meadow(
     mut mrb: ResMut<Assets<MrbAsset>>,
     reaches: Res<Reaches>,
     trouble: Res<WorldTrouble>,
+    place: Res<Place>,
+    built: Res<Furniture>,
 ) {
     // the rules have spoken, or the game knows they never will
     if !reaches.told && trouble.0.is_none() {
@@ -2530,7 +3383,8 @@ fn plant_the_meadow(
     let lovers =
         [Genome { speed: 2.0, sight: 7.0, appetite: 0.9 }, Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }];
 
-    let half_blade = PLANT_MAX * 0.5;
+    let corner = meadow_at(&place);
+    let half_blade = built.plant_max * 0.5;
     // how far from its blade a creature may be and still eat it (`world.rb`: `arm = reach + cap * 0.5`)
     let arm = reaches.eat + half_blade;
     // √(mate_reach² − (half a blade)²), and the two beetles' own bodies under it
@@ -2543,22 +3397,22 @@ fn plant_the_meadow(
     let own_ground = (MEADOW_CLEAR - apart * 0.5) * 0.5;
     let start = (arm + sight.min(own_ground)) * 0.5;
 
-    // MEADOW_AT is the field's near left corner, so "into the field" is +x and the two blades
+    // the corner is the field's near left one, so "into the field" is +x and the two blades
     // stand one behind the other along z
     let toward = Vec2::X;
     let along = Vec2::Y;
     for (i, genome) in lovers.into_iter().enumerate() {
         let side = if i == 0 { 0.5 } else { -0.5 };
-        let blade = MEADOW_AT + along * apart * side;
-        spawn_plant(&mut commands, look, blade, PLANT_MAX, i == 0);
+        let blade = corner + along * apart * side;
+        spawn_plant(&mut commands, look, blade, built.plant_max, i == 0);
         let lover =
             spawn_creature(&mut commands, look, Species::Beetle, blade + toward * start, 45.0, genome, None);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
     }
     info!(
         "selftest: two hungry beetles {apart:.2} apart, each {start:.2} behind a blade of its own at ({:.1}, {:.1}) — from the rules' reach {:.2} and mate_reach {:.2}{}",
-        MEADOW_AT.x,
-        MEADOW_AT.y,
+        corner.x,
+        corner.y,
         reaches.eat,
         reaches.mate,
         if reaches.told { "" } else { " (the game's own: the rules never spoke)" },
@@ -2588,7 +3442,8 @@ fn spawn_plant(commands: &mut Commands, look: Option<&Look>, at: Vec2, size: f32
     if let Some(look) = look {
         // Kenney's grass is about a quarter of a unit high, and a plant here is a tuft a beetle
         // can hide in: the model is scaled up inside the child, where nothing Ruby reads is
-        let (model, scale) = if round { (look.bush.clone(), 2.6) } else { (look.tuft.clone(), 2.2) };
+        let (model, scale) =
+            if round { (look.bush.clone(), look.bush_scale) } else { (look.tuft.clone(), look.tuft_scale) };
         plant.with_children(|plant| {
             plant.spawn((WorldAssetRoot(model), Transform::from_scale(Vec3::splat(scale))));
         });
@@ -2607,7 +3462,10 @@ fn spawn_tree(commands: &mut Commands, look: Option<&Look>, at: Vec2) {
     ));
     if let Some(look) = look {
         tree.with_children(|tree| {
-            tree.spawn((WorldAssetRoot(look.tree.clone()), Transform::from_scale(Vec3::splat(2.2))));
+            tree.spawn((
+                WorldAssetRoot(look.tree.clone()),
+                Transform::from_scale(Vec3::splat(look.tree_scale)),
+            ));
         });
     }
 }
@@ -2625,7 +3483,11 @@ fn spawn_rock(commands: &mut Commands, look: Option<&Look>, at: Vec2, squash: f3
         rock.with_children(|rock| {
             rock.spawn((
                 WorldAssetRoot(look.rock.clone()),
-                Transform::from_scale(Vec3::new(3.4 * squash, 3.0, 3.4 / squash)),
+                Transform::from_scale(Vec3::new(
+                    look.rock_scale[0] * squash,
+                    look.rock_scale[1],
+                    look.rock_scale[0] / squash,
+                )),
             ));
         });
     }
@@ -2668,8 +3530,8 @@ fn spawn_creature(
         // the models face +Z and the world's heading does too (`move_creatures` turns the parent),
         // so the child only sets the size
         let (model, scale) = match species {
-            Species::Beetle => (look.beetle.clone(), 0.55),
-            Species::Rabbit => (look.rabbit.clone(), 0.75),
+            Species::Beetle => (look.beetle.clone(), look.beetle_scale),
+            Species::Rabbit => (look.rabbit.clone(), look.rabbit_scale),
         };
         entity.with_children(|body| {
             // G8: `Tint` is what `tint_species` reads when the model has finished arriving. It is
@@ -2923,15 +3785,18 @@ fn compile_world_source(
     Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines))
 }
 
-fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
+fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>, scenery: Res<Scenery>) {
     // G8: the fog. Its colour and its two distances are `horizon_look`'s from the first frame, the
     // way the sun's are `day_night`'s; what is set here is that there is one at all.
     commands.spawn((
         Camera3d::default(),
         camera_at(&orbit),
         DistanceFog {
-            color: Color::srgb(0.35, 0.5, 0.7),
-            falloff: FogFalloff::Linear { start: 60.0, end: 220.0 },
+            color: Color::srgb(scenery.fog_color[0], scenery.fog_color[1], scenery.fog_color[2]),
+            falloff: FogFalloff::Linear {
+                start: scenery.fog_at_first[0],
+                end: scenery.fog_at_first[1],
+            },
             ..default()
         },
     ));
@@ -2992,6 +3857,8 @@ fn orbit_camera(
     mut wheel: MessageReader<MouseWheel>,
     mut cameras: Query<&mut Transform, With<Camera3d>>,
     watch: Option<Res<CameraLog>>,
+    eye: Res<Eye>,
+    place: Res<Place>,
     mut said_at: Local<f32>,
     // whether the drag under way is the camera's: decided on the press, held until the buttons
     // are all up again
@@ -3021,14 +3888,15 @@ fn orbit_camera(
     let (right, away) = ground_axes(orbit.yaw);
     for m in motion.read() {
         if turning {
-            orbit.yaw -= m.delta.x * 0.005;
-            orbit.pitch = (orbit.pitch + m.delta.y * 0.005).clamp(0.12, 1.45);
+            orbit.yaw -= m.delta.x * eye.turn_per_pixel;
+            orbit.pitch =
+                (orbit.pitch + m.delta.y * eye.turn_per_pixel).clamp(eye.pitch_min, eye.pitch_max);
         } else if sliding {
             // the ground is grabbed and pulled: the mouse moves right, the garden moves right,
             // so the point the camera looks at moves left
-            let step = PAN_PER_PIXEL * orbit.distance;
+            let step = eye.pan_per_pixel * orbit.distance;
             let d = right * -m.delta.x * step + away * m.delta.y * step;
-            orbit.focus = clamp_focus(orbit.focus + d);
+            orbit.focus = clamp_focus(&eye, &place, orbit.focus + d);
         }
     }
     for w in wheel.read() {
@@ -3039,7 +3907,7 @@ fn orbit_camera(
         }
         let notches = notches_of(w.unit, w.y);
         let was_at = orbit.distance;
-        orbit.distance = zoom_by(orbit.distance, notches);
+        orbit.distance = zoom_by(&eye, orbit.distance, notches);
         if watch.is_some() {
             // one line per wheel *message*, because the message is what the browser and the
             // window disagreed about: the unit and the raw number are in it, so the log says
@@ -3065,11 +3933,11 @@ fn orbit_camera(
             d -= right;
         }
         if d != Vec2::ZERO {
-            let step = PAN_PER_SECOND * orbit.distance * time.delta_secs();
-            orbit.focus = clamp_focus(orbit.focus + d.normalize_or_zero() * step);
+            let step = eye.pan_per_second * orbit.distance * time.delta_secs();
+            orbit.focus = clamp_focus(&eye, &place, orbit.focus + d.normalize_or_zero() * step);
         }
         if keys.just_pressed(KeyCode::Home) {
-            *orbit = Orbit::default();
+            *orbit = Orbit::home(&eye);
         }
     }
     if *orbit != was {
@@ -3100,11 +3968,9 @@ fn orbit_camera(
 struct CameraLog;
 
 /// The eye may go a little past the wall, and no further: a garden you can lose is not a garden.
-fn clamp_focus(focus: Vec2) -> Vec2 {
-    Vec2::new(
-        focus.x.clamp(-HALF_W - PAN_LIMIT, HALF_W + PAN_LIMIT),
-        focus.y.clamp(-HALF_D - PAN_LIMIT, HALF_D + PAN_LIMIT),
-    )
+fn clamp_focus(eye: &Eye, place: &Place, focus: Vec2) -> Vec2 {
+    let (w, d) = (place.half_w() + eye.pan_limit, place.half_d() + eye.pan_limit);
+    Vec2::new(focus.x.clamp(-w, w), focus.y.clamp(-d, d))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3131,15 +3997,15 @@ fn sun_up(phase: f32) -> Vec3 {
 /// changed would make the two sets of measurements in `docs/garden.md` mean different things. The
 /// gradient is all above it: the sky gets deeper towards the top, which is what a sky does and
 /// what makes a dome read as a dome rather than as a wall.
-fn sky_colors(height: f32, night: bool, dial: f32) -> (Color, Color) {
+fn sky_colors(light: &Light, height: f32, night: bool, dial: f32) -> (Color, Color) {
     if night {
-        let [r, g, b] = NIGHT_SKY;
+        let [r, g, b] = light.night_sky;
         // the same blue, turned up with the rest of it: a sky that stayed put while the ground
         // brightened would read as fog rather than as a lighter night
         let lit = |k: f32| {
             Color::srgb((r * k * dial).min(1.0), (g * k * dial).min(1.0), (b * k * dial).min(1.0))
         };
-        (lit(1.0), lit(NIGHT_ZENITH))
+        (lit(1.0), lit(light.night_zenith))
     } else {
         let noon = height.clamp(0.0, 1.0);
         (
@@ -3160,6 +4026,7 @@ fn day_night(
     // G6b. `Option` for the same reason the two above it are: the headless run has no light to
     // turn up and no panel to turn it up with
     dial: Option<Res<NightDial>>,
+    light: Res<Light>,
 ) {
     let dial = dial.map(|d| d.0).unwrap_or(1.0);
     // the world's clock, not the process's: a garden read back from a file goes on from the hour
@@ -3169,7 +4036,7 @@ fn day_night(
     // line through `garden.rules`; until it does — and for ever, if that file will not compile —
     // it is [`DAY_LENGTH`]. A `day_length` of zero would divide by it, so a rule that asks for
     // nonsense is ignored rather than obeyed (`answer_world`).
-    sky.phase = (now / sky.day_length + DAWN_OFFSET).fract();
+    sky.phase = (now / sky.day_length + light.dawn_offset).fract();
     let up = sun_up(sky.phase);
     let height = up.y;
     let night = height <= 0.0;
@@ -3178,13 +4045,13 @@ fn day_night(
     // sun, still casting the shadows that say the world is 3D
     let from = if night { -up } else { up };
     let (color, illuminance) = if night {
-        (Color::srgb(0.62, 0.70, 1.0), MOON_LUX * dial)
+        (Color::srgb(0.62, 0.70, 1.0), light.moon_lux * dial)
     } else {
         // low sun is orange, high sun is white
         let noon = height.clamp(0.0, 1.0);
         (
             Color::srgb(1.0, 0.72 + 0.24 * noon, 0.45 + 0.5 * noon),
-            1_200.0 + 9_000.0 * noon,
+            light.day_lux[0] + light.day_lux[1] * noon,
         )
     };
     for (mut transform, mut light) in &mut sun {
@@ -3197,10 +4064,10 @@ fn day_night(
     if let Some(mut ambient) = ambient {
         if night {
             ambient.color = Color::srgb(0.45, 0.54, 0.85);
-            ambient.brightness = NIGHT_AMBIENT * dial;
+            ambient.brightness = light.night_ambient * dial;
         } else {
             ambient.color = Color::srgb(0.7, 0.8, 1.0);
-            ambient.brightness = 120.0 + 260.0 * height.clamp(0.0, 1.0);
+            ambient.brightness = light.day_ambient[0] + light.day_ambient[1] * height.clamp(0.0, 1.0);
         }
     }
     if let Some(mut clear) = clear {
@@ -3208,7 +4075,7 @@ fn day_night(
         // behind it — the same colour the dome's rim is, so that nothing the dome fails to cover
         // is a different blue. In a `--headless` run there is no `ClearColor` and this is skipped
         // whole, as it was before.
-        clear.0 = sky_colors(height, night, dial).0;
+        clear.0 = sky_colors(&light, height, night, dial).0;
     }
 
     if night != sky.night {
@@ -3245,6 +4112,8 @@ fn horizon_look(
     sky: Res<Sky>,
     orbit: Res<Orbit>,
     dial: Res<NightDial>,
+    light: Res<Light>,
+    scenery: Res<Scenery>,
     mut dome: ResMut<SkyDome>,
     mut meshes: ResMut<Assets<Mesh>>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
@@ -3253,7 +4122,7 @@ fn horizon_look(
     mut ground: Query<&mut Transform, (With<Horizon>, Without<SkyShell>)>,
 ) {
     let up = sun_up(sky.phase);
-    let (horizon, zenith) = sky_colors(up.y, up.y <= 0.0, dial.0);
+    let (horizon, zenith) = sky_colors(&light, up.y, up.y <= 0.0, dial.0);
     let (horizon, zenith) = (horizon.to_linear(), zenith.to_linear());
 
     if let Ok(eye) = camera.single() {
@@ -3268,8 +4137,8 @@ fn horizon_look(
 
     for mut fog in &mut fog {
         fog.color = Color::LinearRgba(horizon);
-        let start = (orbit.distance + FOG_NEAR).min(FOG_NEAR_MAX);
-        fog.falloff = FogFalloff::Linear { start, end: start + FOG_DEPTH };
+        let start = (orbit.distance + scenery.fog_near).min(FOG_NEAR_MAX);
+        fog.falloff = FogFalloff::Linear { start, end: start + scenery.fog_depth };
     }
 
     let moved = |a: LinearRgba, b: LinearRgba| {
@@ -3298,8 +4167,13 @@ fn horizon_look(
 
 /// `Velocity` into `Transform`, on XZ, and the walls stop it. A creature also turns to face the
 /// way it is going, which is the only thing in the game that writes `Transform.rotation`.
-fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocity, &mut Transform)>) {
+fn move_creatures(
+    time: Res<Time>,
+    place: Res<Place>,
+    mut creatures: Query<(&Creature, &mut Velocity, &mut Transform)>,
+) {
     let dt = time.delta_secs();
+    let (w, d) = (place.half_w() - place.wall_margin, place.half_d() - place.wall_margin);
     for (creature, mut velocity, mut transform) in &mut creatures {
         // a brain may ask for more than the body can give; the rule is the body's, and from G2
         // the body's number comes off its own genome rather than off its species
@@ -3309,12 +4183,12 @@ fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocit
         }
         let mut x = transform.translation.x + velocity.0.x * dt;
         let mut z = transform.translation.z + velocity.0.y * dt;
-        if x < -HALF_W + 0.5 || x > HALF_W - 0.5 {
-            x = x.clamp(-HALF_W + 0.5, HALF_W - 0.5);
+        if x < -w || x > w {
+            x = x.clamp(-w, w);
             velocity.0.x = 0.0;
         }
-        if z < -HALF_D + 0.5 || z > HALF_D - 0.5 {
-            z = z.clamp(-HALF_D + 0.5, HALF_D - 0.5);
+        if z < -d || z > d {
+            z = z.clamp(-d, d);
             velocity.0.y = 0.0;
         }
         transform.translation.x = x;
@@ -3327,16 +4201,17 @@ fn move_creatures(time: Res<Time>, mut creatures: Query<(&Creature, &mut Velocit
 
 /// Where the walls let a creature stand: the same half unit off the edge that `move_creatures`
 /// keeps, said once so that [`separate`] and the wall can be talked about in the same terms.
-fn inside_the_walls(at: Vec2) -> Vec2 {
-    Vec2::new(at.x.clamp(-HALF_W + 0.5, HALF_W - 0.5), at.y.clamp(-HALF_D + 0.5, HALF_D - 0.5))
+fn inside_the_walls(place: &Place, at: Vec2) -> Vec2 {
+    let (w, d) = (place.half_w() - place.wall_margin, place.half_d() - place.wall_margin);
+    Vec2::new(at.x.clamp(-w, w), at.y.clamp(-d, d))
 }
 
 /// The part of a step that the walls will not allow — zero in the middle of the garden, and what
 /// is left over at the edge of it. It is what an immovable thing refuses to give, measured, so
 /// that [`separate`] can hand it to whoever else is in the pair.
-fn refused_by_the_walls(from: Vec2, step: Vec2) -> Vec2 {
+fn refused_by_the_walls(place: &Place, from: Vec2, step: Vec2) -> Vec2 {
     let want = from + step;
-    want - inside_the_walls(want)
+    want - inside_the_walls(place, want)
 }
 
 /// Nothing walks through anything solid. Circles on XZ, pushed apart until they only touch: two
@@ -3355,6 +4230,7 @@ fn refused_by_the_walls(from: Vec2, step: Vec2) -> Vec2 {
 fn separate(
     mut world: ResMut<ScriptWorld>,
     mut bumps: ResMut<Bumps>,
+    place: Res<Place>,
     mut movers: Query<(Entity, &Collider, &mut Transform), With<Creature>>,
     fixed: Query<(Entity, &Collider, &Transform), Without<Creature>>,
 ) {
@@ -3367,7 +4243,7 @@ fn separate(
         // the walls" holds over the whole of this function and the write-back has nothing to
         // correct. It is where the write-back's clamp went (below); a creature that arrived from
         // outside — a hand-edited save is the only way — is still brought in, as it was before.
-        at.push(inside_the_walls(Vec2::new(transform.translation.x, transform.translation.z)));
+        at.push(inside_the_walls(&place, Vec2::new(transform.translation.x, transform.translation.z)));
         radius.push(collider.radius);
         who.push(entity);
     }
@@ -3382,7 +4258,7 @@ fn separate(
     }
 
     let mut touching: Vec<(Entity, Entity)> = Vec::new();
-    for pass in 0..SEPARATE_PASSES {
+    for pass in 0..place.separate_passes {
         let mut grid: bevy::platform::collections::HashMap<(i32, i32), Vec<usize>> = default();
         for (i, p) in at.iter().enumerate() {
             grid.entry(((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32)).or_default().push(i);
@@ -3433,16 +4309,16 @@ fn separate(
                                 // clamp had put back together
                                 // (`docs/worklog/2026-09-17-selftest-flakes.md` §2).
                                 let half = dir * push * 0.5;
-                                let refused_i = refused_by_the_walls(at[i], -half);
-                                let refused_j = refused_by_the_walls(at[j], half);
-                                at[i] = inside_the_walls(at[i] - half - refused_j);
-                                at[j] = inside_the_walls(at[j] + half - refused_i);
+                                let refused_i = refused_by_the_walls(&place, at[i], -half);
+                                let refused_j = refused_by_the_walls(&place, at[j], half);
+                                at[i] = inside_the_walls(&place, at[i] - half - refused_j);
+                                at[j] = inside_the_walls(&place, at[j] + half - refused_i);
                             }
                             // and the same for a push off something fixed: it may press a
                             // creature against a wall, and a creature pressed against a wall
                             // stays where the wall is — there is nobody to hand the rest to
-                            (true, false) => at[i] = inside_the_walls(at[i] - dir * push),
-                            (false, true) => at[j] = inside_the_walls(at[j] + dir * push),
+                            (true, false) => at[i] = inside_the_walls(&place, at[i] - dir * push),
+                            (false, true) => at[j] = inside_the_walls(&place, at[j] + dir * push),
                             (false, false) => {}
                         }
                     }
@@ -3550,19 +4426,21 @@ fn sprout_plants(
     look: Option<Res<Look>>,
     mut dice: ResMut<Dice>,
     mut asked: ResMut<Sprouts>,
+    place: Res<Place>,
+    built: Res<Furniture>,
     plants: Query<&Transform, With<Plant>>,
 ) {
     for _ in 0..std::mem::take(&mut asked.0) {
         let at = Vec2::new(
-            dice.between(-HALF_W + 1.0, HALF_W - 1.0),
-            dice.between(-HALF_D + 1.0, HALF_D - 1.0),
+            dice.between(-place.half_w() + 1.0, place.half_w() - 1.0),
+            dice.between(-place.half_d() + 1.0, place.half_d() - 1.0),
         );
         // not on top of another one
         if plants.iter().any(|t| Vec2::new(t.translation.x, t.translation.z).distance(at) < 1.5) {
             continue;
         }
-        let round = dice.roll() < 0.35;
-        spawn_plant(&mut commands, look.as_deref(), at, PLANT_MIN, round);
+        let round = dice.roll() < built.round_chance;
+        spawn_plant(&mut commands, look.as_deref(), at, built.plant_min, round);
     }
 }
 
@@ -3783,6 +4661,7 @@ fn startle(
     mut world: ResMut<ScriptWorld>,
     mut contacts: ResMut<Contacts>,
     mut test: Option<ResMut<SelfTest>>,
+    field: Res<Place>,
     creatures: Query<(Entity, &Creature, &Transform, &Velocity)>,
 ) {
     let now = time.elapsed_secs();
@@ -3833,7 +4712,7 @@ fn startle(
                         // to have subscribed to anything (`NEWBORN_GRACE`)
                         if fresh
                             && velocity.0.length() > 0.5
-                            && !by_a_wall(at)
+                            && !by_a_wall(&field, at)
                             && creature.age > NEWBORN_GRACE
                         {
                             test.touched.push(Touch {
@@ -3868,9 +4747,11 @@ fn startle(
 ///
 /// The two numbers it builds with are the rules' as well, handed over once by `garden.rules`
 /// ([`Births`]): how full a newborn is, and how many creatures the game will make at all.
+#[allow(clippy::too_many_arguments)]
 fn children_arrive(
     time: Res<Time>,
     sky: Res<Sky>,
+    place: Res<Place>,
     mut commands: Commands,
     mut births: ResMut<Births>,
     mut newborns: ResMut<Newborns>,
@@ -3885,8 +4766,8 @@ fn children_arrive(
     let hunger = births.hunger;
     for birth in std::mem::take(&mut births.waiting) {
         let at = Vec2::new(
-            birth.at.x.clamp(-HALF_W + 1.0, HALF_W - 1.0),
-            birth.at.y.clamp(-HALF_D + 1.0, HALF_D - 1.0),
+            birth.at.x.clamp(-place.half_w() + 1.0, place.half_w() - 1.0),
+            birth.at.y.clamp(-place.half_d() + 1.0, place.half_d() - 1.0),
         );
         let child =
             spawn_creature(&mut commands, look.as_deref(), birth.species, at, hunger, birth.genome, birth.parent);
@@ -4316,7 +5197,11 @@ struct RuleBook {
 /// The closure is handed `&World` and cannot change anything, which is the compiler saying what
 /// this is for: the world it sees is the world as it stands in `RubevySet::<World>::tick()` —
 /// after the Rust rules, which are ordered before it, and before anything the scripts write.
-fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>, dice: Res<Dice>) {
+fn install_world_answers(
+    mut scripts: ResMut<ScriptWorld<World>>,
+    dice: Res<Dice>,
+    budgets: Res<Budgets>,
+) {
     // **The world's share of the frame, measured** (W1, `docs/worklog/2026-09-17-garden-world.md`).
     //
     // The budgets are per VM and nothing caps them together: with two VMs at rubevy's defaults a
@@ -4355,7 +5240,13 @@ fn install_world_answers(mut scripts: ResMut<ScriptWorld<World>>, dice: Res<Dice
     // the right way round: instructions are a fact about the rules and are the same number in a
     // browser several times slower (`docs/web.md`), while milliseconds are a fact about whichever
     // machine is running them.
-    scripts.budget = 45_000;
+    // **S5b-3: the number is [`WORLD_BUDGET`] and it is a setting now** (`world_script_budget`).
+    // Everything above is why 45,000 is the *default*; a run that writes another number in
+    // `garden.settings.txt` is a run the paragraph above is not about, which is the whole of
+    // what "measured" buys and the whole of what changing it costs. `frame_time` is set for the
+    // same reason it was left alone: so that the game says what it is rather than inheriting it.
+    scripts.budget = budgets.world;
+    scripts.frame_time = Budgets::frame_time(budgets.world_frame_time_ms);
 
     // **The world's dice, so that two runs are not the same run** (W2).
     //
@@ -4816,12 +5707,13 @@ fn watch_minds(
     time: Res<Time>,
     frame: Res<bevy::diagnostic::FrameCount>,
     world: Res<ScriptWorld>,
+    budgets: Res<Budgets>,
     mut minds: Query<(&mut Mind, Option<&ScriptTask>)>,
 ) {
     let now = frame.0;
     // how many frames a gap has to be before it is too long to be anything but a nap
     let dt = time.delta_secs().max(1.0 / 1000.0);
-    let sleep_floor = (SHORTEST_SLEEP / dt).ceil().max(2.0) as u32;
+    let sleep_floor = (budgets.shortest_sleep / dt).ceil().max(2.0) as u32;
     for (mut mind, script) in &mut minds {
         let Some(script) = script else { continue };
         let stats = world.stats(script);
@@ -4873,7 +5765,7 @@ fn watch_minds(
                 mind.heat.resize(i + 1, 0.0);
             }
             for h in mind.heat.iter_mut() {
-                *h *= 0.985;
+                *h *= budgets.heat_decay;
             }
             mind.heat[i] += 1.0;
         }
@@ -5271,6 +6163,10 @@ fn load_world(
     brains: Res<Brains>,
     mut mrb: ResMut<Assets<MrbAsset>>,
     mut dice: ResMut<Dice>,
+    // S5b-3: a rock's squash and whether a blade is a bush are not in the save (`GardenSave`
+    // says why), so they are rolled again here — out of the same two settings `spawn_world`
+    // rolls them from, or a garden read back would wear numbers the store no longer holds
+    built: Res<Furniture>,
     old: Query<Entity, Or<(With<Plant>, With<Tree>, With<Rock>, With<Creature>)>>,
 ) {
     let save = loading.save.clone();
@@ -5288,13 +6184,13 @@ fn load_world(
     for plant in &save.plants {
         // whether a plant is a bush or a tuft is the model's business, so it is rolled again
         // rather than written down
-        spawn_plant(&mut commands, look, Vec2::from(plant.at), plant.size, dice.roll() < 0.35);
+        spawn_plant(&mut commands, look, Vec2::from(plant.at), plant.size, dice.roll() < built.round_chance);
     }
     for at in &save.trees {
         spawn_tree(&mut commands, look, Vec2::from(*at));
     }
     for at in &save.rocks {
-        spawn_rock(&mut commands, look, Vec2::from(*at), dice.between(0.8, 1.25));
+        spawn_rock(&mut commands, look, Vec2::from(*at), dice.between(built.rock_squash[0], built.rock_squash[1]));
     }
     let mut pending = Vec::new();
     for creature in &save.creatures {
@@ -5364,6 +6260,7 @@ fn restore_memory(
     mut sky: ResMut<Sky>,
     mut scripts: ResMut<ScriptWorld>,
     mut reload: Option<ResMut<ReloadAt>>,
+    budgets: Res<Budgets>,
     tasks: Query<&ScriptTask>,
 ) {
     // the world's clock stands still while this lasts
@@ -5382,7 +6279,7 @@ fn restore_memory(
     let waited = time.elapsed_secs() - restoring.since;
     if restoring.pending.is_empty() {
         restoring.done = true;
-    } else if waited > RESTORE_PATIENCE {
+    } else if waited > budgets.restore_patience {
         warn!("{} creatures never started; the garden is running anyway", restoring.pending.len());
         restoring.done = true;
     }
@@ -5576,7 +6473,7 @@ fn animate_creatures(
     for (creature, velocity, eating, mut animated) in &mut creatures {
         let want = if eating.is_some_and(|e| e.until > now) {
             Gait::Eat
-        } else if velocity.0.length() > 0.2 {
+        } else if velocity.0.length() > look.walking_at {
             Gait::Walk
         } else {
             Gait::Idle
@@ -5590,7 +6487,7 @@ fn animate_creatures(
             Species::Rabbit => &look.rabbit_gaits,
         };
         transitions
-            .play(&mut player, gaits.node(want), std::time::Duration::from_millis(180))
+            .play(&mut player, gaits.node(want), std::time::Duration::from_millis(look.gait_blend_ms))
             .repeat();
         animated.playing = want;
     }
@@ -5698,6 +6595,7 @@ fn watch_probe(
 fn watch_turning(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
+    field: Res<Place>,
     creatures: Query<(&Velocity, &Transform)>,
 ) {
     let now = time.elapsed_secs();
@@ -5712,7 +6610,7 @@ fn watch_turning(
         // before the handler and after it however it turned. The handler is not what failed
         // there, and a check that says it did would be a check about the walls. A frame like that
         // is skipped rather than judged; a touch whose whole window was like that is not counted.
-        if !by_a_wall(place) {
+        if !by_a_wall(&field, place) {
             // the angle between the two headings: a flee is roughly a reversal, and anything past
             // a quarter turn is a different course than the one it was on. A beetle that stopped
             // has changed what it is doing as surely as one that turned, so it counts too — which
@@ -5770,8 +6668,8 @@ fn watch_turning(
 
 /// Within a unit of the edge of the field, where `move_creatures` clips `Velocity` and a heading
 /// stops being readable from it.
-fn by_a_wall(at: &Transform) -> bool {
-    at.translation.x.abs() > HALF_W - 1.5 || at.translation.z.abs() > HALF_D - 1.5
+fn by_a_wall(field: &Place, at: &Transform) -> bool {
+    at.translation.x.abs() > field.half_w() - 1.5 || at.translation.z.abs() > field.half_d() - 1.5
 }
 
 /// **Creatures sleep at night.** One second after the game published `"night"`, nothing with a
@@ -6240,29 +7138,31 @@ mod tests {
     #[test]
     fn ten_notches_are_ten_steps_and_not_the_end_of_the_range() {
         // what the author's browser did: ten notches from the default, in pixels, one at a time
-        let mut d = Orbit::default().distance;
+        let eye = Eye::default();
+        let mut d = eye.distance;
         let mut seen = vec![d];
         for _ in 0..10 {
-            d = zoom_by(d, notches_of(MouseScrollUnit::Pixel, 100.0));
+            d = zoom_by(&eye, d, notches_of(MouseScrollUnit::Pixel, 100.0));
             seen.push(d);
         }
         // ten distinct distances, each a tenth nearer than the last, and nowhere near the stop
         for pair in seen.windows(2) {
             assert!((pair[0] / pair[1] - ZOOM_PER_NOTCH).abs() < 1e-4, "{pair:?}");
         }
-        assert!(seen.last().unwrap() > &ZOOM_MIN, "{seen:?}");
+        assert!(seen.last().unwrap() > &eye.zoom_min, "{seen:?}");
         // and the same ten in lines land in the same place: this is the whole of the browser fix
-        let mut line = Orbit::default().distance;
+        let mut line = eye.distance;
         for _ in 0..10 {
-            line = zoom_by(line, notches_of(MouseScrollUnit::Line, 1.0));
+            line = zoom_by(&eye, line, notches_of(MouseScrollUnit::Line, 1.0));
         }
         assert!((line - seen[10]).abs() < 1e-3, "{line} vs {}", seen[10]);
     }
 
     #[test]
     fn the_range_is_reached_but_not_passed() {
-        assert_eq!(zoom_by(ZOOM_MIN, 5.0), ZOOM_MIN);
-        assert_eq!(zoom_by(ZOOM_MAX, -5.0), ZOOM_MAX);
+        let eye = Eye::default();
+        assert_eq!(zoom_by(&eye, ZOOM_MIN, 5.0), ZOOM_MIN);
+        assert_eq!(zoom_by(&eye, ZOOM_MAX, -5.0), ZOOM_MAX);
         // from one end to the other is about thirty notches, not one
         let notches = (ZOOM_MAX / ZOOM_MIN).ln() / ZOOM_PER_NOTCH.ln();
         assert!((29.0..32.0).contains(&notches), "{notches}");
@@ -6278,13 +7178,139 @@ mod tests {
         let (right, _) = ground_axes(std::f32::consts::FRAC_PI_2);
         assert!((right - Vec2::new(0.0, -1.0)).length() < 1e-5, "{right}");
         // and the eye cannot leave the garden behind
-        let far = clamp_focus(Vec2::new(1000.0, -1000.0));
-        assert_eq!(far, Vec2::new(HALF_W + PAN_LIMIT, -HALF_D - PAN_LIMIT));
+        let (eye, place) = (Eye::default(), Place::default());
+        let far = clamp_focus(&eye, &place, Vec2::new(1000.0, -1000.0));
+        assert_eq!(far, Vec2::new(place.half_w() + PAN_LIMIT, -place.half_d() - PAN_LIMIT));
+        // and a wider garden moves the stop with it, which is what `field_width` is for
+        let wide = Place { width: 100.0, ..Place::default() };
+        let far = clamp_focus(&eye, &wide, Vec2::new(1000.0, -1000.0));
+        assert_eq!(far.x, 50.0 + PAN_LIMIT);
+    }
+
+    /// **What a line in `garden.settings.txt` reaches** (S5b-3). One key per resource, because
+    /// what is being checked is the wiring — that a key of that name is read at all and lands in
+    /// that field — rather than each of the seventy. The reading itself is one `take` for all of
+    /// them.
+    ///
+    /// It is the shape S5b-1 gave the panels' settings and S5b-2 gave Battle's `Look`, with one
+    /// addition: **a key nobody wrote leaves the default alone**, which is what makes a store
+    /// written by an older build safe to read and is the whole of the browser compatibility
+    /// question.
+    #[test]
+    fn a_line_in_the_store_reaches_the_garden() {
+        fn read(path: &Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        }
+        fn write(path: &Path, text: &str) -> Result<(), String> {
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        }
+        let path = std::env::temp_dir().join("garden-settings-test.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut settings = games_shell::Settings::load(&path, "a test", read, write);
+        settings.set("field_width", "60");
+        settings.set("start_plants", "9");
+        settings.set("light_moon_lux", "400");
+        settings.set("fog_depth", "120");
+        settings.set("look_hunger_warn", "70");
+        settings.set("eye_distance", "20");
+        settings.set("script_budget", "500000");
+        settings.set("world_script_frame_time_ms", "0");
+
+        let mut place = Place::default();
+        place.read_from(&settings);
+        assert_eq!(place.width, 60.0);
+        assert_eq!(place.half_w(), 30.0, "half the field moves with the field");
+        assert_eq!(place.depth, FIELD_D, "and a key nobody wrote is the default");
+
+        let mut built = Furniture::default();
+        built.read_from(&settings);
+        assert_eq!(built.plants, 9);
+        assert_eq!(built.trees, TREES);
+
+        let mut light = Light::default();
+        light.read_from(&settings);
+        assert_eq!(light.moon_lux, 400.0);
+        assert_eq!(light.night_sky, NIGHT_SKY);
+        // and the hour `--at midnight` means moves with the offset rather than with a constant
+        assert!((midnight(&light) - MIDNIGHT_BY_DEFAULT).abs() < 1e-4);
+        let dawnless = Light { dawn_offset: 0.0, ..Light::default() };
+        assert!((midnight(&dawnless) - 0.75 * DAY_LENGTH).abs() < 1e-4);
+
+        let mut scenery = Scenery::default();
+        scenery.read_from(&settings);
+        assert_eq!(scenery.fog_depth, 120.0);
+        assert_eq!(scenery.sky_sides, SKY_SIDES);
+
+        let mut picture = Picture::default();
+        picture.read_from(&settings);
+        assert_eq!(picture.hunger_warn, 70.0);
+        assert_eq!(picture.window, WINDOW);
+        assert_eq!(picture.beetle_model, BEETLE_MODEL, "a name, not a number, and still a default");
+
+        let mut eye = Eye::default();
+        eye.read_from(&settings);
+        assert_eq!(eye.distance, 20.0);
+        assert_eq!(eye.click_reach, window::CLICK_REACH);
+
+        let mut budgets = Budgets::default();
+        budgets.read_from(&settings);
+        assert_eq!(budgets.creature, 500_000);
+        assert_eq!(budgets.world, WORLD_BUDGET, "the world's is its own key");
+        // 0 ms is rubevy's `None`: no wall-clock guard, the instruction count alone
+        assert_eq!(budgets.world_frame_time_ms, 0.0);
+        assert_eq!(Budgets::frame_time(budgets.world_frame_time_ms), None);
+        assert_eq!(
+            Budgets::frame_time(budgets.creature_frame_time_ms),
+            Some(std::time::Duration::from_millis(8))
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **Where a save goes** (S5b-3). The store moves it; the flag still beats the store.
+    #[test]
+    fn the_store_names_the_save_and_the_flag_beats_it() {
+        fn read(path: &Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        }
+        fn write(path: &Path, text: &str) -> Result<(), String> {
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        }
+        let path = std::env::temp_dir().join("garden-save-name-test.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut settings = games_shell::Settings::load(&path, "a test", read, write);
+        assert_eq!(save_path(&settings, None), platform::SAVE_FILE);
+        settings.set("save_file", "mine.json");
+        assert_eq!(save_path(&settings, None), "mine.json");
+        assert_eq!(save_path(&settings, Some("flag.json")), "flag.json");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Midnight worked out from the defaults, for the test above to compare against — the number
+    /// the `const MIDNIGHT` used to be.
+    const MIDNIGHT_BY_DEFAULT: f32 = (0.75 - DAWN_OFFSET) * DAY_LENGTH;
+
+    /// **The checks' patience follows the budget** (S5b-3). S7 derived it as
+    /// `2 + ceil(budget / 45,600)` and wrote 200,000 into the sum as a number; now that the
+    /// budget is `script_budget` in the store, the sum has to be done against what the run was
+    /// actually given or the check judges a slow VM as a broken one.
+    #[test]
+    fn a_bigger_budget_buys_the_checks_more_frames() {
+        let budgets = Budgets::default();
+        // what it has always been, and what `docs/verification/selftest-lines.md` was recorded at
+        assert_eq!(window::scheduler_frames(&budgets), 7);
+        // five times the budget is five times the frames a restart may take to come round
+        let rich = Budgets { creature: 1_000_000, ..Budgets::default() };
+        assert_eq!(window::scheduler_frames(&rich), 2 + 22);
+        // and a VM given almost nothing still gets the two frames that are structural
+        let poor = Budgets { creature: 1, ..Budgets::default() };
+        assert_eq!(window::scheduler_frames(&poor), 3);
     }
 
     #[test]
     fn midnight_is_the_darkest_moment() {
-        let phase = (MIDNIGHT / DAY_LENGTH + DAWN_OFFSET).fract();
+        let light = Light::default();
+        let phase = (midnight(&light) / DAY_LENGTH + light.dawn_offset).fract();
         assert!((phase - 0.75).abs() < 1e-5, "{phase}");
         let up = (phase * std::f32::consts::TAU).sin();
         assert!(up < -0.999, "{up}");
