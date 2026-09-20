@@ -192,7 +192,7 @@ selftest: ok   the starved creature's entity is gone (NvN starved at N s)
 selftest: ok   what the world declares reaches a creature's memory (Beetle NvN had "wet" in its @memory at N s)
 ```
 
-## Garden, a window — 44 lines
+## Garden, a window — 45 lines
 
 `GARDEN_SELFTEST=1 docker/run.sh garden release`. The editor, the VM panel, the wheel, `P`, and
 `F3`'s third file — the rules of the world.
@@ -209,8 +209,9 @@ selftest: ok   FN shows it again
 selftest: ok   N s paused: every creature is where it was
 selftest: ok   N s paused: nobody got hungrier
 selftest: ok   N s paused: the day did not turn
-selftest: ok   P again gives the budget back
-selftest: ok   P pauses: the scripts' budget is N
+selftest: ok   N s paused: the same creatures are there
+selftest: ok   P again gives both budgets back
+selftest: ok   P pauses: both VMs' budgets are N
 selftest: ok   Revert puts every beetle back on the file
 selftest: ok   Revert puts the file's rules back
 selftest: ok   Revert shows the file again
@@ -258,7 +259,7 @@ either game that arranges the world rather than watching it: the birth it is abo
 garden would otherwise win about once in a hundred runs, so the run forces one into that frame
 (`window::birth_in_the_apply_frame`, registered only by the checks).
 
-## Garden, a browser — 45 lines
+## Garden, a browser — 46 lines
 
 `…/garden/?selftest`. The window's list plus the `done` line.
 
@@ -275,8 +276,9 @@ selftest: ok   FN shows it again
 selftest: ok   N s paused: every creature is where it was
 selftest: ok   N s paused: nobody got hungrier
 selftest: ok   N s paused: the day did not turn
-selftest: ok   P again gives the budget back
-selftest: ok   P pauses: the scripts' budget is N
+selftest: ok   N s paused: the same creatures are there
+selftest: ok   P again gives both budgets back
+selftest: ok   P pauses: both VMs' budgets are N
 selftest: ok   Revert puts every beetle back on the file
 selftest: ok   Revert puts the file's rules back
 selftest: ok   Revert shows the file again

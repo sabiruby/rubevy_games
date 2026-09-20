@@ -1259,6 +1259,85 @@ impl FakePointer<'_, '_> {
     }
 }
 
+/// **The two VMs, as one system parameter** (S5b-5).
+///
+/// `window_selftest` was at fifteen of Bevy's sixteen and the pause is about **both** VMs — `P`
+/// takes the budget off the creatures' and off the world's together ([`inspect_keys`]) — so the
+/// two travel as one rather than as the fifteenth and the sixteenth. It is the answer
+/// [`FakePointer`] and `crate::VmReport` give to the same limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BothVms<'w> {
+    /// every creature's script
+    creatures: Res<'w, ScriptWorld>,
+    /// `ruby/world.rb` (W1)
+    rules: Res<'w, ScriptWorld<crate::World>>,
+}
+
+/// **What two samples of "one value per creature" say about each other** (S5b-5).
+///
+/// The pause checks used to be `places() == test.places`, a `Vec` compared with `Vec`, which
+/// compares **the order the creatures came out of the `Query` in** as well as the values. That
+/// order is per archetype, so one creature moving to another archetype between the two samples —
+/// rubevy hanging a `ScriptTask` on it, `dress_animations` hanging an `Animated`, an `Eating`
+/// that was on its way when the world stopped — made a still world look like a moving one. S8
+/// reproduced it by adding an empty marker to one creature and nothing else: one run in one
+/// (`docs/worklog/2026-09-20-writes-landing-in-a-pause.md`).
+///
+/// So the sample is looked up **by entity**, and what comes out is said in three parts, because
+/// they are three different pieces of news: a creature that is not there any more, a creature
+/// that was not there before, and a creature whose value moved. There is **no tolerance** —
+/// equality is what the check means, and a threshold here would be a number with nothing behind
+/// it.
+struct Changes {
+    /// entities in the first sample and not in the second
+    gone: Vec<Entity>,
+    /// entities in the second and not in the first
+    fresh: Vec<Entity>,
+    /// entities in both whose value is not the same, as "who: was -> is"
+    moved: Vec<String>,
+}
+
+impl Changes {
+    /// Whether the same creatures are in both samples, whatever their values did.
+    fn same_creatures(&self) -> bool {
+        self.gone.is_empty() && self.fresh.is_empty()
+    }
+
+    /// The names for a sentence, or nothing at all when there is nothing to say.
+    fn cast(&self) -> String {
+        match (self.gone.len(), self.fresh.len()) {
+            (0, 0) => String::new(),
+            _ => format!(" (gone: {:?}; new: {:?})", self.gone, self.fresh),
+        }
+    }
+
+    fn what_moved(&self) -> String {
+        if self.moved.is_empty() { String::new() } else { format!(" ({})", self.moved.join("; ")) }
+    }
+}
+
+fn what_changed<T: PartialEq + std::fmt::Debug>(
+    before: &[(Entity, T)],
+    after: &[(Entity, T)],
+) -> Changes {
+    let mut changes = Changes { gone: Vec::new(), fresh: Vec::new(), moved: Vec::new() };
+    for (entity, was) in before {
+        match after.iter().find(|(e, _)| e == entity) {
+            None => changes.gone.push(*entity),
+            Some((_, now)) if now != was => {
+                changes.moved.push(format!("{entity}: {was:?} -> {now:?}"))
+            }
+            Some(_) => {}
+        }
+    }
+    for (entity, _) in after {
+        if !before.iter().any(|(e, _)| e == entity) {
+            changes.fresh.push(*entity);
+        }
+    }
+    changes
+}
+
 impl WindowTest {
     /// Starts once the garden has been running for `at` seconds — long enough for every creature
     /// to have a task and for the editor to be showing one.
@@ -1415,7 +1494,7 @@ pub fn window_selftest(
     ruby: Res<RubyDir>,
     brains: Res<Brains>,
     panel: Res<VmInspector>,
-    world: Res<ScriptWorld>,
+    vms: BothVms,
     sky: Res<Sky>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     minds: Query<(Entity, &Mind, Option<&ScriptTask>)>,
@@ -1432,7 +1511,7 @@ pub fn window_selftest(
         return;
     }
     let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
-    let spent = || tasks.iter().map(|t| world.vm.task_instructions(t.task())).sum::<u64>();
+    let spent = || tasks.iter().map(|t| vms.creatures.vm.task_instructions(t.task())).sum::<u64>();
     // the world in three numbers: where everybody is, what they have eaten, and the hour
     let places = || -> Vec<(Entity, Vec3)> { bodies.iter().map(|(e, t, _)| (e, t.translation)).collect() };
     let hunger = || -> Vec<(Entity, f32)> { bodies.iter().map(|(e, _, h)| (e, h.0)).collect() };
@@ -1496,7 +1575,7 @@ pub fn window_selftest(
             // once the pause has taken hold, and not on the frame it was asked for: the scripts
             // and the rules of *that* frame had already run when the key was read
             test.insn = spent();
-            test.wake = world.vm.task_next_wakeup_ticks();
+            test.wake = vms.creatures.vm.task_next_wakeup_ticks();
             test.places = places();
             test.hunger = hunger();
             test.phase = sky.phase;
@@ -1508,18 +1587,51 @@ pub fn window_selftest(
             test.at = now + 2.0;
         }
         3 => {
-            ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
+            // **Both VMs** (S5b-5). `P` takes the budget off the creatures' and off the world's
+            // together (`inspect_keys`), and until now the check looked at one of them — a pause
+            // that had stopped the creatures and left `world.rb`'s VM running would have passed
+            // this line and then failed the three below with no word about why.
+            ok(
+                panel.paused && vms.creatures.budget == 0 && vms.rules.budget == 0,
+                "P pauses: both VMs' budgets are 0",
+            );
             ok(spent() == test.insn, "nothing ran while it was paused");
-            // the three the author asked for: **the world**, not only the VM
-            ok(places() == test.places, "2 s paused: every creature is where it was");
-            ok(hunger() == test.hunger, "2 s paused: nobody got hungrier");
+            // **The three the author asked for: the world, not only the VM** — and each of them
+            // said by entity rather than by comparing two `Vec`s ([`what_changed`], S5b-5).
+            //
+            // `P` stops **the rules of the garden, its clock and its two VMs**. It does not
+            // freeze Bevy's world, and it was never meant to: a creature can still be given a
+            // `ScriptTask`, an `Animated` or an `Eating` in the middle of a pause, which moves it
+            // from one archetype to another and so moves it in the order `Query::iter` hands the
+            // creatures over in. That is not the garden moving, and a check that compares two
+            // lists in order cannot tell the two apart (S8).
+            let where_they_are = what_changed(&test.places, &places());
+            let meters = what_changed(&test.hunger, &hunger());
+            ok(
+                where_they_are.same_creatures(),
+                &format!(
+                    "2 s paused: the same creatures are there{}",
+                    where_they_are.cast()
+                ),
+            );
+            ok(
+                where_they_are.moved.is_empty(),
+                &format!(
+                    "2 s paused: every creature is where it was{}",
+                    where_they_are.what_moved()
+                ),
+            );
+            ok(
+                meters.moved.is_empty(),
+                &format!("2 s paused: nobody got hungrier{}", meters.what_moved()),
+            );
             ok(sky.phase == test.phase, "2 s paused: the day did not turn");
             ok(panel.open && !panel.frames.is_empty(), "the VM panel has the creature's frames");
             ok(panel.heap.as_ref().is_some_and(|h| h.live > 0), "the panel has the heap counters");
             let what = "nothing that was sleeping woke on the resume frame";
             match test.wake {
                 Some(was) if was > 0 => {
-                    let left = world.vm.task_next_wakeup_ticks();
+                    let left = vms.creatures.vm.task_next_wakeup_ticks();
                     let same = left == Some(was);
                     info!(
                         "selftest: {} {what}: the next one is due in {was} ticks, as it was two seconds ago{}",
@@ -1552,21 +1664,23 @@ pub fn window_selftest(
             test.turn = Turn::AMeterMoved;
         }
         4 => {
-            ok(!panel.paused && world.budget > 0, "P again gives the budget back");
+            // both of them again, as the pause took both
+            ok(
+                !panel.paused && vms.creatures.budget > 0 && vms.rules.budget > 0,
+                "P again gives both budgets back",
+            );
             ok(spent() > test.insn, "the creatures are thinking again");
             // and the world with them. Positions are "somebody moved" rather than "everybody
             // did": a creature that is asleep, or one a handler has told to stand still, is
-            // allowed to be where it was.
-            let moved = places()
-                .iter()
-                .any(|(e, at)| test.places.iter().any(|(was, place)| was == e && place != at));
-            ok(moved, "and the garden moves again: somebody has walked");
+            // allowed to be where it was. This one is by entity too, and always was — a creature
+            // that arrived or left while the world was running is neither the news here nor a
+            // reason to say nobody walked.
+            let walked = !what_changed(&test.places, &places()).moved.is_empty();
+            ok(walked, "and the garden moves again: somebody has walked");
             // "changed", not "fell": a creature standing on a plant is *filling* its meter, and
             // over half a second the garden as a whole can go either way. What the check is about
             // is that `get_hungry` and `eat` are running again at all.
-            let meters = hunger()
-                .iter()
-                .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now));
+            let meters = !what_changed(&test.hunger, &hunger()).moved.is_empty();
             ok(meters, "the meters move again");
             ok(sky.phase > test.phase, "the day turns again");
             keys.release(KeyCode::KeyP);

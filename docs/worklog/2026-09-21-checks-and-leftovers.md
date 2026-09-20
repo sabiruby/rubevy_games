@@ -141,3 +141,58 @@ Battle の 200,000 は rubevy の既定のままである。**測っていない
 理由も無い（試合は機体 2 台で上限がはっきりしているが、`each_frame` の中身も `matches/*.rb` の
 作りも箱庭とは別物である）。`docs/numbers.md` §4.5 に「箱庭は測って決めた、Battle は未測定」と
 書いた。
+
+---
+
+## 3. 一時停止の 2 行 — `Vec` の `==` をやめた（B-1）
+
+S8 が割った原因そのもの: `places() == test.places` は `Vec` 同士の比較なので、**値だけでなく
+`Query` が生き物を返す順番まで比べていた**。その順番は archetype ごとなので、止まりの前後に
+1 体が別の archetype に移る（rubevy が `ScriptTask` を付ける／`dress_animations` が `Animated` を
+付ける／止める直前の `Eating` が着地する）だけで、動いていない世界が動いて見える。
+
+直し方は本体が決めた S8 の (A)1 + (B)1 のとおり:
+
+* **entity を鍵に引き当てて比べる**（`what_changed`。`Changes { gone, fresh, moved }`）。
+* **「消えた／増えた／値が変わった」を別々に言う。** 判定の行は 2 → 3 行になった:
+  `the same creatures are there`（顔ぶれ）、`every creature is where it was`（場所）、
+  `nobody got hungrier`（メーター）。FAIL のときは誰がどう動いたかを文が名指しする。
+* **許容は置かない。** 等しいことがこの判定の意味で、ここに閾値を置けば出どころの無い数が 1 つ
+  増えるだけである。
+* コメントに 1 行: **`P` は世界の規則と時計と 2 本の VM を止めるもので、Bevy の世界を凍らせる
+  ものではない。** 止まりの中で `ScriptTask` や `Animated` が付くのは世界が動いたのではない。
+* 一時停止の作り（`Paused`、`is_still`）は**変えていない**。順序の辺も足していない（S7 が
+  `.chain()` に 1 本足して別の判定を割った前例がある）。
+
+**world の VM も見るようにした**（S8 の気づき §206）。`P` は 2 本の VM の予算を一緒に 0 にするのに、
+判定は生き物の VM しか見ていなかった。`window_selftest` は Bevy の引数 15 個だったので、
+2 本を `BothVms`（`SystemParam`）にまとめて 15 のままにしてある（`FakePointer` と同じ手）。
+行の文面が 2 つ変わった: `P pauses: both VMs' budgets are 0`、`P again gives both budgets back`。
+
+### 仕込みで前後を確かめた
+
+S8 の計器を今の木に当て直した（`GARDEN_S8_TOUCH=<n>`: 止まりの n フレーム目に、生き物 1 体へ
+**空の marker component を 1 つ付けるだけ**。値は 1 つも変えない）。**常設していない**——
+測った後に外した。
+
+| 仕込み `GARDEN_S8_TOUCH=3` の窓の走行 | 直す前（`1ef1fd3`） | 直した後 |
+|---|---|---|
+| 1 巡目 | **FAIL 2**（`every creature is where it was`、`nobody got hungrier`） | ok 0 FAIL |
+| 2 巡目 | **FAIL 2**（同じ 2 行） | ok 0 FAIL |
+| 3 巡目 | **FAIL 2**（同じ 2 行） | ok 0 FAIL |
+
+前後とも docker の window で、交互に走らせた。**3/3 で再現し、3/3 で直っている。**
+
+仕込み無しの窓の走行は **45 行 FAIL 0**（前は 44 行）。`tools/fixedlines.sh` の diff は
+**狙った 3 行の増減だけ**:
+
+```
+< selftest: ok   P again gives the budget back
+< selftest: ok   P pauses: the scripts' budget is N
+---
+> selftest: ok   N s paused: the same creatures are there
+> selftest: ok   P again gives both budgets back
+> selftest: ok   P pauses: both VMs' budgets are N
+```
+
+`docs/verification/selftest-lines.md` の箱庭の窓（44 → 45 行）とブラウザ（45 → 46 行）を直した。
