@@ -55,12 +55,25 @@ class Shot
   end
 end
 
-class Robot
-  UNSET = -999.0
-  # how fast a shot of a given power flies (the game's numbers, for leading a target)
-  SHOT_FAST = 55.0
-  SHOT_SLOW = 30.0
+# **The handful of the match's numbers a robot has to be able to read** (S5b-2).
+#
+# `lead` cannot aim ahead of a target without knowing how fast a shot flies, and until 2026-09-21
+# it knew by holding a copy: `SHOT_FAST = 55.0` here and `BULLET_SPEED_FAST` in the Rust, two
+# numbers that were the same one and were not joined. A match that made its shots slower left
+# every robot aiming at where the target used to be, and nothing said so.
+#
+# They come from the game now — `Rubevy.ask("model")`, asked once when a robot starts, beside the
+# `srand` that gives it its dice — so a `match "…", numbers: { shot_fast: 90.0 }` reaches the
+# arithmetic as well as the shots.
+class Model
+  attr_reader :shot_fast, :shot_slow, :radar_range, :incoming_range, :power_min
 
+  def initialize(row)
+    @shot_fast, @shot_slow, @radar_range, @incoming_range, @power_min = row
+  end
+end
+
+class Robot
   # === what the game answers =================================================
 
   # Yourself, fresh from the game.
@@ -69,24 +82,37 @@ class Robot
   # Yourself as of the last `status` or `radar` — no question asked.
   def me = @me || status
 
+  # The numbers this match is being played by ([`Model`]), as the game handed them over when this
+  # robot started. No question is asked here: it is one object, made once, shared by the brain and
+  # by every handler task, because they are all this robot's.
+  def model = $model
+
   # Every other robot still running within `range`, friends included. Also refreshes `me`.
-  def radar(range = 60.0)
-    rows = Rubevy.ask("radar", range).pop
+  # `range` defaults to the match's `radar_range`.
+  def radar(range = nil)
+    rows = Rubevy.ask("radar", range || model.radar_range).pop
     @me = Status.new(rows.shift)
     rows.map { |row| Contact.new(row, @me.team) }
   end
 
-  # Shots from other teams within `range`, the nearest first.
-  def incoming(range = 25.0) = Rubevy.ask("incoming", range).pop.map { |row| Shot.new(row) }
+  # Shots from other teams within `range`, the nearest first (the match's `incoming_range`).
+  def incoming(range = nil) = Rubevy.ask("incoming", range || model.incoming_range).pop.map { |row| Shot.new(row) }
 
   # The controls, all in one question. Leave out what should stay as it is.
   #   throttle: -1 (full reverse) .. 1 (full ahead)
   #   turn:     -1 (clockwise) .. 1 (counterclockwise), at the tank's turning rate
   #   aim:      the angle the turret should turn to (it turns at its own rate)
-  #   fire:     power 0.2 .. 1 — harder hits, flies slower, reloads longer, costs more energy
+  #   fire:     power `model.power_min` .. 1 — harder hits, flies slower, reloads longer, costs
+  #             more energy
   # Returns true when a shot left the barrel.
+  #
+  # **`nil` is how a control is left alone** (S5b-2). It used to be a number: `UNSET = -999.0`
+  # here and again in the Rust, a value chosen to be one no control could really take, and
+  # nothing guaranteed that — `aim` is an angle, and an angle of -999 is a legal number. A `nil`
+  # argument reaches the game as the nothing it is (`rubevy`'s `Request::num` answers `None` for
+  # it), so the sentinel is gone from both sides and there is no number to disagree about.
   def act(throttle: nil, turn: nil, aim: nil, fire: nil)
-    fired, _energy, _cooldown = Rubevy.ask("act", throttle || UNSET, turn || UNSET, aim || UNSET, fire || UNSET).pop
+    fired, _energy, _cooldown = Rubevy.ask("act", throttle, turn, aim, fire).pop
     fired > 0
   end
 
@@ -162,10 +188,11 @@ class Robot
   # A turn value that brings the hull round to `angle`, gently as it gets close.
   def steer_to(angle) = (angle_diff(me.heading, angle) * 2.0).clamp(-1.0, 1.0)
 
-  def enemies(range = 60.0) = radar(range).select(&:enemy?)
-  def nearest_enemy(range = 60.0) = enemies(range).min_by(&:distance)
+  def enemies(range = nil) = radar(range).select(&:enemy?)
+  def nearest_enemy(range = nil) = enemies(range).min_by(&:distance)
 
-  def shot_speed(power) = SHOT_FAST + (SHOT_SLOW - SHOT_FAST) * power
+  # How fast a shot of that power flies — the match's two numbers, not a copy of them.
+  def shot_speed(power) = model.shot_fast + (model.shot_slow - model.shot_fast) * power
 
   # Where to aim to hit `target` if it keeps going the way it is: one guess at the flight time,
   # corrected once.
@@ -231,6 +258,12 @@ def run_robot
   raise "this file defines no robot" if klass.nil?
   # a robot's `rand` is rolled from the match's dice, so a match with a seed repeats its luck
   srand(Rubevy.ask("seed").pop.to_i)
+  # and the handful of the match's numbers the DSL has to do arithmetic with (S5b-2). One object
+  # for every robot in the match: they are all playing the same match, and a robot that kept its
+  # own copy would be the bug this replaced.
+  row = Rubevy.ask("model").pop
+  raise "no match has said what the game's numbers are" if row.nil?
+  $model = Model.new(row)
   bot = klass.new
   start_handlers(bot, klass, tasks)
   bot.log "online"

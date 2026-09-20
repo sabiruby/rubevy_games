@@ -436,60 +436,79 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 
 ## 4. SabiRuby Battle（Rust）
 
-### 4.1 機体・弾・エネルギー — **まとめて (b)**
+> **S5b-2（2026-09-21）で、この節の数は全部「利用者が変えられる場所」に移した。** 行番号は
+> `shared-crate` ブランチのその時点のもの。**既定値は 1 つも動かしていない**（例外が 1 つだけ
+> あり、§4.6 の「向きが変わったか」の閾値 0.200 → 0.195。§7-12）。
+>
+> 移し先は 2 つに分かれる。**遊びの数 (b) は Ruby 側**——`ruby/match_prelude.rb` の
+> `Match::MODEL`（32 件）で、試合ごとに `match "…", numbers: { … }` で上書きできる。Rust は
+> `MatchModel` を serde で受け取り（`#[serde(deny_unknown_fields)]`、`Option` も `default` も
+> **無い**）、`MatchModel::wrong` が「遊べない数」（速さ 0、機体より小さい闘技場）を断る。
+> **Rust 側に既定値は 1 つも残っていない**——試合が数を言うまで、床も壁もロボットも無い。
+> **動かす側の数 (c) は `sabibots.settings.txt`**（`Look`、16 件 + VM の 2 件）。
+>
+> `prelude.rb` の `SHOT_FAST` / `SHOT_SLOW` と `UNSET` の二重（§7-2）は、両方とも**数が
+> 1 つになった**: 前者は `Rubevy.ask("model")` で試合から受け取り、後者は `nil` に置き換えて
+> **数そのものを無くした**（§5）。
+>
+> 過程は `docs/worklog/2026-09-21-numbers-battle.md`。
 
-`sabibots/src/main.rs:28-51`。1 つのコミット（`978eb34`「robots become tanks」）で一度に入った。
-コミットメッセージは**なぜこの形にしたか**（「thrust/fire in any direction left one obvious brain」）を言うが、
-**個々の数を測った記録は無い**。`docs/sabiruby-battle.md:185-206` は同じ数を仕様として書き直しているだけで、出どころではない。
-名前の付いた 13 個は「模型の理由はある／数の根拠は無い」＝ *理由のみ*、名前も付いていない 6 個は **不明**。
-**全部、毎フレーム読まれる**。
+### 4.1 機体・弾・エネルギー — **(b)。全部 `ruby/match_prelude.rb` の `Match::MODEL` へ**
 
-| 名前 | 位置 | 値 | 今変えられるか | 分類案 | 出どころ |
+1 つのコミット（`978eb34`「robots become tanks」）で一度に入った。コミットメッセージは
+**なぜこの形にしたか**（「thrust/fire in any direction left one obvious brain」）を言うが、
+**個々の数を測った記録は無い**。`docs/sabiruby-battle.md:185-206` は同じ数を仕様として
+書き直しているだけで、出どころではない。**全部、毎フレーム読まれる**（Rust 側が
+`Res<TheMatch>` のフィールドを読むだけで、VM に問うわけではない。Ruby が聞くのは
+起動時の 1 回だけ）。
+
+| 名前 | 位置（Ruby） | 値 | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|
-| `ROBOT_RADIUS` | `main.rs:28` | 1.6 | `const` | (b) → `matches/*.rb` | *理由のみ*（`978eb34`） |
-| `MAX_SPEED` | `main.rs:31` | 12.0 | `const` | (b) | *理由のみ*（`main.rs:29-30`「turns at a limited rate」） |
-| `REVERSE_SPEED` | `main.rs:32` | 7.0 | `const` | (b) | *理由のみ*（同上） |
-| `TURN_RATE` | `main.rs:33` | 2.6 rad/s | `const` | (b) | *理由のみ*（同上） |
-| `TURRET_RATE` | `main.rs:34` | 4.0 rad/s | `const` | (b) | *理由のみ*（同上） |
-| `ENERGY_MAX` | `main.rs:37` | 100.0 | `const` | (b) | *理由のみ*（`main.rs:35-36`「A robot that fires everything it has cannot also run away」） |
-| `ENERGY_REGEN` | `main.rs:38` | 12.0 /s | `const` | (b) | *理由のみ*（同上） |
-| `DRIVE_COST` | `main.rs:39` | 9.0 /s | `const` | (b) | *理由のみ*（同上） |
-| `FIRE_COST` | `main.rs:40` | 16.0 × (0.25 + power) | `const`（0.25 は `main.rs:1975` に直書き） | (b) | *理由のみ*（同上） |
-| `BULLET_SPEED_FAST` / `SLOW` | `main.rs:42-43` | 55.0 / 30.0 | `const`。**`prelude.rb:61-62` が同じ数を別に持つ**（§7-2） | (b) | *理由のみ*（`main.rs:41`「more damage, a slower shot, a longer reload」） |
-| `BULLET_DAMAGE_MIN` / `MAX` | `main.rs:44-45` | 4.0 / 16.0 | `const` | (b) | *理由のみ*（同上） |
-| `COOLDOWN_MIN` / `MAX` | `main.rs:46-47` | 0.3 / 0.8 秒 | `const` | (b) | *理由のみ*（同上） |
-| `BASE_SPREAD` | `main.rs:49` | 0.02 rad | `const` | (b) | *理由のみ*（`main.rs:48`「a gun is not a laser」） |
-| 威力の下限 | `main.rs:1974` | 0.2 | 直書き | (b) | **不明** |
-| 体力の満 | `main.rs:1565` | 100.0 | 直書き。`main.rs:638, 715` が `/ 100.0` で 2 回写している | (b)（§7-8） | **不明** |
-| 弾の寿命 | `main.rs:1987` | 2.5 秒 | 直書き | (b) | **不明** |
-| 弾の出る位置 | `main.rs:1989` | 砲口から 2.8 | 直書き | (b) | **不明** |
-| グリップ（速度が追いつく時定数） | `main.rs:2060` | 0.2 秒 | 直書き | (b) | **不明** |
-| エネルギー切れの減速 | `main.rs:2053` | 0.35 倍 | 直書き | (b) | **不明** |
-| `UNSET` | `main.rs:51` | −999.0 | `const`。**`prelude.rb:59` が同じ数を別に持つ**（§7-2） | **(a)** 「触らない」の合図。実際に取りうる値と重なると制御が飛ぶ | *理由のみ*（`main.rs:50`「leave this as it is」） |
+| `robot_radius` | `match_prelude.rb:35` | 1.6 | `matches/*.rb` の `numbers:` | (b) | *理由のみ*（`978eb34`） |
+| `hp_max` | `match_prelude.rb:36` | 100.0 | 同上 | (b) | **不明**。**S5b-2 が名前を付けた**——生成・バー 2 か所・判定の計 4 か所に無名で散っていた（§7-8） |
+| `max_speed` | `match_prelude.rb:37` | 12.0 | 同上 | (b) | *理由のみ*「turns at a limited rate」 |
+| `reverse_speed` | `match_prelude.rb:38` | 7.0 | 同上 | (b) | *理由のみ*（同上） |
+| `turn_rate` | `match_prelude.rb:39` | 2.6 rad/s | 同上 | (b) | *理由のみ*（同上）。判定もこれを読む（§4.6） |
+| `turret_rate` | `match_prelude.rb:40` | 4.0 rad/s | 同上 | (b) | *理由のみ*（同上） |
+| `grip` | `match_prelude.rb:41` | 0.2 秒 | 同上 | (b) | **不明**（`main.rs` の `(-dt / 0.2).exp()` に直書きだった） |
+| `out_of_energy` | `match_prelude.rb:42` | 0.35 倍 | 同上 | (b) | **不明**（同じく直書きだった） |
+| `energy_max` | `match_prelude.rb:45` | 100.0 | 同上 | (b) | *理由のみ*「a robot that fires everything it has cannot also run away」 |
+| `energy_regen` | `match_prelude.rb:46` | 12.0 /s | 同上 | (b) | *理由のみ*（同上） |
+| `drive_cost` | `match_prelude.rb:47` | 9.0 /s | 同上 | (b) | *理由のみ*（同上） |
+| `fire_cost` / `fire_cost_base` | `match_prelude.rb:48-49` | 16.0 × (0.25 + power) | 同上 | (b) | *理由のみ*／0.25 は **不明**（直書きだった） |
+| `power_min` | `match_prelude.rb:52` | 0.2 | 同上 | (b) | **不明**（`clamp(0.2, 1.0)` に直書きだった） |
+| `shot_fast` / `shot_slow` | `match_prelude.rb:53-54` | 55.0 / 30.0 | 同上 | (b) | *理由のみ*「more damage, a slower shot, a longer reload」。**`prelude.rb` の写しは消えた**——`lead` は `Rubevy.ask("model")` で受け取る（§7-2） |
+| `damage_min` / `damage_max` | `match_prelude.rb:55-56` | 4.0 / 16.0 | 同上 | (b) | *理由のみ*（同上） |
+| `cooldown_min` / `cooldown_max` | `match_prelude.rb:57-58` | 0.3 / 0.8 秒 | 同上 | (b) | *理由のみ*（同上） |
+| `base_spread` | `match_prelude.rb:59` | 0.02 rad | 同上 | (b) | *理由のみ*「a gun is not a laser」 |
+| `bullet_life` | `match_prelude.rb:60` | 2.5 秒 | 同上 | (b) | **不明**（直書きだった） |
+| `muzzle` | `match_prelude.rb:61` | 2.8 | 同上 | (b) | **不明**（直書きだった） |
+| ~~`UNSET`~~ | — | — | **数そのものが無くなった**（S5b-2）。`act` の「触らない」は `nil` | — | — |
 
 ### 4.2 雑音とレーダー
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
 | `noise` | `matches/training.rb:4` | 0.3 | ● | **Ruby** | **(e)** | **引用**: `docs/sabiruby-battle.md:202-206` |
-| 位置のぶれ | `main.rs:1920` | `noise × 距離 × 0.05` | ● | 直書き | (b) | **引用**（式のみ）: `docs/sabiruby-battle.md:204`「positions by up to noise × distance × 5%」 |
-| 速度のぶれ | `main.rs:1922` | `× noise × 2.0` | ● | 直書き | (b) | **不明** |
-| 弾のぶれ | `main.rs:1949` | `× noise × 1.5` | ● | 直書き | (b) | **不明** |
-| 弾道の散り | `main.rs:1979` | `BASE_SPREAD + noise × 0.1` | ● | 直書き | (b) | **引用**（式のみ）: `docs/sabiruby-battle.md:205` |
-| `radar` の既定距離 | `main.rs:1913` / `prelude.rb:73` | 60.0 | ● | **Ruby 側は変えられる**が Rust にも既定がある | (e)／(b) | **不明** |
-| `incoming` の既定距離 | `main.rs:1942` / `prelude.rb:80` | 25.0 | ● | 同上 | (e)／(b) | **不明** |
-| `seed` の桁 | `main.rs:1908` | `× 1,000,000` | | 直書き | (a) Ruby に整数で渡すための桁 | **不明** |
+| `position_blur` | `match_prelude.rb:66` | 0.05 | ● | `numbers:` | (b) | **引用**（式のみ）: `docs/sabiruby-battle.md:204`「positions by up to noise × distance × 5%」 |
+| `velocity_blur` | `match_prelude.rb:67` | 2.0 | ● | `numbers:` | (b) | **不明** |
+| `shot_blur` | `match_prelude.rb:68` | 1.5 | ● | `numbers:` | (b) | **不明** |
+| `spread_per_noise` | `match_prelude.rb:69` | 0.1 | ● | `numbers:` | (b) | **引用**（式のみ）: `docs/sabiruby-battle.md:205` |
+| `radar_range` | `match_prelude.rb:64` | 60.0 | ● | `numbers:` | (b) | **不明**。**Rust と Ruby の二重が消えた**: `prelude.rb` の `radar(range = nil)` はこれを既定にし、Rust の `num_or` もこれを読む |
+| `incoming_range` | `match_prelude.rb:65` | 25.0 | ● | `numbers:` | (b) | **不明**（同上） |
+| `seed` の桁 | `main.rs:2537` | `× 1,000,000` | | 直書き | (a) Ruby に整数で渡すための桁 | **不明** |
 
 ### 4.3 闘技場と壁
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| 闘技場の半径 | `main.rs:302`（`ArenaSize::default`） | 32.0 | | `const` 相当 | (c)／(b) | **不明** |
-| 木箱の間隔 | `main.rs:1763` | 約 2.6 | | 直書き | (c) | **引用**: `docs/sabiruby-battle.md:646`（「25 crates a side at the start」＝ 64/2.6） |
-| `MIN_CRATES` | `main.rs:1768` | 7 | | `const` | (b) 試合の規則 | **引用**: コミット `28f3b53`「down to 7 a side」、`docs/sabiruby-battle.md:646`「room for a last fight」。7 の根拠は*理由のみ* |
-| 床のタイル | `main.rs:1421-1433` | 8.0 単位、3 枚に 1 枚別柄 | | 直書き | (c) | **不明** |
-| ロボットの初期配置 | `match_prelude.rb:61-63` | 半径 20、円周に等分 | | **Ruby** | **(e)** | **不明** |
-| `TEAMS` の数 | `main.rs:54` | 4 | | `const` | (a) `TEAM_COLORS` と長さが揃っている必要がある | **導出** |
+| `arena`（半幅） | `match_prelude.rb:72` | 32.0 | | `numbers:` | (b) | **不明**。S5b-1 が Rust の `ARENA_HALF_WIDTH` で止めてあったもの |
+| `crate_size`（木箱の間隔） | `match_prelude.rb:73` | 2.6 | | `numbers:` | (b) | **引用**: `docs/sabiruby-battle.md:646`（「25 crates a side at the start」＝ 64/2.6）。**一覧の分類案は (c) だったが (b) にした**——`shrink` が動かす量そのもので、`min_crates` と組でしか意味がない（§7-13） |
+| `min_crates` | `match_prelude.rb:74` | 7 | | `numbers:` | (b) | **引用**: コミット `28f3b53`「down to 7 a side」。7 の根拠は*理由のみ* |
+| `NO_MATCH_YET` | `main.rs:43` | 1.0 | | `const` のまま | **(a)** 闘技場ではない。試合が幅を言うまでカメラが枠取る正方形で、**何も描かれない**（床も壁も `build_field` が試合の言ったフレームに置く）。正の数でありさえすればよい | **導出**: `games-shell` の `NO_WINDOW` と同じ形 |
+| 床のタイル `FLOOR_TILE` / `FLOOR_PATTERN` | `main.rs:270-271` | 8.0 単位、3 枚に 1 枚別柄 | | `Settings` の `look_floor_tile` / `look_floor_pattern` | (c) | **不明** |
+| ロボットの初期配置 | `match_prelude.rb:137-139` | 半径 20、円周に等分 | | **Ruby** | **(e)** | **不明** |
+| `TEAMS` の数 | `main.rs:370` | 4 | | `const` | (a) `TEAM_COLORS` と長さが揃っている必要がある | **導出** |
 
 ### 4.4 試合の進行（`matches/training.rb`、**すでに (e)**）
 
@@ -499,134 +518,160 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 |---|---|---|---|
 | `sudden_death` の開始 | `training.rb:9` | 20 秒 | **引用**: コミット `28f3b53`「shrink one crate every 2 s from 20 s on instead of two jumps」 |
 | 縮む周期 | `training.rb:9` | 2.0 秒ごと 1 箱 | **引用**: 同上（`28f3b53`） |
-| 試合ループの `sleep` | `match_prelude.rb:112` | 0.2 秒 | **不明** |
-| 決着を見る前の `sleep` | `match_prelude.rb:87` | 0.1 秒 | **不明** |
+| 試合ループの `sleep` | `match_prelude.rb:196` | 0.2 秒 | **不明** |
+| 決着を見る前の `sleep` | `match_prelude.rb:171` | 0.1 秒 | **不明** |
 
-### 4.5 表示と実行
+### 4.5 表示と実行 — **(c)。`sabibots.settings.txt` へ**
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+`Look`（Resource、`main.rs:280`）。鍵は全部 `look_` で始まる（S5b-1 の `editor_` / `vm_` /
+`hud_` / `guide_` / `code_` / `camera_` に揃えた）。窓の大きさだけは窓を開ける前に要るので、
+`Settings` は 2 つの枝に分かれる前に読む。
+
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| HUD の予算バーの満 | `main.rs:2308` | 3,000 命令 | ● | 直書き（**毎フレーム代入**） | (c) | *理由のみ* 「a brain that thinks for a frame spends tens to hundreds; the bar fills as one approaches a timeslice's worth」`main.rs:2306-2307`。3,000 は**不明** |
-| CPU バーの満 | `main.rs:659` | 3000.0 | ● | 直書き | (c) | *理由のみ*: 上と同じ数の写し（§7-8） |
-| 熱の減衰 | `main.rs:2291` | 0.8 秒の時定数 | ● | 直書き | (c) | *理由のみ* 「about a second of memory」`main.rs:2290` |
-| 体力バーの色の境 | `main.rs:639-644, 720-725` | 0.5 / 0.25 | ● | 直書き（2 か所） | (c) | **不明** |
-| `BAR_WIDTH` | `main.rs:686` | 3.6 | ● | `const` | (c) | **不明**（`ROBOT_RADIUS × 2.25` = 3.6 と一致するが、そう書かれてはいない） |
-| ロボットの見た目の大きさ | `main.rs:1591` | `ROBOT_RADIUS × 2.4` | | 直書き | (c) | **不明** |
-| 名札の高さ | `main.rs:562` | `ROBOT_RADIUS × 2.25` | ● | 直書き | (c) | **不明** |
-| 爆発の大きさと時間 | `main.rs:2155-2158` | ×3.5 / ×(0.6 + damage/16) / 0.7 / 0.25 秒 | ● | 直書き | (c) | **不明**。`/16.0` は `BULLET_DAMAGE_MAX` の写し |
-| 窓の大きさ | `main.rs:331` | 1600×900 | | 直書き | (c) | **不明** |
-| `--headless` の既定 | `main.rs:264` | 10.0 秒 | | 引数 | **(e)** | **不明** |
-| `--shot` の既定 | `main.rs:271` | 3.0 秒 | | 引数 | **(e)** | **不明**（箱庭は 6.0。§7-7） |
-| スクリプトの優先度 | `main.rs:1587, 1653, 2260` | 本体 100 / 試合 10 / 差し替え 128 | | 直書き | (a) 順序の約束。`prelude.rb:262` の `+20` と組で効く | **不明**（100/10/128 の理由） |
-| `localStorage` の接頭辞 | `platform.rs:103` | `"sabibots:"` | | `const` | **(a)** 変えると利用者のセーブが消える | **引用**: `docs/plans/shared-crate-plan.md:162` |
+| 予算バーの満 `BAR_FULL` | `main.rs:266` | 3,000 命令 | ● | `look_bar_full` | (c) | *理由のみ*「the bar fills as one approaches a timeslice's worth」。3,000 は**不明**、そして `ScriptWorld::budget` からは**導けない**（200,000 は VM 全体の 1 フレーム分で、rubevy はタスクごとの持ち分を持たない）。**2 か所の写しは 1 つになり**、`panel.budget` の毎フレーム代入は生成時の 1 回になった（§7-8、§7-9） |
+| 熱の減衰 `HEAT_MEMORY` | `main.rs:258` | 0.8 秒の時定数 | ● | `look_heat_memory` | (c) | *理由のみ*「about a second of memory」 |
+| 体力バーの色の境 `LIFE_WARN` / `LIFE_LOW` | `main.rs:241-242` | 0.5 / 0.25 | ● | `look_life_warn` / `look_life_low` | (c) | **不明**。2 か所（記録板と機体の上）の写しが 1 つになった |
+| 体力バー `LIFE_BAR` | `main.rs:236` | 幅 3.6 / 高さ 0.45 / 浮き 1.35 | ● | `look_life_bar_width` / `_height` / `_lift` | (c) | **不明**（幅 3.6 は `robot_radius × 2.25` と一致するが、そうは書かれていない）。**高さと浮きは一覧に無かった 2 件**——幅と同じバーの寸法なので一緒に足した |
+| 機体の見た目の大きさ `HULL_SCALE` | `main.rs:247` | `robot_radius × 2.4` | | `look_hull_scale` | (c) | **不明** |
+| 名札の高さ `NAMEPLATE_LIFT` | `main.rs:248` | `robot_radius × 2.25` | ● | `look_nameplate_lift` | (c) | **不明** |
+| 爆発 `BLAST_DOWN` / `BLAST_HIT` | `main.rs:253-254` | ×3.5・0.7 秒 ／ ×0.6・0.25 秒 | ● | `look_blast_down` / `_span`、`look_blast_hit` / `_span` | (c) | **不明**。damage の割り算は `damage_max` を読むようになった（`/16.0` の写しが消えた） |
+| 窓の大きさ `WINDOW` | `main.rs:274` | 1600×900 | | `window_width` / `window_height` | (c) | **不明** |
+| VM の予算 | rubevy の既定 200,000 | — | ● | `script_budget` | (c) | **Battle はどこでも設定していない**（rubevy の既定のまま。rubevy 自身が「出どころ不明」と書いている）。S5b-2 は**値を選ばず**、設定できるようにしただけ |
+| VM の `frame_time` | rubevy の既定 8 ms | — | ● | `script_frame_time_ms` | (c) | **不明**（同上。rubevy の 8 ms も「出どころ不明」と書かれている） |
+| `--headless` の既定 | `main.rs:584` | 10.0 秒 | | 引数、または `headless_seconds` | (c)→(e) | **不明** |
+| `--shot` の既定 | `main.rs:585-586` | `shot.png` / 3.0 秒 | | 引数、または `shot_file` / `shot_seconds` | (c)→(e) | **不明**（箱庭は 6.0。§7-7） |
+| 弾の見た目 | `main.rs:2629` | `0.7 + 0.6 × power` | ● | 直書きのまま | (c) | **不明**。**移していない**——一覧に無く、S5b-1 の作法（範囲を自分で広げない）に従った。§7-14 |
+| 砲塔・名札・影の寸法 | `main.rs:481, 499, 870, 873, 916` | 1.1×2.6、1.0、44 px、0.045、0.12 | | 直書きのまま | (c) | **不明**。同上、§7-14 |
+| スクリプトの優先度 | `main.rs:2012, 2163, 2241` | 本体 100 / 試合 10 / 差し替え 128 | | 直書き | (a) 順序の約束。`prelude.rb:295` の `+20` と組で効く | **不明**（100/10/128 の理由） |
+| `localStorage` の接頭辞 | `platform.rs:37` | `"sabibots:"` | | `const` | **(a)** 変えると利用者のセーブが消える | **引用**: `docs/plans/shared-crate-plan.md:162` |
 
-### 4.6 selftest の閾値（(d)）
+### 4.6 selftest の閾値（(d)。**S5b-5 で見直す。ここでは触っていない**）
 
 | 何を見るか | 位置 | 閾値 | 出どころ |
 |---|---|---|---|
-| ハンドラが走った・向きが変わった | `main.rs:1356, 1368, 1389` | 当たりから 0.3 秒 | **引用**: `docs/sabiruby-battle.md:314, 327`（scout の `sleep 0.3` と対）。`main.rs:1301-1303` |
-| どれだけ向きが変わったか | `main.rs:1398` | 0.2 rad | **導出**: 「a quarter of the full turning rate over the 0.3 s」`main.rs:1397`（`TURN_RATE 2.6 × 0.3 ÷ 4 ≈ 0.195`） |
-| 落ちたロボットを外す | `main.rs:1264` | 落ちてから 0.5 秒 | **不明** |
-| 体力が満で始まる | `main.rs:1086` | 100.0 | **不明**: `ENERGY_MAX` ではなく体力の 100（§7-8） |
-| 壁が隅で終わる | `main.rs:1101-1102` | 誤差 0.01 | **導出**: ε（判定の一部として挙げた） |
-| チェックの開始 | `main.rs:430` | 2.0 秒 | **不明** |
+| ハンドラが走った・向きが変わった | `main.rs:1830`（`HIT_WINDOW`） | 当たりから 0.3 秒 | **引用**: `docs/sabiruby-battle.md:314, 327`（scout の `sleep 0.3` と対） |
+| どれだけ向きが変わったか | `main.rs:1824`（`enough_of_a_swerve`） | `turn_rate × 0.3 ÷ 4` | **導出**: 「a quarter of the full turning rate over the 0.3 s」。**S5b-2 で式にした**——`turn_rate` が試合のものになったので、0.2 という数はその写しになってしまう。既定の模型では 0.195 で、**この 1 件だけ既定値が動いた**（0.200 は同じ導出を丸めた数。§7-12） |
+| 落ちたロボットを外す | `main.rs:1728` | 落ちてから 0.5 秒 | **不明** |
+| 体力が満で始まる | `main.rs:1570` | `hp_max` | **導出**: S5b-2 で数の写しをやめ、試合が渡した値を読む |
+| 壁が隅で終わる | `main.rs:1565-1566` | 誤差 0.01 | **導出**: ε（判定の一部として挙げた） |
+| チェックの開始 | `main.rs:770` | 2.0 秒 | **不明** |
 
 ---
 
 ## 5. SabiRuby Battle（Ruby）
 
-| 名前 | 位置 | 値 | 今変えられるか | 分類案 | 出どころ |
+> **S5b-2 の後。** `prelude.rb`（robot の DSL）が持っていた Rust の数の写し 3 つは消えた:
+> `SHOT_FAST` / `SHOT_SLOW` は `Rubevy.ask("model")` で試合から受け取り、`UNSET` は `nil` に
+> 置き換わって**数そのものが無くなった**。`radar` / `incoming` の既定距離も同じ道で来る。
+> 試合の模型 32 件は §4 に数えた（重複して数えない）。
+
+| 名前 | 位置 | 値 | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|
-| `UNSET` | `prelude.rb:59` | −999.0 | Ruby | (a)。`main.rs:51` の写し | **不明**（写しであることも書かれていない。§7-2） |
-| `SHOT_FAST` / `SHOT_SLOW` | `prelude.rb:61-62` | 55.0 / 30.0 | Ruby | (a) 相当。`main.rs:42-43` の写し | *理由のみ* 「(the game's numbers, for leading a target)」`prelude.rb:60`。§7-2 |
-| `ON_SLOTS` | `prelude.rb:118` | 4 | Ruby | **(a)** `run_handler` に書き出されている名前の数 | **引用**: 箱庭の `ON_SLOTS`（`prelude.rb:340-356`）と同じ理由 |
-| ハンドラの優先度差 | `prelude.rb:262-263` | 本体 +20、上限 255 | Ruby | (a) 255 は mruby-task の優先度の上限 | **不明**（+20 の理由） |
-| `steer_to` の利得 | `prelude.rb:163` | ×2.0 | Ruby | **(e)** | **不明** |
-| `aimed?` の許容 | `prelude.rb:184` | 0.12 rad | Ruby | **(e)** | **不明** |
-| `near_wall?` の余白 | `prelude.rb:188` | 6.0 | Ruby | **(e)** | **不明** |
-| `on_collision?` の半径 | `prelude.rb:201` | 2.5 | Ruby | **(e)** | **不明**（`ROBOT_RADIUS` 1.6 より大きい。当たり判定ではなく「避けるかどうか」の余裕） |
-| `wander_turn` の変わりやすさ | `prelude.rb:212` | 0.04 | Ruby | **(e)** | **不明** |
-| `lead` の反復 | `prelude.rb:175` | 2 回 | Ruby | (a) 「one guess … corrected once」（`prelude.rb:170-171`） | *理由のみ* |
-| `fire` の既定 | `prelude.rb:95` | 0.5 | Ruby | **(e)** | **不明** |
-| scout の数 | `scout.rb:18-64` | `sleep 0.3` / `0.05`、`rand < 0.5` / `< 0.01`、`nearest_enemy(45)`、`incoming(18)`、`near_wall?(6)`、距離 14、`lead(_, 0.3)`、`aimed?(_, 0.2)`、エネルギー 25、威力 0.3 | Ruby | **(e)** | `sleep 0.05` と `sleep 0.3` は *理由のみ*（`scout.rb:4-10`、`docs/sabiruby-battle.md:314`）。残りは**不明** |
-| hunter の数 | `hunter.rb:5-19` | `nearest_enemy(60)`、`near_wall?(5)`、距離 18 / 34、`lead(_, 0.9)`、エネルギー 40、威力 0.9 / 0.8、`sleep 0.08` | Ruby | **(e)** | **不明**（`docs/sabiruby-battle.md:246-248` は振る舞いを説明するだけ） |
+| ~~`UNSET`~~ | — | — | **無くなった**（S5b-2）。`act(throttle: nil)` の `nil` が `Request::num` に `None` で届く | — | — |
+| ~~`SHOT_FAST` / `SHOT_SLOW`~~ | `prelude.rb:68-75`（`Model`） | 試合の `shot_fast` / `shot_slow` | **`matches/*.rb` の `numbers:`** | **(e)** | 写しではなくなった（§7-2 の決着） |
+| `ON_SLOTS` | `prelude.rb:144` | 4 | Ruby | **(a)** `run_handler` に書き出されている名前の数 | **引用**: 箱庭の `ON_SLOTS` と同じ理由 |
+| ハンドラの優先度差 | `prelude.rb:295-296` | 本体 +20、上限 255 | Ruby | (a) 255 は mruby-task の優先度の上限 | **不明**（+20 の理由） |
+| `steer_to` の利得 | `prelude.rb:189` | ×2.0 | Ruby | **(e)** | **不明** |
+| `aimed?` の許容 | `prelude.rb:211` | 0.12 rad | Ruby | **(e)** | **不明** |
+| `near_wall?` の余白 | `prelude.rb:215` | 6.0 | Ruby | **(e)** | **不明** |
+| `on_collision?` の半径 | `prelude.rb:228` | 2.5 | Ruby | **(e)** | **不明**（`robot_radius` 1.6 より大きい。当たり判定ではなく「避けるかどうか」の余裕） |
+| `wander_turn` の変わりやすさ | `prelude.rb:239` | 0.04 | Ruby | **(e)** | **不明** |
+| `lead` の反復 | `prelude.rb:202` | 2 回 | Ruby | (a) 「one guess … corrected once」 | *理由のみ* |
+| `fire` の既定 | `prelude.rb:121` | 0.5 | Ruby | **(e)** | **不明** |
+| scout の数 | `scout.rb:18-64` | `sleep 0.3` / `0.05`、`rand < 0.5` / `< 0.01`、`nearest_enemy(45)`、`incoming(18)`、`near_wall?(6)`、距離 14、`lead(_, 0.3)`、`aimed?(_, 0.2)`、エネルギー 25、威力 0.3 | Ruby | **(e)** | `sleep 0.05` と `sleep 0.3` は *理由のみ*。残りは**不明** |
+| hunter の数 | `hunter.rb:5-19` | `nearest_enemy(60)`、`near_wall?(5)`、距離 18 / 34、`lead(_, 0.9)`、エネルギー 40、威力 0.9 / 0.8、`sleep 0.08` | Ruby | **(e)** | **不明** |
 
 ---
 
 ## 6. 集計
 
-数えたのはこの文書の表の行（§1〜§5）で、**269 件**。
+数えたのはこの文書の表の行（§1〜§5）で、**272 件**。
 `docs/garden.md` の例を引いただけの行と rubevy 側の数を参照しただけの行の 2 つは数えていない。
+消えた数（`UNSET` 2 件と `SHOT_FAST` / `SHOT_SLOW` の写し 1 件）は**取り消し線の行として残し、
+件数からは外した**——どこへ行ったかを次に数える人が探さずに済むように。
 
-**S5a の 260 件との差は 9 件で、全部 §1（共有 crate）の分**: S3 のパン・ズームのカメラ 8 件を
-足し（一覧を取った時点では無かった）、コードパネルの字の大きさ 2 つを 1 行として足し、
-アリーナの床の色を足し、S3 で消えた「ずらす幅 0.16」を落とした。
-`ArenaSize` の 32.0 は (e) から **(b)**（ゲームの遊びの数）へ、窓が無いときの 16/9 は (c) から
-**(a)** へ動いた — どちらも S5b-1 で実際にそう置いたからで、数そのものは変えていない。
+**S5a の 260 件からの差は 12 件。** うち 9 件は S5b-1 の分（S3 のパン・ズームのカメラ 8 件、
+コードパネルの字の大きさ、アリーナの床の色、S3 で消えた「ずらす幅 0.16」を落とした）で、
+残り 3 件が S5b-2 の分:
+
+* **+2**: VM パネルの 7 色を 1 行、説明パネルの余白 3 つを 1 行（S5a の網に掛かっていなかった。§1）。
+* **+3 / −2**: Battle。無名だった数に名前が付いて 1 行になったもの（体力の満 100 は 4 か所 →
+  `hp_max` 1 行、予算バーの満 3000 は 2 か所 → `BAR_FULL` 1 行）と、新しく一覧に入れたもの
+  （`NO_MATCH_YET`、VM の予算と `frame_time`、体力バーの高さと浮き、移していない直書き 2 行）と、
+  **無くなった 3 件**（`UNSET` の Rust 側と Ruby 側、`SHOT_FAST` / `SHOT_SLOW` の Ruby の写し）。
 
 ### 分類ごと
 
-| 分類 | 件数 |
-|---|---|
-| (a) 不変量 | 34 |
-| (b) 遊びの数 → Ruby 側 | 34 |
-| (c) 動かす側の数 → `Settings` / 引数 | 100 |
-| (d) selftest の閾値 | 28 |
-| (e) 既に Ruby か設定から変えられる | 73 |
-| **合計** | **269** |
+| 分類 | 件数 | S5b-1 の後から |
+|---|---|---|
+| (a) 不変量 | 32 | −2（`UNSET` の 2 件が無くなった） |
+| (b) 遊びの数 → Ruby 側 | 38 | +4 |
+| (c) 動かす側の数 → `Settings` / 引数 | 105 | +5 |
+| (d) selftest の閾値 | 28 | 変わらず |
+| (e) 既に Ruby か設定から変えられる | 69 | −4 |
+| **合計** | **272** | **+3** |
 
-2 つに跨るもの（`DAY_LENGTH` のように「既に Ruby から変えられるが Rust にも既定値がある」、
-`radar` の既定距離のように「Ruby からも Rust からも来る」）は、**先に書いた方**で 1 件として数えた。
+2 つに跨るもの（`DAY_LENGTH` のように「既に Ruby から変えられるが Rust にも既定値がある」）は、
+**先に書いた方**で 1 件として数えた。Battle の `radar` / `incoming` の既定距離はこの形だったが、
+S5b-2 で**両側が同じ 1 つの数を読む**ようになったので跨いでいない。
 
-**毎フレーム読まれる数は 110 件**（全体の 41%）。移すときに読む費用を測る必要があるのはこの 110 件。
-（S5b-1 が §1 で移した数は、どれも Resource のフィールドを読むだけで、VM に問うわけではない。
-費用の測定が要るのは Ruby 側へ移す (b) の数で、それは S5b-2 以降。）
-特に多いのは `world.rb` の規則 21 件と Battle の機体模型 20 件で、どちらも (b)＝ Ruby へ移す候補。
+**(b) のうち Battle の 32 件は、もう「移す候補」ではなく移し終えたもの**（`Match::MODEL`）。
+残る (b) は箱庭の分で、それは S5b-4。
+
+**毎フレーム読まれる数は 110 件**（全体の 40%）。Battle の機体模型 20 件はこの数に入ったままだが、
+**読んでいるのは Rust で、`Res<TheMatch>` のフィールドを読むだけ**——Ruby に問うのは
+robot が起動するときの 1 回（`Rubevy.ask("model")`）と、試合が始まるときの 1 回
+（`Rubevy.ask("rules", …)`）だけである。だから「毎フレーム Ruby に聞く」費用は 0 で、
+S5a が心配していた測定は要らなかった。
 
 ### 出どころごと
 
 | 出どころ | 件数 |
 |---|---|
 | **測った**（日付・条件つきの実測がある） | 14 |
-| **導出**（既にある制約から出ている） | 21 |
+| **導出**（既にある制約から出ている） | 23 |
 | **引用**（文書・計画書・コミットに書いてある） | 51 |
-| *理由のみ*（理由らしきことは書いてあるが、測った記録も導出も無い） | 53 |
-| **不明** | **130** |
-| **合計** | **269** |
+| *理由のみ*（理由らしきことは書いてあるが、測った記録も導出も無い） | 50 |
+| **不明** | **134** |
+| **合計** | **272** |
 
-**出どころ不明が 130 件、全体の 48%。** 内訳:
+**出どころ不明が 134 件、全体の 49%。** 内訳:
 
 | どこ | 件数 | うち不明 |
 |---|---|---|
-| 共有 crate の `src`（`rubevy-egui` + `games-shell`。S5b-1 の後） | 42 | 24 |
+| 共有 crate の `src`（`rubevy-egui` + `games-shell`。S5b-2 の後） | 44 | 26 |
 | `garden/src` | 117 | 49 |
 | `garden/ruby` | 40 | 20 |
-| `sabibots/src` | 57 | 28 |
-| `sabibots/ruby` | 13 | 9 |
+| `sabibots/src` + `sabibots/ruby`（S5b-2 の後） | 71 | 39 |
+
+Battle の 2 つを分けて数えるのをやめたのは、**数の住所が言語で分かれなくなった**ため:
+機体の模型 32 件はいまや `sabibots/ruby/match_prelude.rb` にあり、それを読むのは Rust である。
 
 不明がいちばん濃いのは**表示まわり**（字の大きさ、パネルの寸法、色、バーの目盛）と
-**Battle の機体模型に付いている無名の数**（弾の寿命、砲口の位置、グリップ）。
+**Battle の機体模型に付いていた無名の数**（弾の寿命、砲口の位置、グリップ）——後者は
+S5b-2 で名前が付いたが、**名前が付いたことと出どころが分かったことは別**で、
+`match_prelude.rb` の各行のコメントは「unknown」と書いてある。
 いちばん薄いのは**箱庭の夜と霧と予算**で、そこは測った記録がコメントに残っている。
 
 ### 機械的に拾った数と、選んだ数
 
-| どこ | `const` 宣言 | 数値リテラルを含む行 | 選んだ数 |
-|---|---|---|---|
-| 共有 crate の `src`（S5b-1 の後） | 64（うち数値 53） | 320 | 42 |
-| `garden/src` | 88（うち数値 68） | 538 | 117 |
-| `sabibots/src` | 28（うち数値 21） | 322 | 57 |
-| `garden/ruby` + `sabibots/ruby` | 8（`NAME = 数` の行） | 237 | 53 |
-| **合計** | **180（うち数値 142）** | **1,417** | **269** |
+S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1 と S5b-2 が既定値に名前を付けたので
+リテラルを含む行は増えているが、**利用者から見える数が増えたわけではない**（名前と
+`impl Default` と単体テストのぶん）。
 
-共有 crate の行だけ数が大きく動いたのは S5b-1 の結果で、**数が増えたのではなく名前が増えた**:
-S5a の時点では 20 個の `const`（うち数値 17）と 149 行のリテラルだったところに、
-既定値に名前を付けた `const` と、それを既定にする `Default` の実装と、単体テストが入った。
-リテラルを含む行が 149 → 320 に増えたぶんのほとんどは `impl Default`（1 フィールド 1 行）と
-テストの中の数で、**利用者から見える数は 33 → 42（うち 8 件は S3 のカメラの再掲）**である。
+| どこ | `const` 宣言（S5a 時点） | 数値リテラルを含む行（S5a 時点） | 選んだ数（今） |
+|---|---|---|---|
+| 共有 crate の `src` | 20（うち数値 17） | 149 | 44 |
+| `garden/src` | 88（うち数値 68） | 538 | 117 |
+| `sabibots/src` | 28（うち数値 21） | 322 | — |
+| `garden/ruby` + `sabibots/ruby` | 8（`NAME = 数` の行） | 237 | — |
+| `sabibots` の `src` + `ruby` | — | — | 71 |
+| **合計** | **144（うち数値 114）** | **1,246** | **272** |
 
 `const` 宣言は `grep -nE '^\s*(pub\s+)?const\s'`、リテラルは
 `grep -nE '(^|[^A-Za-z0-9_.":])[0-9]+(_[0-9]+)*(\.[0-9]+)?'` で拾い、コメントだけの行を落としてから目で選んだ。
-**リテラル 1,417 行から 269 件**（19%）。落とした 8 割の内訳は §0 の「入れなかった基準」。
+落とした 8 割の内訳は §0 の「入れなかった基準」。
 選んだ数がリテラル行より多い節と少ない節があるのは、1 行に数が 2 つある（`spacing([12.0, 6.0])`）のと
 同じ数が何行にも出る（`0.35` が 3 か所）のが混ざっているため。
 
@@ -646,6 +691,11 @@ S5a の時点では 20 個の `const`（うち数値 17）と 149 行のリテ�
    「the game's numbers, for leading a target」と**写しであることを自覚している**が、繋がってはいないので
    片方を動かすともう片方が黙って嘘をつく（`lead` が外れる、`act` が「触らない」を取り違える）。
    属する話: S5b で Battle の数を Ruby に移すときの設計そのもの。
+   **決着（S5b-2、2026-09-21）**: 3 つとも**数が 1 つになった**。弾の速さは試合の持ち物
+   （`match_prelude.rb` の `shot_fast` / `shot_slow`）で、`prelude.rb` は `Rubevy.ask("model")` で
+   受け取る——robot が起動するときの 1 回だけで、毎フレームではない。`UNSET` は**消した**:
+   `act(throttle: nil)` の `nil` は `Arg::Value` として届き、`Request::num` が `None` を返すので、
+   番兵の数そのものが要らない（S5a が §8-6 で「`Option` にすれば数が要らなくなる」と書いた道）。
 3. **箱庭の変異率 0.1 が 2 か所にある。** 本物は `garden/ruby/creatures/beetle.rb:81` の `mutate(0.1)`、
    判定側は `garden/src/main.rs:3955` の `const RATE: f32 = 0.1`。`main.rs:3953` は「the rate is the one the
    beetle's script passes to `mutate`, which is 0.1」と写しだと書いているが、**`beetle.rb` を書き換えても
@@ -676,9 +726,15 @@ S5a の時点では 20 個の `const`（うち数値 17）と 149 行のリテ�
    `sabibots/src/main.rs:1565`（生成）、`:638` と `:715`（バーの `/ 100.0`）、`:1086`（判定）に
    4 回書かれていて `ENERGY_MAX` のような名前が無い。VM の予算バーの満は `:2308` の `3_000` と
    `:659` の `3000.0`。どれも `const` にすらなっていない。属する話: S5b の最初の作業。
+   **決着（S5b-2）**: 100 は試合の `hp_max`（`match_prelude.rb:36`）1 つになり、生成もバー 2 か所も
+   判定も同じ 1 つを読む。3000 は `Look::bar_full`（`sabibots.settings.txt` の `look_bar_full`）
+   1 つになった。**`ScriptWorld::budget` から導けないか調べたが、導けない**——200,000 は VM 全体の
+   1 フレーム分で、rubevy はタスクごとの持ち分を持たない（`task_run_limits` に残り全部を渡す）。
+   だから数は残るが、1 つで、変えられる場所にある。
 9. **`sabibots/src/main.rs:2308` は毎フレーム同じ定数を代入している。** `panel.budget = 3_000;` が
    ロボット 1 体につき毎フレーム走る。害は無いが、`ScriptPanel` の初期化時に 1 度でよい。
    属する話: 共有 crate の `ScriptPanel`。
+   **決着（S5b-2）**: `spawn_robot` の `ScriptPanel { budget: … }` で 1 回だけになった。
 10. **`docs/README.md` の目次の Battle の説明（31 行 + 当たり 2 行）と `?selftest` の実際の行数は
     今回確かめていない。** 一覧の仕事はコードを動かさないので、突き合わせていない。属する話: S1 の基準取り。
 11. **VM パネルの `AMBER` と `REG_NAME` は、エディタの `AMBER` / `KINDS[0]` と同じ値**
@@ -688,6 +744,25 @@ S5a の時点では 20 個の `const`（うち数値 17）と 149 行のリテ�
     色を変えた人が VM パネルまで塗り替えることになり、それは記録の無い意図を後から作ることになる。
     単体テスト（`inspect.rs` の `the_colours_are_settings_and_not_in_the_store`）が「今日は同じ値」
     であることだけを書き留めている。属する話: 共有 crate（色の設計）。
+12. **S5b-2 で動いた既定値が 1 つだけある**: 判定「向きが変わったか」の閾値 0.200 → 0.195。
+    `handler_selftest` は `watch.peak > 0.2` と書いていて、その横のコメントが
+    「a quarter of the full turning rate over the 0.3 s」——つまり `TURN_RATE 2.6 × 0.3 ÷ 4 = 0.195`
+    を丸めた数だと、S5a の一覧が既に記録している。`turn_rate` が試合のものになった以上、
+    0.2 という数は**試合の数の写し**になる（速い機体の試合では緩すぎ、遅い機体の試合では
+    通らない閾値になる）ので、コメントが言っていた式そのものにした
+    （`enough_of_a_swerve`）。動く向きは緩い側で、判定が厳しくなることはない。
+    属する話: (d) の閾値の設計／著者への報告事項。
+13. **`crate_size` 2.6 を (c) ではなく (b) にした。** 一覧の分類案は (c)（動かす側）だったが、
+    `shrink` が壁を動かす量そのもので、`min_crates`（分類案 (b)）と組でしか意味を持たない。
+    `wall_layout` は 2 つを一緒に使う。`Match::MODEL` に置いた。
+    属する話: 分類の見直し（著者判断待ち。戻すなら `Look` へ 1 行移すだけ）。
+14. **一覧に無い直書きの数が Battle にまだある。** 弾のスプライトの大きさ
+    （`main.rs:2629` の `0.7 + 0.6 × power`、`× 0.55` / `× 1.3`）、砲塔のスプライト
+    （`:481` の `1.1 × 2.6`、`:499` の 1.0）、名札の字の大きさと縮尺と影のずれ
+    （`:870, 873, 916` の 44 px / 0.045 / 0.12）、灰色 2 種（`:459, 503`）、z 座標一式。
+    S5a の網に掛かっておらず、**S5b-2 は範囲を自分で広げないために移していない**
+    （S5b-1 が同じ判断をした。§1 の VM パネルの色がその結果 1 段階遅れた）。
+    一覧には §4.5 の 2 行として載せた。属する話: 一覧の抜け。
 
 ---
 

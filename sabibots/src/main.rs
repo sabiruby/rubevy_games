@@ -25,43 +25,346 @@ use rubevy::{
     in_the_authors_lines, replace_script, Answer, MrbAsset, Program, RubevyPlugin, RubevySet,
     Script, ScriptEnded, ScriptTask, ScriptWorld,
 };
-use games_shell::{ArenaPlugin, ArenaSize, GuidePlugin, Hud, ScriptPanel};
+use games_shell::{ArenaPlugin, ArenaSize, ArenaView, GuidePlugin, Hud, ScriptPanel};
 use rubevy_egui::{Editor, EditorAction, EditorPlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::Value;
+use serde::Deserialize;
 
-const ROBOT_RADIUS: f32 = 1.6;
-/// A robot is a tank: it moves along its heading, turns at a limited rate, and its turret turns
-/// on its own, also at a limited rate.
-const MAX_SPEED: f32 = 12.0;
-const REVERSE_SPEED: f32 = 7.0;
-const TURN_RATE: f32 = 2.6;
-const TURRET_RATE: f32 = 4.0;
-/// Energy: driving and firing cost it, time gives it back. A robot that fires everything it has
-/// cannot also run away.
-const ENERGY_MAX: f32 = 100.0;
-const ENERGY_REGEN: f32 = 12.0;
-const DRIVE_COST: f32 = 9.0;
-const FIRE_COST: f32 = 16.0;
-/// A shot's power (0.2 to 1): more damage, a slower shot, a longer reload, more energy.
-const BULLET_SPEED_FAST: f32 = 55.0;
-const BULLET_SPEED_SLOW: f32 = 30.0;
-const BULLET_DAMAGE_MIN: f32 = 4.0;
-const BULLET_DAMAGE_MAX: f32 = 16.0;
-const COOLDOWN_MIN: f32 = 0.3;
-const COOLDOWN_MAX: f32 = 0.8;
-/// Even with no noise in the match, a gun is not a laser.
-const BASE_SPREAD: f32 = 0.02;
-/// "leave this as it is", for any part of `act` the brain does not set
-const UNSET: f64 = -999.0;
-
-/// **Half the width of the arena**, in world units: the middle to a wall.
+/// **The square the camera is framed on before a match has said how big the arena is** — which is
+/// not the arena (S5b-2).
 ///
-/// It was `games_shell::ArenaSize`'s default until S5b-1, which is a game's number living in the
-/// shared shell — how much world a window holds is a thing only the game knows, and the third
-/// game has no arena at all. **Source unknown**: it arrived with the first match and nothing
-/// says why 32 (`docs/numbers.md` §1.1). A match shrinks the field from here
-/// (`arena.shrink`), and `restart_match` puts it back.
-const ARENA_HALF_WIDTH: f32 = 32.0;
+/// How wide the field is is the match's ([`MatchModel::arena`], `ruby/match_prelude.rb`), and
+/// until the match has handed its numbers over there is no field: no floor, no wall and nobody
+/// standing on it. [`build_field`] puts the floor and the crates down on the frame the match
+/// speaks, and `games_shell`'s `follow_arena` reframes the camera in the same frame's
+/// `PostUpdate`, before anything is drawn — so this value is never seen, and it only has to be a
+/// positive number for the window arithmetic. It is the shape `games_shell::NO_WINDOW` has, and
+/// for the same reason.
+const NO_MATCH_YET: f32 = 1.0;
+
+/// **What the match is played by** — every number that says how a tank moves, how hard a shot
+/// hits and how wide the field is.
+///
+/// Until S5b-2 these were nineteen `const`s and six bare numbers in this file, and two of them
+/// (the shot speeds) were written a second time in `ruby/prelude.rb` so that a robot could lead a
+/// target: change one and the other half of the game quietly disagreed. They are `Match::MODEL`'s
+/// now (`ruby/match_prelude.rb`), which is where a player can reach them and where they always
+/// belonged — they describe the match, not the program.
+///
+/// **The game keeps no defaults for them.** There is no frame to cover, because nothing exists
+/// before the match has spoken: `Match#run` asks `Rubevy.ask("rules", …)` in its first line and
+/// spawns nobody until it is answered. A field left out of the Hash is an error and not a number
+/// silently supplied from here, which is what `deny_unknown_fields` does from the other side for
+/// a name the game does not know.
+///
+/// Where each value came from is written beside it in `match_prelude.rb`; for most of them the
+/// honest answer is *unknown* (`docs/numbers.md` §4).
+#[derive(Deserialize, Debug, Clone, Resource)]
+#[serde(deny_unknown_fields)]
+struct MatchModel {
+    // --- the tank ---
+    /// How wide a tank is: what a shot has to reach, what two of them are pushed apart to, and
+    /// how close to the wall one may stand.
+    robot_radius: f32,
+    /// What a robot starts with, and what a full health bar means.
+    hp_max: f32,
+    max_speed: f32,
+    reverse_speed: f32,
+    /// rad/s the hull turns at, at `turn` 1.
+    turn_rate: f32,
+    /// rad/s the turret turns at, on its own.
+    turret_rate: f32,
+    /// Seconds for the speed to catch up with the throttle: a tank takes a moment to get going.
+    grip: f32,
+    /// What is left of the speed when the tank is flat — an empty tank still crawls.
+    out_of_energy: f32,
+    // --- energy ---
+    energy_max: f32,
+    /// Per second.
+    energy_regen: f32,
+    /// Per second, at full throttle.
+    drive_cost: f32,
+    /// A shot costs `fire_cost × (fire_cost_base + power)`.
+    fire_cost: f32,
+    fire_cost_base: f32,
+    // --- the gun ---
+    /// The weakest shot worth firing; `power` is clamped to `power_min ..= 1`.
+    power_min: f32,
+    /// How fast the weakest shot flies, and the heaviest. **`ruby/prelude.rb`'s `lead` reads
+    /// these two through `Rubevy.ask("model")`** rather than keeping its own copy, which is the
+    /// whole reason S5b-2 started here.
+    shot_fast: f32,
+    shot_slow: f32,
+    damage_min: f32,
+    damage_max: f32,
+    cooldown_min: f32,
+    cooldown_max: f32,
+    /// rad: even with no noise in the match, a gun is not a laser.
+    base_spread: f32,
+    /// Seconds a shot flies before it is gone.
+    bullet_life: f32,
+    /// How far in front of the middle of the tank a shot appears.
+    muzzle: f32,
+    // --- what a tank can know ---
+    /// The default range of `radar`, and of `incoming`. The DSL's keyword defaults are these
+    /// (`prelude.rb`), and so is what this file uses for a question that names no range: one
+    /// number, read in both places.
+    radar_range: f32,
+    incoming_range: f32,
+    /// A contact's place strays by `noise × distance × position_blur`, its speed by
+    /// `noise × velocity_blur`, an `incoming` shot's place by `noise × shot_blur`, and every shot
+    /// spreads by `noise × spread_per_noise` on top of [`MatchModel::base_spread`].
+    position_blur: f32,
+    velocity_blur: f32,
+    shot_blur: f32,
+    spread_per_noise: f32,
+    // --- the field ---
+    /// Half the width of the square, the middle to a wall. A match shrinks the field from here
+    /// and a restart puts it back.
+    arena: f32,
+    /// About how far apart the wall's crates stand; the step is stretched so that a side is a
+    /// whole number of them.
+    crate_size: f32,
+    /// `shrink` stops at this many crates a side: room for a last fight.
+    min_crates: f32,
+}
+
+impl MatchModel {
+    /// **What is wrong with these numbers, if anything is** — the rules serde cannot state.
+    ///
+    /// It is the arrangement the garden's `RuleBook` has: serde says whether the Hash has the
+    /// right shape, and this says whether the game can be played with what is in it. A match
+    /// that asks for nonsense is refused rather than obeyed, because every one of these ends in
+    /// a division, a `clamp` or a `lerp` that a zero or a negative turns into a tank that cannot
+    /// move, a field nobody fits in, or a wall with no crates in it.
+    fn wrong(&self) -> Option<String> {
+        let positive = [
+            ("robot_radius", self.robot_radius),
+            ("hp_max", self.hp_max),
+            ("max_speed", self.max_speed),
+            ("reverse_speed", self.reverse_speed),
+            ("turn_rate", self.turn_rate),
+            ("turret_rate", self.turret_rate),
+            ("grip", self.grip),
+            ("energy_max", self.energy_max),
+            ("fire_cost", self.fire_cost),
+            ("shot_fast", self.shot_fast),
+            ("shot_slow", self.shot_slow),
+            ("bullet_life", self.bullet_life),
+            ("radar_range", self.radar_range),
+            ("incoming_range", self.incoming_range),
+            ("arena", self.arena),
+            ("crate_size", self.crate_size),
+        ];
+        for (what, value) in positive {
+            if !(value > 0.0) {
+                return Some(format!("{what} is {value}, and a match cannot be played with that"));
+            }
+        }
+        for (what, value) in [
+            ("energy_regen", self.energy_regen),
+            ("drive_cost", self.drive_cost),
+            ("base_spread", self.base_spread),
+            ("muzzle", self.muzzle),
+            ("position_blur", self.position_blur),
+            ("velocity_blur", self.velocity_blur),
+            ("shot_blur", self.shot_blur),
+            ("spread_per_noise", self.spread_per_noise),
+            ("fire_cost_base", self.fire_cost_base),
+            ("out_of_energy", self.out_of_energy),
+        ] {
+            if value < 0.0 {
+                return Some(format!("{what} is {value}, which is less than nothing"));
+            }
+        }
+        if !(self.power_min > 0.0 && self.power_min <= 1.0) {
+            return Some(format!("power_min is {}, and power runs from it to 1", self.power_min));
+        }
+        if self.damage_min > self.damage_max {
+            return Some("damage_min is more than damage_max".to_string());
+        }
+        if self.cooldown_min > self.cooldown_max {
+            return Some("cooldown_min is more than cooldown_max".to_string());
+        }
+        if self.min_crates < 1.0 {
+            return Some(format!("a wall of {} crates a side is no wall", self.min_crates));
+        }
+        // a robot has to fit inside the field it is fighting in, or `move_robots` clamps it to a
+        // limit behind its own back
+        if self.arena <= self.robot_radius {
+            return Some(format!(
+                "an arena {} across holds no tank of radius {}",
+                self.arena * 2.0,
+                self.robot_radius
+            ));
+        }
+        None
+    }
+
+    /// The five numbers `ruby/prelude.rb`'s helpers do arithmetic with, in the order its `Model`
+    /// reads them. It is an answer rather than five constants written into the DSL, which is what
+    /// they were until S5b-2.
+    fn for_the_dsl(&self) -> Vec<f64> {
+        vec![
+            self.shot_fast as f64,
+            self.shot_slow as f64,
+            self.radar_range as f64,
+            self.incoming_range as f64,
+            self.power_min as f64,
+        ]
+    }
+}
+
+/// **What the match handed over, or nothing yet.**
+///
+/// A resource that is always there and is empty until the first `Rubevy.ask("rules", …)`, rather
+/// than a resource that appears: the systems that read it run from the first frame and the answer
+/// "the match has not spoken" is one they all have to have. It is also what they *want* — there
+/// is nothing on the field to move until a match has put it there.
+#[derive(Resource, Default)]
+struct TheMatch(Option<MatchModel>);
+
+// ---------------------------------------------------------------------------------------------
+// How the match is *drawn*, as against how it is fought (S5b-2). `MatchModel` above is the
+// match's and lives in Ruby; these are the game's own and live in `sabibots.settings.txt`, which
+// is where the panels' numbers have lived since S5b-1. The `const`s name the defaults and say
+// where each came from — which, as with the tank, is mostly nowhere.
+// ---------------------------------------------------------------------------------------------
+
+/// The bar over a robot's head: how wide and how tall it is in world units, and how far above the
+/// hull it floats (a multiple of the tank's radius). **Source unknown**, all three.
+pub const LIFE_BAR: [f32; 3] = [3.6, 0.45, 1.35];
+
+/// Where the health bar changes colour: green above the first, yellow above the second, red
+/// below. **Source unknown**; the same two numbers were written in the scoreboard and again over
+/// the tank, and they are one setting now.
+pub const LIFE_WARN: f32 = 0.5;
+pub const LIFE_LOW: f32 = 0.25;
+
+/// How large the hull sprite is drawn, and how high the nameplate floats — both as multiples of
+/// the tank's radius, so a match that asks for bigger tanks gets bigger pictures of them.
+/// **Source unknown**.
+pub const HULL_SCALE: f32 = 2.4;
+pub const NAMEPLATE_LIFT: f32 = 2.25;
+
+/// The puff where a shot landed: how large and how long, for a robot going down and for an
+/// ordinary hit. The hit's size also grows with the damage, as a share of the heaviest shot the
+/// match allows. **Source unknown**, all four.
+pub const BLAST_DOWN: [f32; 2] = [3.5, 0.7];
+pub const BLAST_HIT: [f32; 2] = [0.6, 0.25];
+
+/// The time constant of the "thinking" figure and of the editor's heat: about a second of memory,
+/// so a line the brain keeps coming back to stays lit. *Reason only* — the sentence is the record.
+pub const HEAT_MEMORY: f32 = 0.8;
+
+/// **Instructions a frame that fill the thinking bar.** *Reason only*: "a brain that thinks for a
+/// frame spends tens to hundreds; the bar fills as one approaches a timeslice's worth". The 3,000
+/// itself has **no recorded source**, and it cannot be derived from `ScriptWorld::budget` — that
+/// is 200,000 for the whole VM a frame, and rubevy hands the VM the whole of what is left rather
+/// than a slice per task. It was written twice (the scoreboard's bar and `ScriptPanel::budget`)
+/// and is one setting now.
+pub const BAR_FULL: f32 = 3000.0;
+
+/// The sand tiles under the arena: how large one is, and one in how many is the other picture.
+/// **Source unknown**.
+pub const FLOOR_TILE: f32 = 8.0;
+pub const FLOOR_PATTERN: i32 = 3;
+
+/// The window the game opens. **Source unknown**.
+pub const WINDOW: [f32; 2] = [1600.0, 900.0];
+
+/// **How the match is drawn.** Every one of these can be changed in `sabibots.settings.txt`; what
+/// cannot be changed there is how it is *fought*, which is [`MatchModel`] and belongs to the
+/// match's own Ruby.
+#[derive(Resource, Debug, Clone, PartialEq)]
+struct Look {
+    /// [`LIFE_BAR`]
+    life_bar: [f32; 3],
+    /// [`LIFE_WARN`] / [`LIFE_LOW`]
+    life_warn: f32,
+    life_low: f32,
+    /// [`HULL_SCALE`]
+    hull_scale: f32,
+    /// [`NAMEPLATE_LIFT`]
+    nameplate_lift: f32,
+    /// [`BLAST_DOWN`] / [`BLAST_HIT`]
+    blast_down: [f32; 2],
+    blast_hit: [f32; 2],
+    /// [`HEAT_MEMORY`]
+    heat_memory: f32,
+    /// [`BAR_FULL`]
+    bar_full: f32,
+    /// [`FLOOR_TILE`] / [`FLOOR_PATTERN`]
+    floor_tile: f32,
+    floor_pattern: i32,
+    /// [`WINDOW`]
+    window: [f32; 2],
+}
+
+impl Default for Look {
+    fn default() -> Self {
+        Look {
+            life_bar: LIFE_BAR,
+            life_warn: LIFE_WARN,
+            life_low: LIFE_LOW,
+            hull_scale: HULL_SCALE,
+            nameplate_lift: NAMEPLATE_LIFT,
+            blast_down: BLAST_DOWN,
+            blast_hit: BLAST_HIT,
+            heat_memory: HEAT_MEMORY,
+            bar_full: BAR_FULL,
+            floor_tile: FLOOR_TILE,
+            floor_pattern: FLOOR_PATTERN,
+            window: WINDOW,
+        }
+    }
+}
+
+impl Look {
+    /// **What the player left in `sabibots.settings.txt`.**
+    ///
+    /// | key | field |
+    /// |---|---|
+    /// | `look_life_bar_width` / `look_life_bar_height` / `look_life_bar_lift` | [`Look::life_bar`] |
+    /// | `look_life_warn` / `look_life_low` | the two colour thresholds |
+    /// | `look_hull_scale` | [`Look::hull_scale`] |
+    /// | `look_nameplate_lift` | [`Look::nameplate_lift`] |
+    /// | `look_blast_down` / `look_blast_down_span` | [`Look::blast_down`] |
+    /// | `look_blast_hit` / `look_blast_hit_span` | [`Look::blast_hit`] |
+    /// | `look_heat_memory` | [`Look::heat_memory`] |
+    /// | `look_bar_full` | [`Look::bar_full`] |
+    /// | `look_floor_tile` / `look_floor_pattern` | the sand under the arena |
+    /// | `window_width` / `window_height` | [`Look::window`] — read before the window is opened |
+    ///
+    /// A key that is not there leaves the field alone, which is what makes a store written by an
+    /// older build safe to read.
+    fn read_from(&mut self, settings: &games_shell::Settings) {
+        let take = |key: &str, slot: &mut f32| {
+            if let Some(value) = settings.number(key) {
+                *slot = value;
+            }
+        };
+        take("look_life_bar_width", &mut self.life_bar[0]);
+        take("look_life_bar_height", &mut self.life_bar[1]);
+        take("look_life_bar_lift", &mut self.life_bar[2]);
+        take("look_life_warn", &mut self.life_warn);
+        take("look_life_low", &mut self.life_low);
+        take("look_hull_scale", &mut self.hull_scale);
+        take("look_nameplate_lift", &mut self.nameplate_lift);
+        take("look_blast_down", &mut self.blast_down[0]);
+        take("look_blast_down_span", &mut self.blast_down[1]);
+        take("look_blast_hit", &mut self.blast_hit[0]);
+        take("look_blast_hit_span", &mut self.blast_hit[1]);
+        take("look_heat_memory", &mut self.heat_memory);
+        take("look_bar_full", &mut self.bar_full);
+        take("look_floor_tile", &mut self.floor_tile);
+        take("window_width", &mut self.window[0]);
+        take("window_height", &mut self.window[1]);
+        if let Some(value) = settings.number("look_floor_pattern") {
+            self.floor_pattern = value.max(1.0) as i32;
+        }
+    }
+}
 
 /// The teams a match can put on the field, in the order Ruby names them.
 const TEAMS: [(&str, &str, &str); 4] = [
@@ -273,6 +576,11 @@ impl Shots {
 /// S1**, moved out only because the parsing they were in is `games_shell::Args`' now and the
 /// garden's `--shot` waits a different six seconds; no run's behaviour turns on them, since every
 /// line in `docs/sabiruby-battle.md` passes its own number.
+///
+/// **S5b-2**: they are defaults of a flag *and* of the store — `headless_seconds`, `shot_file`
+/// and `shot_seconds` in `sabibots.settings.txt` move them for a run that names no number,
+/// and the flag still wins over both. Until then "the default is 10" could only be changed by
+/// rebuilding, which is the thing the flag was supposed to spare anybody.
 const HEADLESS_SECONDS: f32 = 10.0;
 const SHOT_FILE: &str = "shot.png";
 const SHOT_SECONDS: f32 = 3.0;
@@ -281,19 +589,37 @@ fn main() {
     let ruby = platform::ruby_dir();
     // The flags both games take, read by `games_shell::Args` since S1.
     let args = games_shell::Args::from_env();
+    // `--lang en|ja` (G6b): which language the guide opens in, for its two pictures. Not
+    // remembered; the player's own click is.
+    let lang_asked = args.value("--lang");
+    // **The store, read before anything else** (S5b-2). G6b put it here for the guide's language
+    // — the panel opens by itself and must not show one language and then jump to the other —
+    // and since S5b-2 the window's size, how the match is drawn and the flags' own defaults come
+    // out of the same file, so it is read before the two branches rather than inside one of them.
+    // A headless run has no panel to choose anything with and reads it all the same: what it
+    // takes from it is how long to run when nobody said.
+    let (settings, lang) = games_shell::remembered(
+        platform::SETTINGS_FILE,
+        "SabiRuby Battle: what the panel remembers. Delete a line for the default.",
+        platform::read,
+        platform::write,
+        lang_asked.as_deref(),
+    );
+    let mut look = Look::default();
+    look.read_from(&settings);
     // `--headless N`: no window, N seconds, the match reported on stdout. It is how the game is
     // tested where there is no GPU, and it runs exactly the same systems as the windowed one.
-    let headless = args.headless(HEADLESS_SECONDS);
+    let headless = args.headless(settings.number("headless_seconds").unwrap_or(HEADLESS_SECONDS));
     // `--shot FILE [SECONDS]`: a window, a picture of it, and out. For checking the HUD where
     // the window itself cannot be looked at.
-    let shot = args.shot(SHOT_FILE, SHOT_SECONDS);
+    let shot = args.shot(
+        settings.get("shot_file").unwrap_or(SHOT_FILE),
+        settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
+    );
     // `--vm` (G9): open the VM panel. It is closed unless somebody asks, and on a command line
     // this is the asking — `--shot docs/vm-inspector.png 14 --vm` is how the picture in
     // `docs/sabiruby-battle.md` is taken. A player asks with `F2`.
     let wants_vm = args.has("--vm");
-    // `--lang en|ja` (G6b): which language the guide opens in, for its two pictures. Not
-    // remembered; the player's own click is.
-    let lang_asked = args.value("--lang");
 
     let mut app = App::new();
     match headless {
@@ -311,24 +637,12 @@ fn main() {
             ))
             // no renderer here, but the same systems run and they load sprites
             .init_asset::<Image>()
-            .insert_resource(ArenaSize(ARENA_HALF_WIDTH))
+            .insert_resource(ArenaSize(NO_MATCH_YET))
             .insert_resource(Headless { until: seconds })
             .init_resource::<Hud>()
             .add_systems(Update, stop_when_over);
         }
         None => {
-            // G6b: the one thing this game remembers between runs — which language the guide is
-            // read in. Read before the first frame, because the panel opens by itself and must
-            // not show one language and then jump to the other. `platform.rs` decides whether
-            // that is a file beside the game or a key in the browser's local storage, and the
-            // ten lines that read it are `games_shell::remembered`'s since S1.
-            let (settings, lang) = games_shell::remembered(
-                platform::SETTINGS_FILE,
-                "SabiRuby Battle: what the panel remembers. Delete a line for the default.",
-                platform::read,
-                platform::write,
-                lang_asked.as_deref(),
-            );
             app.add_plugins((
                 DefaultPlugins
                     .set(AssetPlugin {
@@ -340,7 +654,7 @@ fn main() {
                     .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SabiRuby Battle".into(),
-                        resolution: (1600u32, 900u32).into(),
+                        resolution: (look.window[0].max(1.0) as u32, look.window[1].max(1.0) as u32).into(),
                         // in the browser: the page's canvas, as large as its box
                         canvas: Some("#sabibots".into()),
                         fit_canvas_to_parent: true,
@@ -348,7 +662,10 @@ fn main() {
                     }),
                     ..default()
                 }),
-                ArenaPlugin::showing(ARENA_HALF_WIDTH),
+                // S5b-2: the camera is framed on nothing until the match says how wide the field
+                // is, which it does in its first line. `build_field` and `follow_arena` both act
+                // on the frame it does, before anything is drawn.
+                ArenaPlugin::showing(NO_MATCH_YET),
                 // H2: the editor, with the lexer behind its colours. Which lexer is
                 // `platform.rs`'s to know — the compiler linked in on a PC,
                 // `window.sabibotsHighlight` in a page.
@@ -370,7 +687,6 @@ fn main() {
             .insert_resource(
                 guide_text::guide().opening(lang, shot.is_none() || args.has("--guide")),
             )
-            .insert_resource(settings)
             .init_resource::<Watched>()
             .init_resource::<Hud>()
             .init_resource::<Paused>()
@@ -385,13 +701,23 @@ fn main() {
             .add_systems(bevy_egui::EguiPrimaryContextPass, draw_scoreboard);
         }
     }
+    // **What the scripts are allowed a frame** (S5b-2). Battle has never set either of them: the
+    // VM runs on rubevy's own defaults (200,000 instructions and 8 ms, neither of which rubevy
+    // can say where it got — its `ScriptWorld::budget` rustdoc says so). Nothing is measured here
+    // and nothing is chosen here; what changes is that a player can now say, which is what the
+    // thinking bar in the scoreboard is for reading the effect of.
+    let budget = settings.number("script_budget");
+    let frame_time = settings.number("script_frame_time_ms");
     app.insert_resource(RubyDir(ruby.clone()))
+        .insert_resource(settings)
+        .insert_resource(look)
+        .init_resource::<TheMatch>()
         .init_resource::<Restart>()
         .init_resource::<KeptBrains>()
         .init_resource::<Shots>()
         .init_resource::<Events>()
         .init_resource::<Rules>()
-        .add_systems(Startup, (spawn_match, spawn_arena))
+        .add_systems(Startup, spawn_match)
         // The whole chain sits in `RubevySet::Answer`, which rubevy puts after the set that
         // runs the scripts and collects their questions. That is what makes `answer_requests`
         // see a question on the frame it was asked, so the script wakes on the next frame
@@ -419,7 +745,7 @@ fn main() {
                 move_bullets.run_if(world_moves),
                 gray_out_downed,
                 fade_blasts.run_if(world_moves),
-                rebuild_walls,
+                build_field,
                 reload_changed,
                 report_ended,
                 update_hud,
@@ -452,6 +778,19 @@ fn main() {
         app.insert_resource(watch);
     } else {
         warn!("could not watch {ruby:?}: saving a robot will not reload it");
+    }
+    // the two the store may move, written after the plugin has made the VM. Left alone where
+    // nobody asked, so the default is rubevy's and not a copy of rubevy's kept here.
+    if budget.is_some() || frame_time.is_some() {
+        let mut world = app.world_mut().resource_mut::<ScriptWorld>();
+        if let Some(budget) = budget {
+            world.budget = budget.max(0.0) as u64;
+            info!("setting: the scripts get {} instructions a frame", world.budget);
+        }
+        if let Some(ms) = frame_time {
+            world.frame_time = (ms > 0.0).then(|| std::time::Duration::from_secs_f32(ms / 1000.0));
+            info!("setting: the scripts get {:?} a frame", world.frame_time);
+        }
     }
     app.run();
 }
@@ -540,9 +879,12 @@ fn spawn_nameplates(mut commands: Commands, robots: Query<Entity, Added<Robot>>)
 fn follow_nameplates(
     mut commands: Commands,
     watched: Res<Watched>,
+    the_match: Res<TheMatch>,
+    look: Res<Look>,
     robots: Query<(&Robot, &Transform), Without<Nameplate>>,
     mut plates: Query<(Entity, &Nameplate, &mut Text2d, &mut TextColor, &mut Transform)>,
 ) {
+    let Some(model) = &the_match.0 else { return };
     for (plate, owner, mut text, mut color, mut transform) in &mut plates {
         let Ok((robot, at)) = robots.get(owner.robot) else {
             commands.entity(plate).despawn();
@@ -573,7 +915,8 @@ fn follow_nameplates(
         // the shadow sits a little down and right of the text it darkens
         let nudge = if owner.shadow { 0.12 } else { 0.0 };
         transform.translation.x = at.translation.x + nudge;
-        transform.translation.y = at.translation.y + ROBOT_RADIUS * 2.25 - nudge;
+        transform.translation.y =
+            at.translation.y + model.robot_radius * look.nameplate_lift - nudge;
     }
 }
 
@@ -585,9 +928,14 @@ fn draw_scoreboard(
     robots: Query<(Entity, &Robot)>,
     mut editor: ResMut<Editor>,
     mut restart: ResMut<Restart>,
+    the_match: Res<TheMatch>,
+    look: Res<Look>,
 ) {
     use bevy_egui::egui;
     let Ok(ctx) = contexts.ctx_mut() else { return };
+    // What a full bar means is the match's (S5b-2). The panel is drawn either way — a match whose
+    // script will not compile has no numbers and no robots, and the line saying so is in here.
+    let model = the_match.0.as_ref();
     let over = hud.line.starts_with("winner") || hud.line == "a draw";
     let mut rows: Vec<(Entity, &Robot)> = robots.iter().collect();
     rows.sort_by_key(|(_, r)| r.number);
@@ -621,6 +969,9 @@ fn draw_scoreboard(
                 ui.end_row();
 
                 for (entity, robot) in rows {
+                    // a robot on the field is a robot a match put there, so its numbers are here
+                    let Some(model) = model else { continue };
+                    let (hp_max, energy_max) = (model.hp_max, model.energy_max);
                     let (r, g, b) = TEAM_COLORS[robot.team.min(TEAM_COLORS.len() - 1)];
                     let down = robot.hp <= 0.0;
                     let team = if down {
@@ -649,10 +1000,10 @@ fn draw_scoreboard(
                         editor.picked = Some(entity.to_bits());
                     }
 
-                    let life = (robot.hp / 100.0).clamp(0.0, 1.0);
-                    let fill = if life > 0.5 {
+                    let life = (robot.hp / hp_max).clamp(0.0, 1.0);
+                    let fill = if life > look.life_warn {
                         egui::Color32::from_rgb(90, 190, 90)
-                    } else if life > 0.25 {
+                    } else if life > look.life_low {
                         egui::Color32::from_rgb(220, 180, 60)
                     } else {
                         egui::Color32::from_rgb(210, 70, 60)
@@ -660,7 +1011,7 @@ fn draw_scoreboard(
                     let text = if down { "down".to_string() } else { format!("{}", robot.hp as i32) };
                     ui.add(egui::ProgressBar::new(life).fill(fill).desired_width(120.0).text(text));
 
-                    let energy = (robot.energy / ENERGY_MAX).clamp(0.0, 1.0);
+                    let energy = (robot.energy / energy_max).clamp(0.0, 1.0);
                     ui.add(
                         egui::ProgressBar::new(if down { 0.0 } else { energy })
                             .fill(egui::Color32::from_rgb(200, 170, 60))
@@ -669,8 +1020,8 @@ fn draw_scoreboard(
                     );
 
                     // a timeslice's worth of instructions fills the bar: the point where a brain
-                    // starts taking turns away from the others
-                    let cpu = (robot.cpu / 3000.0).clamp(0.0, 1.0);
+                    // starts taking turns away from the others (`Look::bar_full`)
+                    let cpu = (robot.cpu / look.bar_full).clamp(0.0, 1.0);
                     ui.add(
                         egui::ProgressBar::new(cpu)
                             .fill(egui::Color32::from_rgb(90, 140, 210))
@@ -697,16 +1048,15 @@ struct LifeBar {
     fill: bool,
 }
 
-const BAR_WIDTH: f32 = 3.6;
-
-fn spawn_life_bars(mut commands: Commands, robots: Query<Entity, Added<Robot>>) {
+fn spawn_life_bars(mut commands: Commands, look: Res<Look>, robots: Query<Entity, Added<Robot>>) {
+    let [width, height, _] = look.life_bar;
     for entity in &robots {
         for fill in [false, true] {
             commands.spawn((
                 LifeBar { robot: entity, fill },
                 Sprite {
                     color: if fill { Color::srgb(0.35, 0.8, 0.35) } else { Color::srgba(0.0, 0.0, 0.0, 0.6) },
-                    custom_size: Some(Vec2::new(BAR_WIDTH, 0.45)),
+                    custom_size: Some(Vec2::new(width, height)),
                     ..default()
                 },
                 Transform::from_xyz(0.0, 0.0, if fill { 5.1 } else { 5.0 }),
@@ -717,29 +1067,33 @@ fn spawn_life_bars(mut commands: Commands, robots: Query<Entity, Added<Robot>>) 
 
 fn follow_life_bars(
     mut commands: Commands,
+    the_match: Res<TheMatch>,
+    look: Res<Look>,
     robots: Query<(&Robot, &Transform), Without<LifeBar>>,
     mut bars: Query<(Entity, &LifeBar, &mut Sprite, &mut Transform, &mut Visibility)>,
 ) {
+    let Some(model) = &the_match.0 else { return };
+    let [width, height, lift] = look.life_bar;
     for (bar, owner, mut sprite, mut transform, mut visibility) in &mut bars {
         let Ok((robot, at)) = robots.get(owner.robot) else {
             commands.entity(bar).despawn();
             continue;
         };
         *visibility = if robot.hp <= 0.0 { Visibility::Hidden } else { Visibility::Inherited };
-        let life = (robot.hp / 100.0).clamp(0.0, 1.0);
-        let y = at.translation.y + ROBOT_RADIUS * 1.35;
+        let life = (robot.hp / model.hp_max).clamp(0.0, 1.0);
+        let y = at.translation.y + model.robot_radius * lift;
         if owner.fill {
-            let w = BAR_WIDTH * life;
-            sprite.custom_size = Some(Vec2::new(w.max(0.001), 0.45));
-            sprite.color = if life > 0.5 {
+            let w = width * life;
+            sprite.custom_size = Some(Vec2::new(w.max(0.001), height));
+            sprite.color = if life > look.life_warn {
                 Color::srgb(0.35, 0.8, 0.35)
-            } else if life > 0.25 {
+            } else if life > look.life_low {
                 Color::srgb(0.9, 0.75, 0.25)
             } else {
                 Color::srgb(0.85, 0.3, 0.25)
             };
             // anchored at the bar's left end, so it empties towards the left
-            transform.translation.x = at.translation.x - BAR_WIDTH / 2.0 + w / 2.0;
+            transform.translation.x = at.translation.x - width / 2.0 + w / 2.0;
         } else {
             transform.translation.x = at.translation.x;
         }
@@ -1030,6 +1384,10 @@ struct MatchUnderTest<'w, 's> {
     panel: Res<'w, VmInspector>,
     walls: Query<'w, 's, &'static Transform, With<Wall>>,
     arena: Res<'w, ArenaSize>,
+    /// **The numbers the match handed over** (S5b-2), so that "every robot starts with full
+    /// health" is measured against what full health *is* in this match rather than against a copy
+    /// of it kept in the checks.
+    the_match: Res<'w, TheMatch>,
 }
 
 impl MatchUnderTest<'_, '_> {
@@ -1185,7 +1543,10 @@ fn selftest(
                 return;
             }
             ok(robots.iter().count() == 4 && fresh == 4, "after a restart there are four robots again, not eight");
-            ok(robots.iter().all(|(_, r)| r.hp == 100.0), "every robot starts with full health");
+            // what full health is, is the match's (S5b-2): the check reads the number the game is
+            // playing by and not a 100 written down here
+            let full = field.the_match.0.as_ref().map(|m| m.hp_max);
+            ok(full.is_some_and(|full| robots.iter().all(|(_, r)| r.hp == full)), "every robot starts with full health");
             // the last of the four replacements has landed: from here the arena's behaviours are
             // nobody's but the match's again, and a hit is a hit (`EditChecks`)
             edits.landed(now);
@@ -1448,13 +1809,36 @@ fn angle_between(a: f32, b: f32) -> f32 {
     if d > PI { d - TAU } else { d }
 }
 
+/// **How far a hit has to have thrown the tank** for the check to call it a swerve: a quarter of
+/// the full turning rate over the window above.
+///
+/// The threshold was written out as `0.2` until S5b-2, with that sentence beside it — which was
+/// this arithmetic on the `TURN_RATE` of 2.6, rounded up from 0.195. Now that the turning rate is
+/// the match's (`ruby/match_prelude.rb`) a number in this file would be a copy of it: a match
+/// that gave its tanks a slower hull would be checked against a swerve they cannot make, and one
+/// that gave them a quicker hull would be checked against nothing at all.
+///
+/// So the check does the arithmetic its own comment stated, and the threshold moves with the
+/// match. On the default model it is 0.195 rather than 0.200, which is the rounding coming off.
+fn enough_of_a_swerve(turn_rate: f32) -> f32 {
+    turn_rate * HIT_WINDOW / 4.0
+}
+
+/// **The window a handler has to answer a hit in** (`docs/sabiruby-battle.md`: the scout's
+/// `sleep 0.3` is the other half of it). *Cited*, and it stays in the checks — it is what is
+/// being measured, not a number the game plays by.
+const HIT_WINDOW: f32 = 0.3;
+
 fn handler_selftest(
     time: Res<Time>,
     mut test: ResMut<HandlerTest>,
     edits: Res<EditChecks>,
+    the_match: Res<TheMatch>,
     robots: Query<&Robot>,
     tasks: Query<&ScriptTask>,
 ) {
+    // a hit is taken by a robot a match put on the field, so the match's numbers are here
+    let Some(turn_rate) = the_match.0.as_ref().map(|m| m.turn_rate) else { return };
     let now = time.elapsed_secs();
     for watch in test.watching.iter_mut() {
         if let Ok(robot) = robots.get(watch.robot) {
@@ -1515,7 +1899,7 @@ fn handler_selftest(
         }
         let ran = robot.handler_runs > watch.runs;
         // a quarter of the full turning rate over the 0.3 s: the swerve, not the brain's steering
-        let turned = watch.peak > 0.2;
+        let turned = watch.peak > enough_of_a_swerve(turn_rate);
         test.checked += 1;
         test.ran += u32::from(ran);
         test.turned += u32::from(turned);
@@ -1535,10 +1919,59 @@ fn handler_selftest(
 #[derive(Component)]
 struct Wall;
 
-/// The floor, tiled, and a wall of crates around it.
-fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetServer>) {
-    let half = arena.0;
-    let tile = 8.0;
+/// A tile of the sand under the arena, so the floor can be laid again for another match.
+#[derive(Component)]
+struct Floor;
+
+/// **The floor and the wall, put down when the match has said how big the field is** (S5b-2), and
+/// again whenever it changes — the walls closing in, a restart, another match.
+///
+/// It was two systems: `spawn_arena` in `Startup`, which could only ever use a number written
+/// into this file, and `rebuild_walls`, which watched `ArenaSize` for changes. They are one now
+/// because the arena's width is the match's, and a `Startup` system runs before any match has
+/// spoken. What it does instead is remember what it laid and lay it again when that is no longer
+/// what is wanted — the floor when the field's *framed* width or the tile changes, the crates
+/// when the width the match is fighting inside or the crate size does.
+fn build_field(
+    mut commands: Commands,
+    the_match: Res<TheMatch>,
+    arena: Res<ArenaSize>,
+    look: Res<Look>,
+    view: Option<ResMut<ArenaView>>,
+    server: Res<AssetServer>,
+    floor: Query<Entity, With<Floor>>,
+    walls: Query<Entity, With<Wall>>,
+    mut floor_laid: Local<Option<(f32, f32, i32)>>,
+    mut walls_laid: Local<Option<(f32, f32, f32)>>,
+) {
+    let Some(model) = &the_match.0 else { return };
+
+    let want_floor = (model.arena, look.floor_tile, look.floor_pattern);
+    if *floor_laid != Some(want_floor) {
+        *floor_laid = Some(want_floor);
+        for tile in &floor {
+            commands.entity(tile).despawn();
+        }
+        lay_the_floor(&mut commands, &server, model.arena, &look);
+        // and the camera is framed on the match's square rather than on the nothing it opened on
+        if let Some(mut view) = view {
+            view.framed = model.arena;
+        }
+    }
+
+    let want_walls = (arena.0, model.crate_size, model.min_crates);
+    if *walls_laid != Some(want_walls) {
+        *walls_laid = Some(want_walls);
+        for wall in &walls {
+            commands.entity(wall).despawn();
+        }
+        build_walls(&mut commands, &server, arena.0, model.crate_size);
+    }
+}
+
+/// The sand, tiled far enough past the wall that a wide window sees no edge of it.
+fn lay_the_floor(commands: &mut Commands, server: &AssetServer, half: f32, look: &Look) {
+    let tile = look.floor_tile;
     let sand: Handle<Image> = server.load("sprites/tileSand1.png");
     let sand2: Handle<Image> = server.load("sprites/tileSand2.png");
     // the window is 16:9 and the arena is square, so the floor reaches past the wall sideways
@@ -1550,14 +1983,15 @@ fn spawn_arena(mut commands: Commands, arena: Res<ArenaSize>, server: Res<AssetS
         for iy in 0..ny {
             let x = -wide + tile * (ix as f32 + 0.5);
             let y = -tall + tile * (iy as f32 + 0.5);
-            let image = if (ix + iy) % 3 == 0 { sand2.clone() } else { sand.clone() };
+            let image =
+                if (ix + iy) % look.floor_pattern == 0 { sand2.clone() } else { sand.clone() };
             commands.spawn((
+                Floor,
                 Sprite { image, custom_size: Some(Vec2::splat(tile)), ..default() },
                 Transform::from_xyz(x, y, -1.0),
             ));
         }
     }
-    build_walls(&mut commands, &server, half);
 }
 
 /// The entity the match's script runs on.
@@ -1594,6 +2028,7 @@ fn restart_match(
     mut restart: ResMut<Restart>,
     mut commands: Commands,
     ruby: Res<RubyDir>,
+    the_match: Res<TheMatch>,
     mut assets: ResMut<Assets<MrbAsset>>,
     mut arena: ResMut<ArenaSize>,
     mut shots: ResMut<Shots>,
@@ -1618,7 +2053,12 @@ fn restart_match(
     for entity in &others {
         commands.entity(entity).despawn();
     }
-    arena.0 = ARENA_HALF_WIDTH;
+    // back to the width the match asked for. It is the match's own number, not one kept here:
+    // the script that is about to start says it again in its first line, and this is only so
+    // that the wall is not left closed in for the frame in between.
+    if let Some(model) = &the_match.0 {
+        arena.0 = model.arena;
+    }
     shots.0.clear();
     events.0.clear();
     hud.line = "the match starts again".into();
@@ -1645,22 +2085,37 @@ fn restart_key(
     }
 }
 
+/// **What it takes to put a robot on the field**, as one system parameter.
+///
+/// `answer_requests` was at fourteen and S5b-2 adds the model it is answering from; five of the
+/// fourteen were only ever there so that [`spawn_robot`] could be called, and they travel
+/// together now. It also spares that function the six-argument prefix it had grown.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Spawning<'w> {
+    ruby: Res<'w, RubyDir>,
+    assets: ResMut<'w, Assets<MrbAsset>>,
+    server: Res<'w, AssetServer>,
+    shots: ResMut<'w, Shots>,
+    kept: Res<'w, KeptBrains>,
+    look: Res<'w, Look>,
+}
+
 /// `Rubevy.ask("spawn", file, team, x, y)` from the match: a robot with its own brain.
 fn spawn_robot(
     commands: &mut Commands,
-    ruby: &Path,
-    assets: &mut Assets<MrbAsset>,
-    server: &AssetServer,
-    shots: &mut Shots,
-    kept: &KeptBrains,
+    it: &mut Spawning,
+    model: &MatchModel,
     file: &str,
     team: usize,
     at: Vec2,
 ) -> Option<Entity> {
+    let ruby = it.ruby.0.clone();
+    let ruby = ruby.as_path();
+    let assets = &mut *it.assets;
     let path = ruby.join("robots").join(format!("{file}.rb"));
-    let number = shots.0.len() + 1; // one entry per robot spawned so far
+    let number = it.shots.0.len() + 1; // one entry per robot spawned so far
     // a brain applied before a restart comes back with the robot's number, if it still compiles
-    let brain = kept.0.get(&number).cloned();
+    let brain = it.kept.0.get(&number).cloned();
     let applied = brain.as_ref().and_then(|text| {
         let name = format!("{file}.rb");
         compile_text(ruby, "prelude.rb", &name, text, "run_robot", assets).map_err(|e| warn!("{e}")).ok()
@@ -1670,6 +2125,7 @@ fn spawn_robot(
         Some(c) => c,
         None => compile(ruby, &path, assets)?,
     };
+    let server = &*it.server;
     let (team_name, hull, bullet) = TEAMS[team.min(TEAMS.len() - 1)];
     let name = format!("{number} {team_name}/{file}");
     let source = brain.clone().unwrap_or_else(|| platform::read(&path).unwrap_or_default());
@@ -1682,14 +2138,14 @@ fn spawn_robot(
                 team,
                 name: name.clone(),
                 file: path,
-                hp: 100.0,
+                hp: model.hp_max,
                 cooldown: 0.0,
                 velocity: Vec2::ZERO,
                 throttle: 0.0,
                 turn: 0.0,
                 turret: facing,
                 turret_target: facing,
-                energy: ENERGY_MAX,
+                energy: model.energy_max,
                 last_instructions: 0,
                 prelude_lines,
                 own_line: None,
@@ -1705,16 +2161,18 @@ fn spawn_robot(
                 downed_at: None,
             },
             Script::new(handle).with_name(&name).with_priority(100),
-            ScriptPanel { name, ..default() },
+            // what fills the thinking bar, set once here rather than written over every frame in
+            // `update_hud` as it was until S5b-2
+            ScriptPanel { name, budget: it.look.bar_full as u64, ..default() },
             Sprite {
                 image: server.load(hull),
-                custom_size: Some(Vec2::splat(ROBOT_RADIUS * 2.4)),
+                custom_size: Some(Vec2::splat(model.robot_radius * it.look.hull_scale)),
                 ..default()
             },
             Transform::from_xyz(at.x, at.y, 1.0),
         ))
         .id();
-    shots.0.push((robot, server.load(bullet)));
+    it.shots.0.push((robot, server.load(bullet)));
     Some(robot)
 }
 
@@ -1883,38 +2341,19 @@ fn do_editor_actions(
     }
 }
 
-/// The wall follows the arena: a match that closes it in changes `ArenaSize`, and the crates
-/// move to the new edge.
-fn rebuild_walls(
-    mut commands: Commands,
-    arena: Res<ArenaSize>,
-    server: Res<AssetServer>,
-    walls: Query<Entity, With<Wall>>,
-) {
-    if !arena.is_changed() || arena.is_added() {
-        return;
-    }
-    for wall in &walls {
-        commands.entity(wall).despawn();
-    }
-    build_walls(&mut commands, &server, arena.0);
-}
-
-/// How many crates make a side of an arena this size, and how far apart they are.
-fn wall_layout(half: f32) -> (i32, f32) {
-    let count = (half * 2.0 / 2.6).round().max(1.0) as i32;
+/// How many crates make a side of an arena this size, and how far apart they are
+/// ([`MatchModel::crate_size`]).
+fn wall_layout(half: f32, crate_size: f32) -> (i32, f32) {
+    let count = (half * 2.0 / crate_size).round().max(1.0) as i32;
     (count, half * 2.0 / count as f32)
 }
 
-/// The walls stop closing in at this many crates a side: room for a last fight.
-const MIN_CRATES: i32 = 7;
-
-/// A crate of about 2.6 units every step along each side, the step stretched a little so that
-/// the side is a whole number of crates and every side ends exactly on a corner — at any size the
-/// match shrinks the arena to.
-fn build_walls(commands: &mut Commands, server: &AssetServer, half: f32) {
+/// A crate every step along each side, the step stretched a little so that the side is a whole
+/// number of crates and every side ends exactly on a corner — at any size the match shrinks the
+/// arena to.
+fn build_walls(commands: &mut Commands, server: &AssetServer, half: f32, crate_size: f32) {
     let image: Handle<Image> = server.load("sprites/crateMetal.png");
-    let (count, step) = wall_layout(half);
+    let (count, step) = wall_layout(half, crate_size);
     let mut place = |x: f32, y: f32| {
         commands.spawn((
             Wall,
@@ -1942,15 +2381,14 @@ fn answer_requests(
     mut commands: Commands,
     mut arena: ResMut<ArenaSize>,
     mut rules: ResMut<Rules>,
-    kept: Res<KeptBrains>,
-    mut shots: ResMut<Shots>,
+    // **What the match is played by** (S5b-2): empty until `"rules"` below fills it, and nothing
+    // asks anything before then — the match spawns nobody until it has been answered.
+    mut the_match: ResMut<TheMatch>,
+    mut spawning: Spawning,
     mut events: ResMut<Events>,
     mut hud: ResMut<Hud>,
     // the match's clock, which stops with the match (G9), rather than the process's
     clock: Res<WorldClock>,
-    ruby: Res<RubyDir>,
-    mut assets: ResMut<Assets<MrbAsset>>,
-    server: Res<AssetServer>,
 ) {
     let positions: Vec<(Entity, usize, Vec2, f32)> = robots
         .iter()
@@ -1969,8 +2407,38 @@ fn answer_requests(
         }
         // what the match asks for. It has no entity of its own: it is the game, not a thing in it
         match request.kind.as_str() {
-            // `match "…", noise: 0.3, seed: 7`: how noisy this match is, and its dice
+            // `match "…", noise: 0.3, seed: 7, numbers: { … }`: how noisy this match is, its
+            // dice, and **the numbers the game is played by** (S5b-2).
+            //
+            // Read with serde, as the garden's `garden.rules` is and for the same reason: the
+            // message a badly shaped Hash gets back is worth as much as the reading. A name the
+            // game does not know is an error (`deny_unknown_fields`) rather than a number
+            // quietly ignored, and numbers that are the wrong shape for a match — a tank with no
+            // speed, a field smaller than a tank — are refused by `MatchModel::wrong` after
+            // serde has said the Hash is a `MatchModel` at all.
+            //
+            // A refusal is answered as text; `Match#run` raises on it and spawns nobody, so a
+            // match the game cannot play does not half start.
             "rules" => {
+                let asked = request
+                    .value(2)
+                    .ok_or_else(|| "rules wants the match's numbers as a Hash".to_string())
+                    .and_then(|v| {
+                        sabiruby_serde::from_value::<MatchModel>(&mut world.vm, v)
+                            .map_err(|e| world.vm.describe_error(&e))
+                    })
+                    .and_then(|model| match model.wrong() {
+                        Some(why) => Err(why),
+                        None => Ok(model),
+                    });
+                let model = match asked {
+                    Ok(model) => model,
+                    Err(why) => {
+                        error!("the match's numbers were refused: {why}");
+                        world.answer(&request, Answer::Text(why));
+                        continue;
+                    }
+                };
                 rules.noise = request.num_or(0, 0.0).clamp(0.0, 1.0) as f32;
                 let seed = request.num_or(1, -1.0);
                 rules.dice = if seed >= 0.0 {
@@ -1978,6 +2446,10 @@ fn answer_requests(
                 } else {
                     platform::clock_seed()
                 };
+                // the field is the width the match asked for, from this frame: `build_field`
+                // lays the floor and the crates on it, and the camera reframes in `PostUpdate`
+                arena.0 = model.arena;
+                the_match.0 = Some(model);
                 world.answer(&request, Answer::Num(rules.noise as f64));
                 continue;
             }
@@ -1990,11 +2462,17 @@ fn answer_requests(
                 let team_name = request.text(1).unwrap_or("red").to_string();
                 let team = TEAMS.iter().position(|(n, _, _)| *n == team_name).unwrap_or(0);
                 let at = Vec2::new(request.num_or(2, 0.0) as f32, request.num_or(3, 0.0) as f32);
-                let answer =
-                    match spawn_robot(&mut commands, &ruby.0, &mut assets, &server, &mut shots, &kept, &file, team, at) {
-                        Some(e) => Answer::Num(e.to_bits() as f64),
-                        None => Answer::Nil,
-                    };
+                // a match that has not handed its numbers over has not got this far: `Match#run`
+                // asks `"rules"` in its first line and raises if it was refused
+                let answer = match the_match.0.as_ref() {
+                    Some(model) => {
+                        match spawn_robot(&mut commands, &mut spawning, model, &file, team, at) {
+                            Some(e) => Answer::Num(e.to_bits() as f64),
+                            None => Answer::Nil,
+                        }
+                    }
+                    None => Answer::Nil,
+                };
                 world.answer(&request, answer);
                 continue;
             }
@@ -2016,9 +2494,13 @@ fn answer_requests(
             // `shrink(crates)`: every wall moves in by that many crates. The crate size stays the
             // same, so the wall is still a whole number of crates and the corners still meet
             "shrink" => {
+                let Some(model) = the_match.0.as_ref() else {
+                    world.answer(&request, Answer::Nil);
+                    continue;
+                };
                 let crates = request.num_or(0, 1.0).max(0.0).round() as i32;
-                let (count, step) = wall_layout(arena.0);
-                let smaller = (count - 2 * crates).max(MIN_CRATES.min(count));
+                let (count, step) = wall_layout(arena.0, model.crate_size);
+                let smaller = (count - 2 * crates).max((model.min_crates as i32).min(count));
                 let half = step * smaller as f32 / 2.0;
                 if half < arena.0 - 0.01 {
                     arena.0 = half;
@@ -2045,23 +2527,32 @@ fn answer_requests(
             continue;
         };
         let at = transform.translation.truncate();
+        // a robot on the field was put there by a match, so the numbers it is played by are here
+        let Some(model) = the_match.0.as_ref() else {
+            world.answer(&request, Answer::Nil);
+            continue;
+        };
         let answer = match request.kind.as_str() {
             // for `srand`: a robot's own dice, rolled from the match's
             "seed" => Answer::Num((rules.roll() * 1_000_000.0).floor() as f64),
+            // S5b-2: the handful of the match's numbers `ruby/prelude.rb`'s helpers do arithmetic
+            // with. Asked once when a robot starts, beside its `srand`.
+            "model" => Answer::List(model.for_the_dsl()),
             "status" => Answer::List(status_row(&robot, at, arena.0, clock.0)),
             // the robot itself first, then every other robot still running within range, read
             // through the match's noise: the further away, the less exact
             "radar" => {
-                let range = request.num_or(0, 60.0) as f32;
+                let range = request.num_or(0, model.radar_range as f64) as f32;
                 let mut rows = vec![status_row(&robot, at, arena.0, clock.0)];
                 for (other, team, hp, pos, vel, heading, turret) in &seen {
                     let dist = pos.distance(at);
                     if *other == me || *hp <= 0.0 || dist > range {
                         continue;
                     }
-                    let blur = rules.noise * dist * 0.05;
+                    let blur = rules.noise * dist * model.position_blur;
                     let pos = *pos + Vec2::new(rules.wobble(), rules.wobble()) * blur;
-                    let vel = *vel + Vec2::new(rules.wobble(), rules.wobble()) * rules.noise * 2.0;
+                    let vel = *vel
+                        + Vec2::new(rules.wobble(), rules.wobble()) * rules.noise * model.velocity_blur;
                     let off = pos - at;
                     rows.push(vec![
                         other.to_bits() as f64,
@@ -2081,54 +2572,72 @@ fn answer_requests(
             }
             // shots from other teams within range: where they are and where they are going
             "incoming" => {
-                let range = request.num_or(0, 25.0) as f32;
+                let range = request.num_or(0, model.incoming_range as f64) as f32;
                 let mut rows: Vec<Vec<f64>> = bullets
                     .iter()
                     .filter(|(b, _)| b.team != robot.team)
                     .map(|(b, t)| (b, t.translation.truncate()))
                     .filter(|(_, p)| p.distance(at) <= range)
                     .map(|(b, p)| {
-                        let p = p + Vec2::new(rules.wobble(), rules.wobble()) * rules.noise * 1.5;
+                        let p = p
+                            + Vec2::new(rules.wobble(), rules.wobble()) * rules.noise * model.shot_blur;
                         vec![p.x as f64, p.y as f64, b.velocity.x as f64, b.velocity.y as f64, p.distance(at) as f64]
                     })
                     .collect();
                 rows.sort_by(|a, b| a[4].total_cmp(&b[4]));
                 Answer::Rows(rows)
             }
-            // `act(throttle, turn, aim, power)`: the controls, any of them UNSET to leave alone.
-            // Answers [fired (1 or 0), energy, cooldown]
+            // `act(throttle, turn, aim, power)`: the controls, any of them left out to leave
+            // alone. Answers [fired (1 or 0), energy, cooldown].
+            //
+            // **`nil` is what "leave it alone" looks like** since S5b-2. It was a number before —
+            // `UNSET = -999.0`, written here and again in `ruby/prelude.rb`, two copies of a
+            // value chosen to be one no control could really take, which nothing guaranteed
+            // (`aim` is an angle and -999 is a legal one). `Arg::Value` carries a `nil` through
+            // as the nothing it is, so `Request::num` answers `None` for it and there is no
+            // sentinel on either side to disagree about.
             "act" => {
-                let set = |i: usize| request.num(i).filter(|v| *v > UNSET + 1.0);
                 if robot.hp <= 0.0 {
                     Answer::List(vec![0.0, 0.0, 0.0])
                 } else {
-                    if let Some(t) = set(0) {
+                    if let Some(t) = request.num(0) {
                         robot.throttle = (t as f32).clamp(-1.0, 1.0);
                     }
-                    if let Some(t) = set(1) {
+                    if let Some(t) = request.num(1) {
                         robot.turn = (t as f32).clamp(-1.0, 1.0);
                     }
-                    if let Some(a) = set(2) {
+                    if let Some(a) = request.num(2) {
                         robot.turret_target = a as f32;
                     }
                     let mut fired = false;
-                    if let Some(power) = set(3).filter(|p| *p > 0.0) {
-                        let power = (power as f32).clamp(0.2, 1.0);
-                        let cost = FIRE_COST * (0.25 + power);
+                    if let Some(power) = request.num(3).filter(|p| *p > 0.0) {
+                        let power = (power as f32).clamp(model.power_min, 1.0);
+                        let cost = model.fire_cost * (model.fire_cost_base + power);
                         if robot.cooldown <= 0.0 && robot.energy >= cost {
                             robot.energy -= cost;
-                            robot.cooldown = COOLDOWN_MIN + (COOLDOWN_MAX - COOLDOWN_MIN) * power;
-                            let spread = (BASE_SPREAD + rules.noise * 0.1) * rules.wobble();
+                            robot.cooldown = model.cooldown_min
+                                + (model.cooldown_max - model.cooldown_min) * power;
+                            let spread = (model.base_spread + rules.noise * model.spread_per_noise)
+                                * rules.wobble();
                             let angle = robot.turret + spread;
                             let dir = Vec2::from_angle(angle);
-                            let speed = BULLET_SPEED_FAST + (BULLET_SPEED_SLOW - BULLET_SPEED_FAST) * power;
-                            let damage = BULLET_DAMAGE_MIN + (BULLET_DAMAGE_MAX - BULLET_DAMAGE_MIN) * power;
-                            let image = shots.image_for(me);
+                            let speed =
+                                model.shot_fast + (model.shot_slow - model.shot_fast) * power;
+                            let damage =
+                                model.damage_min + (model.damage_max - model.damage_min) * power;
+                            let image = spawning.shots.image_for(me);
                             let size = 0.7 + 0.6 * power;
+                            let muzzle = model.muzzle;
                             commands.spawn((
-                                Bullet { velocity: dir * speed, owner: me, team: robot.team, damage, life: 2.5 },
+                                Bullet {
+                                    velocity: dir * speed,
+                                    owner: me,
+                                    team: robot.team,
+                                    damage,
+                                    life: model.bullet_life,
+                                },
                                 Sprite { image, custom_size: Some(Vec2::new(size * 0.55, size * 1.3)), ..default() },
-                                Transform::from_xyz(at.x + dir.x * 2.8, at.y + dir.y * 2.8, 2.0)
+                                Transform::from_xyz(at.x + dir.x * muzzle, at.y + dir.y * muzzle, 2.0)
                                     .with_rotation(Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2)),
                             ));
                             fired = true;
@@ -2182,8 +2691,14 @@ fn status_row(robot: &Robot, at: Vec2, arena: f32, now: f32) -> Vec<f64> {
     ]
 }
 
-fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut Robot, &mut Transform)>) {
+fn move_robots(
+    time: Res<Time>,
+    arena: Res<ArenaSize>,
+    the_match: Res<TheMatch>,
+    mut robots: Query<(&mut Robot, &mut Transform)>,
+) {
     use std::f32::consts::{PI, TAU};
+    let Some(model) = &the_match.0 else { return };
     let dt = time.delta_secs();
     for (mut robot, mut transform) in &mut robots {
         robot.cooldown = (robot.cooldown - dt).max(0.0);
@@ -2192,23 +2707,25 @@ fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut R
             continue;
         }
         // driving costs energy; an empty tank still crawls, at a third of the speed
-        let tired = if robot.energy > 0.0 { 1.0 } else { 0.35 };
-        robot.energy = (robot.energy + (ENERGY_REGEN - DRIVE_COST * robot.throttle.abs()) * dt).clamp(0.0, ENERGY_MAX);
+        let tired = if robot.energy > 0.0 { 1.0 } else { model.out_of_energy };
+        robot.energy = (robot.energy
+            + (model.energy_regen - model.drive_cost * robot.throttle.abs()) * dt)
+            .clamp(0.0, model.energy_max);
 
-        robot.heading = (robot.heading + robot.turn * TURN_RATE * dt).rem_euclid(TAU);
-        let top = if robot.throttle >= 0.0 { MAX_SPEED } else { REVERSE_SPEED };
+        robot.heading = (robot.heading + robot.turn * model.turn_rate * dt).rem_euclid(TAU);
+        let top = if robot.throttle >= 0.0 { model.max_speed } else { model.reverse_speed };
         let wanted = Vec2::from_angle(robot.heading) * robot.throttle * top * tired;
         // a tank takes a moment to get going and to stop: about a fifth of a second
-        let grip = 1.0 - (-dt / 0.2).exp();
+        let grip = 1.0 - (-dt / model.grip).exp();
         robot.velocity = robot.velocity.lerp(wanted, grip);
 
         // the turret turns towards where it was told, the short way round, at its own rate
         let diff = (robot.turret_target - robot.turret + PI).rem_euclid(TAU) - PI;
-        let step = diff.clamp(-TURRET_RATE * dt, TURRET_RATE * dt);
+        let step = diff.clamp(-model.turret_rate * dt, model.turret_rate * dt);
         robot.turret = (robot.turret + step).rem_euclid(TAU);
 
         let step = robot.velocity * dt;
-        let limit = arena.0 - ROBOT_RADIUS;
+        let limit = arena.0 - model.robot_radius;
         let x = transform.translation.x + step.x;
         let y = transform.translation.y + step.y;
         // a wall stops the part of the motion that goes into it
@@ -2228,13 +2745,18 @@ fn move_robots(time: Res<Time>, arena: Res<ArenaSize>, mut robots: Query<(&mut R
 /// Tanks do not drive through each other: two that overlap are pushed apart, half each (a wreck
 /// does not move, so the one still running takes all of it), and lose the speed that went into
 /// the other.
-fn separate_robots(arena: Res<ArenaSize>, mut robots: Query<(&mut Robot, &mut Transform)>) {
-    let limit = arena.0 - ROBOT_RADIUS;
+fn separate_robots(
+    arena: Res<ArenaSize>,
+    the_match: Res<TheMatch>,
+    mut robots: Query<(&mut Robot, &mut Transform)>,
+) {
+    let Some(model) = &the_match.0 else { return };
+    let limit = arena.0 - model.robot_radius;
     let mut pairs = robots.iter_combinations_mut();
     while let Some([(mut a, mut ta), (mut b, mut tb)]) = pairs.fetch_next() {
         let offset = tb.translation.truncate() - ta.translation.truncate();
         let dist = offset.length();
-        let overlap = ROBOT_RADIUS * 2.0 - dist;
+        let overlap = model.robot_radius * 2.0 - dist;
         if overlap <= 0.0 {
             continue;
         }
@@ -2266,10 +2788,13 @@ fn move_bullets(
     mut test: Option<ResMut<HandlerTest>>,
     server: Res<AssetServer>,
     arena: Res<ArenaSize>,
+    the_match: Res<TheMatch>,
+    look: Res<Look>,
     mut bullets: Query<(Entity, &mut Bullet, &mut Transform)>,
     mut robots: Query<(Entity, &mut Robot, &Transform), Without<Bullet>>,
     tasks: Query<&ScriptTask>,
 ) {
+    let Some(model) = &the_match.0 else { return };
     let dt = time.delta_secs();
     let now = time.elapsed_secs();
     // who is whom, read before the loop takes a robot mutably: what a hit tells the brain is the
@@ -2289,15 +2814,26 @@ fn move_bullets(
             if target == bullet.owner || robot.team == bullet.team || robot.hp <= 0.0 {
                 continue;
             }
-            if t.translation.truncate().distance(at) <= ROBOT_RADIUS {
+            if t.translation.truncate().distance(at) <= model.robot_radius {
                 let was_alive = robot.hp > 0.0;
                 robot.hp -= bullet.damage;
                 commands.entity(entity).despawn();
                 let big = was_alive && robot.hp <= 0.0;
-                let size = if big { ROBOT_RADIUS * 3.5 } else { ROBOT_RADIUS * (0.6 + bullet.damage / 16.0) };
+                // the puff is a multiple of the tank, and an ordinary one grows with the damage
+                // as a share of the heaviest shot the match allows
+                let size = model.robot_radius
+                    * if big {
+                        look.blast_down[0]
+                    } else {
+                        look.blast_hit[0] + bullet.damage / model.damage_max
+                    };
                 let image = if big { "sprites/explosion3.png" } else { "sprites/explosion1.png" };
                 commands.spawn((
-                    Blast { life: 0.0, span: if big { 0.7 } else { 0.25 }, size },
+                    Blast {
+                        life: 0.0,
+                        span: if big { look.blast_down[1] } else { look.blast_hit[1] },
+                        size,
+                    },
                     Sprite { image: server.load(image), custom_size: Some(Vec2::splat(size * 0.4)), ..default() },
                     Transform::from_xyz(at.x, at.y, 3.0),
                 ));
@@ -2424,10 +2960,11 @@ fn report_ended(mut ended: MessageReader<ScriptEnded>, mut hud: ResMut<Hud>) {
 fn update_hud(
     world: Res<ScriptWorld>,
     time: Res<Time>,
+    look: Res<Look>,
     mut robots: Query<(&mut Robot, Option<&ScriptTask>, &mut ScriptPanel)>,
 ) {
     // about a second of memory: a line the brain keeps coming back to stays lit
-    let keep = (-time.delta_secs() / 0.8).exp();
+    let keep = (-time.delta_secs() / look.heat_memory).exp();
     let mut alive = 0;
     for (mut robot, script, mut panel) in &mut robots {
         panel.name = robot.name.clone();
@@ -2442,9 +2979,6 @@ fn update_hud(
         let Some(script) = script else { continue };
         let stats = world.stats(script);
         panel.spent = stats.instructions.saturating_sub(robot.last_instructions);
-        // a brain that thinks for a frame spends tens to hundreds; the bar fills as one
-        // approaches a timeslice's worth, which is where it starts costing the other robot
-        panel.budget = 3_000;
         robot.last_instructions = stats.instructions;
         panel.at = match stats.location {
             Some((file, line)) if line > robot.prelude_lines => {
@@ -2474,4 +3008,173 @@ fn update_hud(
         }
     }
     let _ = alive;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The match's numbers, as `ruby/match_prelude.rb`'s `Match::MODEL` sends them. Written out
+    /// here rather than parsed out of the Ruby because what these tests are about is the rules
+    /// the game applies *after* serde; that the two lists agree at all is checked by every run,
+    /// and by construction — `deny_unknown_fields` with no `Option` and no `default` in sight
+    /// means a match whose Hash is missing a name, or carries one the game does not know, is
+    /// refused before a robot is spawned.
+    fn a_model() -> MatchModel {
+        MatchModel {
+            robot_radius: 1.6,
+            hp_max: 100.0,
+            max_speed: 12.0,
+            reverse_speed: 7.0,
+            turn_rate: 2.6,
+            turret_rate: 4.0,
+            grip: 0.2,
+            out_of_energy: 0.35,
+            energy_max: 100.0,
+            energy_regen: 12.0,
+            drive_cost: 9.0,
+            fire_cost: 16.0,
+            fire_cost_base: 0.25,
+            power_min: 0.2,
+            shot_fast: 55.0,
+            shot_slow: 30.0,
+            damage_min: 4.0,
+            damage_max: 16.0,
+            cooldown_min: 0.3,
+            cooldown_max: 0.8,
+            base_spread: 0.02,
+            bullet_life: 2.5,
+            muzzle: 2.8,
+            radar_range: 60.0,
+            incoming_range: 25.0,
+            position_blur: 0.05,
+            velocity_blur: 2.0,
+            shot_blur: 1.5,
+            spread_per_noise: 0.1,
+            arena: 32.0,
+            crate_size: 2.6,
+            min_crates: 7.0,
+        }
+    }
+
+    /// **The numbers the game has been played by since 2026-09-17 are a match the game accepts.**
+    /// S5b-2 moved every one of them out of this file and into `ruby/match_prelude.rb` without
+    /// changing any of them, and this is the half of that claim Rust can hold: the values that
+    /// were `const`s here pass the rules that decide whether a match can be played at all.
+    #[test]
+    fn the_numbers_the_game_has_always_used_are_a_match_it_will_play() {
+        assert_eq!(a_model().wrong(), None);
+    }
+
+    /// And what is refused. Every one of these ends in a division, a `clamp` or a `lerp` that a
+    /// zero or a negative turns into a tank that cannot move or a field nobody fits in — so the
+    /// match is stopped with a sentence instead of started and left to misbehave.
+    #[test]
+    fn a_match_that_cannot_be_played_is_refused_with_a_reason() {
+        let refused = |model: MatchModel, word: &str| {
+            let why = model.wrong().unwrap_or_else(|| panic!("accepted: {word}"));
+            assert!(why.contains(word), "{why} does not mention {word}");
+        };
+        refused(MatchModel { max_speed: 0.0, ..a_model() }, "max_speed");
+        refused(MatchModel { grip: 0.0, ..a_model() }, "grip");
+        refused(MatchModel { turn_rate: -1.0, ..a_model() }, "turn_rate");
+        refused(MatchModel { energy_regen: -1.0, ..a_model() }, "energy_regen");
+        refused(MatchModel { power_min: 0.0, ..a_model() }, "power_min");
+        refused(MatchModel { power_min: 1.5, ..a_model() }, "power_min");
+        refused(MatchModel { damage_min: 20.0, ..a_model() }, "damage_min");
+        refused(MatchModel { cooldown_min: 1.0, ..a_model() }, "cooldown_min");
+        refused(MatchModel { min_crates: 0.0, ..a_model() }, "no wall");
+        // a tank has to fit in the field, or `move_robots` clamps it behind its own back
+        refused(MatchModel { arena: 1.0, ..a_model() }, "holds no tank");
+        // and a field a whisker larger than a tank is allowed: the game says what is broken, not
+        // what is unwise
+        assert_eq!(MatchModel { arena: 1.7, ..a_model() }.wrong(), None);
+    }
+
+    /// The five the DSL does arithmetic with, in the order `ruby/prelude.rb`'s `Model` reads
+    /// them. The order is the whole of the contract between the two files, so it is written down
+    /// on both sides and held here.
+    #[test]
+    fn the_dsl_is_handed_the_five_it_needs_in_order() {
+        let row = a_model().for_the_dsl();
+        assert_eq!(row.len(), 5);
+        assert_eq!(row[0], 55.0, "shot_fast");
+        assert_eq!(row[1], 30.0, "shot_slow");
+        assert_eq!(row[2], 60.0, "radar_range");
+        assert_eq!(row[3], 25.0, "incoming_range");
+        assert!((row[4] - 0.2).abs() < 1e-6, "power_min");
+        // and `lead`'s arithmetic, which is what the two speeds are for, is the game's own
+        let model = a_model();
+        let shot_speed = |power: f32| model.shot_fast + (model.shot_slow - model.shot_fast) * power;
+        assert_eq!(shot_speed(0.0), row[0] as f32);
+        assert_eq!(shot_speed(1.0), row[1] as f32);
+    }
+
+    /// **The wall is a whole number of crates whatever the match asks for**, and the crate size
+    /// is the match's since S5b-2 (it was a 2.6 written into this file).
+    #[test]
+    fn a_side_is_a_whole_number_of_crates_at_any_size() {
+        for half in [32.0f32, 24.0, 12.5, 4.0] {
+            for size in [2.6f32, 1.0, 5.0] {
+                let (count, step) = wall_layout(half, size);
+                assert!(count >= 1);
+                assert!(
+                    (step * count as f32 - half * 2.0).abs() < 1e-3,
+                    "{count} crates of {step} do not make {half} × 2"
+                );
+                // the step is the asked-for size, stretched to fit rather than replaced
+                assert!((step - size).abs() <= size * 0.5, "{step} is not about {size}");
+            }
+        }
+        // the default match, as `docs/sabiruby-battle.md` describes it: 25 crates a side
+        assert_eq!(wall_layout(32.0, 2.6).0, 25);
+    }
+
+    /// **The swerve a hit has to produce follows the match's turning rate** (S5b-2). It was
+    /// `0.2` written into the check, which is this arithmetic on 2.6 rounded up — and once the
+    /// turning rate is the match's, a number here would be a copy of it.
+    #[test]
+    fn what_counts_as_a_swerve_follows_the_hull() {
+        // the default model: 2.6 × 0.3 ÷ 4, which the source used to round to 0.2
+        assert!((enough_of_a_swerve(2.6) - 0.195).abs() < 1e-6);
+        // a match with quicker hulls asks for more of a swerve, and a slower one for less
+        assert!(enough_of_a_swerve(5.2) > enough_of_a_swerve(2.6));
+        assert!(enough_of_a_swerve(1.3) < enough_of_a_swerve(2.6));
+    }
+
+    /// **What a player left in `sabibots.settings.txt` reaches the drawing** (S5b-2), and a key
+    /// nobody wrote leaves the default alone. It is the shape S5b-1 gave the panels' settings.
+    #[test]
+    fn the_store_changes_how_the_match_is_drawn() {
+        fn read(path: &Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        }
+        fn write(path: &Path, text: &str) -> Result<(), String> {
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        }
+        let path = std::env::temp_dir().join("sabibots-look-test.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut settings = games_shell::Settings::load(&path, "a test", read, write);
+        settings.set("look_bar_full", "500");
+        settings.set("look_life_warn", "0.75");
+        settings.set("look_floor_pattern", "-2");
+
+        let mut look = Look::default();
+        look.read_from(&settings);
+        assert_eq!(look.bar_full, 500.0);
+        assert_eq!(look.life_warn, 0.75);
+        assert_eq!(look.floor_pattern, 1, "a pattern of nothing would be a modulo by zero");
+        assert_eq!(look.life_low, LIFE_LOW, "a key nobody wrote leaves the default alone");
+        assert_eq!(look.window, WINDOW);
+
+        let mut untouched = Look::default();
+        untouched.read_from(&games_shell::Settings::load(
+            std::env::temp_dir().join("sabibots-look-empty.txt"),
+            "a test",
+            read,
+            write,
+        ));
+        assert_eq!(untouched, Look::default());
+        let _ = std::fs::remove_file(&path);
+    }
 }

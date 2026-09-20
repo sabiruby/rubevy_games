@@ -197,6 +197,64 @@ Now a robot is a tank:
 * Tanks push each other apart instead of driving through each other, and a team's shots pass over
   its own robots.
 
+**Every number in that list is the match's** (`ruby/match_prelude.rb`, `Match::MODEL`), and the
+next section says how to change one.
+
+## Where the numbers are
+
+Since 2026-09-21 nothing about how the game is played is written into the Rust. There are three
+places a number lives, and which one it is in says what kind of number it is.
+
+### What the game is played by — `ruby/matches/*.rb`
+
+How fast a tank is, how hard a shot hits, how far a radar reaches, how wide the field is: 32
+numbers, listed with their defaults in `Match::MODEL` at the top of `ruby/match_prelude.rb`. A
+match changes what it likes and leaves the rest:
+
+```ruby
+match "Duel", noise: 0.0, numbers: { max_speed: 20.0, arena: 24.0, shot_fast: 90.0 } do
+  team :red,  robots: %w[scout]
+  team :blue, robots: %w[hunter]
+end
+```
+
+The match hands them to the game in its first line, before anybody is on the field, and **the game
+keeps no copies**: there is no arena, no wall and no tank until a match has said how big they are.
+A name the game does not know (`max_sped: 20.0`) is refused with a message rather than quietly
+ignored, and so are numbers a match cannot be played with — a tank of no speed, a field smaller
+than a tank.
+
+The handful the robots' own DSL does arithmetic with reach it the same way: `lead` asks the game
+how fast a shot flies (`Rubevy.ask("model")`, once, when a robot starts) instead of keeping the
+two speeds of its own, which is what it did until 2026-09-21 — so a match that makes its shots
+slower moves the shots *and* the aiming, together.
+
+### How the match is drawn — `sabibots.settings.txt`
+
+Beside the game (in a browser, a `localStorage` key), one `key=value` a line. How the panels look
+has been here since 2026-09-20; the game's own picture joined it: `look_bar_full` (what fills the
+thinking bar), `look_life_warn` / `look_life_low` (where the health bar changes colour),
+`look_life_bar_width` / `_height` / `_lift`, `look_hull_scale`, `look_nameplate_lift`,
+`look_blast_down` / `_span`, `look_blast_hit` / `_span`, `look_heat_memory`, `look_floor_tile`,
+`look_floor_pattern`, `window_width` / `window_height`.
+
+Two more say what the scripts are allowed: `script_budget` (instructions a frame for the whole VM)
+and `script_frame_time_ms`. Left out, they are rubevy's own defaults, which is what this game has
+always run on. And three are the defaults of flags: `headless_seconds`, `shot_file`,
+`shot_seconds` — the flag still wins where it is given.
+
+A key that is not there is the default. Deleting a line is how to go back.
+
+### What the checks measure — the checks
+
+The 0.3 s a handler has to answer a hit in, the half second a wreck is given before its tasks are
+counted: those are in `src/main.rs`, beside the check that uses them, because they are what is
+being measured rather than what the game plays by. Where a check needs one of the match's numbers
+it reads the match's — "every robot starts with full health" asks the match what full health is.
+
+`docs/numbers.md` §4 and §5 are the whole list, with where each value came from (which, for most
+of the tank, is nowhere).
+
 ## Randomness
 
 `match "Training", noise: 0.3, seed: 7 do … end`:

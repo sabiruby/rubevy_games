@@ -20,6 +20,13 @@ sabiruby.workspace = true
 rubevy-egui.workspace = true
 games-shell.workspace = true
 bevy_egui.workspace = true
+# S5b-2: the match hands its numbers over as a Ruby Hash and one line reads it —
+# `from_value::<MatchModel>` walks it and says what is wrong with it in the script's own terms.
+# The garden has had it since G3 for the same reason (`sabiruby` `docs/design/serde.md`): the
+# message a badly shaped Hash gets back is worth as much as the reading. The crate names the VM
+# by path, so pointing at the same source is what keeps one VM in the binary.
+sabiruby-serde.workspace = true
+serde = { version = "1", features = ["derive"] }
 
 # The PC build: the Ruby compiler (C) is linked in, Bevy runs on threads and opens an X11 or
 # Wayland window.

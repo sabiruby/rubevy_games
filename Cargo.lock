@@ -4371,6 +4371,8 @@ dependencies = [
  "rubevy-egui",
  "sabiruby",
  "sabiruby-compiler",
+ "sabiruby-serde",
+ "serde",
  "wasm-bindgen",
  "web-sys",
 ]
