@@ -1170,6 +1170,18 @@ pub struct WindowTest {
     /// actually giving the creatures' VM (S5b-3). It is kept here rather than read in
     /// `window_selftest`, which is at Bevy's sixteen parameters.
     frames: u32,
+    /// **and the frames that come before the VM's, where there are any** (S5b-5).
+    ///
+    /// [`scheduler_frames`] counts from the moment something was asked of the VM. A step that
+    /// asks by pressing a key has one frame in front of that which is nobody's scheduler:
+    /// `rubevy-egui`'s panel reads `Ctrl+Enter` in the egui pass, so `Editor::action` is not set
+    /// until the frame after the one the check pressed it in, and `do_editor_actions` takes it
+    /// the frame after that. It is the same frame [`Turn::EguiHasThePointer`] is entirely about,
+    /// counted here because it comes *before* the wait rather than being the wait.
+    ///
+    /// Set beside the `turn` it belongs to and cleared with it. It is only ever 0 or 1, and the
+    /// 1 is that frame.
+    spare: u32,
     /// every beetle there was when Apply was pressed, so that the one born in that very frame
     /// can be told from them (S7)
     beetles_before: Vec<Entity>,
@@ -1366,7 +1378,17 @@ impl WindowTest {
 /// [`scheduler_frames`] is where it gives up and judges anyway — which is a FAIL, and a true
 /// one: the VM has had turns to hand out and has not handed one to a task that is ready, or egui
 /// has had the pointer put on it and has not noticed.
-#[derive(Default, PartialEq, Eq, Clone, Copy)]
+///
+/// **S5b-5 took the last two seconds out** ([`Turn::TheDayIs`]). S7 changed the four waits that
+/// had flaked and left the two around `world.rb`'s own Apply and Revert at 0.6 s, saying they
+/// were the same shape and had simply not failed yet. They are the same shape, so they are the
+/// same wait now; **the seconds that are left in this file are the ones that mean seconds** — two
+/// seconds of a pause, half a second of walking, nine seconds of the VM going on running — and
+/// 0.2 s twice for a key that a frame of Bevy's input has to see.
+// `Eq` is not derived any more: [`Turn::TheDayIs`] carries the day length the rules are to have
+// said, which is the `f32` `Sky::day_length` is. Nothing here wants total equality — the one
+// comparison is against [`Turn::NotWaiting`].
+#[derive(Default, PartialEq, Clone, Copy)]
 enum Turn {
     /// nothing: the step's `at` is a length of the world's time and means what it says
     #[default]
@@ -1375,6 +1397,14 @@ enum Turn {
     RestartedBeetles,
     /// somebody's meter has moved, which only `world.rb`'s `each_frame` can do
     AMeterMoved,
+    /// **the rules that have just been applied are running** (S5b-5), said by the one number of
+    /// theirs that crosses the boundary: `garden.rules(day_length:)` is written into
+    /// [`crate::Sky`] by a world script that has just started, so the day being this long is
+    /// "these rules, running". It is the same wait as [`RestartedBeetles`](Turn::RestartedBeetles)
+    /// with one script instead of a dozen — Apply on `world.rb` replaces the rules' script
+    /// (`crate::wear_the_rules`), and what is left to wait for is rubevy making a task of it and
+    /// the scheduler giving it a turn
+    TheDayIs(f32),
     /// egui has taken the pointer the check moved over the editor — or let it go again when the
     /// panel was closed. **Not the VM**; the thing being waited for is bevy_egui learning where
     /// the pointer is, which takes a frame of its own (see the two wheel checks, steps 13-17)
@@ -1412,8 +1442,11 @@ enum Turn {
 ///
 /// The same number covers the world's VM ([`Turn::AMeterMoved`]), where the reckoning comes out
 /// smaller: its script is resumed rather than made, so there are no structural frames, and its
-/// budget is 45,000 (`crate::install_world_answers`), so one frame's worth is one frame. And it
-/// covers [`Turn::EguiHasThePointer`], which is not the VM at all and wants **one** frame:
+/// budget is 45,000 (`crate::install_world_answers`), so one frame's worth is one frame. It also
+/// covers [`Turn::TheDayIs`] (S5b-5), where the world's script **is** made rather than resumed —
+/// Apply on `world.rb` replaces it — so that one wants the same two structural frames the
+/// creatures' restarts want, and `2 + ceil(45,000 / 45,600)` is three as well. And it covers
+/// [`Turn::EguiHasThePointer`], which is not the VM at all and wants **one** frame:
 /// bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
 /// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
 /// in is the frame egui knows. This is the largest of the three, and one number is better than
@@ -1535,10 +1568,11 @@ pub fn window_selftest(
             Turn::AMeterMoved => hunger()
                 .iter()
                 .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now)),
+            Turn::TheDayIs(want) => sky.day_length == want,
             Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
         };
         test.waited += 1;
-        if !came_round && test.waited < test.frames {
+        if !came_round && test.waited < test.frames + test.spare {
             return;
         }
         // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict
@@ -1549,6 +1583,7 @@ pub fn window_selftest(
         );
         test.turn = Turn::NotWaiting;
         test.waited = 0;
+        test.spare = 0;
     }
 
     match test.step {
@@ -1836,11 +1871,24 @@ pub fn window_selftest(
             keys.release(KeyCode::F3);
             // the keys themselves this time, not `Editor::action`: `rubevy-egui`'s panel reads
             // Ctrl+Enter in `PostUpdate` (the egui pass), so the action it sets is taken by
-            // `do_editor_actions` on the next frame — which is inside the breath below
+            // `do_editor_actions` on the next frame — which is inside the wait below
             keys.press(KeyCode::ControlLeft);
             keys.press(KeyCode::Enter);
             test.step = 12;
-            test.at = now + 0.6;
+            // **S5b-5: the last two waits that were still seconds.** 0.6 s is five frames on a
+            // quiet PC and three on a loaded one or in a browser, and what is wanted here is not
+            // a length of time at all: it is `do_editor_actions` taking the key's action, rubevy
+            // making a task of the new rules and the scheduler giving it a turn — the same three
+            // things the waits after Apply and Revert on a *creature* wait for (S7). These two
+            // had simply not failed yet.
+            test.at = now;
+            test.turn = Turn::TheDayIs(30.0);
+            // and one frame in front of the VM's own, because this step asks with a key rather
+            // than by setting `Editor::action`: the egui pass is where `Ctrl+Enter` is read
+            // ([`WindowTest::spare`]). The first run with the wait in it took exactly three
+            // frames, which is `scheduler_frames` to the frame — that is the wait being right up
+            // against its bound, not room to spare.
+            test.spare = 1;
         }
         12 => {
             keys.release(KeyCode::Enter);
@@ -1860,7 +1908,9 @@ pub fn window_selftest(
             ok(!editor.changed(), "after Apply the text is what the world runs");
             editor.action = Some(EditorAction::Revert);
             test.step = 13;
-            test.at = now + 0.6;
+            // and the same wait the other way round: the file's own `day_length` back again
+            test.at = now;
+            test.turn = Turn::TheDayIs(60.0);
         }
         13 => {
             ok(sky.day_length == 60.0, "Revert puts the file's rules back");
