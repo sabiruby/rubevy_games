@@ -1,12 +1,17 @@
 # 数の一覧 — rubevy_games が今持っている数と、その出どころ
 
-計画書 `docs/plans/shared-crate-plan.md` の段階 **S5a**。コードは 1 行も変えていない。
+計画書 `docs/plans/shared-crate-plan.md` の段階 **S5a**（一覧）と **S5b**（移す作業）。
 対象は `crates/rubevy-egui/src/` と `crates/games-shell/src/`（S5a を取った時点ではどちらも `crates/rubevy-arena/src/` だった。
 S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**/*.rb`、`sabibots/ruby/**/*.rb`。
-行番号は `numbers` ブランチ（main `b1ce042` から分岐）の時点のもの。
 拾い方と選び方の過程は `docs/worklog/2026-09-20-numbers-inventory.md`。
 
-**これは提案であって決定ではない。** 著者が見てから S5b で移す。
+**§2〜§5 は S5a のままの提案で、行番号は `numbers` ブランチ（main `b1ce042` から分岐）の時点のもの。**
+著者が見てから S5b で 1 節ずつ移す。
+
+**§1（共有 crate）は S5b-1（2026-09-20）で移し終えた。** 行番号は `shared-crate` ブランチの
+その時点のもので、`今変えられるか` の欄は移した先を言う。S3 が足したカメラの 8 件（§1.2）を
+一覧に足したので、共有 crate の件数は 33 → 42 になった（§6）。**既定値は 1 つも動かしていない。**
+過程は `docs/worklog/2026-09-20-numbers-shared-crates.md`。
 
 ---
 
@@ -53,70 +58,119 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
 
 ## 1. 共有 crate（`crates/rubevy-egui` と `crates/games-shell`）
 
-> **S4a（2026-09-20）で `crates/rubevy-arena` は 2 つに割れた。** この節の表の `位置` 欄は S5a を取った
-> 時点のもので、ファイル名はそのままだが置き場所と行番号は動いている。`editor.rs` / `inspect.rs` /
-> `code.rs` は `crates/rubevy-egui/src/`、`lib.rs`（`ArenaPlugin`）/ `camera.rs` / `guide.rs` /
-> `settings.rs` / `platform.rs` / `args.rs` / `checks.rs` / `hud.rs` は `crates/games-shell/src/`。
-> S5b で数を動かすときに行番号ごと取り直す。
+> **S5b-1（2026-09-20）で、この節の数は全部「利用者が変えられる場所」に移した。** 行番号は
+> `shared-crate` ブランチの S5b-1 の時点のもの。`const` は**既定値の名前としてだけ**残っていて、
+> どれも rustdoc の 1 行で出どころ（測った／導出／引用／理由のみ／**不明**）を言う。
+> **既定値は 1 つも動かしていない**（2 本の selftest の 6 通りの走行が前後で同じ行を出す。
+> `docs/verification/selftest-lines.md`）。
+>
+> `今変えられるか` の欄は移した先を言う。`Settings` の欄に鍵があるものは `*.settings.txt` に
+> 1 行書けば次の走行で効く（読むのは `games_shell::PanelSettingsPlugin`、`PreStartup`）。
+> 鍵の無いものは app が起動時に渡すか、走行中に Resource へ書く。
+> **色と鍵盤は `Settings` に出していない** — 色を文字列から読むには構文解析が要り、
+> それは S3 が `CameraKeys` を `Settings` に出さなかったのと同じ理由（`camera.rs`）。
+>
+> S4a の注意書き（`crates/rubevy-arena` が 2 つに割れてファイルが動いた）はここで解消した。
 
-### 1.1 カメラと画面
+### 1.1 アリーナのカメラ（`games-shell/src/lib.rs`）
 
-| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `ArenaSize::default` | `lib.rs:43` | 32.0 | | `ArenaPlugin { size }` で app が渡せる | (e) → ただし sabibots は `default()` のまま（`sabibots/src/main.rs:302`） | **不明** |
-| 壁の外に見せる床 | `lib.rs:93, 115` | `+ 3.0` | | `const` ですらない（式に直書き） | (c) `ArenaPlugin` の設定値へ | *理由のみ* 「a little floor past the wall, so what stands at the edge is not cut off」`lib.rs:92` |
-| 窓が無いときの縦横比 | `lib.rs:114` | 16/9 | | 直書き | (c) | *理由のみ*（`docs/sabiruby-battle.md:646`「The window is 16:9 and the arena square」） |
-| エディタを開いたときカメラをずらす幅 | `lib.rs:118` | 画面幅の 0.16 | | 直書き | (c) — 計画 S3 が「塞がれ px の Resource」に置き換える | *理由のみ* 「the editor is about a third of the window on the right」`lib.rs:117`。**1/3 と 0.16 が合っていない**（§7-4） |
+| アリーナの半幅 | — | — | | **共有 crate から消えた**（S5b-1）。ゲームが渡す: `ArenaPlugin::showing(half)` / `ArenaSize(half)`。Battle の `ARENA_HALF_WIDTH`（`sabibots/src/main.rs:64`、32.0） | (b) ゲームの遊びの数 | **不明**（32.0 の出どころ。`sabibots` の rustdoc に「不明」と書いた） |
+| `FLOOR_MARGIN`（壁の外に見せる床） | `lib.rs:67` | 3.0 | | `ArenaPlugin { floor_margin }` / `ArenaPlugin::showing(..).with_floor_margin(..)`。`ArenaView` が運ぶ | (c) | *理由のみ* 「a little floor past the wall, so what stands at the edge is not cut off」。3.0 そのものは**不明** |
+| `NO_WINDOW`（窓が無いフレームの代役） | `lib.rs:75` | 16/9 | | `const` のまま | (a) 窓が無いフレームでは何も描かないので値は見えない。0 除算を避けるための比だけが意味 | **引用**（`docs/sabiruby-battle.md`「The window is 16:9 and the arena square」） |
+| 床の色 | `lib.rs:102` | `srgb(0.08, 0.08, 0.10)` | | `ArenaPlugin { floor }`（前から） | (e) | **不明** |
+| ~~エディタを開いたときずらす幅 0.16~~ | — | — | | **S3 で消えた**（`ViewInsets` が実測の px を書く）。コメントの「3 分の 1」との食い違いも一緒に消えた | — | — |
 
-### 1.2 エディタ（`editor.rs`）
+### 1.2 パン・ズームのカメラ（`games-shell/src/camera.rs`。**S3 が足した。S5a の一覧には入っていない**）
 
-| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+S3 の時点で既に `CameraControls`（Resource、`Settings` の `camera_*` 7 鍵、キー割り当ては
+`CameraKeys`）に入っていて、既定値ごとに出どころが rustdoc に 1 行ある。S5b-1 は**この 8 件を
+一覧に足しただけで、コードは触っていない**。
+
+| 名前 | 位置 | 既定値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `MARGIN` | `editor.rs:426` | 8.0 | | `pub const` | (c) | 名前付きである理由は書いてある（窓のチェックが矩形を計算できるように、`editor.rs:419-425`）。値は **不明** |
-| `WIDTH` | `editor.rs:427` | 520.0 | | `pub const` | (c) | 同上・**不明** |
-| `HEIGHT` | `editor.rs:428` | 640.0 | | `pub const` | (c) | 同上・**不明** |
-| `FONT` | `editor.rs:417` | 13.0 | | `const` | (c) | **不明** |
-| `KINDS`（9 色） | `editor.rs:454-464` | `(210,214,222)` ほか 8 色 | ● | `const` | (c) 表示。ただし出どころは強い | **測った**: WCAG コントラスト地 ≥4.96 / 帯 ≥3.09、CIE76 ΔE ≥25.9。`editor.rs:430-453` と `docs/worklog/2026-09-18-editor-highlight.md` |
-| 熱の帯の色 | `editor.rs:507` | `(150,110,20)` | ● | 直書き | (c) | **引用**: 合成後の (103,77,17) が 9 色を測るときの前提になっている（`editor.rs:440-441`） |
-| 熱の帯の最大 α | `editor.rs:506` | 170 | ● | 直書き | (c) | **不明**（170 という数自体の根拠。色の方はこの 170 を前提に測っている） |
-| 熱を描き始める下限 | `editor.rs:505` | 最も熱い行の 0.1 | ● | 直書き | (c) | *理由のみ* 「a line passed through once is not a place」`editor.rs:504` |
-| 琥珀（`* edited` と「未適用」） | `editor.rs:324` | `(240,190,90)` | ● | 直書き | (c) | *理由のみ* 「暖色は熱のもの」（`editor.rs:445-447`） |
-| 行番号の桁の色 | `editor.rs:401` | `(120,128,140)` | ● | 直書き | (a) 分類 3（コメント）と同じ値であることが意味（`editor.rs:435-436`） | **導出**: `editor.rs:458` と同じ数 |
-| ボタンの余白と字の大きさ | `editor.rs:341-342, 349, 367` | 10/5, 6.0, 16.0, 8/4 | ● | 直書き | (c) | *理由のみ* 「big enough to hit without aiming」`editor.rs:340` |
+| `ZOOM_PER_NOTCH` | `camera.rs:48` | 1.10 | ● | `CameraControls`、`Settings` の `camera_zoom_per_notch` | (e) | **導出**（箱庭で: 全域が約 30 ノッチ＝指 10 回。単体テストが 29〜32 を確かめる） |
+| `PIXELS_PER_NOTCH` | `camera.rs:55` | 100.0 | ● | 同上 `camera_pixels_per_notch` | (e) | **引用**: Chromium の `wheel` は 1 ノッチ `deltaY = 100` |
+| `ZOOM_IN_LIMIT` | `camera.rs:64` | 6/42 | ● | 同上 `camera_zoom_in_limit` | (e) | **不明**（箱庭の `ZOOM_MIN` ÷ 既定距離。箱庭の 2 つの数に記録が無い。rustdoc に「引き継いだ、正当化していない」と書いてある） |
+| `ZOOM_OUT_LIMIT` | `camera.rs:68` | 110/42 | ● | 同上 `camera_zoom_out_limit` | (e) | **不明**（同上） |
+| `DRAG_PER_PIXEL` | `camera.rs:80` | 1.0 | ● | 同上 `camera_drag_per_pixel` | (e) | **導出**: 「カーソルの下の点がカーソルの下に居続ける」から 1.0（箱庭の出どころ不明の 0.0016 は引き継がなかった） |
+| `KEYS_PER_SECOND` | `camera.rs:88` | 0.9 | ● | 同上 `camera_keys_per_second` | (e) | **不明**（箱庭の `PAN_PER_SECOND` の書き写し。箱庭側に記録が無い） |
+| `CLICK_SLOP` | `camera.rs:93` | 6.0 | ● | 同上 `camera_click_slop` | (e) | *理由のみ*「a few pixels」（箱庭 `window.rs` の同名の数と同じ） |
+| `CameraControls::bounds` | `camera.rs:153` | `None` | ● | `CameraControls`（`Settings` には出さない） | (e) | **導出**: 世界の端はゲームしか知らないので既定を持たない |
 
-### 1.3 VM パネル（`inspect.rs`）
+### 1.3 エディタ（`crates/rubevy-egui/src/editor.rs`）
 
-| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+寸法は `EditorLayout`（Resource。`EditorPlugin::sized(..)`、`Settings` の `editor_*` 6 鍵）、
+色は `EditorColors`（`Editor::colors` の中。`drawn_kind` が `Editor` だけで答えられるように、
+Resource を分けずにここへ置いた — 判定の system が Bevy の引数 16 個の上限に当たっているため）。
+
+| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `REGS_FRAMES` | `inspect.rs:29` | 6 | ● | `pub const` | (c) | *理由のみ* 「A brain waiting for the game stands about three frames deep in the DSL, so six reaches its own code as well」`inspect.rs:27-28` |
-| 命令数/フレームの平滑化 | `inspect.rs:264` | 0.95 / 0.05 | ● | 直書き | (c) | **不明** |
-| VM の ms の平滑化 | `inspect.rs:533` | 0.8 / 0.2 | ● | 直書き | (c) | **不明** |
-| ログに出すフレーム数 | `inspect.rs:410` | 4 | | 直書き | (c) | **不明** |
-| クラス名を切る長さ | `inspect.rs:480, 483` | 40 / 39 | ● | 直書き | (c) | **不明** |
-| `LIMIT`（値の表示を切る長さ） | `inspect.rs:564` | 52 | ● | `const` | (c) | **不明** |
-| `FONT` | `inspect.rs:555` | 12.0 | | `const` | (c) | **不明** |
-| `PANEL_HEIGHT` / `FRAMES_HEIGHT` / `REGS_HEIGHT` | `inspect.rs:557-559` | 440 / 148 / 150 | | `const` | (c) | **不明** |
-| パネルの幅 | `inspect.rs:596` | 640.0（窓幅 − 16 が上限） | ● | 直書き | (c) | **不明** |
+| `MARGIN` | `editor.rs:508` | 8.0 | | `EditorLayout::margin`、`Settings` の `editor_margin` | (c) | 名前がある理由は書いてある（窓のチェックが矩形を計算できるように）。値は **不明** |
+| `WIDTH` | `editor.rs:509` | 520.0 | | `EditorLayout::width`、`editor_width` | (c) | 同上・**不明** |
+| `HEIGHT` | `editor.rs:510` | 640.0 | | `EditorLayout::height`、`editor_height` | (c) | 同上・**不明** |
+| `FONT` | `editor.rs:494` | 13.0 | | `EditorLayout::font`、`editor_font` | (c) | **不明** |
+| `KINDS`（9 色） | `editor.rs:648` | `(210,214,222)` ほか 8 色 | ● | `EditorColors::kinds`（`Editor::colors`）。`Settings` には出していない | (c) 表示。ただし出どころは強い | **測った**: WCAG コントラスト地 ≥4.96 / 帯 ≥3.09、CIE76 ΔE ≥25.9（`docs/worklog/2026-09-18-editor-highlight.md`）。**変えられるようにしたので、変えるとこの保証は破れる** — rustdoc にそう書いた（著者判断、2026-09-20） |
+| 熱の帯の色 `HEAT_BAND` | `editor.rs:605` | `(150,110,20)` | ● | `EditorColors::heat_band` | (c) | **引用**: 合成後の (103,77,17) が 9 色を測るときの前提。ここを変えても上の保証が破れる |
+| 熱の帯の最大 α `HEAT_ALPHA` | `editor.rs:606` | 170 | ● | `EditorColors::heat_alpha` | (c) | **不明**（170 そのもの。色の方はこの 170 を前提に測っている） |
+| 熱を描き始める下限 `HEAT_FLOOR` | `editor.rs:610` | 0.1 | ● | `EditorColors::heat_floor` | (c) | *理由のみ* 「a line passed through once is not a place」 |
+| 琥珀 `AMBER`（`* edited` と「未適用」） | `editor.rs:614` | `(240,190,90)` | ● | `EditorColors::amber` | (c) | *理由のみ* 「暖色は熱のもの」 |
+| 行番号の桁の色 | `editor.rs`（`EditorColors::gutter`） | 分類 3 と同じ | ● | 変えられない（**分類 3 の色を引く**ようにした） | (a) コメントと同じ色であることが意味 | **導出**: S5b-1 で数の写しをやめ、`kinds[3]` を読む 1 行にした |
+| ボタンの余白と字の大きさ | `editor.rs:515-521` | 10/5, 6.0, 16.0, 8/4 | ● | `EditorLayout::choice_padding` / `choice_spacing` / `choice_font` / `button_padding`（字の大きさと間隔は `Settings` の `editor_choice_font` / `editor_choice_spacing`） | (c) | *理由のみ* 「big enough to hit without aiming」。余白の 2 組は **不明** |
 
-### 1.4 説明（`guide.rs`）と HUD
+### 1.4 VM パネル（`crates/rubevy-egui/src/inspect.rs`）
 
-| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+`InspectStyle`（`VmInspector::style` の中。`fill` がメソッドで、窓の無いゲームが
+`VmInspector` を手で作って呼ぶため Resource を分けられない）と `VmClock::smoothing`。
+`Settings` の鍵は `vm_*` 7 つ + `vm_clock_smoothing`。
+
+| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| 説明の窓の大きさ | `guide.rs:283-284` | `[640, 820]`、最大 820→860 | ● | 直書き | (c) | **引用**: G6 の絵で下が切れていたので広げた（`docs/plans/garden-plan.md:502-505`「2 枚目ではキー表が下で切れていたので `default_size([640, 820])` に」）。測った記録ではない |
-| キーの色 `KEYCOL` | `guide.rs:244` | `(255,226,150)` | ● | `const` | (c) | **不明** |
-| 日本語フォント（部分集合） | `guide.rs:56` | 327 文字・62,780 バイト | | ビルド時（`tools/subset-font.sh`） | (a) 本文と一緒に切らないと字が欠ける | **測った**（`docs/plans/garden-plan.md:498`。9,589,900 → 62,780 バイト） |
-| HUD の予算バーの目盛 | `hud.rs:120-121` | 16 | ● | 直書き | (c) | **不明** |
-| HUD の字の大きさ | `hud.rs:65, 109` | 15.0 / 13.0 | | 直書き | (c) | **不明** |
-| HUD の余白 | `hud.rs:52-56` | 8 / 8 / 8 / 3 | | 直書き | (c) | **不明** |
+| `REGS_FRAMES` | `inspect.rs:38` | 6 | ● | `InspectStyle::regs_frames`、`vm_regs_frames` | (c) | *理由のみ* 「A brain waiting for the game stands about three frames deep in the DSL, so six reaches its own code as well」 |
+| 命令数/フレームの平滑化 `INSN_SMOOTHING` | `inspect.rs:69` | 0.05（＝ 1 − 0.95） | ● | `InspectStyle::insn_smoothing` | (c) | **不明**（平滑化する理由だけ書いてある） |
+| VM の ms の平滑化 `CLOCK_SMOOTHING` | `inspect.rs:651` | 0.2（＝ 1 − 0.8） | ● | `VmClock::smoothing`、`vm_clock_smoothing` | (c) | *理由のみ* 「60 Hz で約 1/6 秒ぶんの記憶」。0.2 そのものは **不明** |
+| ログに出すフレーム数 `LOG_FRAMES` | `inspect.rs:64` | 4 | | `InspectStyle::log_frames` | (c) | **不明** |
+| 名前を切る長さ `NAME_CHARS` | `inspect.rs:61` | 40（切ると 39 + `…`） | ● | `InspectStyle::name_chars` | (c) | **不明** |
+| 値の表示を切る長さ `VALUE_CHARS` | `inspect.rs:57` | 52 | ● | `InspectStyle::value_chars`、`vm_value_chars` | (c) | **不明** |
+| `FONT` | `inspect.rs:41` | 12.0 | | `InspectStyle::font`、`vm_font` | (c) | **不明** |
+| `PANEL_HEIGHT` / `FRAMES_HEIGHT` / `REGS_HEIGHT` | `inspect.rs:45-47` | 440 / 148 / 150 | | `InspectStyle`、`vm_panel_height` / `vm_frames_height` / `vm_regs_height` | (c) | **不明** |
+| パネルの幅 `WIDTH` / `WIDTH_MARGIN` | `inspect.rs:51-52` | 640.0（窓幅 − 16 が上限） | ● | `InspectStyle::width` / `width_margin`、`vm_width` | (c) | **不明** |
 
-### 1.5 コードパネル（`code.rs`、**今どのゲームも使っていない**）
+### 1.5 説明（`games-shell/src/guide.rs`）と HUD（`games-shell/src/hud.rs`）
 
-| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `ROWS` | `code.rs:50` | 28 | ● | `const` | (c) | **不明** |
-| `WIDTH`（切る文字数） | `code.rs:149` | 44 | ● | `const` | (c) | *理由のみ*、**かつ数が合っていない**: 「430px of a monospace 12px font: about 58 characters」`code.rs:147` に対して 44（§7-1） |
-| パネルの位置と幅 | `code.rs:67-69` | 上 120 / 右 8 / 幅 430 | | 直書き | (c) | *理由のみ* 「below the HUD rows, so the two do not overlap」`code.rs:66` |
+| 説明の窓の大きさ `SIZE` / `MAX_HEIGHT` | `guide.rs:202-203` | `[640, 820]`、最大 860 | ● | `GuideStyle`、`Settings` の `guide_width` / `guide_height` / `guide_max_height` | (c) | **引用**: G6 の絵で下が切れていたので広げた（`docs/plans/garden-plan.md`）。測った記録ではない。860 は **不明** |
+| キーの色 `KEYCOL` | `guide.rs:320` | `(255,226,150)` | ● | `GuideStyle::key_color`（`Settings` には出さない） | (c) | **不明** |
+| 日本語フォント（部分集合） | `guide.rs:56` | 327 文字・62,780 バイト | | ビルド時（`tools/subset-font.sh`） | (a) 本文と一緒に切らないと字が欠ける | **測った**（`docs/plans/garden-plan.md`。9,589,900 → 62,780 バイト） |
+| HUD の予算バーの目盛 `BAR_TICKS` | `hud.rs:33` | 16 | ● | `HudStyle::bar_ticks`、`hud_bar_ticks` | (c) | **不明** |
+| HUD の字の大きさ `LINE_FONT` / `PANEL_FONT` | `hud.rs:37-38` | 15.0 / 13.0 | | `HudStyle`、`hud_line_font` / `hud_panel_font` | (c) | **不明** |
+| HUD の余白 `MARGIN` / `PADDING` / `ROW_GAP` | `hud.rs:42-44` | 8 / 8 / 3 | | `HudStyle`、`hud_margin`（余白と行間は app が渡す） | (c) | **不明** |
 
+### 1.6 コードパネル（`crates/rubevy-egui/src/code.rs`、**今どのゲームも使っていない**）
+
+| 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
+|---|---|---|---|---|---|---|
+| `ROWS` | `code.rs:59` | 28 | ● | `CodeStyle::rows`、`Settings` の `code_rows` | (c) | **不明** |
+| `CHARS`（切る文字数） | `code.rs:68` | 44 | ● | `CodeStyle::chars`、`code_chars` | (c) | **不明（コメントと値が最初から食い違う）**: 「430px of a monospace 12px font: about 58 characters」に対して 44。同じコミット `23c5ad3` で両方入っていて、どちらが意図か読んでも分からない。**どちらにも寄せていない**（既定は 44 のまま、食い違いは rustdoc に書いた）。§7-1 |
+| パネルの位置と幅 `TOP` / `RIGHT` / `WIDTH` / `PADDING` | `code.rs:72-75` | 上 120 / 右 8 / 幅 430 / 余白 8 | | `CodeStyle`、`code_width` | (c) | *理由のみ* 「below the HUD rows, so the two do not overlap」（上だけ）。ほかは **不明** |
+| 字の大きさ `TITLE_FONT` / `LINE_FONT` | `code.rs:79-80` | 13.0 / 12.0 | | `CodeStyle`、`code_font`（本文） | (c) | **不明**。12.0 は上の食い違うコメントが計算に使っている数 |
+
+### 1.7 S5b-1 が足した設定の一覧
+
+| 設定 | どこ | `Settings` の鍵 | 既定値 |
+|---|---|---|---|
+| `EditorLayout` | `rubevy-egui`（Resource。`EditorPlugin::sized`） | `editor_margin` / `editor_width` / `editor_height` / `editor_font` / `editor_choice_font` / `editor_choice_spacing` | 8 / 520 / 640 / 13 / 16 / 6 |
+| `EditorColors` | `rubevy-egui`（`Editor::colors`） | — （色は出さない） | `KINDS` 9 色 / `HEAT_BAND` / `HEAT_ALPHA` 170 / `HEAT_FLOOR` 0.1 / `AMBER` |
+| `InspectStyle` | `rubevy-egui`（`VmInspector::style`） | `vm_font` / `vm_panel_height` / `vm_frames_height` / `vm_regs_height` / `vm_width` / `vm_regs_frames` / `vm_value_chars` | 12 / 440 / 148 / 150 / 640 / 6 / 52 |
+| `VmClock::smoothing` | `rubevy-egui` | `vm_clock_smoothing` | 0.2 |
+| `CodeStyle` | `rubevy-egui`（Resource。`CodePanelPlugin::sized`） | `code_rows` / `code_chars` / `code_width` / `code_font` | 28 / 44 / 430 / 12 |
+| `HudStyle` | `games-shell`（Resource。`HudPlugin::styled`） | `hud_line_font` / `hud_panel_font` / `hud_margin` / `hud_bar_ticks` | 15 / 13 / 8 / 16 |
+| `GuideStyle` | `games-shell`（Resource。`GuidePlugin::styled`） | `guide_width` / `guide_height` / `guide_max_height` | 640 / 820 / 860 |
+| `ArenaPlugin::floor_margin` | `games-shell`（プラグインの値。`ArenaView` が運ぶ） | — | 3.0 |
+| `ArenaPlugin::showing(half)` | `games-shell`（既定を**持たない**。ゲームが渡す） | — | — |
+| `PanelSettingsPlugin` | `games-shell`（`PreStartup` に上の鍵を読む） | — | — |
 ---
 
 ## 2. Garden（Rust）
@@ -493,24 +547,32 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
 
 ## 6. 集計
 
-数えたのはこの文書の表の行（§1〜§5）で、**260 件**。
+数えたのはこの文書の表の行（§1〜§5）で、**269 件**。
 `docs/garden.md` の例を引いただけの行と rubevy 側の数を参照しただけの行の 2 つは数えていない。
+
+**S5a の 260 件との差は 9 件で、全部 §1（共有 crate）の分**: S3 のパン・ズームのカメラ 8 件を
+足し（一覧を取った時点では無かった）、コードパネルの字の大きさ 2 つを 1 行として足し、
+アリーナの床の色を足し、S3 で消えた「ずらす幅 0.16」を落とした。
+`ArenaSize` の 32.0 は (e) から **(b)**（ゲームの遊びの数）へ、窓が無いときの 16/9 は (c) から
+**(a)** へ動いた — どちらも S5b-1 で実際にそう置いたからで、数そのものは変えていない。
 
 ### 分類ごと
 
 | 分類 | 件数 |
 |---|---|
-| (a) 不変量 | 33 |
-| (b) 遊びの数 → Ruby 側 | 33 |
-| (c) 動かす側の数 → `Settings` / 引数 | 101 |
+| (a) 不変量 | 34 |
+| (b) 遊びの数 → Ruby 側 | 34 |
+| (c) 動かす側の数 → `Settings` / 引数 | 100 |
 | (d) selftest の閾値 | 28 |
-| (e) 既に Ruby か設定から変えられる | 65 |
-| **合計** | **260** |
+| (e) 既に Ruby か設定から変えられる | 73 |
+| **合計** | **269** |
 
 2 つに跨るもの（`DAY_LENGTH` のように「既に Ruby から変えられるが Rust にも既定値がある」、
 `radar` の既定距離のように「Ruby からも Rust からも来る」）は、**先に書いた方**で 1 件として数えた。
 
-**毎フレーム読まれる数は 103 件**（全体の 40%）。移すときに読む費用を測る必要があるのはこの 103 件。
+**毎フレーム読まれる数は 110 件**（全体の 41%）。移すときに読む費用を測る必要があるのはこの 110 件。
+（S5b-1 が §1 で移した数は、どれも Resource のフィールドを読むだけで、VM に問うわけではない。
+費用の測定が要るのは Ruby 側へ移す (b) の数で、それは S5b-2 以降。）
 特に多いのは `world.rb` の規則 21 件と Battle の機体模型 20 件で、どちらも (b)＝ Ruby へ移す候補。
 
 ### 出どころごと
@@ -518,17 +580,17 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
 | 出どころ | 件数 |
 |---|---|
 | **測った**（日付・条件つきの実測がある） | 14 |
-| **導出**（既にある制約から出ている） | 18 |
-| **引用**（文書・計画書・コミットに書いてある） | 50 |
+| **導出**（既にある制約から出ている） | 21 |
+| **引用**（文書・計画書・コミットに書いてある） | 51 |
 | *理由のみ*（理由らしきことは書いてあるが、測った記録も導出も無い） | 53 |
-| **不明** | **125** |
-| **合計** | **260** |
+| **不明** | **130** |
+| **合計** | **269** |
 
-**出どころ不明が 125 件、全体の 48%。** 内訳:
+**出どころ不明が 130 件、全体の 48%。** 内訳:
 
 | どこ | 件数 | うち不明 |
 |---|---|---|
-| 共有 crate の `src`（S4a 後は `rubevy-egui` + `games-shell`） | 33 | 19 |
+| 共有 crate の `src`（`rubevy-egui` + `games-shell`。S5b-1 の後） | 42 | 24 |
 | `garden/src` | 117 | 49 |
 | `garden/ruby` | 40 | 20 |
 | `sabibots/src` | 57 | 28 |
@@ -542,15 +604,21 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
 
 | どこ | `const` 宣言 | 数値リテラルを含む行 | 選んだ数 |
 |---|---|---|---|
-| 共有 crate の `src`（S4a 後は `rubevy-egui` + `games-shell`） | 20（うち数値 17） | 149 | 33 |
+| 共有 crate の `src`（S5b-1 の後） | 64（うち数値 53） | 320 | 42 |
 | `garden/src` | 88（うち数値 68） | 538 | 117 |
 | `sabibots/src` | 28（うち数値 21） | 322 | 57 |
 | `garden/ruby` + `sabibots/ruby` | 8（`NAME = 数` の行） | 237 | 53 |
-| **合計** | **136（うち数値 106）** | **1,246** | **260** |
+| **合計** | **180（うち数値 142）** | **1,417** | **269** |
+
+共有 crate の行だけ数が大きく動いたのは S5b-1 の結果で、**数が増えたのではなく名前が増えた**:
+S5a の時点では 20 個の `const`（うち数値 17）と 149 行のリテラルだったところに、
+既定値に名前を付けた `const` と、それを既定にする `Default` の実装と、単体テストが入った。
+リテラルを含む行が 149 → 320 に増えたぶんのほとんどは `impl Default`（1 フィールド 1 行）と
+テストの中の数で、**利用者から見える数は 33 → 42（うち 8 件は S3 のカメラの再掲）**である。
 
 `const` 宣言は `grep -nE '^\s*(pub\s+)?const\s'`、リテラルは
 `grep -nE '(^|[^A-Za-z0-9_.":])[0-9]+(_[0-9]+)*(\.[0-9]+)?'` で拾い、コメントだけの行を落としてから目で選んだ。
-**リテラル 1,246 行から 260 件**（21%）。落とした 8 割の内訳は §0 の「入れなかった基準」。
+**リテラル 1,417 行から 269 件**（19%）。落とした 8 割の内訳は §0 の「入れなかった基準」。
 選んだ数がリテラル行より多い節と少ない節があるのは、1 行に数が 2 つある（`spacing([12.0, 6.0])`）のと
 同じ数が何行にも出る（`0.35` が 3 か所）のが混ざっているため。
 
@@ -561,6 +629,9 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
    両方 1 つのコミット（`23c5ad3`）で入っている。どちらが正しいのか読んでも分からない。
    なお `CodePanel` は**どのゲームからも使われていない**（`HudPlugin`、`read_script` も同じ。計画書 §2 が
    「消さない」と決めている）。属する話: 共有 crate。
+   **S5b-1 の扱い（2026-09-20）**: どちらにも寄せていない。既定は 44 のまま（`CodeStyle::chars`）、
+   食い違いそのものを `CHARS` の rustdoc に書き、58 が欲しい人は `code_chars=58` と書けるようにした。
+   「コメントの方が正しい」と決めて 58 にするのは、記録の無い推測で既定値を動かすことになる。
 2. **Battle の 3 つの数が Rust と Ruby の両方に別々に書かれている。** `UNSET = -999.0`
    （`sabibots/src/main.rs:51` と `sabibots/ruby/prelude.rb:59`）、`BULLET_SPEED_FAST/SLOW` = 55/30
    （`main.rs:42-43` と `prelude.rb:61-62` の `SHOT_FAST/SHOT_SLOW`）。`prelude.rb:60` は
@@ -572,7 +643,11 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
    beetle's script passes to `mutate`, which is 0.1」と写しだと書いているが、**`beetle.rb` を書き換えても
    判定は 0.1 のまま**なので、8 番目の判定は利用者が変異率を上げた瞬間に FAIL になる（エディタで
    その場で書き換えられるのがこのゲームの見せ場なので、踏める）。属する話: (d) の閾値の設計。
-4. **`ArenaPlugin` のコメントと数が合っていない。** `crates/games-shell/src/lib.rs:117` は
+4. **（S3 で解消）`ArenaPlugin` のコメントと数が合っていない。** 2026-09-20 に確かめた:
+   `games-shell/src/lib.rs` に `0.16` も「a third of the window」も**もう無い**。S3 が `ViewInsets`
+   （パネルが実測の px を書く）に替えたときに、数もコメントも一緒に消えている。残っているのは
+   `follow_arena` の rustdoc と単体テストの中で「16% は何だったか」を説明する記述だけで、
+   これは歴史の説明であって使われている数ではない。以下は S5a 時点の記述: `crates/games-shell/src/lib.rs:117` は
    「the editor is about a third of the window on the right」と書いて、次の行で `visible_width * 0.16` を
    使っている。1/3 なら中心をずらす量は 1/6 ≈ 0.167 なので**計算としては合っている**が、コメントは
    「エディタの幅」を、数は「ずらす量」を言っていて、読むと食い違って見える。計画 S3 がこの行を
@@ -626,6 +701,10 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
    測った制約（コントラスト 4.9 / ΔE 25）を破れてしまう。**(a) 寄りの (c)**。
    → 変えられるようにするなら「変えると測った保証が消える」と rustdoc に書くべき、と考えるが、
    そこまで踏み込むかは著者判断。
+   **決着（著者、2026-09-20 / S5b-1 で実装）**: 変えられるようにする（`EditorColors::kinds`）。
+   **測った保証が破れること**を `KINDS` の rustdoc に書いた（コントラスト 4.96 / 帯 3.09 / ΔE 25.9 は
+   この 9 色の*集合*についての測定で、1 色差し替えれば 3 つとも成り立たなくなり、それを見張るものは
+   コードの中に無い）。`Settings` には出していない — 色を文字列から読むには構文解析が要る。
 
 5. **`REGS_FRAMES` 6**（`inspect.rs:29`）。
    毎フレーム `vm.snapshot(REGS_FRAMES)` を呼ぶので**費用に直結**する。(c) だが、
@@ -641,6 +720,10 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
    共有 crate の既定値で、Battle はそのまま使っている。**(c)** にしたが、闘技場の広さは
    Battle にとっては **(b) 遊びの数**（`shrink` で試合中に変わる）。
    「共有 crate の既定 = ゲームの遊びの数」が重なっている唯一の場所。
+   **決着（著者、2026-09-20 / S5b-1 で実装）**: 共有 crate は既定を**持たない**
+   （`ArenaPlugin::showing(half)`。`CameraPlugin::showing(half_height)` が既定を持たないのと同じ理由 —
+   窓が抱える世界の量はゲームしか知らない）。32.0 は Battle の `ARENA_HALF_WIDTH` に名前つきで置いた。
+   これを Ruby 側（`matches/*.rb`）へ移すかどうかは **S5b-2** が決める。
 
 8. **`--headless` / `--shot` の既定秒数**。
    **(e)**（引数で変えられる）に入れたが、既定値そのものは変えられない。
