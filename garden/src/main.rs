@@ -45,7 +45,10 @@ use bevy::prelude::*;
 // G8: the event the glTF loader triggers when a model's entities actually exist, which is the
 // only moment a loaded material can be replaced (`tint_species`).
 use bevy::world_serialization::WorldInstanceReady;
-use rubevy::{Answer, Arg, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptTask, ScriptWorld};
+use rubevy::{
+    in_the_authors_lines, Answer, Arg, MrbAsset, Program, RubevyPlugin, RubevySet, Script,
+    ScriptTask, ScriptWorld,
+};
 use rubevy_arena::{EditorPlugin, GuidePlugin, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::value::ObjId;
 use sabiruby::{IntoRuby, Vm};
@@ -859,7 +862,7 @@ pub const WORLD_FILE: &str = "world.rb";
 
 /// What goes in front of a creature's file, and in front of the world's, in the one program each
 /// is compiled as. They are named because the compiler's line numbers have to be told about them
-/// ([`in_the_authors_lines`]) as well as read from them.
+/// (rubevy's [`in_the_authors_lines`]) as well as read from them.
 pub const PRELUDE_FILE: &str = "prelude.rb";
 pub const WORLD_PRELUDE_FILE: &str = "world_prelude.rb";
 
@@ -2715,6 +2718,13 @@ fn compile(
 
 /// The same, for a creature whose file is not a file: the selftest's tester (G3), which is four
 /// lines of Ruby in this source and wants the prelude in front of it like any other creature.
+///
+/// The putting-together and the line numbers are rubevy's since S2 ([`Program`],
+/// [`in_the_authors_lines`], R6): what this file had were the two functions every game that lets
+/// a player write Ruby has to write, and they are the same in sabibots. `Program::new` counts
+/// the lines off the text it really put in front instead of the `prelude.lines().count() + 2`
+/// that stood here — the same number for a prelude read from a file, which is the only kind the
+/// garden has, and the right one for a prelude that does not end with a newline.
 fn compile_source(
     ruby: &Path,
     name: &str,
@@ -2722,67 +2732,11 @@ fn compile_source(
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
     let prelude = platform::read(&ruby.join(PRELUDE_FILE))?;
-    let src = format!("{prelude}\n# ---- {name} ----\n{body}\nrun_creature\n");
-    let prelude_lines = prelude.lines().count() as u32 + 2;
-    match platform::compile(&src, name) {
-        Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), prelude_lines)),
-        Err(e) => Err(in_the_authors_lines(&e, prelude_lines, PRELUDE_FILE)),
+    let program = Program::new(&prelude, name, body, "run_creature");
+    match platform::compile(&program.source, name) {
+        Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines)),
+        Err(e) => Err(in_the_authors_lines(&e, program.prelude_lines, PRELUDE_FILE)),
     }
-}
-
-/// **Take the prelude off the line numbers a compiler reports** (2026-09-18).
-///
-/// A creature's file and the world's are each handed to the compiler with their prelude in front,
-/// as one program (`compile_source`, `compile_world_source`), so every line the compiler names is
-/// a line of *that* program: the beetle's `if hunger < < hungry_below`, which is line 118 of
-/// `beetle.rb`, was reported as line 600. The VM panel has always taken the prelude off the
-/// frames it shows (`VmInspector::fill`'s `prelude_lines`); the editor's status line and the log
-/// did not, and those are the two places somebody who has just mistyped is looking.
-///
-/// It is done on the **text** rather than by asking the compiler for a better answer, because in
-/// a browser there is no compiler to ask: `window.gardenCompile(source)` takes a source and
-/// nothing else (`platform.rs`) and throws whatever the playground's module says. Both builds
-/// report `FILE:LINE:COL: message`, one diagnostic to a line — the shape `mrbc` prints and the
-/// shape `sabiruby_compiler::Diagnostic` renders — so the one thing that has to be found in the
-/// string is the `:LINE:COL:` in it, and the first one on a line is the only one that can be it.
-///
-/// A line at or below the prelude's own length is an error **in the prelude**, which is not the
-/// author's file at all: it is said so by name, with the line it really is, rather than by a
-/// number the author cannot find (and rather than a negative one).
-fn in_the_authors_lines(message: &str, prelude_lines: u32, prelude: &str) -> String {
-    message.lines().map(|line| one_diagnostic(line, prelude_lines, prelude)).collect::<Vec<_>>().join("\n")
-}
-
-/// One line of a compiler's message, with its line number moved. Anything that does not look like
-/// `…:LINE:COL:…` is handed back untouched — a message the compiler wrote without a place in it
-/// ("compile error") is still the whole of what it said.
-fn one_diagnostic(line: &str, prelude_lines: u32, prelude: &str) -> String {
-    let bytes = line.as_bytes();
-    // a run of digits from `at`, and where it ends
-    let digits = |at: usize| -> (Option<u32>, usize) {
-        let end = at + bytes[at..].iter().take_while(|b| b.is_ascii_digit()).count();
-        (line[at..end].parse().ok(), end)
-    };
-    for colon in 0..line.len() {
-        if bytes[colon] != b':' {
-            continue;
-        }
-        let (Some(number), after_line) = digits(colon + 1) else { continue };
-        if bytes.get(after_line) != Some(&b':') {
-            continue;
-        }
-        let (Some(_), after_col) = digits(after_line + 1) else { continue };
-        if bytes.get(after_col) != Some(&b':') {
-            continue;
-        }
-        if number > prelude_lines {
-            return format!("{}:{}{}", &line[..colon], number - prelude_lines, &line[after_line..]);
-        }
-        // the file's name is the word in front of that colon; the prelude's goes in its place
-        let name_at = line[..colon].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
-        return format!("{}{prelude}:{number}{}", &line[..name_at], &line[after_line..]);
-    }
-    line.to_string()
 }
 
 /// **The world's rules, compiled and hung on an entity of their own** (W1).
@@ -2872,11 +2826,10 @@ fn compile_world_source(
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
     let prelude = platform::read(&ruby.join(WORLD_PRELUDE_FILE))?;
-    let src = format!("{prelude}\n# ---- world.rb ----\n{body}\nrun_world\n");
-    let prelude_lines = prelude.lines().count() as u32 + 2;
-    let bytes = platform::compile(&src, WORLD_FILE)
-        .map_err(|e| in_the_authors_lines(&e, prelude_lines, WORLD_PRELUDE_FILE))?;
-    Ok((mrb.add(MrbAsset { bytes }), prelude_lines))
+    let program = Program::new(&prelude, WORLD_FILE, body, "run_world");
+    let bytes = platform::compile(&program.source, WORLD_FILE)
+        .map_err(|e| in_the_authors_lines(&e, program.prelude_lines, WORLD_PRELUDE_FILE))?;
+    Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines))
 }
 
 fn spawn_camera(mut commands: Commands, orbit: Res<Orbit>) {
@@ -6177,46 +6130,11 @@ mod tests {
     use super::*;
     use bevy::input::mouse::MouseScrollUnit;
 
-    /// **The compiler's line numbers, put back into the author's file** (2026-09-18).
-    ///
-    /// The three cases are the three a person meets: an error in the file being edited, an error
-    /// in the prelude in front of it, and a message with no place in it at all. The input is the
-    /// real thing — `beetle.rb` with `if hunger < < hungry_below` on its line 118, compiled with
-    /// a 482-line prelude in front of it, which is what the game printed before this was written.
-    #[test]
-    fn a_compiler_line_is_reported_in_the_authors_own_file() {
-        let real = "beetle.rb: beetle.rb:600:19: syntax error, unexpected '<'; expected an expression after the operator";
-        assert_eq!(
-            in_the_authors_lines(real, 482, PRELUDE_FILE),
-            "beetle.rb: beetle.rb:118:19: syntax error, unexpected '<'; expected an expression after the operator"
-        );
-        // a line inside the prelude is not the author's file: it is said by name, with the line
-        // it really is, rather than as a number nobody can find or a negative one
-        assert_eq!(
-            in_the_authors_lines("beetle.rb: beetle.rb:47:3: syntax error", 482, PRELUDE_FILE),
-            "beetle.rb: prelude.rb:47:3: syntax error"
-        );
-        // the boundary: the prelude's last line is the prelude's, the first line after it is the
-        // author's line 1
-        assert_eq!(in_the_authors_lines("f:482:1: x", 482, PRELUDE_FILE), "prelude.rb:482:1: x");
-        assert_eq!(in_the_authors_lines("f:483:1: x", 482, PRELUDE_FILE), "f:1:1: x");
-        // the world's file is the same machinery with the other prelude
-        assert_eq!(
-            in_the_authors_lines("world.rb: world.rb:20:1: syntax error", 120, WORLD_PRELUDE_FILE),
-            "world.rb: world_prelude.rb:20:1: syntax error"
-        );
-        // several diagnostics, one to a line, each moved
-        assert_eq!(
-            in_the_authors_lines("a.rb:600:1: one\na.rb:610:2: two", 482, PRELUDE_FILE),
-            "a.rb:118:1: one\na.rb:128:2: two"
-        );
-        // and a message with no place in it is handed back whole: `CompileError` renders
-        // "compile error" when the compiler gave it no diagnostics, and a missing file's message
-        // is `platform::read`'s, which has a path with colons in it and no line
-        assert_eq!(in_the_authors_lines("beetle.rb: compile error", 482, PRELUDE_FILE), "beetle.rb: compile error");
-        let missing = "/home/x/garden/ruby/creatures/beetle.rb: No such file or directory (os error 2)";
-        assert_eq!(in_the_authors_lines(missing, 482, PRELUDE_FILE), missing);
-    }
+    // **The compiler's line numbers, put back into the author's file** used to be checked here,
+    // with `beetle.rb`'s real message from 2026-09-18 (line 118 reported as 600). The function
+    // moved to rubevy in S2 and so did the seven cases, with the creatures' names taken out:
+    // rubevy `tests/source.rs`, which also compiles a real program with a real prelude and reads
+    // the real compiler's message rather than a remembered one.
 
     #[test]
     fn a_notch_is_a_notch_in_either_unit() {

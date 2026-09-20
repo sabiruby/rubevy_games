@@ -6,6 +6,11 @@ license.workspace = true
 repository.workspace = true
 description = "Garden — a small 3D world whose creatures read and write their own ECS components from Ruby"
 
+# `build.rs`: the `ruby/` directory put into the binary for the browser build. std and nothing
+# else, and it is built for this machine rather than for the target.
+[build-dependencies]
+rubevy-build.workspace = true
+
 [dependencies]
 bevy.workspace = true
 rubevy.workspace = true

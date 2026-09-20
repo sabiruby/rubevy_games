@@ -21,7 +21,10 @@ mod platform;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use rubevy::{Answer, MrbAsset, RubevyPlugin, RubevySet, Script, ScriptEnded, ScriptTask, ScriptWorld};
+use rubevy::{
+    in_the_authors_lines, replace_script, Answer, MrbAsset, Program, RubevyPlugin, RubevySet,
+    Script, ScriptEnded, ScriptTask, ScriptWorld,
+};
 use rubevy_arena::{ArenaPlugin, ArenaSize, Editor, EditorAction, EditorPlugin, GuidePlugin, Hud, ScriptPanel, VmInspector, VmInspectorPlugin, Watch};
 use sabiruby::Value;
 
@@ -973,6 +976,17 @@ impl EditChecks {
     }
 }
 
+/// The text the S2 check types into the editor, and the line its one mistake is on.
+///
+/// `1 < < 2` is an operator with nothing after it: one diagnostic, and it is on the last line of
+/// the text whichever robot's file is being shown. The line is counted rather than written down,
+/// so it stays right when a robot's file grows.
+fn a_text_that_will_not_compile(file: &str) -> (String, usize) {
+    let broken = format!("{}\n1 < < 2\n", file.trim_end());
+    let at = broken.lines().count();
+    (broken, at)
+}
+
 fn selftest(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
@@ -1013,6 +1027,34 @@ fn selftest(
             test.at = now + 0.5;
         }
         1 => {
+            // **S2: a text that will not compile is refused in the author's own line numbers.**
+            //
+            // Until the prelude and the robot's file were put together by rubevy's `Program`,
+            // the number in `not applied:` was the whole compiled program's: `prelude.rb` is
+            // 295 lines and the separator and the blank line after it are two more, so the
+            // editor said line 302 for a mistake on line 5 and the author was sent somewhere
+            // that is not in the file being looked at. The garden was fixed on 2026-09-18 and
+            // this one was not.
+            let (broken, _) = a_text_that_will_not_compile(&test.original);
+            editor.text = broken;
+            editor.action = Some(EditorAction::Apply);
+            test.step = 2;
+            // the gap every step in this sequence uses: `do_editor_actions` runs on a later
+            // frame, and the answer is read on the step after this one
+            test.at = now + 0.5;
+        }
+        2 => {
+            // the text was refused, the robot kept the brain it had, and the line the editor
+            // names is the author's — not that line plus the 297 in front of it
+            let (_, r3) = by_number(3).unwrap();
+            let said = editor.message.clone();
+            let (_, at) = a_text_that_will_not_compile(&test.original);
+            ok(
+                said.contains(&format!(":{at}:")) && r3.brain.is_none(),
+                &format!("a syntax error is refused on the author's own line {at}: {said}"),
+            );
+            editor.reset_to(test.original.clone(), "back to the file");
+
             // H2. Both robots' files hold a `def run`, so one `find` reaches a keyword the lexer
             // has to have seen. `drawn_kind` goes the whole way through the panel's own
             // `listing()` and reads the colour back out of the `LayoutJob`: what this says is
@@ -1028,10 +1070,10 @@ fn selftest(
             ok(editor.changed(), "typing marks the text edited");
             editor.action = Some(EditorAction::Apply);
             edits.asked(now, "Apply");
-            test.step = 2;
+            test.step = 3;
             test.at = now + 0.5;
         }
-        2 => {
+        3 => {
             let (_, r3) = by_number(3).unwrap();
             let (_, r4) = by_number(4).unwrap();
             let on_disk = platform::read(&r3.file).unwrap_or_default();
@@ -1041,20 +1083,20 @@ fn selftest(
             ok(!editor.changed(), "after Apply the text is what the robot runs");
             editor.action = Some(EditorAction::ApplyAll);
             edits.asked(now, "Apply to all");
-            test.step = 3;
+            test.step = 4;
             test.at = now + 0.5;
         }
-        3 => {
+        4 => {
             let (_, r4) = by_number(4).unwrap();
             let (_, r2) = by_number(2).unwrap();
             ok(r4.brain.is_some(), "Apply to all reaches robot 4 (same file)");
             ok(r2.brain.is_none(), "Apply to all leaves robot 2 (another file) alone");
             editor.action = Some(EditorAction::Revert);
             edits.asked(now, "Revert");
-            test.step = 4;
+            test.step = 5;
             test.at = now + 0.5;
         }
-        4 => {
+        5 => {
             let (_, r3) = by_number(3).unwrap();
             let (_, r4) = by_number(4).unwrap();
             ok(r3.brain.is_none(), "Revert puts robot 3 back on its file");
@@ -1065,11 +1107,11 @@ fn selftest(
             restart.0 = true;
             edits.asked(now, "Restart");
             test.before = robots.iter().map(|(e, _)| e).collect();
-            test.step = 5;
+            test.step = 6;
             test.at = now;
             test.deadline = now + 2.0;
         }
-        5 => {
+        6 => {
             // On the frame the four new robots are there, and not two seconds later: since a
             // question costs one frame instead of two the robots decide half again as often, and
             // by two seconds into a fresh match one of them has taken a hit. What is being
@@ -1084,10 +1126,10 @@ fn selftest(
             // the last of the four replacements has landed: from here the arena's behaviours are
             // nobody's but the match's again, and a hit is a hit (`EditChecks`)
             edits.landed(now);
-            test.step = 6;
+            test.step = 7;
             test.at = now + 1.0;
         }
-        6 => {
+        7 => {
             let r3 = by_number(3).map(|(_, r)| r);
             let r4 = by_number(4).map(|(_, r)| r);
             ok(r3.is_some_and(|r| r.brain.is_none()), "robot 3 comes back on its file");
@@ -1103,17 +1145,17 @@ fn selftest(
             test.insn = spent();
             ok(!panel.open, "the VM panel starts closed");
             keys.press(KeyCode::F2);
-            test.step = 7;
+            test.step = 8;
             test.at = now + 0.2;
         }
-        7 => {
+        8 => {
             ok(panel.open, "F2 opens it");
             keys.release(KeyCode::F2);
             keys.press(KeyCode::KeyP);
-            test.step = 8;
+            test.step = 9;
             test.at = now + 0.1;
         }
-        8 => {
+        9 => {
             // The pause has taken hold. How many ticks the earliest sleeping task still has to
             // wait is the measure of the scheduler's clock: a budget of 0 stops that clock too
             // (rubevy `fa37eaa`), so this number must be the same when the pause ends. The
@@ -1122,12 +1164,12 @@ fn selftest(
             test.places = places();
             test.clock = match_clock.0;
             test.insn = spent();
-            test.step = 9;
+            test.step = 10;
             // two seconds (G9): a tank crosses several units in that, and the match's clock
             // would have run a tenth of the way to its first rule
             test.at = now + 2.0;
         }
-        9 => {
+        10 => {
             ok(panel.paused && world.budget == 0, "P pauses: the scripts' budget is 0");
             ok(spent() == test.insn, "nothing ran while it was paused");
             ok(places() == test.places, "2 s paused: every robot is where it was");
@@ -1163,10 +1205,10 @@ fn selftest(
             // here is a real keyboard
             keys.release(KeyCode::KeyP);
             keys.press(KeyCode::KeyP);
-            test.step = 10;
+            test.step = 11;
             test.at = now + 0.5;
         }
-        10 => {
+        11 => {
             ok(!panel.paused && world.budget > 0, "P again gives the budget back");
             ok(spent() > test.insn, "the behaviours are running again");
             let moved = places()
@@ -1184,7 +1226,7 @@ fn selftest(
             } else {
                 info!("selftest: done — the match keeps running (a page has nothing to exit to)");
             }
-            test.step = 11;
+            test.step = 12;
         }
         _ => {}
     }
@@ -1624,6 +1666,17 @@ fn compile_with(
 
 /// The same, from text rather than a file: what the editor applies. The error is the compiler's
 /// message, for the editor to show.
+///
+/// **In the author's own line numbers since S2.** The prelude sits in front, so every line the
+/// compiler names is a line of the whole program — 295 lines further down than the same line of
+/// the robot's file, which is the number the editor's `not applied:` used to show and nobody
+/// could find. rubevy's [`Program`] puts the two halves together and says how far down that
+/// pushed the first one, and [`in_the_authors_lines`] takes it off again (R6). The garden has
+/// had the second half since 2026-09-18; this is where it was still missing.
+///
+/// The correction is here rather than at the four call sites so that there is one answer: what
+/// this returns is a message in the author's terms whether it is logged, shown in the editor, or
+/// both.
 fn compile_text(
     ruby: &Path,
     prelude_file: &str,
@@ -1633,21 +1686,20 @@ fn compile_text(
     assets: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
     let prelude = platform::read(&ruby.join(prelude_file))?;
-    let src = format!("{prelude}\n# ---- {name} ----\n{body}\n{start}\n");
-
-    // the prelude sits in front, so a line in the compiled program is `prelude_lines` further
-    // down than the same line of the robot's own file
-    let prelude_lines = prelude.lines().count() as u32 + 2;
-    platform::compile(&src, name).map(|bytes| (assets.add(MrbAsset { bytes }), prelude_lines))
+    let program = Program::new(&prelude, name, body, start);
+    match platform::compile(&program.source, name) {
+        Ok(bytes) => Ok((assets.add(MrbAsset { bytes }), program.prelude_lines)),
+        Err(e) => Err(in_the_authors_lines(&e, program.prelude_lines, prelude_file)),
+    }
 }
 
 /// Starts a robot over with another brain: dropping its task and giving it a new `Script`.
+///
+/// S2: the three lines this was are rubevy's [`replace_script`] (R6). The `ScriptDone` is the
+/// one that does not show: without it a robot whose brain had run to its end could never be
+/// given another.
 fn restart(commands: &mut Commands, entity: Entity, name: &str, handle: Handle<MrbAsset>) {
-    commands
-        .entity(entity)
-        .remove::<rubevy::ScriptTask>()
-        .remove::<rubevy::ScriptDone>()
-        .insert(Script::new(handle).with_name(name).with_priority(128));
+    replace_script(commands, entity, Script::new(handle).with_name(name).with_priority(128));
 }
 
 fn brain_name(robot: &Robot) -> String {
