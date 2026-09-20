@@ -5381,8 +5381,9 @@ fn reload_while_running(
 ///
 /// The keys are the same two in both builds (G5). A browser would take F5 for itself — it is
 /// Reload, and a reload is the one thing a player who meant to save must not get — so the page
-/// takes the key back before the game sees it (`web/garden.html`, `keydown` in the capture phase),
-/// which is what SabiRuby Battle already does for its own F5. F9 no browser wants. The buttons are
+/// takes the key back before the game sees it (the game's `KEYS` in `web/games.sh`, a `keydown`
+/// in the capture phase), which is what SabiRuby Battle already does for its own F5. F9 no
+/// browser wants. The buttons are
 /// there because a key that only works because a page remembered to intercept it is a thin thing
 /// to hang a garden on, and because nobody opening a link knows that F5 is Save.
 fn save_load_keys(

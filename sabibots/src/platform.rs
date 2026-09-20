@@ -36,9 +36,10 @@ pub static RUBY_FILES: platform::RubyFiles = &[];
 /// played it, and a different prefix loses every one of them.
 const STORE: &str = "sabibots:";
 
-/// The page's two bridges, by the names `web/sabibots.html` defines them under
-/// (`window.sabibotsCompile`, `window.sabibotsHighlight`). They are looked up by name rather than
-/// bound at compile time, which is what lets one shared binding serve every game.
+/// The page's two bridges, by the names the page defines them under — `window.sabibotsCompile`
+/// and `window.sabibotsHighlight`, which are this game's word out of `web/games.sh` filled into
+/// `web/page.html.in`. They are looked up by name rather than bound at compile time, which is
+/// what lets one shared binding serve every game.
 const COMPILE_BRIDGE: &str = "sabibotsCompile";
 const HIGHLIGHT_BRIDGE: &str = "sabibotsHighlight";
 

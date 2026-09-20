@@ -23,7 +23,7 @@ pub fn selftest_asked(_env_name: &str) -> bool {
 /// **A number the checks were handed in the environment**, such as the garden's
 /// `GARDEN_RELOAD_AT=20` — the checks' only way to press F9 with no keyboard. There is no
 /// environment in a page and nothing to read, so the answer there is `None`: a browser's checks
-/// press the key for real (`web/garden.html` sends the `keydown`).
+/// press the key for real (the page takes it back for them: the game's `KEYS` in `web/games.sh`).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn asked_number(env_name: &str) -> Option<f32> {
     std::env::var(env_name).ok().and_then(|s| s.parse::<f32>().ok())

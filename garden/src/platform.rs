@@ -38,9 +38,10 @@ pub static RUBY_FILES: platform::RubyFiles = &[];
 /// them.
 const STORE: &str = "garden:";
 
-/// The page's two bridges, by the names `web/garden.html` defines them under
-/// (`window.gardenCompile`, `window.gardenHighlight`). They are looked up by name rather than
-/// bound at compile time, which is what lets one shared binding serve every game.
+/// The page's two bridges, by the names the page defines them under — `window.gardenCompile`
+/// and `window.gardenHighlight`, which are this game's word out of `web/games.sh` filled into
+/// `web/page.html.in`. They are looked up by name rather than bound at compile time, which is
+/// what lets one shared binding serve every game.
 const COMPILE_BRIDGE: &str = "gardenCompile";
 const HIGHLIGHT_BRIDGE: &str = "gardenHighlight";
 
@@ -119,8 +120,8 @@ pub fn selftest_asked() -> bool {
 /// (G5's finding 1) was found in a browser rather than here. This says when to open the `--load`
 /// file, instead of opening it before the first frame. It is read only when `GARDEN_SELFTEST` is
 /// set, so it is not a switch a player can trip — and a page has no environment and no `--load`,
-/// where the checks press F9 for real (`web/garden.html` sends the key) and there is nothing to
-/// defer.
+/// where the checks press F9 for real (the page takes the key back for them — the game's `KEYS`
+/// in `web/games.sh`) and there is nothing to defer.
 pub fn reload_asked_at() -> Option<f32> {
     games_shell::checks::asked_number("GARDEN_RELOAD_AT")
 }
