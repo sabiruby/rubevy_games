@@ -11,6 +11,11 @@
 # mean nothing without its parent, which is worse for the thing this is mostly used for.
 # web/dist/index.html is the entry, written only by a build of `all`.
 #
+# A game's page is `web/page.html.in` filled in with that game's values from `web/games.sh` —
+# the title, the two colours, the canvas id, the names of the two functions the page hangs on
+# `window`, the keys it takes back from the browser and the two notes that explain them. The two
+# pages used to be two files that differed in fifteen lines.
+#
 # The PC version is the ordinary `cargo run -p <game>`; the two are the same code, and what
 # differs is chosen by the target (see each game's src/platform.rs).
 #
@@ -27,11 +32,34 @@ PLAYGROUND="${SABIRUBY_PLAYGROUND:-$ROOT/../sabiruby-playground}"
 OUT="$HERE/dist"
 cd "$ROOT"
 
-case "$WHAT" in
-  all) GAMES=(sabibots garden) ;;
-  sabibots|garden) GAMES=("$WHAT") ;;
-  *) echo "usage: web/build.sh [sabibots|garden|all]" >&2; exit 2 ;;
-esac
+# shellcheck source=games.sh
+. "$HERE/games.sh"
+
+if [ "$WHAT" = all ]; then
+  GAMES=("${GAMES_ALL[@]}")
+elif [ -n "${TITLE[$WHAT]:-}" ]; then
+  GAMES=("$WHAT")
+else
+  echo "usage: web/build.sh [${GAMES_ALL[*]}|all]" >&2; exit 2
+fi
+
+# One page per game out of one template. Plain parameter expansion rather than sed: the values
+# are prose with slashes, ampersands and newlines in them, and none of that has to be escaped
+# here. A value never contains a `{{…}}` of its own, so the order of the replacements is free.
+write_page() {
+  local game="$1" out="$2" page
+  page=$(cat "$HERE/page.html.in")
+  page=${page//'{{GAME}}'/$game}
+  page=${page//'{{TITLE}}'/${TITLE[$game]}}
+  page=${page//'{{BG}}'/${BG[$game]}}
+  page=${page//'{{FG}}'/${FG[$game]}}
+  page=${page//'{{DIM}}'/${DIM[$game]}}
+  page=${page//'{{KEYS}}'/${KEYS[$game]}}
+  page=${page//'{{COMPILE_NOTE}}'/${COMPILE_NOTE[$game]}}
+  page=${page//'{{KEYS_NOTE}}'/${KEYS_NOTE[$game]}}
+  case "$page" in *'{{'*) echo "$out: a {{…}} in page.html.in has no value in games.sh" >&2; exit 1 ;; esac
+  printf '%s\n' "$page" > "$out"
+}
 
 [ -f "$PLAYGROUND/web/sabiruby.wasm" ] || { echo "no $PLAYGROUND/web/sabiruby.wasm: run tools/build.sh in sabiruby-playground (or set SABIRUBY_PLAYGROUND)" >&2; exit 1; }
 want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
@@ -62,7 +90,7 @@ build_game() {
   # (bevy_asset io/wasm.rs: `window.fetch_with_str(path)`), so it resolves against the page —
   # …/rubevy_games/garden/assets/… — and a game in a subdirectory needs nothing said about it.
   cp -r "$game/assets" "$dir/assets"
-  cp "$HERE/$game.html" "$dir/index.html"
+  write_page "$game" "$dir/index.html"
   cp "$PLAYGROUND/web/sabiruby.wasm" "$PLAYGROUND/web/sabi.js" "$dir/compiler/"
   mkdir -p "$dir/compiler/vendor"
   cp -r "$PLAYGROUND/web/vendor/browser_wasi_shim" "$dir/compiler/vendor/"
