@@ -58,14 +58,17 @@ a page to exit to, `games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
 
 A line whose verdict may move between runs is marked in the lists below, because the alternative
 — leaving the check out of the comparison, which is what was done until 2026-09-20 — means never
-comparing it at all. **There are two** (S5b-5 added the second):
+comparing it at all. **There are three**, and S5b-5 added the third:
 
-* `nothing that was sleeping woke on the resume frame` is `ok` when something was asleep with a
-  deadline when the pause began and `--` when nothing was.
-* `and with the panel closed the same wheel in the same place zooms` is `--` when the game opened
-  the editor again before the wheel was turned — `choose_watched` does that when the creature
-  being watched dies, and a creature starving in that second is the garden's own business. The
-  run measured nothing about the wheel, which is neither a pass nor a failure.
+* Battle's `the handler tasks of every robot that went down ended` is `ok` in a run long enough
+  for a robot with a handler to be destroyed and to have been down half a second, and `--` in one
+  that is not. It is marked again where the list itself is, below.
+* the garden's `nothing that was sleeping woke on the resume frame` is `ok` when something was
+  asleep with a deadline when the pause began and `--` when nothing was.
+* the garden's `and with the panel closed the same wheel in the same place zooms` is `--` when
+  the game opened the editor again before the wheel was turned — `choose_watched` does that when
+  the creature being watched dies, and a creature starving in that second is the garden's own
+  business. The run measured nothing about the wheel, which is neither a pass nor a failure.
 
 ---
 

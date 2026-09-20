@@ -610,3 +610,47 @@ S5b-3 の気づき「`save_file` の設定が実走行で確かめられてい�
 9. **隣の worktree の待ちのシェルが 2 つ残って回っている**（`until … sleep 20` のループ。
    前の担当のもの）。止めていない（他の担当のプロセスを止めない規則）。機械は 99% idle のままで、
    測定には影響していない。属する先: 作法。
+
+---
+
+## 15. 段階の終わりの確認
+
+| 何を | 結果 |
+|---|---|
+| `cargo build --workspace --all-targets` | **警告 0・エラー 0** |
+| `cargo test --workspace` | **60 通過**（着手前 58。足したのは `query_name` の 1 本と `day_length_in` の 1 本） |
+| 箱庭ヘッドレス `--headless 90` | 13 行 FAIL 0、一覧と一致 |
+| Battle ヘッドレス `--headless 25` | 4 行 FAIL 0、一覧と一致（`the handler tasks …` が `--` の走行。**verdict が動く行**として前から記録されている） |
+| 箱庭 窓（docker） | **45 行** FAIL 0、一覧と一致（44 → 45） |
+| Battle 窓（docker） | 32 行 FAIL 0、一覧と一致 |
+| 箱庭 ブラウザ `?selftest` | **46 行** FAIL 0、pageerror 0、requestfailed 0（45 → 46） |
+| Battle ブラウザ `?selftest` | 33 行 FAIL 0、pageerror 0、requestfailed 0 |
+| `web/build.sh all` + `wasm-opt` | 通る（大きさは §11） |
+
+### 揺れ — 最終版を同じ条件に掛けた
+
+**8 本同時・6 巡・48 走行**（idle 99〜100%）:
+
+| | FAIL の出た走行 | 行 | 待ちが上限で諦めた回数 |
+|---|---|---|---|
+| 直す前（`21040c1`、§9 の表の左） | 6 / 88 | 45 | 3 |
+| `held` だけ直した版（§9 の表の右） | 3 / 88 | 45 | 3 |
+| **最終版**（説明パネルを閉じる・前提を確かめる） | **0 / 48** | 45 | **0** |
+
+**待ちが一度も上限に達していない。** §9 で残っていた 3 件の正体は、直接には確かめていないが、
+説明パネルを閉じたら消えた——ホイールを回す前に egui が何かを掴んでいる、という同じ形である。
+§14-1 に書いたとおり、**egui の待ちが VM の数に相乗りしている**という構造の問題は残っている
+（今は上限に当たらないだけで、`script_budget` をもっと下げれば当たる）。
+
+### 行の集合が変わったところ（`docs/verification/selftest-lines.md` を更新した）
+
+| 行 | 何が起きたか |
+|---|---|
+| `P pauses: the scripts' budget is N` → `P pauses: both VMs' budgets are N` | 判定が 2 本の VM を見るようになった（B-1） |
+| `P again gives the budget back` → `P again gives both budgets back` | 同上 |
+| **`N s paused: the same creatures are there`（新）** | 「消えた／増えた」を場所と空腹から分けて言う（B-1） |
+| `night arrived by N s` → `night arrived within a day of N s` | 閾値が実値になった（B-8） |
+| `the day is what world.rb says it is` → `… (N s)` | 読んだ値を印字する（B-8） |
+| `… over N passes of \`each_frame\`` → `… over N frames they ran in` | 名前が実物に合った（D-3） |
+
+箱庭の窓 44 → **45 行**、ブラウザ 45 → **46 行**。Battle の 3 つは無変更。

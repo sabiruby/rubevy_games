@@ -1972,9 +1972,9 @@ pub fn window_selftest(
         // `day_length` is what it watches because it is the one rule that **crosses the boundary
         // as a number**: the sun is drawn in Rust and `garden.rules(day_length:)` is how the file
         // says how long a turn of it takes (`Sky::day_length`). Only a world script that has just
-        // started says it, so `Sky::day_length == 30` is "these rules are the ones running", with
-        // no window to wait for, no threshold and no statistics — where "the grass grew" or "a
-        // meter fell" would need all three.
+        // started says it, so the sun turning in the time the *edited* text asks for is "these
+        // rules are the ones running", with no window to wait for, no threshold and no
+        // statistics — where "the grass grew" or "a meter fell" would need all three.
         11 => {
             ok(
                 editor.file == "world.rb" && editor.text.contains("world do"),
