@@ -648,10 +648,19 @@ impl Picture {
 /// a fully grown one is, which the first plants and the checks' fixtures are made at.
 const PLANTS_AT_START: usize = 55;
 const PLANT_MIN: f32 = 0.18;
-/// A plant at its full size. `world.rb` has this number too, as the cap its growth stops at —
-/// which is the same fact said in the two places that need it: here it is what the world is built
-/// with, there it is what the rule does.
-const PLANT_MAX: f32 = 1.4;
+/// **How big a blade the game builds full-grown is** — the largest of the grass a new garden is
+/// scattered with, and the size of the three blades the checks' fixtures are planted at.
+///
+/// `world.rb` has a `plant_max` too, and **it is not this one** (S5b-4, and §7-15 of
+/// `docs/numbers.md`): there it is the ceiling a blade's *growth* stops at, a rule that runs
+/// sixty times a second over grass that is already in the ground. This is a size the game hands
+/// to `spawn_plant`. They are the same number today and nothing holds them so — a garden whose
+/// rules stop growth at 0.5 and whose furniture is built at 1.4 opens with grass that will never
+/// be that big again, and one the other way round opens with seedlings that grow.
+///
+/// It was called `PLANT_MAX` and its key in the store was `plant_max` until S5b-4, which is how
+/// the two came to look like one number with two homes. **Source: unknown.**
+const PLANT_GROWN: f32 = 1.4;
 
 /// Creatures
 const BEETLES: usize = 6;
@@ -683,14 +692,16 @@ const CREATURES_APART: f32 = 2.0;
 /// which a person may want more or less of without having an opinion about how grass grows.
 ///
 /// **A garden read back from a save uses none of it**: `load_world` builds the world out of the
-/// file, and the only thing from here it can still reach is [`Furniture::plant_max`], which
+/// file, and the only thing from here it can still reach is [`Furniture::plant_grown`], which
 /// `plant_the_meadow` plants the checks' corner at.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct Furniture {
-    /// [`PLANTS_AT_START`] / [`PLANT_MIN`] / [`PLANT_MAX`]
+    /// [`PLANTS_AT_START`] / [`PLANT_MIN`] / [`PLANT_GROWN`]
     pub plants: usize,
     pub plant_min: f32,
-    pub plant_max: f32,
+    /// how big a blade this builds when it builds a full-grown one — **not** `world.rb`'s
+    /// `plant_max`, which is where growth stops ([`PLANT_GROWN`])
+    pub plant_grown: f32,
     /// [`BEETLES`] / [`RABBITS`] / [`TREES`] / [`ROCKS`]
     pub beetles: usize,
     pub rabbits: usize,
@@ -716,7 +727,7 @@ impl Default for Furniture {
         Furniture {
             plants: PLANTS_AT_START,
             plant_min: PLANT_MIN,
-            plant_max: PLANT_MAX,
+            plant_grown: PLANT_GROWN,
             beetles: BEETLES,
             rabbits: RABBITS,
             trees: TREES,
@@ -735,7 +746,7 @@ impl Default for Furniture {
 }
 
 impl Furniture {
-    /// `start_plants`, `plant_min`, `plant_max`, `start_beetles`, `start_rabbits`, `start_trees`,
+    /// `start_plants`, `plant_min`, `plant_grown`, `start_beetles`, `start_rabbits`, `start_trees`,
     /// `start_rocks`, `start_hunger_min` / `start_hunger_max`, `start_tries`,
     /// `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`,
     /// `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`,
@@ -748,7 +759,7 @@ impl Furniture {
         };
         count("start_plants", &mut self.plants);
         take(settings, "plant_min", &mut self.plant_min);
-        take(settings, "plant_max", &mut self.plant_max);
+        take(settings, "plant_grown", &mut self.plant_grown);
         count("start_beetles", &mut self.beetles);
         count("start_rabbits", &mut self.rabbits);
         count("start_trees", &mut self.trees);
@@ -3328,7 +3339,7 @@ fn spawn_world(
         // `plant_min` 0.18 — which is what a *sprout* starts at — and missed the different
         // number a garden's first grass is scattered between. Moving a number the list does not
         // have is how a stage widens itself, so it is reported instead (§7 of the list).
-        let size = dice.between(0.3, built.plant_max);
+        let size = dice.between(0.3, built.plant_grown);
         let round = dice.roll() < built.round_chance;
         spawn_plant(&mut commands, look, at, size, round);
         grass.push(at);
@@ -3369,7 +3380,7 @@ fn spawn_world(
         commands.entity(entity).insert(Fasting);
         info!("selftest: a beetle with no behaviour and nothing to eat stands at ({:.1}, {:.1})", fasting_at.x, fasting_at.y);
 
-        let dinner = spawn_plant(&mut commands, look, dinner_at, built.plant_max, false);
+        let dinner = spawn_plant(&mut commands, look, dinner_at, built.plant_grown, false);
         // hungry enough that its script goes looking rather than wandering (the beetle's own
         // threshold is 55), and far enough that getting there has to be walking
         // the species' own genome, not a rolled one: the check below is written for a beetle
@@ -3478,9 +3489,10 @@ struct Meadow;
 /// out at startup that the rules will never speak at all, and the corner then stands on the
 /// game's own [`REACH`] and [`MATE_REACH`].
 ///
-/// The size of a blade is the *garden's* number and not the rules': [`Furniture::plant_max`] is what
-/// `spawn_plant` is told to make these two, and `world.rb`'s `plant_max` is the cap its growth
-/// stops at. They are the same number today, and the corner is planted by whoever plants it.
+/// The size of a blade is the *garden's* number and not the rules': [`Furniture::plant_grown`] is
+/// what `spawn_plant` is told to make these two, and `world.rb`'s `plant_max` is the cap its
+/// growth stops at. **S5b-4 gave them different names**, because they were never the same
+/// sentence: they are the same number today and nothing in either file holds them together.
 #[allow(clippy::too_many_arguments)]
 fn plant_the_meadow(
     mut commands: Commands,
@@ -3506,7 +3518,7 @@ fn plant_the_meadow(
         [Genome { speed: 2.0, sight: 7.0, appetite: 0.9 }, Genome { speed: 2.4, sight: 9.0, appetite: 1.1 }];
 
     let corner = meadow_at(&place);
-    let half_blade = built.plant_max * 0.5;
+    let half_blade = built.plant_grown * 0.5;
     // how far from its blade a creature may be and still eat it (`world.rb`: `arm = reach + cap * 0.5`)
     let arm = reaches.eat + half_blade;
     // √(mate_reach² − (half a blade)²), and the two beetles' own bodies under it
@@ -3526,7 +3538,7 @@ fn plant_the_meadow(
     for (i, genome) in lovers.into_iter().enumerate() {
         let side = if i == 0 { 0.5 } else { -0.5 };
         let blade = corner + along * apart * side;
-        spawn_plant(&mut commands, look, blade, built.plant_max, i == 0);
+        spawn_plant(&mut commands, look, blade, built.plant_grown, i == 0);
         let lover =
             spawn_creature(&mut commands, look, &bodies, Species::Beetle, blade + toward * start, 45.0, genome, None);
         give_mind(&mut commands, &ruby.0, &brains, &mut mrb, lover, Species::Beetle);
