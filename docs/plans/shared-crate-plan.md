@@ -168,8 +168,8 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 
 | 段階 | 状況 |
 |---|---|
-| S1 | 実行中（2026-09-20、ブランチ `shared-crate`） |
-| S2 | rubevy の R6 待ち（R6 は実行中） |
+| S1 | **済み**（2026-09-20、`shared-crate` の `8f836d4`）。`rubevy_arena::{platform, checks, args}` と `settings::remembered` / `Guide::opening`。2 本の `platform.rs` は 261 → 141 行、201 → 98 行（コメントと空行を除くと 121 → 51、103 → 33）。ブラウザの橋は `js_sys::Reflect` で unsafe 0。共有 crate に数は 1 つも置いていない（`--shot` / `--headless` の既定はゲームが渡す）。動きは不変: テスト 18 → 22、箱庭ヘッドレスの 13 件は本文まで一致、窓は 3 走行とも ok 43、ブラウザは 2 ゲームとも pageerror 0・requestfailed 0（garden ok 43、Battle は当たりに依らない 31 行）。計画に無かった判断 1 つ: PC の `compile` / `highlight` も共有側へ移したので `rubevy-arena` が PC で `sabiruby-compiler` に依存する。記録は `docs/worklog/2026-09-20-shared-platform.md` |
+| S2 | 実行中（rubevy の R6 `cb8bf00` を、切り離した worktree `rubevy-wt-r6` への一時の `[patch]` で使う。rubevy が push されるまで main に入れられない） |
 | S3〜S4 | 未着手 |
 | S5a | **済み**（2026-09-20、`a0de41e` を main に取り込み）。`docs/numbers.md`: 数値リテラルを含む 1,246 行から **260 件**。分類案は (a) 不変量 33 / (b) 遊びの数 → Ruby 33 / (c) 動かす側 → Settings・引数 101 / (d) selftest の閾値 28 / (e) 既に変えられる 65。出どころは 測った 14 / 導出 18 / 引用 50 / 理由のみ 53 / **不明 125（48%）**。毎フレーム読まれる数 103 件。コードは無変更。記録は `docs/worklog/2026-09-20-numbers-inventory.md` |
 | S5b | **著者が一覧を見るのを待っている**（`docs/numbers.md` の §8「迷った数」10 件と下の 7 章） |
@@ -181,6 +181,11 @@ S1 は rubevy を待たずに始められる。S5a も待たずに始められ�
 
 | 日付・段階 | 気づいた点 | どこ | 属する先 | 状況（計画に足した／著者判断待ち／見送り・理由） |
 |---|---|---|---|---|
+| 09-20 S1 | **箱庭の窓のチェックに揺れがある**: 無改変の状態で 3 走行中 2 走行が 1 件ずつ FAIL（`Revert puts every beetle back on the file`、`every restarted beetle's new task has run`。どちらもエディタの Apply / Revert / 再起動の周り）。これまでの揺れの記録はヘッドレスだけで、窓側のこの 2 件は記録が無い。S1 の後の 3 走行は全部 ok 43 だったが、3 走行では何も言えない | `garden/src/window.rs` の窓のチェック。再現: コンテナのビルド直後に `GARDEN_SELFTEST=1` で release の garden を続けて 2 回 | ゲーム固有（箱庭の判定）。バグ候補 | **著者判断待ち**: 調査を別に立てるか（前の揺れと同じく、何十回か回して原因を割る） |
+| 09-20 S1 | Battle のヘッドレスは当たりの数が走行ごとに大きく振れる（25 秒で 20 発と 9 発）。selftest の**行数**は前後比較の基準にならず、「当たりに依らない行の集合」で比べる必要がある | `sabibots` の selftest | 本の素材／確認の作法 | 計画に足した: S2 以降の確認は行の集合で比べる。book の findings に写す |
+| 09-20 S1 | `rubevy-arena` が PC ビルドで `sabiruby-compiler` に依存するようになった（S1 の判断）。「共有 crate は画面・ファイル・ブラウザのもの」という線引きからは新顔 | `crates/rubevy-arena/Cargo.toml` | 共有 crate（構成） | **著者判断待ち**（`rubevy-arena` の構成見直しと一緒に） |
+| 09-20 S1 | `--headless` の既定 10.0、`--shot` の既定 6.0 / 3.0 / `shot.png` に出どころが無い。文書の走行例は常に数を渡すので、既定値が効く走行は文書に 1 つも無い | `garden/src/main.rs`、`sabibots/src/main.rs` | 出どころの無い数 | `docs/numbers.md` の (c) に既にある。S5b で |
+| 09-20 S1 | 2 本の `build.rs` の冒頭のコメント（「The PC build … gets the table too」）が実物と違う。`docker/run.sh:23` は `SABIBOTS_SELFTEST` 固定で箱庭の窓のチェックを回せない（実際に回せず手で `docker run` を書いた）。この機械の PATH に `wasm-opt` が無く `web/build.sh` は縮めずに通る | `*/build.rs`、`docker/run.sh:23`、環境 | 文書と実物のずれ／道具／環境 | `build.rs` は S2 で消える。`run.sh` は S4。`wasm-opt` は `~/.local/binaryen-version_132/bin` を PATH に入れる（担当への依頼文に書く） |
 | 09-20 S5a | **Battle の数が Rust と Ruby に別々にある**: `UNSET = -999.0`、弾の速さ 55 / 30。繋がっていないので片方を動かすともう片方が黙って嘘をつく（`lead` が外す） | `sabibots/src/main.rs:42-43,51`、`sabibots/ruby/prelude.rb:59-62` | ゲーム固有（Battle） | S5b の Battle で最初に直す（Rust が Ruby に渡す 1 か所に） |
 | 09-20 S5a | **変異率 0.1 が 2 か所で、判定が追随しない**: 本物は `beetle.rb` の `mutate(0.1)`、8 番目の判定は Rust の `const RATE = 0.1`。エディタで `beetle.rb` を書き換えると判定が FAIL になる | `garden/ruby/creatures/beetle.rb:81`、`garden/src/main.rs:3955` | ゲーム固有（箱庭、判定の設計） | S5b: 判定が VM から実際の値を読む形に（`@handlers` / `@asleep` を読んだのと同じ道）。**著者判断待ち** |
 | 09-20 S5a | 空腹バーの色の境 55.0 と甲虫の `hungry_below` 55.0 が同じ数で繋がっていない | `garden/src/window.rs:1059`、`beetle.rb:10` | ゲーム固有（箱庭） | S5b で、意図があるなら繋ぐ・無いなら別の数と書く。**著者判断待ち**（意図を知っているのは著者） |
