@@ -1314,16 +1314,23 @@ fn stop_when_over(
             .filter(|r| r.handlers > 0 && r.downed_at.is_some_and(|at| now - at > 0.5))
             .collect();
         let ended = settled.iter().filter(|r| r.handler_off >= r.handlers).count();
-        if settled.is_empty() {
-            // a short match where nobody was destroyed does not exercise this; saying FAIL
-            // there would be saying a check failed when it never ran
-            info!("selftest: --   no robot with a handler was down long enough to check its tasks");
-        } else {
-            ok(
-                ended == settled.len(),
-                format!("the handler tasks of every robot that went down ended ({ended}/{})", settled.len()),
-            );
-        }
+        // **One sentence, three verdicts** (S4). A short match where nobody was destroyed does
+        // not exercise this, and saying FAIL there would be saying a check failed when it never
+        // ran — so it says `--`, which is this game's n/a. What changed in S4 is that the
+        // unmeasured run no longer says something *else*: it used to print "no robot with a
+        // handler was down long enough to check its tasks", a different line, so the set of
+        // lines a run printed depended on whether anybody had died and the two had to be
+        // dropped from the comparison altogether. Now the line is always there and it is the
+        // verdict in front of it that moves (docs/verification/selftest-lines.md).
+        info!(
+            "selftest: {} the handler tasks of every robot that went down ended ({})",
+            if settled.is_empty() { "--  " } else if ended == settled.len() { "ok  " } else { "FAIL" },
+            if settled.is_empty() {
+                "none was down long enough to check".to_string()
+            } else {
+                format!("{ended}/{}", settled.len())
+            },
+        );
         ok(test.checked > 0, format!("{} hits on a robot with a handler were checked", test.checked));
         ok(
             test.checked > 0 && test.ran == test.checked,
@@ -1411,36 +1418,46 @@ fn handler_selftest(
     });
     for watch in due {
         let Ok(robot) = robots.get(watch.robot) else { continue };
-        // A robot destroyed inside the window is not a robot that failed to swerve: the game
-        // takes its task away and sets its controls to zero. The hit is not counted either way.
-        // (Found here: one run in four ended with `turned (13/14)`, the miss being a scout hit at
-        // 19.37 s that went down before the 0.3 s were up — 0.04 rad.)
-        if robot.downed_at.is_some_and(|down| down < watch.at + 0.3) {
-            info!("selftest: --   {} went down within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
-            continue;
-        }
-        // Nor is a robot whose brain was taken away and started again inside the window (the
-        // editor's Apply, or a saved file). The old task is terminated and the new one subscribes
-        // afresh, so a `hit` published in between reaches nobody — and a swerve already under way
-        // is cut off with it. The task it is running is how that shows from here: a different one
-        // is a different brain. It is not rare in the editor's selftest, which applies a brain
-        // three times while the match is being fought.
-        if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
-            info!("selftest: --   {}'s behaviour was replaced within 0.3 s of the hit at {:.2} s: not counted", robot.name, watch.at);
-            continue;
-        }
-        // **Nor any robot at all, while the editor's checks are handing behaviours out**
-        // (2026-09-18). The test above catches the robot the editor was showing; `Apply to all`
-        // reaches every robot on the file and a restart reaches all four, and their hits lose
-        // the same 0.3 s for the same reason — the task that would have run the handler was
-        // terminated and its replacement had not subscribed yet. The moments come from
-        // [`EditChecks`], which is where the steps that press the buttons write them down; the
-        // window asked about is this check's own, and unchanged.
-        if let Some(what) = edits.over(watch.at, watch.at + 0.3) {
-            info!(
-                "selftest: --   the editor's checks were handing out behaviours ({what}) within 0.3 s of the hit on {} at {:.2} s: not counted",
-                robot.name, watch.at
-            );
+        // **Why this hit could not be measured, if it could not be** — and nothing else changes
+        // with it (S4). Each of the three used to print a sentence of its own instead of the two
+        // below, so a hit that was excluded left one line where a hit that was counted left two,
+        // and the wording moved as well: four different shapes to filter out before two runs
+        // could be compared. The same two sentences are printed either way now, with `--` (this
+        // game's n/a) in front of them and the reason at the end. What is excluded, and why, is
+        // unchanged (docs/verification/selftest-lines.md).
+        let unmeasured: Option<String> =
+            // A robot destroyed inside the window is not a robot that failed to swerve: the game
+            // takes its task away and sets its controls to zero. The hit is not counted either way.
+            // (Found here: one run in four ended with `turned (13/14)`, the miss being a scout hit at
+            // 19.37 s that went down before the 0.3 s were up — 0.04 rad.)
+            if robot.downed_at.is_some_and(|down| down < watch.at + 0.3) {
+                Some("it went down inside the 0.3 s".to_string())
+            }
+            // Nor is a robot whose brain was taken away and started again inside the window (the
+            // editor's Apply, or a saved file). The old task is terminated and the new one subscribes
+            // afresh, so a `hit` published in between reaches nobody — and a swerve already under way
+            // is cut off with it. The task it is running is how that shows from here: a different one
+            // is a different brain. It is not rare in the editor's selftest, which applies a brain
+            // three times while the match is being fought.
+            else if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
+                Some("its behaviour was replaced inside the 0.3 s".to_string())
+            }
+            // **Nor any robot at all, while the editor's checks are handing behaviours out**
+            // (2026-09-18). The test above catches the robot the editor was showing; `Apply to all`
+            // reaches every robot on the file and a restart reaches all four, and their hits lose
+            // the same 0.3 s for the same reason — the task that would have run the handler was
+            // terminated and its replacement had not subscribed yet. The moments come from
+            // [`EditChecks`], which is where the steps that press the buttons write them down; the
+            // window asked about is this check's own, and unchanged.
+            else if let Some(what) = edits.over(watch.at, watch.at + 0.3) {
+                Some(format!("the editor's checks were handing out behaviours ({what}) inside the 0.3 s"))
+            } else {
+                None
+            };
+        if let Some(why) = unmeasured {
+            let (at, name) = (watch.at, &robot.name);
+            info!("selftest: --   {name} ran a handler within 0.3 s of the hit at {at:.2} s: not counted, {why}");
+            info!("selftest: --   {name} turned within 0.3 s of the hit at {at:.2} s: not counted, {why}");
             continue;
         }
         let ran = robot.handler_runs > watch.runs;
