@@ -360,6 +360,31 @@ class Creature
     @handlers ||= []
   end
 
+  # === a number of this species', with a name ===============================
+  #
+  # `mutation_rate 0.1` in a creature's body says how far a child of this species may stray from
+  # the average of its parents — the number `Genome#mutate` takes.
+  #
+  # It is written this way, on the class, rather than as a `def` like `hungry_below`, because the
+  # **game reads it** (`garden/src/main.rs`, `mutation_rate_of`): the eighth check measures a
+  # child against `mix` and `mutate` and has to know what rate the file used. It used to keep a
+  # copy of the number instead, and a copy meant that raising the rate in the editor — which is
+  # the thing this game is for — turned that check into a FAIL. The road out is the one
+  # `@handlers` already takes: a class-level instance variable the host reads with two
+  # `ivar_get`s, and no new question for a script to answer.
+  #
+  # A file that never says it is not wrong; the game judges such a child at the rate `beetle.rb`
+  # ships with, which is what it did for every file before this existed.
+  def self.mutation_rate(rate = nil)
+    @mutation_rate = rate.to_f unless rate.nil?
+    @mutation_rate
+  end
+
+  # and the same number from inside the creature, which is where `mutate` is called
+  def mutation_rate
+    self.class.mutation_rate
+  end
+
   def self.on(event, &block)
     raise "on needs a block" if block.nil?
     slot = handlers.size

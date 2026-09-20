@@ -333,11 +333,19 @@ handler tasks with it, and nothing in either file says a word about that.
 publish freely — all of these were already wired up in G0, when nothing in the world was
 listening, and G1 added no `publish` call at all.
 
-**Three of the numbers above are in two places on purpose.** `DAY_LENGTH`, `CHILD_HUNGER` and
-`POP_MAX` are still `const`s in `main.rs`, because the game has to have an answer before
-`world.rb` has spoken — and for ever, in a garden whose `world.rb` will not compile. `PLANT_MAX`
-and `HUNGER_MAX` are in both files saying two different things: here they are what the world is
-*built* with and what a bar draws as full, there they are what a rule stops at.
+**Some of the numbers above are in two places on purpose.** `DAY_LENGTH`, `CHILD_HUNGER`,
+`POP_MAX`, `REACH`, `TOUCH_REACH`, `MATE_REACH`, `SPROUT_GAP` and the four body radii are still
+`const`s in `main.rs`, because the game has to have an answer before `world.rb` has spoken — and
+for ever, in a garden whose `world.rb` will not compile. They are **stand-ins**, not second
+opinions: a test (`the_stand_ins_are_what_world_rb_says`) reads `ruby/world.rb` and fails if the
+two ever drift apart.
+
+`PLANT_GROWN` and `HUNGER_MAX` are a different case — the same number in both files saying two
+different things: here they are what the world is *built* with and what a bar draws as full,
+there (`plant_max`, `hunger_max`) they are what a rule stops at. That is why the first of them
+has a **different name** on each side since S5b-4: a garden whose rules stop growth at 0.5 and
+whose furniture is built at 1.4 opens with grass that will never be that big again, and one
+name for the two would hide it.
 
 ## Where the numbers are
 
@@ -356,6 +364,33 @@ A handful of them are in Rust as well, as the answer the game has before `world.
 and for ever in a garden whose `world.rb` will not compile — the paragraph above says which and
 why.
 
+**Eleven of `world.rb`'s numbers are handed to the game once**, in the world script's first line
+(`garden.rules`), because the thing that needs them is Rust. Five of them the game *builds* with
+— `day_length` (the sun is drawn here), `child_hunger` and `pop_max` (a body is made here),
+`reach` and `mate_reach` (the checks' meadow corner is placed here). The other six the game
+*sweeps* with:
+
+| in `world.rb` | what walks with it |
+|---|---|
+| `touch_reach` | `startle`: every beetle against every rabbit, every frame |
+| `sprout_gap` | `sprout_plants`: a new seed against every blade already up |
+| `beetle_radius`, `rabbit_radius`, `tree_radius`, `rock_radius` | `separate`: every solid circle against every other |
+
+The number is a rule; the walk is not something Ruby should be doing sixty times a second — which
+is the same sentence the top of `world.rb` writes about `garden.within`. Edit one and press
+`Ctrl+Enter` and it is in force on the next frame, the bodies in the garden included
+(`bodies_wear_the_rules` re-measures every `Collider`).
+
+A `world.rb` that says nothing about one of them leaves the game on its stand-in, and so does an
+**older `world.rb`** — one saved out of the editor before these existed: `run_world` sends only
+the keys the world it is running actually has.
+
+Two of these want watching. A **body's radius is not its picture**: how large the model is drawn
+is `garden.settings.txt`'s (`look_beetle_scale` and its four neighbours), so changing one without
+the other gives a creature that bumps into things it is not touching. And **a longer
+`touch_reach` does not mean more `on(:touched)`**: the game publishes when a contact is *made*,
+and the further a rabbit can reach the less often the contact is broken and made again.
+
 ### How the garden is run and drawn — `garden.settings.txt`
 
 Beside the game (in a browser, a `localStorage` key under `garden:`), one `key=value` a line.
@@ -366,7 +401,7 @@ is not there is the default — deleting a line is how to go back.
 | what | keys |
 |---|---|
 | the field and its walls | `field_width`, `field_depth`, `wall_margin`, `separate_passes` |
-| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_max`, `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart` |
+| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_grown` (how big a blade this builds full-grown — **not** `world.rb`'s `plant_max`, which is where growth stops), `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart` |
 | the light | `light_moon_lux`, `light_night_ambient`, `light_night_sky_r` / `_g` / `_b`, `light_night_zenith`, `light_dawn_offset`, `light_dial_min` / `_max`, `light_day_lux` / `_span`, `light_day_ambient` / `_span`, `light_sun_lux`, `light_shadow_cascades` / `_near` / `_far` — and `night`, the slider in the panel |
 | the scenery past the wall | `horizon_half`, `sky_radius`, `sky_sides`, `sky_rings`, `fog_near`, `fog_depth`, `fog_color_r` / `_g` / `_b`, `fog_start`, `fog_end`, `edge_trees`, `edge_jitter`, `edge_out_min` / `_max`, `edge_scale_min` / `_max` |
 | how it is drawn | `window_width` / `window_height`, `look_ground_r` / `_g` / `_b`, `look_hunger_low`, `look_hunger_warn`, `look_hunger_bar_width` / `_height`, `look_tuft_scale`, `look_bush_scale`, `look_tree_scale`, `look_rock_scale`, `look_rock_squash`, `look_beetle_scale`, `look_rabbit_scale`, `look_walking_at`, `look_gait_blend_ms`, `look_beetle_model` |
@@ -2020,8 +2055,9 @@ and one is about the genome (G2), which is the whole round trip in a single line
    **Where they stand is worked out from the rules' own two distances** (2026-09-18), and until
    that day it was not. The corner used to be a tight clump of four plants with a beetle four and
    a half units away on *either side* of it, and that cannot work: a creature eats a plant from
-   `reach` away — `1.1` plus half the plant's size, so 1.8 at `plant_max` — and its script stops
-   walking towards grass the moment its meter passes `hungry_below`. Two beetles approaching one
+   `reach` away — `1.1` plus half the plant's size, so 1.8 at `plant_max` (the rules' growth
+   ceiling) — and its script stops walking towards grass the moment its meter passes
+   `hungry_below`. Two beetles approaching one
    clump from opposite sides therefore stop about 1.8 short on each side and stand **up to 3.6
    apart** while both eat, where `mate_reach` is 2.0. What paired them was the wandering they do
    once fed happening to bring them together. Over 64 twenty-second runs the corner made a child

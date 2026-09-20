@@ -85,13 +85,45 @@ world do
                            #   so nothing is born breeding
   def pop_max       = 24   # POP_MAX: how many creatures the garden holds
 
-  # Four of those the **game** needs. Two because the game builds the body — a newborn's meter
-  # and the cap — and two because the game builds one *place* out of them: `reach` and
-  # `mate_reach` are where the selftest's meadow corner stands, so that two beetles walking to
-  # grass certainly end up close enough for these rules to pair them (2026-09-18). They go over
-  # once, at the start, with `day_length` — the same handover and the same reason, which is that
-  # Rust cannot ask this file a question (`world_prelude.rb`, `run_world`). Change one of them
-  # here and the corner moves with it; everything else above is read here and nowhere else.
+  # === the numbers the game sweeps with (S5b-4) =============================
+  #
+  # These six were the last of the garden's play still written in `garden/src/main.rs`, and they
+  # are here for the reason the top of this file gives about `garden.within`: **the number is a
+  # rule and the walk is not**. Each of them is used by a loop over every pair of things in the
+  # field — every beetle against every rabbit, every new seed against every blade already up,
+  # every solid circle against every other — which is a loop Ruby should not be writing sixty
+  # times a second. So this file says the number once and the game does the walking.
+
+  # how close a rabbit has to come for a beetle to be told about it (`on(:touched)`). It was
+  # TOUCH_REACH, and it is the same number it was.
+  def touch_reach   = 1.3
+
+  # how far a new blade has to stand from every blade already up. It was the one number of the
+  # grass that stayed behind in Rust when the rest of the grass came here (W1).
+  def sprout_gap    = 1.5
+
+  # **How wide the things in the garden are.** Circles on the ground: this is what is pushed
+  # apart when two of them are inside each other, and what a "bumped" is measured with. They were
+  # BEETLE_RADIUS, RABBIT_RADIUS, TREE_RADIUS and ROCK_RADIUS, with these same values.
+  #
+  # The *picture* of a body is not this — how big the model is drawn is `garden.settings.txt`'s
+  # (`look_beetle_scale` and its four neighbours), because a model's size is the look of the
+  # game and not its rules. Change one of these without the other and a beetle bumps into things
+  # its picture is not touching, which is worth seeing once.
+  def beetle_radius = 0.40
+  def rabbit_radius = 0.50
+  def tree_radius   = 0.70
+  def rock_radius   = 0.60
+
+  # Ten of the numbers above the **game** needs. Two because the game builds the body — a
+  # newborn's meter and the cap — two because the game builds one *place* out of them (`reach`
+  # and `mate_reach` are where the selftest's meadow corner stands, so that two beetles walking
+  # to grass certainly end up close enough for these rules to pair them, 2026-09-18), and six
+  # because the game does the walking for them. They go over once, at the start, with
+  # `day_length` — the same handover and the same reason, which is that Rust cannot ask this
+  # file a question (`world_prelude.rb`, `run_world`). Change one of them here and the corner
+  # moves with it, and every body in the garden is re-measured on the next frame; everything
+  # else above is read here and nowhere else.
 
   # === the rules ============================================================
   each_frame do |dt|

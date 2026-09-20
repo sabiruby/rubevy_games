@@ -7,7 +7,18 @@
 
 creature "Beetle" do
   # Below this it stops wandering and goes looking for grass. 100 is full, 0 is dead.
+  #
+  # (The hunger bar on screen turns amber at this same number, and **the two are not connected**:
+  # `look_hunger_warn` in `garden.settings.txt` is the colour, this is the beetle. Neither
+  # remembers why 55, and the day somebody changes one the other will not follow.)
   def hungry_below = 55.0
+
+  # How far a child's genes may stray from the average of its parents', up and down: `mutate`
+  # multiplies every gene by somewhere in `1 ± this`. It was written into the call below until
+  # S5b-4; it has a name now because **the game reads it** — the eighth check judges a child by
+  # the rate this file used, instead of by a copy of the number that stopped being true the
+  # moment anybody edited this line (`prelude.rb`, `Creature.mutation_rate`).
+  mutation_rate 0.1
 
   # --- the handlers: one task each, waiting on a queue ----------------------
 
@@ -71,14 +82,14 @@ creature "Beetle" do
   # **This is the whole of G2.** The rule — who may breed with whom, how often, and how many
   # creatures the garden holds — is Rust, in `court`. What the child *is* is worked out here, by
   # calling three methods on a Rust struct: `mix` averages two genomes, `mutate` nudges every gene
-  # by up to a tenth with the VM's own dice, and `to_h` turns the result into the Hash the game
-  # takes back. The partner's genome comes the other way, out of its `Creature` component as a
-  # plain Hash — so both views of `Genome` are used in one line each, three lines apart.
+  # by up to `mutation_rate` with the VM's own dice, and `to_h` turns the result into the Hash the
+  # game takes back. The partner's genome comes the other way, out of its `Creature` component as
+  # a plain Hash — so both views of `Genome` are used in one line each, three lines apart.
   on(:mate) do |partner|
     next if @asleep
     mate = genome_of(partner)
     next if mate.nil? # it starved between the rule speaking and this waking up
-    child = my_genome.mix(mate).mutate(0.1)
+    child = my_genome.mix(mate).mutate(mutation_rate)
     spot = here
     answer = garden.spawn(species: name, genome: child.to_h, at: [spot[0] + 1.2, spot[2] + 1.2])
     if answer == true
