@@ -194,9 +194,14 @@ VM の予算と `frame_time` については**値を選んでいない**。Battl
 | 箱庭 ブラウザ（`garden/?selftest`） | 45 行 | 45 行 FAIL 0 | 一覧と完全一致、pageerror 0・requestfailed 0 |
 
 ほかに: `cargo build --workspace --all-targets` **警告 0**、`cargo test --workspace`
-**46 → 53 通過**（+1 は §1 の色、+6 は Battle の新しいテスト）、`web/build.sh all` の
-`wasm-opt` 後で **sabibots 35,152,714 → 35,216,606（+63,892、+0.18%）、
-garden 35,900,116 → 35,900,926（+810、+0.002%）**。
+**46 → 53 通過**（+1 は §1 の色、+6 は Battle の新しいテスト）。`web/build.sh all` の
+`wasm-opt` 後は **sabibots 35,216,606 / garden 35,900,926 バイト**。
+**前の版の wasm はこの段階では測っていない**ので、比べられるのは S5b-1 が記録した数
+（sabibots 35,152,714 / garden 35,900,116）に対してで、差は **+63,892（+0.18%）と
++810（+0.002%）**——ただし S5b-2 の commit 0（共有 crate の色と余白）もその間に入っている。
+Battle 側が伸びたぶんは `MatchModel` の serde の展開と 32 個の鍵の文字列、
+箱庭側がほぼ動いていないのは共有 crate に足したのが `const` と 2 フィールドだけだから、と読める
+（読めるだけで、内訳は測っていない）。
 
 ### 試合の決着 — 交互に 6 巡
 
