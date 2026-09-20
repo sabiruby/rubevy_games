@@ -56,9 +56,16 @@ a page to exit to, `games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
 | `--  ` | **the run did not put the check in a position to measure anything.** Not a pass and not a failure — the pairing that could not be counted, the probe something walked into. **Both games write `--`** since S5b-5; the garden used to write `n/a` in one of its two places, which was two spellings of one verdict in one game |
 | `done` | the checks are finished and the page keeps running |
 
-A line whose verdict may move between runs is marked in the lists below. There is exactly one,
-and it is marked because the alternative — leaving the check out of the comparison, which is
-what was done until 2026-09-20 — means never comparing it at all.
+A line whose verdict may move between runs is marked in the lists below, because the alternative
+— leaving the check out of the comparison, which is what was done until 2026-09-20 — means never
+comparing it at all. **There are two** (S5b-5 added the second):
+
+* `nothing that was sleeping woke on the resume frame` is `ok` when something was asleep with a
+  deadline when the pause began and `--` when nothing was.
+* `and with the panel closed the same wheel in the same place zooms` is `--` when the game opened
+  the editor again before the wheel was turned — `choose_watched` does that when the creature
+  being watched dies, and a creature starving in that second is the garden's own business. The
+  run measured nothing about the wheel, which is neither a pass nor a failure.
 
 ---
 
