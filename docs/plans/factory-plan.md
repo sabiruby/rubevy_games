@@ -1,0 +1,211 @@
+# 3 本目: Factory（Factorio の mod 構造の縮小版、2D）— 実装指示書
+
+作成 2026-09-20。著者「サンプルゲームで Factorio 風のものを作ってみたい」「2D がよい。最初から画像素材は使いたい」
+「汎用的にできるものはクレートに追加して、汎用化のためのサンプルでもあることを意識して」。
+調査は `docs/worklog/2026-09-20-factory-survey.md`（**着手前に全部読む**）と rubevy `docs/worklog/2026-09-20-factory-survey.md`（規模の実測）。
+前提になる計画: rubevy `docs/plans/generalize-plan.md`（R0〜R10）、`shared-crate-plan.md`（S1〜S5b）。**この 2 つが先**（要るのは R0〜R9 と S1〜S4。数の棚卸し R10・S5 は並行でよい）。
+対象: rubevy_games main `b1ce042` + 上の 2 つの結果、Bevy 0.19.1。
+
+---
+
+## 0. はじめの一歩
+
+```bash
+cd /home/kishima/book/kishima
+git -C rubevy_games worktree add ../rubevy_games-wt-factory -b factory main   # S1〜S4 が main に入ってから
+cd rubevy_games-wt-factory && cargo test --workspace
+```
+
+作法は `/home/kishima/book/.claude/agents/implementer.md` と `/home/kishima/book/CLAUDE.md`。段階ごとに 1 コミット、push しない、main に触らない、
+過程は `docs/worklog/` に書きながら。**Docker Desktop を起動しない。**
+素材の下見は調査のときの scratchpad にあったが消えている前提で、F0a で取り直す（URL は 3.6）。
+
+---
+
+## 1. 何を作るのか（30 秒版）
+
+見下ろし 2D のグリッドに、鉱石 → 採掘機 → コンベア → インサータ → かまど・組立機 → 納品、の線を引くゲーム。**Factorio の構造を小さく写す**:
+
+| Factorio | ここでは |
+|---|---|
+| C++ のコア（搬送、製造） | Rust。コンベア上のアイテムを Ruby は 1 個ずつ触らない |
+| data stage（Lua の `data:extend`） | `ruby/data.rb`: `item` / `recipe` / `machine` の宣言 → Rust の表。tick を使わず Startup で完走（R7 の口） |
+| control stage（Lua の `script.on_event`） | `ruby/control.rb`: `on(:built)` / `on(:crafted)` / `on(:delivered)` と目標（何をいくつ納品したら勝ち） |
+| 回路ネットワーク | **インサータ 1 台ごとの Ruby**。プレイヤーがゲーム内エディタで書き換える |
+
+rubevy の見本として見せるもの: 宣言を集める口、機械数百台のタスク（irep の共有、`sleep` をばらす）、機械の粒度のイベントとあふれの数、
+tick の中で答える格子の問い、フレーム統計の HUD、Ruby から動かすカメラ。
+
+**やらないもの**: 電力、流体、敵、研究ツリー、地下ベルト、列車、ブループリント、マルチプレイ。足したくなったら報告に書く。
+
+---
+
+## 2. 決まっていること・既定
+
+### 決まっている（著者、2026-09-20）
+
+- 2D、最初から画像素材。素材は **Kenney「Tiny Factory」（CC0）を軸に、足りない部品は同じパレットで自作**。
+- Ruby の役割は (a) data stage + control stage を骨格に、(b) プレイヤーが書く機械は**インサータ**。
+- 汎用にできるものは crate へ。ゲームの語彙を crate に持ち込まない。見つけたら実装せず報告に書く（本体が rubevy / 共有 crate の計画に足す）。
+- PC とブラウザ（wasm32-unknown-unknown、WebGL2）の両方。Pages に 3 本目として載せる。
+- 根拠のない数を書かない。unsafe はなるべく避ける（このゲームに要る場面は無いはず。要ると思ったら止まって報告）。
+
+### 既定（違和感があれば止めて報告する）
+
+- crate 名 `factory`、Pages は `/rubevy_games/factory/`、設定は `factory.settings.txt`、セーブは `factory.save.json`、`localStorage` の接頭辞 `factory:`、
+  selftest は `FACTORY_SELFTEST` と `?selftest`。
+- VM は 1 本（data stage・control stage・インサータが同じ VM。data stage で定義した Ruby の定数を control が使える）。mod を別 VM にする話は**しない**。
+- ライセンスは CC0 のみ。CC0 でも `CREDITS.md` に出典・取得日・どのファイルを何に使ったかを書き、パックの `License.txt` を素材の隣に置く。
+- 素材は fetch で載せる（`web/build.sh` が `assets/` をコピー、`AssetMetaCheck::Never`）。`ImagePlugin::default_nearest()`。
+- 数（地図の大きさ、ベルトの速さ、機械の上限、命令予算、インサータの `sleep`）は**どれもこの文書では決めない**。3.7 の決め方に従う。
+- **数は利用者が変えられる場所に置く**（著者、2026-09-20「マジックナンバーは基本的に禁止。ユーザが変えられるようにするべき」）。
+  遊びの数（速さ、時間、容量、レシピ、目標）は **`data.rb` / `control.rb`**（プレイヤーがエディタで変えられる。data stage がそのためにある）。
+  動かす側の数（予算、`frame_time`、上限、`limit:`、表示の倍率）は **`factory.settings.txt`** と起動の引数。
+  Rust の `const` にしてよいのは、変えると壊れる不変量（セーブの版、素材の 16 px）だけ。箱庭は規則の数がほぼ全部 Rust の `const` だった
+  （`docs/worklog/2026-09-17-garden-world-survey.md`）。同じ形にしない。測って決めた数は「既定値」であって、上限そのものではない。
+- **数には理由を残す**（著者、2026-09-20「基本は設定可能なように、理由があるなら理由も残して」）。`docs/numbers.md`（`shared-crate-plan.md` の S5 が作る表）に
+  Factory の節を足し、数を足す段階ごとに行を足す: 名前、既定値、どこで変えるか、出どころ（測った日と条件／導出／**不明**）。
+  `data.rb` の数はその行のコメントに「何に対してこの値か」。理由の無い数は「遊んで決めた、根拠なし」と正直に書き、もっともらしい理由を作らない。
+
+---
+
+## 3. 設計
+
+### 3.1 格子と搬送（Rust、F1）
+
+- タイル座標（整数の組）⇄ ワールド座標。1 タイルの表示の大きさは素材の 16 px の整数倍。
+- 1 タイルに建物 1 つ（大きい機械は複数タイルを占める）。向き 4 つ。設置と撤去はマウス（共有 crate のカメラのクリックのメッセージ → タイル）。
+- **コンベア**: アイテムはベルト上の位置を持ち、Rust の system が進める。詰まれば止まる。曲がりと合流の規則は最小（直線、L 字、横からの合流）。
+  アイテムはエンティティにするか、ベルトごとの列にして描画だけスプライトにするかを、**数千個で両方測って**決める（3.7）。
+- 描画: 地面と建物は `TilemapChunk`（Bevy 本体。F0 で WebGL2 の確認が通れば）。アイテムのアイコンは**1 枚のアトラス**、**同じ z の層**
+  （バッチは z で整列したとき連続する同じ画像だけ。`bevy_sprite_render-0.19.1/src/render/mod.rs`）。
+- ヘッドレスのテスト: ベルトが運ぶ、詰まる、合流する、機械が作る。描画なしで回る形に（garden / sabibots の headless と同じ作り）。
+
+### 3.2 data stage（F2）
+
+```ruby
+item    :iron_ore,   stack: 50, icon: 3
+item    :iron_plate, stack: 100, icon: 4
+recipe  :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 3.2, made_in: :furnace
+machine :furnace,    size: [2, 2], speed: 1.0, sprite: 75
+```
+
+- 受け口は R7 の口（`sabiruby-serde`）。`Startup` で `ScriptWorld::vm` に登録 → `platform::compile` → `Vm::load_and_run` → 表を Resource へ。
+  **最初の `Update` の前に表が揃っている。** data stage のスクリプトの中で `Rubevy.ask(...).pop` と `sleep` は使えない。
+- 検査は serde の後の規則として書く（存在しないアイテムを参照するレシピ、`time` が 0 以下、大きさ 0 の機械）。エラーは Ruby の `data.rb:行` つきで画面に出し、
+  ゲームは始めない（エディタで直して再読み込みできる）。
+- 上の数値は**例**。実際の値はゲームの調整で決め、`data.rb` のコメントに「何に対してこの値か」を書く（かまど 1 台がベルト 1 本を何割埋めるか、など）。
+- control と インサータからの読み返し: `recipes[:iron_plate]`、`items[:gear]`（R7 の読み返しのヘルパ。tick の中で 0 フレーム）。
+- ブラウザではコンパイルが同期でページを止める。起動時にコンパイルするファイルは少なく保つ（data / control / prelude / インサータの既定）。
+
+### 3.3 インサータの Ruby（F3）
+
+```ruby
+inserter "Smart" do
+  def run
+    loop do
+      thing = behind            # 後ろのタイルにある取れるもの（無ければ nil）。tick の中で返る
+      if thing && front.accepts?(thing) && wants?(thing)
+        move thing               # 腕を振る。振り終わるまでこのタスクは待つ
+      else
+        idle                     # ばらした長さだけ眠る
+      end
+    end
+  end
+
+  def wants?(thing) = thing.name != :stone
+end
+```
+
+- 上は**形の案**。DSL の語（`inserter` / `behind` / `front` / `move` / `idle` / `wants?`）と、`on(:arrived)` のようなイベント駆動の形にするかは、
+  garden の prelude（`on`、`def run`、`me[:X]`、`Rubevy::Proxy`）に合わせて F3 の最初に決め、worklog に理由を書く。
+- **読む問いは tick の中で答える**（`answer_in_tick`。格子の隣のタイルを引くだけ）。クロージャは `Vm` を持てず、返せるのは平たい `Answer` だけ
+  → 「何があるか」はアイテムの番号や数で返し、名前への変換は prelude が data stage の表でやる。
+- **`move` は時間のかかる動作**。腕の動きは Rust。終わるまで待つ形を、(a) `Rubevy.ask("factory.move", …).pop` にゲームが後のフレームで答える
+  （`Request` を持ち続けてよいか、その間に機械が撤去・スクリプトが差し替えられたときどうなるか）、(b) イベントを待つ、(c) `sleep` してから確かめる、
+  から**調べて選ぶ**。ここは rubevy の汎用の話（「完了まで待つ動作」）になりうるので、分かったことを報告に書く。
+- **全台が同じ長さ眠らない**（実測: 3000 台・同じ `sleep` で p95 が 20 ms）。`idle` は prelude が台ごとにずらす。ずらし方と長さは 3.7。
+- 既定のスクリプトは全インサータで 1 本（R2 で irep は 1 つ）。エディタで 1 台だけ書き換える／同じスクリプトの全台に適用する、の 2 つ
+  （`Editor` の `apply_label` / `apply_all_label`）。差し替えのたびに古い irep が VM に残る（sabiruby 側の既知の穴）ので、差し替え回数と `ireps` を HUD かログで見えるように。
+- 壊れたスクリプト（例外、`Task::Overrun`）の機械は止まり、機械の上に印を出す。ゲームは続く。
+- セーブはタスクの途中を持てない。インサータの状態は ivar か component に書く（`run` は頭から始め直せる形）。
+
+### 3.4 control stage（F4）
+
+- `ruby/control.rb` は 1 つのスクリプト（1 タスク + `on` のハンドラ）。イベントは**機械の粒度**だけ: 設置、撤去、製造完了、納品、詰まり。
+  **搬送物 1 個ごとのイベントは出さない**（購読 1 本は 1 フレーム 64 件が天井）。
+- 目標: `goal deliver: { science: N }` のような宣言と、`on(:delivered)` で数えて勝ちを publish する形。N は遊んで決める。
+- あふれは `Subscription#dropped`（R3）で数え、HUD に出す。0 でないなら設計（粒度）を見直す合図。
+
+### 3.5 窓（F5）
+
+- 共有 crate: `Editor`（インサータ、`data.rb`、`control.rb` を選べる）、`VmInspector`、`Guide`（英日、`factory/src/guide_text.rs` →
+  `tools/subset-font.sh:45` に足して**フォントを切り直す**）、`Settings`、パン・ズームのカメラ、`Watch`。
+- HUD は egui。`FrameStats`（R5）: 命令数 / 予算、走ったタスク、持ち越し、落としたメッセージ。機械の数、ベルト上のアイテムの数。
+- `P` で世界ごと停止（2 本と同じ作り）。セーブ / ロード（serde、先頭に `version`、違う版は読まない。`docs/web.md:187-194`）。
+- **Ruby からカメラ**（R9 の層 + S3 の答える側）: `control.rb` が勝ったときに納品口へカメラを寄せる、ガイドの中の「ここを見て」、のどちらか 1 つを実例として入れる。
+
+### 3.6 素材（F0a）
+
+- Kenney Tiny Factory 1.0 — https://kenney.nl/assets/tiny-factory （CC0、16×16、`Tilemap/tilemap_packed.png` 192×176 = 4,452 B、間隔なし 12×11）。
+  床 0–2、土 3・9–11・32–35、コンベア右 24–27 / 36–39（2 コマ）、上 4 / 5 系、橙レール 48–51 / 60–63、機械 75–77（赤）・87–89（橙）・99–101（緑）・111–113（青）、
+  木箱 73・85・97、歯車 114。**番号は調査時の読み。取り直して `Tilesheet.txt` と拡大画像で確かめる。**
+- 鉱石の候補: Kenney Tiny Farm の岩（タイル 77・89、https://kenney.nl/assets/tiny-farm 、CC0）に色。UI の枠: Kenney UI Pack – Pixel Adventure（CC0）。
+  既存のパネルは egui なので、画像の枠を使うのはゲーム内の表示（建設メニューなど）だけでよい。
+- **足りないもの**: コンベアの下向き・左向き・曲がり、インサータ（基部 + `Transform` で回す腕の 2 枚）、鉱石、アイテムのアイコン、採掘機・かまどの専用の絵。
+  ベルトの色は 5〜7 色（`#8b9bb4` `#c0cbdc` `#5a6988` `#3e4e6e` `#3f2631`、橙レールは `#fdbe53` `#e38628`）。
+- **ベルトの向きは著者が見て決める**: (i) 3/4 の絵を活かして 4 向き + 曲がりを個別に描く、(ii) ベルトだけ真上からの絵で自作し、回転と反転で済ませる。
+  F0a で両方の小さな見本（直線 4 向きと曲がり 1 つ、機械と並べた画面）を作り、**スクリーンショットを報告して止まる**。
+- 自作の絵は生成スクリプト（`tools/` に置く。Python + Pillow）で作り、スクリプトと出力の両方をコミットする。著者が後から手で直せるよう、1 枚のシートと番号の表にする。
+  自作ぶんのライセンスはリポジトリと同じ（MIT）で、`CREDITS.md` に「Kenney のパレットに合わせて自作」と書く。
+- 容量は箱庭と同じ決め方: 先に上限を決めて表に残す。Kenney 由来の 3 枚は合計 13,974 B（4,452 + 5,866 + 3,656）。上限は F0a で実物を並べてから、
+  既存 2 本の実績（sabibots 234,202 B、garden 322,924 B。`docs/web.md`）を超えない範囲で決める。
+
+### 3.7 数の決め方
+
+| 数 | 決め方 |
+|---|---|
+| アイテムの表現（エンティティか列か）とベルト上の上限 | F1 で数千個を両方の形で、PC と**ブラウザ（SwiftShader ではなく実機の数字が取れるなら実機、取れなければその旨）**で測る |
+| スクリプト付きインサータの上限 | 実測の目安は「毎フレーム動く形で約 1000 台、8.3 ms」（rubevy の worklog）。R1〜R4 の後に how_many_scripts で取り直し、フレームの中でスクリプトに渡せる時間から決める |
+| 命令予算（`budget`）と `frame_time` | 箱庭と同じ: **上限の工場に座って測る**（`garden/src/main.rs:4285-4323` のコメントが手本）。最大値に対する余裕の倍率も測った分布から |
+| インサータの `idle` の長さとずらし方 | 腕の 1 往復の時間（ゲームの調整値）より短く起きても無駄、が上限の根拠。ずらしは「同じフレームに起きる台数」を FrameStats で見て決める |
+| イベントの `limit:` | control が 1 フレームに受けうる機械の出来事の最大を測って決める。既定の 64 で足りるならそのまま、と書く |
+| 地図の大きさ | 上の上限の機械が無理なく置ける広さ、から |
+
+---
+
+## 4. 段階
+
+各段階の終わりに `cargo test --workspace`、PC で起動、wasm ビルド。**F0、F3、F5、F6 は `web/build.sh` + Playwright（pageerror 0、requestfailed 0）まで。**
+
+| 段階 | 到達点 | 確認 |
+|---|---|---|
+| **F0** | crate の骨組み（`shared-crate-plan.md` の後なのでコピーは最小）、`TilemapChunk` で Tiny Factory の床を敷き、カメラでパン・ズーム、Pages の入口に 3 本目 | **`TilemapChunk` が WebGL2（ブラウザ）で描ける**ことを Playwright のスクリーンショットと pageerror 0 で。描けなければ代替（`bevy_ecs_tilemap` 0.19.0 / `Sprite` の敷き詰め）を比べて**報告して止まる** |
+| **F0a** | 素材一式の取得と `CREDITS.md`、自作シートの生成スクリプト、ベルトの向き 2 案の見本 | 見本のスクリーンショット 2 枚と容量の表を報告して**止まる**（著者が選ぶ） |
+| **F1** | 格子、設置と撤去、コンベアの搬送、鉱石と採掘機、箱。Ruby なし | ヘッドレスのテスト（運ぶ・詰まる・合流）。アイテム数千個の計測と、表現の選択の記録 |
+| **F2** | data stage。かまどと組立機がレシピどおりに作る | 宣言の誤り（未知のフィールド、無いアイテム、`time` ≤ 0）が `data.rb:行` つきで出る。表が最初の `Update` の前に揃っているテスト。ブラウザでも同じ |
+| **F3** | インサータの Ruby、prelude と DSL、tick の中の問い、`move` の待ち方の選択、既定のスクリプト 1 本、エディタで 1 台／全台に適用 | インサータなしでは線がつながらず、置くと流れる。わざと壊したスクリプトでゲームが止まらない。N 台での FrameStats（同時に起きる台数、持ち越し）。Playwright |
+| **F4** | control stage とイベント、目標と勝ち、あふれの数の HUD | `control.rb` を差し替えて目標が変わる。`dropped` が 0 のまま上限の工場が回る（回らなければ粒度を報告） |
+| **F5** | 窓一式（エディタ 3 種、VM パネル、ガイド英日 + フォント、設定、`P`、セーブ / ロード、Ruby からカメラ） | セーブ → ロード → セーブでテキストが一致。インサータの ivar が戻る。ガイドに豆腐が無い |
+| **F6** | `?selftest`（`FACTORY_SELFTEST`）、上限の工場での予算の実測と決定、docs（`docs/factory.md`、`docs/web.md` の表とサイズ、`docs/README.md`、`README.md:12` を planned → playable、`CREDITS.md`、`.gitignore`） | selftest を PC で複数回、ブラウザで pageerror 0 と行数一致。wasm のサイズを `docs/web.md` の表に |
+
+---
+
+## 5. 分かっている罠
+
+- **`Vm::set_host_state` を使わない**（rubevy が占有。上書きすると rubevy のコマンドが黙って消える）。表は R7 の口が host store に置く。
+- ネイティブは Bevy の `World` に触れない。`answer_in_tick` のクロージャは `Vm` に触れない（Hash の引数は中を読めない、返せるのは平たい `Answer`）。
+- 同じ tick の中で書いた component は読めない（書きはフレームの終わり）。「読む → 決める → 書く」の順で DSL を作る。
+- `publish` は購読者ごとに値を作り直す。全インサータが同じイベントを購読する形にしない（宛先つきの publish か、読む問いにする）。
+- `Script::with_priority` で優先度を分けると、番号の大きい側は予算が尽きたとき飢える。インサータは全台同じ優先度。control は高く、の理由を書く。
+- `TilemapChunk` の `array_layout` は `.meta` に頼れない（`AssetMetaCheck::Never`）。コードの `with_settings` で渡す。
+- 非整数倍のズームでスプライトのアトラスの隣のタイルがにじむ。カメラのズームを整数倍に丸めるか、1 px 間隔つきのシート（`tilemap.png`）を使う。
+- egui はクリックの前にポインタが動いていないと hover 扱いしない。Playwright では `page.goto` を `waitUntil:'commit'`（`docs/web.md:299-305`）。
+- ブラウザでは `AppExit` を書かない（`CHECKS_EXIT_WHEN_DONE`）。`SystemTime` / `Instant` / `std::fs` を wasm の道に置かない。
+- 外部のサービスを叩くとき（素材の取得など）、著者のメールアドレスなどの個人情報を User-Agent や問い合わせに入れない。
+
+## 6. 状況
+
+| 段階 | 状況 |
+|---|---|
+| F0〜F6 | 未着手（2026-09-20、計画のみ。rubevy R0〜R9 と共有 crate S1〜S4 が先。R10・S5 は並行） |
