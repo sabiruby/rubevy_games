@@ -71,6 +71,11 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
 > それは S3 が `CameraKeys` を `Settings` に出さなかったのと同じ理由（`camera.rs`）。
 >
 > S4a の注意書き（`crates/rubevy-arena` が 2 つに割れてファイルが動いた）はここで解消した。
+>
+> **S5b-2（2026-09-21）が 2 行足した**（42 → 44 件）。S5b-1 が「一覧に無い数がまだある」と
+> 報告した VM パネルの 9 か所の色（→ §1.4 の 1 行、`1 組 1 行` の規則で）と説明パネルの
+> 余白 3 つ（→ §1.5 の 1 行）で、**数は 1 つも動かしていない**。行番号も S5b-2 の時点で
+> 取り直してある。
 
 ### 1.1 アリーナのカメラ（`games-shell/src/lib.rs`）
 
@@ -129,20 +134,22 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 |---|---|---|---|---|---|---|
 | `REGS_FRAMES` | `inspect.rs:38` | 6 | ● | `InspectStyle::regs_frames`、`vm_regs_frames` | (c) | *理由のみ* 「A brain waiting for the game stands about three frames deep in the DSL, so six reaches its own code as well」 |
 | 命令数/フレームの平滑化 `INSN_SMOOTHING` | `inspect.rs:69` | 0.05（＝ 1 − 0.95） | ● | `InspectStyle::insn_smoothing` | (c) | **不明**（平滑化する理由だけ書いてある） |
-| VM の ms の平滑化 `CLOCK_SMOOTHING` | `inspect.rs:651` | 0.2（＝ 1 − 0.8） | ● | `VmClock::smoothing`、`vm_clock_smoothing` | (c) | *理由のみ* 「60 Hz で約 1/6 秒ぶんの記憶」。0.2 そのものは **不明** |
+| VM の ms の平滑化 `CLOCK_SMOOTHING` | `inspect.rs:715` | 0.2（＝ 1 − 0.8） | ● | `VmClock::smoothing`、`vm_clock_smoothing` | (c) | *理由のみ* 「60 Hz で約 1/6 秒ぶんの記憶」。0.2 そのものは **不明** |
 | ログに出すフレーム数 `LOG_FRAMES` | `inspect.rs:64` | 4 | | `InspectStyle::log_frames` | (c) | **不明** |
 | 名前を切る長さ `NAME_CHARS` | `inspect.rs:61` | 40（切ると 39 + `…`） | ● | `InspectStyle::name_chars` | (c) | **不明** |
 | 値の表示を切る長さ `VALUE_CHARS` | `inspect.rs:57` | 52 | ● | `InspectStyle::value_chars`、`vm_value_chars` | (c) | **不明** |
 | `FONT` | `inspect.rs:41` | 12.0 | | `InspectStyle::font`、`vm_font` | (c) | **不明** |
 | `PANEL_HEIGHT` / `FRAMES_HEIGHT` / `REGS_HEIGHT` | `inspect.rs:45-47` | 440 / 148 / 150 | | `InspectStyle`、`vm_panel_height` / `vm_frames_height` / `vm_regs_height` | (c) | **不明** |
 | パネルの幅 `WIDTH` / `WIDTH_MARGIN` | `inspect.rs:51-52` | 640.0（窓幅 − 16 が上限） | ● | `InspectStyle::width` / `width_margin`、`vm_width` | (c) | **不明** |
+| パネルの 7 色（`AMBER` / `PALE` / `LIT` / `DIM` / `REG_NAME` / `REG_TEMP` / `REG_INDEX`） | `inspect.rs:85-109` | `(240,190,90)` ほか 6 色 | ● | `InspectStyle` の 7 フィールド。`Settings` には出していない | (c) 表示 | **不明**（7 色とも）。**S5b-2 で足した**: S5a の網に掛かっておらず、`draw_inspector` の 9 か所に直書きされていた（同じ値が 2 つ、2 回ずつ）。`AMBER` と `REG_NAME` は `editor.rs` の `AMBER` / `KINDS[0]` と**同じ値だが繋いでいない**（意図の記録が無いため。§7-11） |
 
 ### 1.5 説明（`games-shell/src/guide.rs`）と HUD（`games-shell/src/hud.rs`）
 
 | 名前 / 数 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
 | 説明の窓の大きさ `SIZE` / `MAX_HEIGHT` | `guide.rs:202-203` | `[640, 820]`、最大 860 | ● | `GuideStyle`、`Settings` の `guide_width` / `guide_height` / `guide_max_height` | (c) | **引用**: G6 の絵で下が切れていたので広げた（`docs/plans/garden-plan.md`）。測った記録ではない。860 は **不明** |
-| キーの色 `KEYCOL` | `guide.rs:320` | `(255,226,150)` | ● | `GuideStyle::key_color`（`Settings` には出さない） | (c) | **不明** |
+| キーの色 `KEYCOL` | `guide.rs:341` | `(255,226,150)` | ● | `GuideStyle::key_color`（`Settings` には出さない） | (c) | **不明** |
+| 説明の余白 3 つ（`NOTE_SPACING` / `KEY_SPACING`） | `guide.rs:207-211` | 6.0、`[14.0, 3.0]` | ● | `GuideStyle::note_spacing`（`Settings` の `guide_note_spacing`）／`key_spacing`（組なので鍵は無い） | (c) | **不明**。**S5b-2 で足した**（S5a の網に掛かっていなかった。`draw_guide` に直書き） |
 | 日本語フォント（部分集合） | `guide.rs:56` | 327 文字・62,780 バイト | | ビルド時（`tools/subset-font.sh`） | (a) 本文と一緒に切らないと字が欠ける | **測った**（`docs/plans/garden-plan.md`。9,589,900 → 62,780 バイト） |
 | HUD の予算バーの目盛 `BAR_TICKS` | `hud.rs:33` | 16 | ● | `HudStyle::bar_ticks`、`hud_bar_ticks` | (c) | **不明** |
 | HUD の字の大きさ `LINE_FONT` / `PANEL_FONT` | `hud.rs:37-38` | 15.0 / 13.0 | | `HudStyle`、`hud_line_font` / `hud_panel_font` | (c) | **不明** |
@@ -164,10 +171,11 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | `EditorLayout` | `rubevy-egui`（Resource。`EditorPlugin::sized`） | `editor_margin` / `editor_width` / `editor_height` / `editor_font` / `editor_choice_font` / `editor_choice_spacing` | 8 / 520 / 640 / 13 / 16 / 6 |
 | `EditorColors` | `rubevy-egui`（`Editor::colors`） | — （色は出さない） | `KINDS` 9 色 / `HEAT_BAND` / `HEAT_ALPHA` 170 / `HEAT_FLOOR` 0.1 / `AMBER` |
 | `InspectStyle` | `rubevy-egui`（`VmInspector::style`） | `vm_font` / `vm_panel_height` / `vm_frames_height` / `vm_regs_height` / `vm_width` / `vm_regs_frames` / `vm_value_chars` | 12 / 440 / 148 / 150 / 640 / 6 / 52 |
+| `InspectStyle` の 7 色（**S5b-2**） | `rubevy-egui`（同上） | — （色は出さない） | `AMBER` / `PALE` / `LIT` / `DIM` / `REG_NAME` / `REG_TEMP` / `REG_INDEX` |
 | `VmClock::smoothing` | `rubevy-egui` | `vm_clock_smoothing` | 0.2 |
 | `CodeStyle` | `rubevy-egui`（Resource。`CodePanelPlugin::sized`） | `code_rows` / `code_chars` / `code_width` / `code_font` | 28 / 44 / 430 / 12 |
 | `HudStyle` | `games-shell`（Resource。`HudPlugin::styled`） | `hud_line_font` / `hud_panel_font` / `hud_margin` / `hud_bar_ticks` | 15 / 13 / 8 / 16 |
-| `GuideStyle` | `games-shell`（Resource。`GuidePlugin::styled`） | `guide_width` / `guide_height` / `guide_max_height` | 640 / 820 / 860 |
+| `GuideStyle` | `games-shell`（Resource。`GuidePlugin::styled`） | `guide_width` / `guide_height` / `guide_max_height` / `guide_note_spacing`（**S5b-2**） | 640 / 820 / 860 / 6（`key_spacing` `[14, 3]` は鍵なし） |
 | `ArenaPlugin::floor_margin` | `games-shell`（プラグインの値。`ArenaView` が運ぶ） | — | 3.0 |
 | `ArenaPlugin::showing(half)` | `games-shell`（既定を**持たない**。ゲームが渡す） | — | — |
 | `PanelSettingsPlugin` | `games-shell`（`PreStartup` に上の鍵を読む） | — | — |
@@ -673,6 +681,13 @@ S5a の時点では 20 個の `const`（うち数値 17）と 149 行のリテ�
    属する話: 共有 crate の `ScriptPanel`。
 10. **`docs/README.md` の目次の Battle の説明（31 行 + 当たり 2 行）と `?selftest` の実際の行数は
     今回確かめていない。** 一覧の仕事はコードを動かさないので、突き合わせていない。属する話: S1 の基準取り。
+11. **VM パネルの `AMBER` と `REG_NAME` は、エディタの `AMBER` / `KINDS[0]` と同じ値**
+    （`(240,190,90)` と `(210,214,222)`）。同じ crate の隣同士で、片方は「熱の暖色」、片方は
+    「止まっている」の印で、**意図の記録はどこにも無い**。S5b-2 は `garden` の空腹バー 55.0 と
+    `hungry_below` 55.0（§7-6）と同じ扱いにした——**繋がない**。繋ぐと、エディタの `* edited` の
+    色を変えた人が VM パネルまで塗り替えることになり、それは記録の無い意図を後から作ることになる。
+    単体テスト（`inspect.rs` の `the_colours_are_settings_and_not_in_the_store`）が「今日は同じ値」
+    であることだけを書き留めている。属する話: 共有 crate（色の設計）。
 
 ---
 

@@ -202,6 +202,14 @@ impl Guide {
 pub const SIZE: [f32; 2] = [640.0, 820.0];
 pub const MAX_HEIGHT: f32 = 860.0;
 
+/// The gap under each paragraph of the guide, so the notes read as notes rather than as one
+/// block. **Source unknown** (S5b-2: it was written into `draw_guide`).
+pub const NOTE_SPACING: f32 = 6.0;
+
+/// The key table's column gap and row gap. **Source unknown** — like the editor's button padding,
+/// the pair arrived with the panel and nothing says why 14 and 3.
+pub const KEY_SPACING: [f32; 2] = [14.0, 3.0];
+
 /// **Every number the guide has**, in one resource a game can hand [`GuidePlugin::styled`] or a
 /// player can change through the `key=value` store ([`GuideStyle::read_from`]). The key colour is
 /// here too, since it is the one colour this panel chooses for itself.
@@ -213,11 +221,21 @@ pub struct GuideStyle {
     pub max_height: f32,
     /// [`KEYCOL`]
     pub key_color: (u8, u8, u8),
+    /// [`NOTE_SPACING`]
+    pub note_spacing: f32,
+    /// [`KEY_SPACING`]
+    pub key_spacing: [f32; 2],
 }
 
 impl Default for GuideStyle {
     fn default() -> Self {
-        GuideStyle { size: SIZE, max_height: MAX_HEIGHT, key_color: KEYCOL }
+        GuideStyle {
+            size: SIZE,
+            max_height: MAX_HEIGHT,
+            key_color: KEYCOL,
+            note_spacing: NOTE_SPACING,
+            key_spacing: KEY_SPACING,
+        }
     }
 }
 
@@ -229,9 +247,11 @@ impl GuideStyle {
     /// | `guide_width` | [`GuideStyle::size`]`[0]` |
     /// | `guide_height` | [`GuideStyle::size`]`[1]` |
     /// | `guide_max_height` | [`GuideStyle::max_height`] |
+    /// | `guide_note_spacing` | [`GuideStyle::note_spacing`] |
     ///
     /// The colour is not among them, for the reason the camera's keys are not: a colour in a text
-    /// file needs a parser, and a game may still set it.
+    /// file needs a parser, and a game may still set it. [`GuideStyle::key_spacing`] is left out
+    /// for the same reason — it is a pair (S5b-2).
     pub fn read_from(&mut self, settings: &crate::Settings) {
         let take = |key: &str, slot: &mut f32| {
             if let Some(value) = settings.number(key) {
@@ -241,6 +261,7 @@ impl GuideStyle {
         take("guide_width", &mut self.size[0]);
         take("guide_height", &mut self.size[1]);
         take("guide_max_height", &mut self.max_height);
+        take("guide_note_spacing", &mut self.note_spacing);
     }
 }
 
@@ -388,14 +409,14 @@ fn draw_guide(
                         GuideLang::En => egui::RichText::new(&note.en),
                         GuideLang::Ja => egui::RichText::new(&note.ja),
                     });
-                    ui.add_space(6.0);
+                    ui.add_space(style.note_spacing);
                 }
                 if !guide.keys.is_empty() {
                     ui.separator();
                     // two columns now, not three: the key and what it does in the one language
                     egui::Grid::new("guide-keys")
                         .num_columns(2)
-                        .spacing([14.0, 3.0])
+                        .spacing(style.key_spacing)
                         .striped(true)
                         .show(ui, |ui| {
                             for row in &guide.keys {
@@ -459,6 +480,17 @@ mod tests {
         assert_eq!(style.size[0], SIZE[0], "a key nobody wrote leaves the default alone");
         assert_eq!(style.max_height, MAX_HEIGHT);
         assert_eq!(style.key_color, KEYCOL, "and the colour is not in the store at all");
+
+        // S5b-2: the three gaps the panel was drawn with. The single one has a key; the pair does
+        // not, for the reason the colour does not — a pair of numbers in a text file needs a
+        // parser — and a game may still write it.
+        settings.set("guide_note_spacing", "12");
+        let mut spaced = GuideStyle::default();
+        spaced.read_from(&settings);
+        assert_eq!(spaced.note_spacing, 12.0);
+        assert_eq!(spaced.key_spacing, KEY_SPACING, "the pair is not in the store");
+        assert_eq!(GuideStyle { key_spacing: [1.0, 2.0], ..GuideStyle::default() }.key_spacing, [1.0, 2.0]);
+
         let _ = std::fs::remove_file(&path);
     }
 }

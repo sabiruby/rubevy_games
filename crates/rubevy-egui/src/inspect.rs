@@ -68,6 +68,46 @@ pub const LOG_FRAMES: usize = 4;
 /// spends nothing on most frames, and 0, 0, 340, 0 is not a number anybody can read.
 pub const INSN_SMOOTHING: f32 = 0.05;
 
+// ---------------------------------------------------------------------------------------------
+// The colours (S5b-2). They were written into `draw_inspector` in nine places until 2026-09-21,
+// when the S5b-1 inventory turned out to have caught the editor's colours next door and missed
+// these (`docs/numbers.md` §1.4). **One `const` per distinct colour, and one field per `const`**:
+// where the same value was written twice it is one setting now, and the rustdoc says which places
+// it paints. None of them has a recorded source.
+// ---------------------------------------------------------------------------------------------
+
+/// **The world is paused**, and the panel's own note under the waiting line.
+///
+/// **Source unknown**. It is the same value as [`crate::editor::AMBER`] and is **not read from
+/// it**: nothing written down says whether the two panels are meant to be one colour, and
+/// inventing that intent here would make a game that changed the editor's `* edited` mark quietly
+/// repaint the VM panel too (`docs/numbers.md` §7).
+pub const AMBER: egui::Color32 = egui::Color32::from_rgb(240, 190, 90);
+
+/// The script's own lines: the line it is waiting on, and its own frames above the numbers.
+/// **Source unknown**.
+pub const PALE: egui::Color32 = egui::Color32::from_rgb(200, 206, 216);
+
+/// **What to read first**: the sentence saying why the script is waiting, and — in the details —
+/// the frame whose registers are shown. One colour because it is one job; it was written twice.
+/// **Source unknown**.
+pub const LIT: egui::Color32 = egui::Color32::from_rgb(255, 236, 150);
+
+/// The grey of what is there but not the point: a frame that is not the script's own, and the
+/// class of a register's value. **Source unknown**; it was written twice.
+pub const DIM: egui::Color32 = egui::Color32::from_gray(140);
+
+/// A named local of the selected frame — the row a reader is there for. **Source unknown**; it is
+/// the same value as the editor's body colour ([`crate::editor::KINDS`]`[0]`) and, for the reason
+/// [`AMBER`] gives, not read from it.
+pub const REG_NAME: egui::Color32 = egui::Color32::from_rgb(210, 214, 222);
+
+/// A register the compiler needed rather than one the author named. **Source unknown**.
+pub const REG_TEMP: egui::Color32 = egui::Color32::from_gray(130);
+
+/// The `R3` column down the left of the registers. **Source unknown**.
+pub const REG_INDEX: egui::Color32 = egui::Color32::from_gray(120);
+
 /// **Every number the VM panel has.** It is a field of [`VmInspector`] rather than a resource of
 /// its own because [`VmInspector::fill`] is a method — a game with no window builds a panel by
 /// hand to print a log with (SabiRuby Battle's `--headless`), and none of this crate's plugins is
@@ -100,6 +140,20 @@ pub struct InspectStyle {
     pub log_frames: usize,
     /// [`INSN_SMOOTHING`]
     pub insn_smoothing: f32,
+    /// [`AMBER`]
+    pub amber: egui::Color32,
+    /// [`PALE`]
+    pub pale: egui::Color32,
+    /// [`LIT`]
+    pub lit: egui::Color32,
+    /// [`DIM`]
+    pub dim: egui::Color32,
+    /// [`REG_NAME`]
+    pub reg_name: egui::Color32,
+    /// [`REG_TEMP`]
+    pub reg_temp: egui::Color32,
+    /// [`REG_INDEX`]
+    pub reg_index: egui::Color32,
 }
 
 impl Default for InspectStyle {
@@ -116,6 +170,13 @@ impl Default for InspectStyle {
             name_chars: NAME_CHARS,
             log_frames: LOG_FRAMES,
             insn_smoothing: INSN_SMOOTHING,
+            amber: AMBER,
+            pale: PALE,
+            lit: LIT,
+            dim: DIM,
+            reg_name: REG_NAME,
+            reg_temp: REG_TEMP,
+            reg_index: REG_INDEX,
         }
     }
 }
@@ -139,6 +200,9 @@ impl InspectStyle {
     /// A key that is not there leaves the field alone. A count that is written as a fraction is
     /// truncated, and one written as a negative number is read as 0 — which for `vm_regs_frames`
     /// means a snapshot with no registers in it, not a panic.
+    ///
+    /// **The seven colours are not in the store** (S5b-2), for the reason the editor's nine are
+    /// not: a colour in a text file needs a parser. A game may still write them.
     pub fn read_from(&mut self, number: impl Fn(&str) -> Option<f32>) {
         let take = |key: &str, slot: &mut f32| {
             if let Some(value) = number(key) {
@@ -726,8 +790,9 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else { return };
-    let amber = egui::Color32::from_rgb(240, 190, 90);
-    let pale = egui::Color32::from_rgb(200, 206, 216);
+    // S5b-2: the panel's colours are `InspectStyle`'s, as its sizes have been since S5b-1
+    let style = panel.style.clone();
+    let (amber, pale) = (style.amber, style.pale);
     let title = panel.title.clone();
     let status = panel.status.clone();
     let note = panel.note.clone();
@@ -743,7 +808,6 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
     // the bottom left: the scoreboard has the top left and the editor the right side, and all
     // three can be dragged anywhere
     let bottom = ctx.content_rect().bottom();
-    let style = panel.style.clone();
     let font = style.font;
     let width = style.width.min(ctx.content_rect().width() - style.width_margin);
     egui::Window::new("VM")
@@ -767,7 +831,7 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
             ui.add_space(2.0);
             ui.label(
                 egui::RichText::new(waiting.text())
-                    .color(egui::Color32::from_rgb(255, 236, 150))
+                    .color(style.lit)
                     .size(14.0),
             )
             .on_hover_text(waiting.how());
@@ -866,11 +930,11 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                             ))
                             .font(egui::FontId::monospace(font))
                             .color(if panel.selected == i {
-                                egui::Color32::from_rgb(255, 236, 150)
+                                style.lit
                             } else if f.own {
                                 pale
                             } else {
-                                egui::Color32::from_gray(140)
+                                style.dim
                             });
                             if ui
                                 .add(egui::Label::new(text).sense(egui::Sense::click()).wrap_mode(egui::TextWrapMode::Extend))
@@ -910,13 +974,13 @@ fn draw_inspector(mut contexts: EguiContexts, mut panel: ResMut<VmInspector>, cl
                                     (None, _) => String::new(),
                                 };
                                 let color = if r.local || r.index == 0 {
-                                    egui::Color32::from_rgb(210, 214, 222)
+                                    style.reg_name
                                 } else {
-                                    egui::Color32::from_gray(130)
+                                    style.reg_temp
                                 };
-                                ui.label(egui::RichText::new(format!("R{}", r.index)).font(egui::FontId::monospace(font)).color(egui::Color32::from_gray(120)));
+                                ui.label(egui::RichText::new(format!("R{}", r.index)).font(egui::FontId::monospace(font)).color(style.reg_index));
                                 ui.label(egui::RichText::new(name).font(egui::FontId::monospace(font)).color(color));
-                                ui.label(egui::RichText::new(short(&r.class, style.value_chars)).font(egui::FontId::monospace(font)).color(egui::Color32::from_gray(140)));
+                                ui.label(egui::RichText::new(short(&r.class, style.value_chars)).font(egui::FontId::monospace(font)).color(style.dim));
                                 ui.label(egui::RichText::new(short(&r.text, style.value_chars)).font(egui::FontId::monospace(font)).color(color))
                                     .on_hover_text(&r.text);
                                 ui.end_row();
@@ -1055,6 +1119,33 @@ mod tests {
         let mut untouched = InspectStyle::default();
         untouched.read_from(|_| None);
         assert_eq!(untouched, InspectStyle::default());
+    }
+
+    /// **The panel's seven colours are settings, and none of them is in the store** (S5b-2).
+    ///
+    /// They were written into `draw_inspector` in nine places — two values twice — until the
+    /// S5b-1 inventory was found to have caught the editor's colours next door and missed these.
+    /// What this holds is that a game can write one, that reading a store does not touch any of
+    /// them, and that where the same value was written twice there is now one setting rather than
+    /// two: painting `dim` green must reach both the foreign frames and the class column.
+    #[test]
+    fn the_colours_are_settings_and_not_in_the_store() {
+        let mut style = InspectStyle::default();
+        style.read_from(|_| Some(3.0));
+        assert_eq!(style.amber, AMBER, "a store cannot repaint the panel");
+        assert_eq!(style.lit, LIT);
+
+        let green = egui::Color32::from_rgb(0, 255, 0);
+        let mine = InspectStyle { dim: green, ..InspectStyle::default() };
+        assert_eq!(mine.dim, green);
+        assert_ne!(mine, InspectStyle::default());
+
+        // the two that were written twice are one setting each
+        assert_eq!(LIT, egui::Color32::from_rgb(255, 236, 150), "why it waits, and the shown frame");
+        assert_eq!(DIM, egui::Color32::from_gray(140), "a foreign frame, and a value's class");
+        // and the one that is a copy of the editor's is deliberately *not* read from it
+        assert_eq!(AMBER, crate::editor::AMBER, "the same value today…");
+        assert_eq!(REG_NAME, crate::editor::KINDS[0], "…and so is this one");
     }
 
     /// The two lengths a long line is cut at are the panel's own settings now: what a name is cut
