@@ -1011,22 +1011,47 @@ fn a_text_that_will_not_compile(file: &str) -> (String, usize) {
     (broken, at)
 }
 
+/// **What the editor's checks read about the match**, as against what they drive (the editor, the
+/// keyboard, `Restart`). One parameter instead of seven.
+///
+/// [`selftest`] stood at **exactly sixteen system parameters, which is Bevy's limit** — S5b-1 ran
+/// into it and had to put the editor's colours inside `Editor` rather than in a resource of their
+/// own to avoid adding a seventeenth. S5b-2 needs to read what the match was given, so the seven
+/// that are about the world travel together, the way the garden's `FakePointer` does
+/// (`garden/src/window.rs`).
+#[derive(bevy::ecs::system::SystemParam)]
+struct MatchUnderTest<'w, 's> {
+    /// G9: where the tanks are, and what the match's own clock says — the two things `P` must
+    /// hold still besides the VM
+    bodies: Query<'w, 's, (Entity, &'static Transform), With<Robot>>,
+    clock: Res<'w, WorldClock>,
+    tasks: Query<'w, 's, &'static ScriptTask>,
+    world: Res<'w, ScriptWorld>,
+    panel: Res<'w, VmInspector>,
+    walls: Query<'w, 's, &'static Transform, With<Wall>>,
+    arena: Res<'w, ArenaSize>,
+}
+
+impl MatchUnderTest<'_, '_> {
+    /// What every brain has run together: the number that must stop moving while the VM is paused.
+    fn spent(&self) -> u64 {
+        self.tasks.iter().map(|t| self.world.vm.task_instructions(t.task())).sum()
+    }
+
+    /// And where the tanks are, which must stop moving with it (G9).
+    fn places(&self) -> Vec<(Entity, Vec3)> {
+        self.bodies.iter().map(|(e, t)| (e, t.translation)).collect()
+    }
+}
+
 fn selftest(
     time: Res<Time>,
     mut test: ResMut<SelfTest>,
     mut editor: ResMut<Editor>,
     mut watched: ResMut<Watched>,
     robots: Query<(Entity, &Robot)>,
-    // G9: where the tanks are, and what the match's own clock says — the two things `P` must
-    // hold still besides the VM
-    bodies: Query<(Entity, &Transform), With<Robot>>,
-    match_clock: Res<WorldClock>,
-    tasks: Query<&ScriptTask>,
-    world: Res<ScriptWorld>,
-    panel: Res<VmInspector>,
+    field: MatchUnderTest,
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    walls: Query<&Transform, With<Wall>>,
-    arena: Res<ArenaSize>,
     mut restart: ResMut<Restart>,
     mut edits: ResMut<EditChecks>,
     mut exit: MessageWriter<AppExit>,
@@ -1035,12 +1060,11 @@ fn selftest(
     if now < test.at {
         return;
     }
+    let (world, panel, match_clock) = (&field.world, &field.panel, &field.clock);
     let by_number = |n: usize| robots.iter().find(|(_, r)| r.number == n);
     let ok = |cond: bool, what: &str| info!("selftest: {} {what}", if cond { "ok  " } else { "FAIL" });
-    // what every brain has run together: the number that must stop moving while the VM is paused
-    let spent = || tasks.iter().map(|t| world.vm.task_instructions(t.task())).sum::<u64>();
-    // and where the tanks are, which must stop moving with it (G9)
-    let places = || -> Vec<(Entity, Vec3)> { bodies.iter().map(|(e, t)| (e, t.translation)).collect() };
+    let spent = || field.spent();
+    let places = || field.places();
     match test.step {
         0 => {
             // show robot 3 and type a different brain into the editor
@@ -1174,7 +1198,8 @@ fn selftest(
             ok(r3.is_some_and(|r| r.brain.is_none()), "robot 3 comes back on its file");
             ok(r4.is_some_and(|r| r.brain.is_some()), "robot 4 comes back with its applied behaviour");
             // every side ends on a corner: no crate past the wall's line
-            let half = arena.0;
+            let half = field.arena.0;
+            let walls = &field.walls;
             let edge = walls.iter().map(|t| t.translation.x.abs().max(t.translation.y.abs())).fold(0.0f32, f32::max);
             let corner = walls.iter().any(|t| (t.translation.x - half).abs() < 0.01 && (t.translation.y - half).abs() < 0.01);
             ok((edge - half).abs() < 0.01 && corner, "the wall ends exactly on its corners");
