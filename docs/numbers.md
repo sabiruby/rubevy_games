@@ -216,7 +216,8 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 > `ruby/world.rb` を読んで 10 個の代役と突き合わせるので、**2 つの数が黙って食い違うことはない**。
 > **既定値は 1 つも動かしていない**（6 通りの走行が前後で同じ行を出す）。
 > 移さなかったのは §2.12 の種の遺伝子で、理由と 3 つの案は
-> `docs/worklog/2026-09-21-numbers-garden-play.md` §6（著者判断待ち）。
+> `docs/worklog/2026-09-21-numbers-garden-play.md` §6。**S5b-5 で決着した**: 著者の判断で案 A
+> ——`world.rb` ではなく `Furniture` の設定へ（分類 (b) → (c)、鍵 7 つ、既定値は据え置き）。
 
 ### 2.1 場（`Place`）
 
@@ -402,23 +403,26 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 窓のチェックの開始 | `main.rs:2963` | 3.0 秒 | **不明** |
 | 窓のチェックの上限フレーム数 | `window.rs:1352` | `scheduler_frames(&budgets)` | **導出**（§2.9 の行） |
 | `STRUCTURAL_FRAMES` | `window.rs:1358` | 2 | **測った**（S6 §4.4） |
-| `INSTRUCTIONS_A_FRAME_BUYS` | `window.rs:1365` | 45,600 | **測った**（S6: 5.7 命令/µs × 8,000 µs）。S5b-3 の上限の庭では 6.85 命令/µs で、同じ桁 |
+| `INSTRUCTIONS_A_FRAME_BUYS` | `window.rs:1365` | 45,600 | **測った**（S6: `frame_time` を 300 µs に絞った走行の最小フレーム 1,708 命令 = 5.7 命令/µs × 8,000 µs）。**実測は 2 つある**: S5b-3 が上限の庭を本来の 8 ms で測ると 6.85 命令/µs = 54,800。差は機械ではなく条件（300 µs のフレームは tick の出入りの費用を 27 分の 1 の仕事で払う＝「短いフレームの速さ」）。**遅い方を採る**——この数は予算を割って「何フレーム待ってよいか」を出すので、**大きすぎると待ちが短くなり偽の FAIL が出る**（S6・S7 が消しに来たもの）。小さすぎても判定が遅れるだけ。なお既定の予算 41,000 では `ceil` がどちらも 1 で、`scheduler_frames` は 3 で一致する（差が出るのは予算 45,600 超から）。S5b-5 で rustdoc に 2 つの条件を書いた |
 
 ### 2.12 遺伝子（`genome.rs`）
 
-**S5b-4 も移していない。著者判断待ち**（3 案は `docs/worklog/2026-09-21-numbers-garden-play.md` §6）。
+**S5b-5 で `Furniture` の設定になった**（著者判断: 担当の案 A。分類は (b) → **(c)**）。
+鍵は `start_beetle_speed` / `_sight` / `_appetite`、`start_rabbit_speed` / `_sight` / `_appetite`、
+`start_genome_spread` の 7 つ。**既定値は 1 つも動かしていない。**
 
-理由は 1 行で言える: **この 3 行を読むのは `spawn_world`（`Startup`）だけ**で、`garden.rules` が
-届くのは最初の `Update` である。`world.rb` に書けるようにしても**その数はどの走行でも 1 度も
-使われない**——「エディタで変えられるのに何も起きない数」を 7 つ作ることになる。体の半径が
-移せたのは、半径が `Collider` としてエンティティに載っていて、渡されたあとで書き直せるから
-（`bodies_wear_the_rules`）。**読み手がいつ読むかが、移せるかどうかを決める。**
+`world.rb` に移さなかった理由は 1 行で言える: **この 3 行を読むのは `spawn_world`（`Startup`）
+だけ**で、`garden.rules` が届くのは最初の `Update` である。`world.rb` に書けるようにしても
+**その数はどの走行でも 1 度も使われない**——「エディタで変えられるのに何も起きない数」を 7 つ
+作ることになる。体の半径が移せたのは、半径が `Collider` としてエンティティに載っていて、
+渡されたあとで書き直せるから（`bodies_wear_the_rules`）。**読み手がいつ読むかが、移せるかどうかを
+決める。** 庭を建てるときに 1 度だけ読む数は、株の数や個体の数と同じ「最初の家具」である。
 
 | 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
 |---|---|---|---|---|---|---|
-| 甲虫の種 | `genome.rs:65` | speed 2.2 / sight 8.0 / appetite 1.0 | | `const` 相当（`match`） | (b) 遊びの数。**移していない**（上） | **不明** |
-| ウサギの種 | `genome.rs:66` | 3.4 / 12.0 / 1.0 | | 同上 | (b)。**移していない** | **不明** |
-| `SPREAD` | `genome.rs:56` | 0.18 | | `const` | (b)。**移していない** | **不明** |
+| 甲虫の種 `genome::BEETLE` | `genome.rs` | speed 2.2 / sight 8.0 / appetite 1.0 | | `Furniture::beetle`、`start_beetle_speed` / `_sight` / `_appetite` | **(c)** | speed・sight は **不明**（G1 が書いた）。appetite 1.0 は **導出**: `world.rb` の `hunger_rate` に掛かるので、1 は「G1 が走らせた世界そのもの」 |
+| ウサギの種 `genome::RABBIT` | `genome.rs` | 3.4 / 12.0 / 1.0 | | `Furniture::rabbit`、`start_rabbit_speed` / `_sight` / `_appetite` | **(c)** | 同上（**不明** ／ 導出） |
+| `SPREAD` | `genome.rs` | 0.18 | | `Furniture::genome_spread`、`start_genome_spread` | **(c)** | *理由のみ*「甲虫が甲虫でなくなるほどではなく、2 親に平均する差はある」。0.18 自体は **不明** |
 | 遺伝子の上下限 | `genome.rs:230-232` | speed 0.2〜8.0、sight 1.0〜24.0、appetite 0.2〜4.0 | | 直書き | (a) `garden.spawn` が受け取る値の検査 | **不明**（範囲の理由） |
 | `mutate` の既定 | `genome.rs:179` | 0.5 | | 直書き（定数が引けないときの保険） | (a) | **不明** |
 
@@ -432,7 +436,7 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 設定 | どこ | `Settings` の鍵 | 既定値 |
 |---|---|---|---|
 | `Place` | `main.rs`（Resource。`main` が `PreStartup` より前に読む） | `field_width` / `field_depth` / `wall_margin` / `separate_passes` | 40 / 30 / 0.5 / 4 |
-| `Furniture` | 同上 | `start_plants` / `plant_min` / `plant_grown` / `start_beetles` / `start_rabbits` / `start_trees` / `start_rocks` / `start_hunger_min` / `start_hunger_max` / `start_tries` / `start_round_chance` / `start_rock_squash_min` / `_max` / `start_solid_apart` / `start_grass_off_solid` / `start_creature_off_grass` / `start_creature_off_solid` / `start_creatures_apart` | 55 / 0.18 / 1.4 / 6 / 4 / 7 / 9 / 45 / 90 / 40 / 0.35 / 0.8 / 1.25 / 1.5 / 1.2 / 2.5 / 0.6 / 2.0 |
+| `Furniture` | 同上 | `start_plants` / `plant_min` / `plant_grown` / `start_beetles` / `start_rabbits` / `start_trees` / `start_rocks` / `start_hunger_min` / `start_hunger_max` / `start_tries` / `start_round_chance` / `start_rock_squash_min` / `_max` / `start_solid_apart` / `start_grass_off_solid` / `start_creature_off_grass` / `start_creature_off_solid` / `start_creatures_apart` / **`start_beetle_speed` / `_sight` / `_appetite` / `start_rabbit_speed` / `_sight` / `_appetite` / `start_genome_spread`**（S5b-5） | 55 / 0.18 / 1.4 / 6 / 4 / 7 / 9 / 45 / 90 / 40 / 0.35 / 0.8 / 1.25 / 1.5 / 1.2 / 2.5 / 0.6 / 2.0 / **2.2 / 8.0 / 1.0 / 3.4 / 12.0 / 1.0 / 0.18** |
 | `Light` | 同上 | `light_dawn_offset` / `light_moon_lux` / `light_night_ambient` / `light_night_sky_r` / `_g` / `_b` / `light_night_zenith` / `light_dial_min` / `light_dial_max` / `light_day_lux` / `light_day_lux_span` / `light_day_ambient` / `light_day_ambient_span` / `light_sun_lux` / `light_shadow_cascades` / `light_shadow_near` / `light_shadow_far` | 0.08 / 950 / 190 / 0.14 / 0.18 / 0.36 / 0.55 / 0.5 / 2.0 / 1200 / 9000 / 120 / 260 / 8000 / 2 / 24 / 70 |
 | `Scenery` | 同上 | `horizon_half` / `sky_radius` / `sky_sides` / `sky_rings` / `fog_near` / `fog_depth` / `fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end` / `edge_trees` / `edge_jitter` / `edge_out_min` / `_max` / `edge_scale_min` / `_max` | 300 / 500 / 12 / 4 / 14 / 45 / 0.35 / 0.5 / 0.7 / 60 / 220 / 16 / 0.4 / 4 / 15 / 1.7 / 3.1 |
 | `Picture` | 同上（模型の倍率とアニメの 2 つは `Look` が持ち運ぶ） | `window_width` / `window_height` / `look_ground_r` / `_g` / `_b` / `look_hunger_low` / `look_hunger_warn` / `look_hunger_bar_width` / `_height` / `look_tuft_scale` / `look_bush_scale` / `look_tree_scale` / `look_rock_scale` / `look_rock_squash` / `look_beetle_scale` / `look_rabbit_scale` / `look_walking_at` / `look_gait_blend_ms` / `look_beetle_model` | 1600 / 900 / 0.36 / 0.46 / 0.25 / 20 / 55 / 64 / 11 / 2.2 / 2.6 / 2.2 / 3.4 / 3.0 / 0.55 / 0.75 / 0.2 / 180 / `models/animal-crab.glb` |
@@ -716,8 +720,8 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 分類 | 件数 | S5b-3 の後から |
 |---|---|---|
 | (a) 不変量 | 30 | 変わらず（`CELL` は `const` のまま「下限」になった） |
-| (b) 遊びの数 → Ruby 側 | 38 | 変わらず。**うち 6 件が S5b-4 で移り終えた**（箱庭の `world.rb` へ）。残る (b) は種の遺伝子 3 件（§2.12、著者判断待ち）と体の寸法の組（§8-3） |
-| (c) 動かす側の数 → `Settings` / 引数 | 110 | 変わらず |
+| (b) 遊びの数 → Ruby 側 | **35** | **−3**: 種の遺伝子 3 件が S5b-5 で **(c)** に移った（§2.12。`world.rb` では 1 度も読まれない数になるため、`Furniture` の設定へ）。**6 件は S5b-4 で `world.rb` へ移り終えている**。残る (b) は体の寸法の組（§8-3）|
+| (c) 動かす側の数 → `Settings` / 引数 | **113** | **+3**（種の遺伝子。S5b-5 で `Furniture` の 7 鍵になった）|
 | (d) selftest の閾値 | 32 | 変わらず（子の遺伝子の 1 行が「写し」から「VM から読む」になっただけ） |
 | (e) 既に Ruby か設定から変えられる | 75 | **+4**（`world.rb` に増えた 4 行） |
 | **合計** | **285** | **+4** |
@@ -731,10 +735,10 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 S5b-2 で**両側が同じ 1 つの数を読む**ようになったので跨いでいない。
 
 **(b) のうち Battle の 32 件は、もう「移す候補」ではなく移し終えたもの**（`Match::MODEL`）。
-箱庭の分は S5b-4 が 6 件を `world.rb` へ移した。**移し終わっていない (b) は 4 件**——
-種の遺伝子 2 行と `SPREAD`（§2.12。移しても効かないので著者判断待ち）と、体の寸法と模型の
-倍率の組（§8-3。半径は `world.rb` へ行き、倍率は `garden.settings.txt` に残ったので、
-**2 つで 1 組の数が 2 つの場所に分かれた** — 片方だけ動かすと当たりと見た目がずれる）。
+箱庭の分は S5b-4 が 6 件を `world.rb` へ移した。**移し終わっていない (b) は 1 件**——
+体の寸法と模型の倍率の組（§8-3。半径は `world.rb` へ行き、倍率は `garden.settings.txt` に
+残ったので、**2 つで 1 組の数が 2 つの場所に分かれた** — 片方だけ動かすと当たりと見た目がずれる）。
+種の遺伝子 3 件は S5b-5 で (c) になった（§2.12）。
 
 **毎フレーム読まれる数は 112 件**（全体の 40%）。Battle の機体模型 20 件はこの数に入ったままだが、
 **読んでいるのは Rust で、`Res<TheMatch>` のフィールドを読むだけ**——Ruby に問うのは
@@ -1024,8 +1028,10 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
     数ではないが **(a) 不変量**として入れた（変えると利用者のセーブが消える）。
     「数の一覧」に文字列を入れるかは迷った — 計画書 §5 の罠にこの 2 つが名指しで挙がっているので入れた。
 
-11. **（S5b-4）種の遺伝子 `Genome::of` と `SPREAD`**（`genome.rs:56,65-66`）。
-    分類は **(b)** のままだが、**移していない。著者判断待ち。**
+11. **（S5b-4）種の遺伝子 `Genome::of` と `SPREAD`**（`genome.rs`）。
+    **決着（S5b-5、著者判断: 案 A）**: 分類を **(b) → (c)** にし、`Furniture` の設定にした
+    （`start_beetle_speed` / `_sight` / `_appetite`、`start_rabbit_speed` / `_sight` / `_appetite`、
+    `start_genome_spread`。既定値は据え置き）。以下は判断の前の材料である。
     理由は分類の迷いではなく、**移し先が無い**ことである: この 3 行を読むのは `spawn_world`
     （`Startup`）だけで、`garden.rules` が届くのは最初の `Update` ——つまり `world.rb` に書けるように
     しても**その数はどの走行でも 1 度も使われない**。体の半径が移せたのは、半径が `Collider` として

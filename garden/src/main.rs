@@ -720,6 +720,24 @@ pub struct Furniture {
     pub creature_off_grass: f32,
     pub creature_off_solid: f32,
     pub creatures_apart: f32,
+    /// **What each species is built with** ([`Genome::of`]) and how far a rolled one may stray
+    /// from it ([`genome::SPREAD`]).
+    ///
+    /// They are the garden's furniture and not its rules, which is a change of mind (S5b-5). S5b-4
+    /// set out to put them in `ruby/world.rb` with the rest of the numbers of play and found that
+    /// it could not: `spawn_world` is a `Startup` system and `garden.rules` does not reach the
+    /// game until the first `Update`, so a `beetle_speed` written in the rules would be **read by
+    /// nothing, in any run**. What decides where a number can live is who reads it and when
+    /// (`docs/worklog/2026-09-21-numbers-garden-play.md` §6). A number read once, while the world
+    /// is being built, belongs with the other numbers read once while the world is being built —
+    /// the count of plants, the count of creatures, how hungry they start.
+    ///
+    /// It says nothing about what a creature's genome may become afterwards: `Genome#mix` and
+    /// `Genome#mutate` are the species' own Ruby, and `garden.spawn` takes whatever genome a
+    /// script hands it.
+    pub beetle: Genome,
+    pub rabbit: Genome,
+    pub genome_spread: f32,
 }
 
 impl Default for Furniture {
@@ -741,6 +759,9 @@ impl Default for Furniture {
             creature_off_grass: CREATURE_OFF_GRASS,
             creature_off_solid: CREATURE_OFF_SOLID,
             creatures_apart: CREATURES_APART,
+            beetle: genome::BEETLE,
+            rabbit: genome::RABBIT,
+            genome_spread: genome::SPREAD,
         }
     }
 }
@@ -750,7 +771,8 @@ impl Furniture {
     /// `start_rocks`, `start_hunger_min` / `start_hunger_max`, `start_tries`,
     /// `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`,
     /// `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`,
-    /// `start_creatures_apart`.
+    /// `start_creatures_apart`, `start_beetle_speed` / `_sight` / `_appetite`,
+    /// `start_rabbit_speed` / `_sight` / `_appetite`, `start_genome_spread`.
     fn read_from(&mut self, settings: &games_shell::Settings) {
         let count = |key: &str, slot: &mut usize| {
             if let Some(value) = settings.number(key) {
@@ -778,6 +800,22 @@ impl Furniture {
         take(settings, "start_creature_off_grass", &mut self.creature_off_grass);
         take(settings, "start_creature_off_solid", &mut self.creature_off_solid);
         take(settings, "start_creatures_apart", &mut self.creatures_apart);
+        take(settings, "start_beetle_speed", &mut self.beetle.speed);
+        take(settings, "start_beetle_sight", &mut self.beetle.sight);
+        take(settings, "start_beetle_appetite", &mut self.beetle.appetite);
+        take(settings, "start_rabbit_speed", &mut self.rabbit.speed);
+        take(settings, "start_rabbit_sight", &mut self.rabbit.sight);
+        take(settings, "start_rabbit_appetite", &mut self.rabbit.appetite);
+        take(settings, "start_genome_spread", &mut self.genome_spread);
+    }
+
+    /// The genome this garden builds one of that species with — [`Genome::of`] with the store's
+    /// answer where there is one.
+    pub fn genome(&self, species: Species) -> Genome {
+        match species {
+            Species::Beetle => self.beetle,
+            Species::Rabbit => self.rabbit,
+        }
     }
 }
 
@@ -3429,7 +3467,7 @@ fn spawn_world(
         taken.push(at);
         let hunger = dice.between(built.hunger[0], built.hunger[1]);
         // no two creatures alike, so that `Genome#mix` has something to average
-        let genome = Genome::roll(species, |lo, hi| dice.between(lo, hi));
+        let genome = Genome::roll(built.genome(species), built.genome_spread, |lo, hi| dice.between(lo, hi));
         let entity = spawn_creature(&mut commands, look, &bodies, species, at, hunger, genome, None);
         give_mind(&mut commands, &ruby.0, &mut brains, &mut mrb, entity, species);
     }
@@ -7642,6 +7680,8 @@ mod tests {
         settings.set("eye_distance", "20");
         settings.set("script_budget", "500000");
         settings.set("world_script_frame_time_ms", "0");
+        settings.set("start_beetle_speed", "5.5");
+        settings.set("start_genome_spread", "0.0");
 
         let mut place = Place::default();
         place.read_from(&settings);
@@ -7653,6 +7693,19 @@ mod tests {
         built.read_from(&settings);
         assert_eq!(built.plants, 9);
         assert_eq!(built.trees, TREES);
+        // **the species' own three numbers are the garden's furniture** (S5b-5): what is written
+        // moves, what is not is the species' own, and a spread of nothing rolls the base itself
+        assert_eq!(built.genome(Species::Beetle).speed, 5.5);
+        assert_eq!(built.genome(Species::Beetle).sight, genome::BEETLE.sight);
+        assert_eq!(built.genome(Species::Rabbit), genome::RABBIT);
+        assert_eq!(built.genome_spread, 0.0);
+        assert_eq!(
+            Genome::roll(built.genome(Species::Beetle), built.genome_spread, |lo, hi| {
+                assert_eq!((lo, hi), (1.0, 1.0));
+                1.0
+            }),
+            built.genome(Species::Beetle)
+        );
 
         let mut light = Light::default();
         light.read_from(&settings);

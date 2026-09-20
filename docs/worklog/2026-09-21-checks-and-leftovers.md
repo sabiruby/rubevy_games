@@ -375,3 +375,36 @@ PC の `<GAME>_<NAME>=<value>` が、ページでは `?selftest&<name>=<value>` 
 
 PC 側は無変更で、`docker/run.sh` が `<GAME>_` の変数を全部渡すようになった（§1）ので、
 **同じ名前のつまみが 3 つの走らせ方（PC・コンテナ・ページ）で通る**ようになった。
+
+---
+
+## 8. 種の遺伝子は「庭の家具」になった（D-1）
+
+S5b-4 が移せなかった数——`Genome::of` の 2 × 3 と `SPREAD` 0.18——について、著者の判断は
+**案 A: `Furniture` の設定へ**（分類 (b) → (c)）。鍵は 7 つ:
+`start_beetle_speed` / `_sight` / `_appetite`、`start_rabbit_speed` / `_sight` / `_appetite`、
+`start_genome_spread`。**既定値は 1 つも動かしていない。**
+
+`world.rb` に移すと嘘になる、という S5b-4 の見立てはそのまま正しい: この 3 行を読むのは
+`spawn_world`（`Startup`）だけで、`garden.rules` が届くのは最初の `Update` である。
+**庭を建てるときに 1 度だけ読む数は、株の数・個体の数・最初の空腹と同じ「最初の家具」**であって、
+規則ではない。`Furniture` に入れると分類の文が実物と合う。
+
+作りは小さい:
+
+* `genome::BEETLE` / `genome::RABBIT` / `genome::SPREAD` が既定値の名前になり（`pub const`）、
+  `Genome::of` はその 2 つを返すだけになった。**`Genome::of` は消していない**——
+  判定の仕込み（断食甲虫・プローブ）と、走行の終わりに「この庭の平均遺伝子」を種の元の数と
+  並べて印字する行は、*庭*ではなく*種*の話だからである。
+* `Genome::roll` は `(species, jitter)` ではなく `(base, spread, jitter)` を取る。
+  基準も散らばりも設定なので、種から引くのをやめて呼び手が渡す。
+* `Furniture::genome(species)` が庭の答え。`spawn_world` が使う唯一の口である。
+
+出どころも 1 行ずつ書いた: speed と sight は **不明**（G1 が書いた数で、記録が無い）、
+appetite 1.0 は **導出**（`world.rb` の `hunger_rate` に掛かるので、1 は「G1 が走らせた世界
+そのもの」）、`SPREAD` 0.18 は *理由のみ*（「甲虫が甲虫でなくなるほどではなく、2 親に平均する
+差はある」）で数そのものは不明。
+
+単体テストは既にある設定のテストに 4 行足した: 書いた鍵は動き、書かない鍵は種の既定のまま、
+`start_genome_spread=0` の庭では `roll` が基準そのものを返す（`jitter` が `(1.0, 1.0)` で
+呼ばれることまで見ている）。

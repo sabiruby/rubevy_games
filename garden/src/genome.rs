@@ -43,7 +43,7 @@ use crate::Species;
 /// point of this stage is that a type can be both without either knowing. G3 adds a third, which
 /// is neither: `Serialize`/`Deserialize` is what puts the same three numbers in the save file and
 /// reads a script's Hash back as this struct (`CreatureSpec` below).
-#[derive(Clone, Copy, Debug, Reflect, RubyClass, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, RubyClass, Serialize, Deserialize)]
 #[ruby(name = "Genome")]
 pub struct Genome {
     pub speed: f32,
@@ -51,19 +51,35 @@ pub struct Genome {
     pub appetite: f32,
 }
 
-/// How far a rolled genome may stray from its species' own, up and down. Small enough that a
-/// beetle is still a beetle, large enough that two parents have something to average.
-const SPREAD: f32 = 0.18;
+/// How far a rolled genome may stray from its species' own, up and down. *Reason only*: small
+/// enough that a beetle is still a beetle, large enough that two parents have something to
+/// average; 0.18 itself is **unknown**. It is the default of `start_genome_spread`
+/// ([`crate::Furniture`]) since S5b-5.
+pub const SPREAD: f32 = 0.18;
+
+/// **What a beetle is built with**, and the default of `start_beetle_speed` and its two
+/// neighbours. It is what the numbers were before G2, when they were the only speed and the only
+/// sight there were: a beetle walks at 2.2 and sees eight. Both are **unknown** — G1 wrote them
+/// and said nothing about where they came from.
+///
+/// `appetite` is G2's and is 1 for both species on purpose: it multiplies `hunger_rate` in
+/// `ruby/world.rb` (it was `HUNGER_RATE` in `main.rs` until W1), so 1 is **derived** — it is
+/// exactly the world G1 ran.
+pub const BEETLE: Genome = Genome { speed: 2.2, sight: 8.0, appetite: 1.0 };
+/// **What a rabbit is built with**: faster than a beetle and further-sighted, which is the whole
+/// of what makes a rabbit a rabbit in this game. 3.4 and 12.0 are **unknown** in the same way.
+pub const RABBIT: Genome = Genome { speed: 3.4, sight: 12.0, appetite: 1.0 };
 
 impl Genome {
-    /// The species' own, which is what the numbers were before G2: a beetle walks at 2.2 and sees
-    /// eight, a rabbit walks at 3.4 and sees twelve. `appetite` is new and is 1 for both — it
-    /// multiplies `hunger_rate` in `ruby/world.rb` (it was `HUNGER_RATE` in `main.rs` until W1), so
-    /// 1 is exactly the world G1 ran.
+    /// The species' own, as the game ships. **A garden that has been given other numbers is not
+    /// this** — `Furniture::genome` is what `spawn_world` asks, and this is its default
+    /// (`start_beetle_speed` and its six neighbours, S5b-5). What is left here is the answer for
+    /// the places that are about the species rather than about a garden: the checks' fixtures and
+    /// the line the report prints a garden's mean genome against.
     pub fn of(species: Species) -> Genome {
         match species {
-            Species::Beetle => Genome { speed: 2.2, sight: 8.0, appetite: 1.0 },
-            Species::Rabbit => Genome { speed: 3.4, sight: 12.0, appetite: 1.0 },
+            Species::Beetle => BEETLE,
+            Species::Rabbit => RABBIT,
         }
     }
 
@@ -76,10 +92,11 @@ impl Genome {
         format!("speed {:.2}, sight {:.1}, appetite {:.2}", self.speed, self.sight, self.appetite)
     }
 
-    pub fn roll(species: Species, mut jitter: impl FnMut(f32, f32) -> f32) -> Genome {
-        let base = Genome::of(species);
-        let lo = 1.0 - SPREAD;
-        let hi = 1.0 + SPREAD;
+    /// One of the garden's own, jittered by `spread` — the `base` and the `spread` are both the
+    /// caller's since S5b-5, because both are `garden.settings.txt`'s.
+    pub fn roll(base: Genome, spread: f32, mut jitter: impl FnMut(f32, f32) -> f32) -> Genome {
+        let lo = 1.0 - spread;
+        let hi = 1.0 + spread;
         Genome {
             speed: base.speed * jitter(lo, hi),
             sight: base.sight * jitter(lo, hi),

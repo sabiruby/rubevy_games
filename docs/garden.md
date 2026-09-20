@@ -401,7 +401,7 @@ is not there is the default — deleting a line is how to go back.
 | what | keys |
 |---|---|
 | the field and its walls | `field_width`, `field_depth`, `wall_margin`, `separate_passes` |
-| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_grown` (how big a blade this builds full-grown — **not** `world.rb`'s `plant_max`, which is where growth stops), `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart` |
+| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_grown` (how big a blade this builds full-grown — **not** `world.rb`'s `plant_max`, which is where growth stops), `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart`, `start_beetle_speed` / `_sight` / `_appetite`, `start_rabbit_speed` / `_sight` / `_appetite` (what a species is built with), `start_genome_spread` (how far a rolled one strays from it) |
 | the light | `light_moon_lux`, `light_night_ambient`, `light_night_sky_r` / `_g` / `_b`, `light_night_zenith`, `light_dawn_offset`, `light_dial_min` / `_max`, `light_day_lux` / `_span`, `light_day_ambient` / `_span`, `light_sun_lux`, `light_shadow_cascades` / `_near` / `_far` — and `night`, the slider in the panel |
 | the scenery past the wall | `horizon_half`, `sky_radius`, `sky_sides`, `sky_rings`, `fog_near`, `fog_depth`, `fog_color_r` / `_g` / `_b`, `fog_start`, `fog_end`, `edge_trees`, `edge_jitter`, `edge_out_min` / `_max`, `edge_scale_min` / `_max` |
 | how it is drawn | `window_width` / `window_height`, `look_ground_r` / `_g` / `_b`, `look_hunger_low`, `look_hunger_warn`, `look_hunger_bar_width` / `_height`, `look_tuft_scale`, `look_bush_scale`, `look_tree_scale`, `look_rock_scale`, `look_rock_squash`, `look_beetle_scale`, `look_rabbit_scale`, `look_walking_at`, `look_gait_blend_ms`, `look_beetle_model` |
@@ -2121,14 +2121,14 @@ and one is about the genome (G2), which is the whole round trip in a single line
    `hungry_below` and wanders, and about one run in twenty that wander takes it off its blade
    before its meter reaches `mate_hunger`. It comes back when it is hungry again.
 
-   **A run in which the rules paired nobody says `n/a`** instead, in the shape check 5 has.
+   **A run in which the rules paired nobody says `--`** instead, in the shape check 5 has.
    `Genome#mix` is called in a creature's `on(:mate)` and nowhere else, so a run with no `"mate"`
    in it never asked this check its question. A pairing with **no child after it** is still a
    FAIL: that is the road from `on(:mate)` through `garden.spawn`, and it is this check's to
    report.
 
    ```
-   selftest: n/a  a child was born whose genome is its parents' mixed and mutated
+   selftest: --   a child was born whose genome is its parents' mixed and mutated
             (not measured: the rules paired nobody in the whole run who could have answered, so nothing asked `Genome#mix` anything)
    ```
 
