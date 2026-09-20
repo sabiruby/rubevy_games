@@ -40,7 +40,7 @@ if [ "$WHAT" = all ]; then
 elif [ -n "${TITLE[$WHAT]:-}" ]; then
   GAMES=("$WHAT")
 else
-  echo "usage: web/build.sh [${GAMES_ALL[*]}|all]" >&2; exit 2
+  echo "usage: web/build.sh [$(IFS='|'; echo "${GAMES_ALL[*]}")|all]" >&2; exit 2
 fi
 
 # One page per game out of one template. Plain parameter expansion rather than sed: the values
