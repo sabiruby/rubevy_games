@@ -1079,15 +1079,30 @@ fn selftest(
             );
             editor.text = editor.text.replace("sleep 0.05", "sleep 0.5");
             ok(editor.changed(), "typing marks the text edited");
-            editor.action = Some(EditorAction::Apply);
+            // **Press the key, do not write the action down** (S4). Every step here used to set
+            // `editor.action` by hand, which is what a button does — so nothing in these checks
+            // ever went through `draw_editor`'s keyboard, and `Editor::apply_key` could have been
+            // the wrong key, or `None`, with all of them still passing. S4a made that matter: the
+            // crate's default became `None` and the F5 is the game's own line (`setup_editor`).
+            // The forgery is the one `keys.press(KeyCode::F2)` below uses — `just_pressed` is
+            // cleared in `PreUpdate`, and `draw_editor` runs in `EguiPrimaryContextPass`, after
+            // this. Released on the step that reads the answer.
+            keys.release(KeyCode::F5);
+            keys.press(KeyCode::F5);
             edits.asked(now, "Apply");
             test.step = 3;
             test.at = now + 0.5;
         }
         3 => {
+            keys.release(KeyCode::F5);
             let (_, r3) = by_number(3).unwrap();
             let (_, r4) = by_number(4).unwrap();
             let on_disk = platform::read(&r3.file).unwrap_or_default();
+            // the step before pressed F5 and wrote no action down, so a robot with a brain at
+            // all is `Editor::apply_key` arriving. The next line says what the brain is; this
+            // one says the key reached the editor (S4; the garden's page and this one both take
+            // F5 back from the browser for it, `web/games.sh`).
+            ok(r3.brain.is_some(), "F5 is Apply: the key alone applied the text");
             ok(r3.brain.as_deref().is_some_and(|b| b.contains("sleep 0.5")), "Apply gives robot 3 the edited behaviour");
             ok(r4.brain.is_none(), "Apply leaves robot 4 (same file) alone");
             ok(on_disk == test.original, "Apply does not touch the file");
