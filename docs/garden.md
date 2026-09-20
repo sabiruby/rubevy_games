@@ -482,6 +482,11 @@ that is the **only** thing the rules ask that costs a frame (the table under **T
 so the count comes out exact: over a ninety-second run, 5,373 frames and 5,372 passes, the two
 missing ones being the script starting up.
 
+That is a fact about *these* rules, though, and not about the meter that counts them:
+`WorldMeter::ran_in` has one entry per frame the world's script ran in at all, and it was called
+`passes` until 2026-09-21 — a name that was true of the file that ships and would go on being
+printed at a `world.rb` it was not true of.
+
 `every 60 do |n| … end` is a second task in the same VM that only sleeps; the scheduler already
 has "a task asleep until a time", and it is the same clock that makes a creature's `sleep 0.2`
 mean something — so a pause stops the seasons too, and eleven seconds left of a season is eleven
@@ -2257,7 +2262,7 @@ selftest: ok   a beetle touched by a rabbit changed heading within 0.5 s (30/30)
 selftest: ok   the creatures were asleep a second after night fell (15 of them, newborns aside, fastest 0.000 at 26.21 s)
 selftest: ok   a child was born whose genome is its parents' mixed and mutated (at 1.09 s: speed 2.161 vs 2.400/2.000, mean 2.200; sight 7.354 vs 9.000/7.000, mean 8.000; appetite 0.928 vs 1.100/0.900, mean 1.000 (mutated off both parents)) [9 pairings, 3 children]
 selftest: ok   a spawn Hash with a gene missing names the gene (missing field `sight` (TypeError))
-selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5362 passes of `each_frame`)
+selftest: ok   the rules in world.rb are running the world (the grass grew at 0.03 s, over 5362 frames they ran in)
 selftest: ok   the rules can be taken away and given back while the world runs (from 20.03 s no meter fell for 5.0 s; 0 did, and afterwards hunger came back)
 selftest: ok   what the world declares reaches a creature's memory (Beetle 105v0 had "wet" in its @memory at 0.03 s)
 selftest: ok   a save with the wrong version is refused (garden-from-another-version.json: saved with version 99, this garden reads 1)

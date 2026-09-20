@@ -225,17 +225,28 @@ older build wrote. `docs/garden.md` has the rest.
 ## Size
 
 Measured with `--profile web` (release, `opt-level = "s"`, thin LTO, stripped) and binaryen 132 —
-the version CI installs. **Taken again on 2026-09-20**, after S1–S4 of `plans/shared-crate-plan.md`
-(the shared crate, split in two; rubevy's new entry points; the 2D camera), all four columns of
-both games on one machine within the same minutes, so the four are comparable with each other:
+the version CI installs. **Taken again on 2026-09-21**, at the end of S5b of
+`plans/shared-crate-plan.md` (the whole of the numbers work: the two shared crates, Battle, the
+garden's settings, its numbers of play, and the checks), all four columns of both games on one
+machine within the same minutes, so the four are comparable with each other. The four stages
+since the reading below moved these by a quarter of a percent between them, which is why the
+table is taken again rather than adjusted:
 
 | | bytes | gzip -9 | with `wasm-opt -Os` | its gzip |
 |---|---|---|---|---|
-| `sabibots/pkg/game_bg.wasm` | 39,100,735 | 10,026,050 | 35,111,618 | 10,736,516 |
-| `garden/pkg/game_bg.wasm` | 39,873,551 | 10,243,952 | 35,828,300 | 10,947,996 |
+| `sabibots/pkg/game_bg.wasm` | 39,212,650 | 10,060,181 | 35,216,606 | 10,768,420 |
+| `garden/pkg/game_bg.wasm` | 40,035,901 | 10,283,236 | 35,980,029 | 10,992,359 |
 | `compiler/sabiruby.wasm` (each game's copy) | 2,445,509 | 840,268 | — | — |
 | `sabibots/assets/` (16 files) | 234,202 | | | |
-| `garden/assets/` (10 files) | 322,924 | 63,725 | | |
+| `garden/assets/` (10 files) | 322,924 | 62,606 | | |
+
+Against the 2026-09-20 reading in the same four columns, Battle's module is **+111,915 raw
+(+0.29%) and +104,988 after `wasm-opt` (+0.30%)**, and the garden's **+162,350 (+0.41%) and
++151,729 (+0.42%)**. What is in that quarter-to-half a percent is S5b: seven `Resource`s of
+numbers in the garden and one in Battle, the `Settings` keys that read them, the match's model in
+Ruby, and the checks' own new lines. (The garden's assets gzip about a kilobyte differently
+between readings because the measurement concatenates the ten files and `find` does not promise
+an order; the files are the same files.)
 
 The rows before these were measured at the sabiruby 0.5.1 build, before G6's Japanese font and
 everything after it, so the difference between the two tables is not any one change's — the

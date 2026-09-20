@@ -1611,8 +1611,17 @@ const SPROUT_GAP: f32 = 1.5;
 struct WorldMeter {
     /// `ScriptStats::instructions` at the end of the last frame
     last_instructions: u64,
-    /// what a pass cost, one entry per frame in which the script ran at all
-    passes: Vec<u64>,
+    /// **what the rules cost in each frame they ran in at all** — one entry per such frame, and
+    /// the name says that rather than "passes" (S5b-5).
+    ///
+    /// The two are the same number for the rules as they are written: the script waits on
+    /// `Rubevy.ask("frame")`, which is the only thing it asks that costs a frame, so one frame is
+    /// one pass of `each_frame` and a run counts 5,372 of them in 5,373 frames (`docs/garden.md`).
+    /// But that is a fact about *these* rules and not about the measurement: a `world.rb` that
+    /// asks two questions costing a frame, or one whose pass does not finish inside a frame,
+    /// would still make one entry here per frame it ran in. The old name claimed the fact the
+    /// rules happen to have; this one claims what is counted.
+    ran_in: Vec<u64>,
     /// the last of them, which is the figure the HUD draws (W3). The list above is for choosing a
     /// budget after the run; this is what the rules cost *now*, beside what the creatures cost
     /// now, which is the comparison the panel is for.
@@ -1631,12 +1640,12 @@ struct WorldMeter {
 }
 
 impl WorldMeter {
-    /// The middle pass. `None` until one has been measured.
+    /// The middle frame's worth. `None` until one has been measured.
     fn median(&self) -> Option<u64> {
-        if self.passes.is_empty() {
+        if self.ran_in.is_empty() {
             return None;
         }
-        let mut sorted = self.passes.clone();
+        let mut sorted = self.ran_in.clone();
         sorted.sort_unstable();
         Some(sorted[sorted.len() / 2])
     }
@@ -6058,7 +6067,7 @@ fn world_clock_end(
     if pass > 0 {
         meter.most = meter.most.max(pass);
         meter.last_pass = pass;
-        meter.passes.push(pass);
+        meter.ran_in.push(pass);
     }
 }
 
@@ -7275,8 +7284,8 @@ fn stop_when_over(
         // what a frame can cost is `VM` above plus `world` here, and these are the numbers the
         // world's own budget was chosen from.
         info!(
-            "hud: the world's rules — {} passes of `each_frame`, {} instructions at the median and {} at the most (of {}); the world's tick {:.2} ms at the median, {:.2} at the 99th frame in a hundred, {:.2} at the most / {:.1} ms{}",
-            vms.meter.passes.len(),
+            "hud: the world's rules — {} frames they ran in, {} instructions at the median and {} at the most (of {}); the world's tick {:.2} ms at the median, {:.2} at the 99th frame in a hundred, {:.2} at the most / {:.1} ms{}",
+            vms.meter.ran_in.len(),
             match vms.meter.median() {
                 Some(n) => n.to_string(),
                 None => "–".into(),
@@ -7491,15 +7500,15 @@ fn stop_when_over(
         // — a file that can be taken away and given back while the world runs, which no `const`
         // in this source ever was.
         ok(
-            test.grew_at.is_some_and(|t| t <= 2.0) && !vms.meter.passes.is_empty(),
+            test.grew_at.is_some_and(|t| t <= 2.0) && !vms.meter.ran_in.is_empty(),
             match test.grew_at {
                 Some(t) => format!(
-                    "the rules in world.rb are running the world (the grass grew at {t:.2} s, over {} passes of `each_frame`)",
-                    vms.meter.passes.len()
+                    "the rules in world.rb are running the world (the grass grew at {t:.2} s, over {} frames they ran in)",
+                    vms.meter.ran_in.len()
                 ),
                 None => format!(
-                    "the rules in world.rb are running the world (nothing ever grew, over {} passes of `each_frame`)",
-                    vms.meter.passes.len()
+                    "the rules in world.rb are running the world (nothing ever grew, over {} frames they ran in)",
+                    vms.meter.ran_in.len()
                 ),
             },
         );

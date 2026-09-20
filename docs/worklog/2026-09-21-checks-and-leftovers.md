@@ -465,3 +465,46 @@ selftest: FAIL and with the panel closed the same wheel in the same place zooms 
 `SystemParam` なので `window_selftest` の引数は 15 のままである。
 
 直した後の窓の走行は **3/3 で 45 行 FAIL 0**。
+
+---
+
+## 11. `docs/web.md` の表と、`WorldMeter::passes` の名前（D-3）
+
+### wasm の大きさ
+
+S5b-1〜4 の 4 段階で 4 回ずれたので、**4 つの列を同じ機械・同じ数分で取り直した**
+（`--profile web`、binaryen 132）。取り方は前と同じで、`wasm-opt` の前の数は
+`wasm-bindgen` を一時ディレクトリへ出して測った。
+
+| | bytes | gzip -9 | `wasm-opt -Os` | その gzip |
+|---|---|---|---|---|
+| `sabibots` | 39,212,650 | 10,060,181 | 35,216,606 | 10,768,420 |
+| `garden` | 40,035,901 | 10,283,236 | 35,980,029 | 10,992,359 |
+
+09-20 の同じ 4 列に対して Battle は **+111,915（+0.29%）／+104,988（+0.30%）**、
+箱庭は **+162,350（+0.41%）／+151,729（+0.42%)**。中身は S5b そのもの（箱庭の 7 つの
+Resource と Battle の 1 つ、それを読む `Settings` の鍵、Ruby 側の模型、判定の新しい行）。
+
+### `WorldMeter::passes` → `ran_in`
+
+S7 の気づき: **名前に反して「スクリプトが 1 命令でも走ったフレーム」を数えている。**
+出荷される `world.rb` では両者は同じ数になる——`Rubevy.ask("frame")` が 1 フレームを食う唯一の
+問いなので、1 フレーム = `each_frame` 1 パス（90 秒で 5,373 フレーム中 5,372 パス）。
+だがそれは**その規則についての事実**であって、測り方についての事実ではない。
+フレームを食う問いを 2 つ聞く `world.rb` でも、パスが 1 フレームで終わらない `world.rb` でも、
+この `Vec` は「走ったフレーム」を 1 つ積む。
+
+名前を `ran_in` にし、印字も直した:
+
+* 走行の終わりの行: `{} passes of \`each_frame\`` → `{} frames they ran in`
+* 12 番目の判定の文: `over N passes of \`each_frame\`` → `over N frames they ran in`
+
+**HUD の文言は変えていない**ので、`guide_text.rs` もフォントの再サブセット
+（`tools/subset-font.sh`）も要らない——確かめた。HUD が描く「規則」の行は
+`the rules {last_pass} / {budget} insn/frame · {ms}` で、`last_pass` は
+「このフレームで規則が使った命令数」であり、名前も文も元から正しい。
+hover の文（`what one pass of ruby/world.rb's each_frame cost this frame`）も
+出荷される規則については正しいままである。
+
+判定の文が 1 つ変わるので `docs/verification/selftest-lines.md` と `docs/garden.md` の
+走行例を直した。ヘッドレスの 13 行は取り直して一致。

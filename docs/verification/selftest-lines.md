@@ -187,7 +187,7 @@ selftest: ok   nothing walked through anything over N frames (closest pair N of 
 selftest: ok   somebody ate within N s (first at N s)
 selftest: ok   the creatures were asleep a second after night fell (N of them, newborns aside, fastest N at N s)
 selftest: ok   the rules can be taken away and given back while the world runs (from N s no meter fell for N s; N did, and afterwards hunger came back)
-selftest: ok   the rules in world.rb are running the world (the grass grew at N s, over N passes of `each_frame`)
+selftest: ok   the rules in world.rb are running the world (the grass grew at N s, over N frames they ran in)
 selftest: ok   the starved creature's entity is gone (NvN starved at N s)
 selftest: ok   what the world declares reaches a creature's memory (Beetle NvN had "wet" in its @memory at N s)
 ```
@@ -231,7 +231,7 @@ selftest: ok   nothing was written
 selftest: ok   the VM panel has the creature's frames
 selftest: ok   the VM panel starts closed
 selftest: ok   the creatures are thinking again
-selftest: ok   the day is what world.rb says it is
+selftest: ok   the day is what world.rb says it is (N s)
 selftest: ok   the day turns again
 selftest: ok   the editor has a third file, and it is not a creature
 selftest: ok   the editor shows the file of the creature that was clicked
@@ -298,7 +298,7 @@ selftest: ok   nothing was written
 selftest: ok   the VM panel has the creature's frames
 selftest: ok   the VM panel starts closed
 selftest: ok   the creatures are thinking again
-selftest: ok   the day is what world.rb says it is
+selftest: ok   the day is what world.rb says it is (N s)
 selftest: ok   the day turns again
 selftest: ok   the editor has a third file, and it is not a creature
 selftest: ok   the editor shows the file of the creature that was clicked

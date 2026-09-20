@@ -1994,7 +1994,13 @@ pub fn window_selftest(
             let said = day_length_in(&editor.text);
             ok(
                 said.is_some_and(|n| sky.day_length == n),
-                &format!("the day is what world.rb says it is ({said:?})"),
+                &format!(
+                    "the day is what world.rb says it is ({})",
+                    match said {
+                        Some(n) => format!("{n:.1} s"),
+                        None => "and world.rb says nothing about it".into(),
+                    }
+                ),
             );
             test.world_original = platform::read(&ruby.0.join(crate::WORLD_FILE)).unwrap_or_default();
             // and the edit is that number halved — any other number would do, and half of it is
