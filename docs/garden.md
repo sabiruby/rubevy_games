@@ -339,6 +339,68 @@ listening, and G1 added no `publish` call at all.
 and `HUNGER_MAX` are in both files saying two different things: here they are what the world is
 *built* with and what a bar draws as full, there they are what a rule stops at.
 
+## Where the numbers are
+
+Since 2026-09-21 there are three places a number in this game lives, and which one it is in says
+what kind of number it is.
+
+### What the garden is played by — `ruby/world.rb` and the creatures' own files
+
+How fast grass grows, how hungry a walk makes you, what a bite is worth, how full two creatures
+have to be before the rules pair them: those are the rules, they are in `ruby/world.rb`, and the
+panel `F3` opens edits them while the garden runs. What a creature *does* about any of it is its
+own file (`ruby/creatures/beetle.rb`, `rabbit.rb`), edited the same way. The table above is the
+line between those and the mechanics.
+
+A handful of them are in Rust as well, as the answer the game has before `world.rb` has spoken
+and for ever in a garden whose `world.rb` will not compile — the paragraph above says which and
+why.
+
+### How the garden is run and drawn — `garden.settings.txt`
+
+Beside the game (in a browser, a `localStorage` key under `garden:`), one `key=value` a line.
+The panels' own numbers have been here since 2026-09-20; the game's joined them on 2026-09-21.
+It is read **before the first frame**, by a windowed run and a headless one alike, and a key that
+is not there is the default — deleting a line is how to go back.
+
+| what | keys |
+|---|---|
+| the field and its walls | `field_width`, `field_depth`, `wall_margin`, `separate_passes` |
+| what a new garden is built with | `start_plants`, `start_beetles`, `start_rabbits`, `start_trees`, `start_rocks`, `plant_min`, `plant_max`, `start_hunger_min` / `_max`, `start_tries`, `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`, `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`, `start_creatures_apart` |
+| the light | `light_moon_lux`, `light_night_ambient`, `light_night_sky_r` / `_g` / `_b`, `light_night_zenith`, `light_dawn_offset`, `light_dial_min` / `_max`, `light_day_lux` / `_span`, `light_day_ambient` / `_span`, `light_sun_lux`, `light_shadow_cascades` / `_near` / `_far` — and `night`, the slider in the panel |
+| the scenery past the wall | `horizon_half`, `sky_radius`, `sky_sides`, `sky_rings`, `fog_near`, `fog_depth`, `fog_color_r` / `_g` / `_b`, `fog_start`, `fog_end`, `edge_trees`, `edge_jitter`, `edge_out_min` / `_max`, `edge_scale_min` / `_max` |
+| how it is drawn | `window_width` / `window_height`, `look_ground_r` / `_g` / `_b`, `look_hunger_low`, `look_hunger_warn`, `look_hunger_bar_width` / `_height`, `look_tuft_scale`, `look_bush_scale`, `look_tree_scale`, `look_rock_scale`, `look_rock_squash`, `look_beetle_scale`, `look_rabbit_scale`, `look_walking_at`, `look_gait_blend_ms`, `look_beetle_model` |
+| the camera (the 3D orbit, not the shared crate's 2D one) | `eye_pitch`, `eye_distance`, `eye_zoom_per_notch`, `eye_zoom_min` / `_max`, `eye_pan_per_pixel`, `eye_pan_per_second`, `eye_pan_limit`, `eye_turn_per_pixel`, `eye_pitch_min` / `_max`, `eye_click_reach`, `eye_click_slop` |
+| what the scripts are allowed a frame | `script_budget`, `script_frame_time_ms` (the creatures' VM — the same two keys SabiRuby Battle uses), `world_script_budget`, `world_script_frame_time_ms` (`world.rb`'s). `restore_patience`, `shortest_sleep`, `heat_decay` |
+| the defaults of the flags | `headless_seconds`, `shot_file`, `shot_seconds`, `at_seconds`, `save_file`. **The flag still wins** where it is given, and `--eye`'s own default is `eye_distance` |
+| the panels | `editor_*`, `vm_*`, `hud_*`, `guide_*`, and `lang` |
+
+```text
+# garden: what the panel remembers. Delete a line to go back to the default.
+lang=ja
+night=1.30
+field_width=60
+light_moon_lux=1400
+script_budget=500000
+```
+
+**Some of the defaults are measurements, and changing them throws the measurement away.** The
+night's three (`light_moon_lux`, `light_night_ambient`, the sky's colour) are one measurement of
+44 of 255 taken together; `fog_depth` was measured at the default camera's 42 units and 49°, so
+`eye_pitch` and `eye_distance` move it too; `separate_passes` is four because three ninety-second
+runs at four never had a pair closer than 0.97 of their radii; `world_script_budget` is 1.74 times
+the worst frame of a full garden. Each says so in its own rustdoc, and `docs/numbers.md` §2 is the
+whole list with where every value came from — which, for about half of them, is nowhere.
+
+### What the checks measure — the checks
+
+The ten seconds somebody has to eat in, the half second a handler has to turn a beetle in, the two
+frames a newborn is deaf for: those are in `garden/src/main.rs` and `window.rs`, beside the check
+that uses them, because they are what is being measured rather than what the game plays by. Where
+a check needs one of the game's numbers it reads the game's — the window checks' patience is
+`2 + ceil(script_budget / 45,600)` frames, so a run given a bigger budget is given more frames to
+come round in.
+
 ## The world's own VM (W1, W2)
 
 There are **two SabiRuby VMs in the binary**, and the second one is the rules. rubevy takes a type

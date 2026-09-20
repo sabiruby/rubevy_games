@@ -183,188 +183,244 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 
 ## 2. Garden（Rust）
 
-### 2.1 場
+> **S5b-3（2026-09-21）で、この節の (c)「動かす側の数」は全部「利用者が変えられる場所」に移した。**
+> 行番号は `shared-crate` ブランチのその時点のもので取り直してある（S1〜S7 で大きく動いていた）。
+> `const` は**既定値の名前としてだけ**残り、どれも rustdoc の 1 行で出どころ（測った／導出／引用／
+> *理由のみ*／**不明**）を言う。**既定値は 1 つも動かしていない**（6 通りの走行の行の集合が前後で
+> 同じ。`docs/verification/selftest-lines.md`）。
+>
+> 置き場所は **7 つの Resource**で、`main` が**最初のフレームの前に** `garden.settings.txt` から
+> 読む（窓の大きさもカメラも畑の広さも、App を建てる前に要るため。Battle の `Look` が S5b-2 で
+> 同じ場所へ動いたのと同じ理由）。**店は今、ヘッドレスの走行でも読む** — 畑と家具と予算は
+> ヘッドレスの世界のものでもあるため。パネルの数（`editor_*` / `vm_*` / `hud_*` / `guide_*`）は
+> 今までどおり `games_shell::PanelSettingsPlugin` が `PreStartup` で読む。
+>
+> | Resource | 何の数か | 鍵の接頭辞 |
+> |---|---|---|
+> | `Place` | 畑の広さ、壁、押し分けの回数 | `field_*` / `wall_margin` / `separate_passes` |
+> | `Furniture` | 新しい庭を建てるときの家具と間隔 | `start_*` / `plant_min` / `plant_max` |
+> | `Light` | 夜と昼の光、影、夜明けの位相 | `light_*` |
+> | `Scenery` | 地平線・空のドーム・霧・縁の木 | `horizon_*` / `sky_*` / `fog_*` / `edge_*` |
+> | `Picture` | 窓、地面の色、空腹バー、模型の倍率、アニメ | `window_*` / `look_*` |
+> | `Eye` | 3D オービットのカメラとクリック | `eye_*` |
+> | `Budgets` | 2 本の VM の予算と `frame_time`、待ちと熱 | `script_*` / `world_script_*` ほか |
+>
+> **(b)（遊びの数 → Ruby 側）と (d)（判定の閾値）の行は触っていない** — S5b-4 と S5b-5 の仕事で、
+> 行番号だけ取り直した。
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+### 2.1 場（`Place`）
+
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `FIELD_W` | `main.rs:62` | 40.0 | | `const` | (c) 起動の引数か `Settings` | **引用**: 計画書 `docs/plans/garden-plan.md:51`「40×30 マスの草地」。1 単位 ≈ ウサギ 1 匹（`main.rs:61`） |
-| `FIELD_D` | `main.rs:63` | 30.0 | | `const` | (c) | **引用**: 同上 |
-| `HALF_W` / `HALF_D` | `main.rs:64-65` | 20.0 / 15.0 | ● | 導出 | (a) 上の 2 つから導いているので独立の数ではない | **導出**: `FIELD_W / 2.0` |
-| 壁の内側の余白 | `main.rs:3277-3283, 3296` | 0.5 | ● | 直書き | (c) | **不明**（`move_creatures` と `separate` の両方が同じ 0.5 で clamp する） |
+| `FIELD_W` | `main.rs:70` | 40.0 | | `Place::width`、`Settings` の `field_width` | (c) | **引用**: 計画書 `docs/plans/garden-plan.md:51`「40×30 マスの草地」。なぜその 2 つかは**不明** |
+| `FIELD_D` | `main.rs:71` | 30.0 | | `Place::depth`、`field_depth` | (c) | **引用**: 同上 |
+| ~~`HALF_W` / `HALF_D`~~ | — | — | ● | **`const` が無くなった**（S5b-3）。`Place::half_w()` / `half_d()` が畑から導く | (a)→導出 | **導出**: `width / 2.0` |
+| 壁の内側の余白 `WALL_MARGIN` | `main.rs:75` | 0.5 | ● | `Place::wall_margin`、`wall_margin` | (c) | **不明**（`move_creatures` と `inside_the_walls` が同じ 0.5 で clamp する。G0 から） |
 
-### 2.2 昼夜と光
+### 2.2 昼夜と光（`Light`）
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `DAY_LENGTH` | `main.rs:74` | 60.0 秒 | ● | `world.rb:21` の `day_length` が上書きする（`garden.rules`）。この数は「規則が黙っているときの既定」 | (e)＋(c) の既定値 | **引用**: `main.rs:67-73`「It is the default now, not the rule (W1)」 |
-| `DAWN_OFFSET` | `main.rs:77` | 0.08 | ● | `const` | (c) | *理由のみ* 「the first thing a run sees is daylight」`main.rs:75-76`。0.08 という数自体は**不明** |
-| `MIDNIGHT` | `main.rs:83` | `(0.75 − 0.08) × 60` = 40.2 s | | 導出 | (a) `--at midnight` が指す時刻。位相 0.75 が太陽の最下点なので式が壊れると別の時刻になる | **導出**（`main.rs:79-82` に式ごと書いてある） |
-| `MOON_LUX` | `main.rs:111` | 950.0 | ● | `NightDial`（`Settings` の `night`）が掛かる | (c) の既定値（倍率は既に (e)） | **測った**: 真夜中の地面の平均輝度 44/255（目標 40〜50、G6 は 26、午後は 81）。`main.rs:85-104`、`docs/plans/garden-plan.md:515, 529` |
-| `NIGHT_AMBIENT` | `main.rs:112` | 190.0 | ● | 同上 | (c) の既定値 | **測った**（同上。「110 to 190 moved the mean by 1.9」`main.rs:106-107`） |
-| `NIGHT_SKY` | `main.rs:115` | `[0.14, 0.18, 0.36]` | ● | 同上 | (c) の既定値 | **測った**（`docs/plans/garden-plan.md:530`。G6 の `0.06,0.08,0.17` から比のまま） |
-| `NightDial` の既定 | `main.rs:135` | 1.0 | ● | `Settings` の `night`（スライダ） | **(e)** | **引用**: `main.rs:117-129`（著者に数を尋ねるための仕掛け） |
-| `NIGHT_DIAL_MIN` / `MAX` | `main.rs:141-142` | 0.5 / 2.0 | | `pub const` | (c) | *理由のみ* 「Half the night is still a night; twice it is the author saying the screen is darker than ours」`main.rs:139-140` |
-| 昼の照度 | `main.rs:3152` | `1200 + 9000 × noon` | ● | 直書き | (c) | *理由のみ*（`main.rs:98`「the day's floor（1,200 lux, the sun on the horizon）」）。9000 は**不明** |
-| 昼の環境光 | `main.rs:3168` | `120 + 260 × height` | ● | 直書き | (c) | **不明** |
-| 太陽・月の距離 | `main.rs:3156` | 60.0 | ● | 直書き | (a) 平行光なので距離は影のカスケードに効くだけ | **不明** |
-| 太陽の照度（`DirectionalLight`） | `main.rs:2202` | 8,000.0 | | 直書き（起動時） | (c) | **不明**（毎フレーム `day_night` が上書きするので初期値だけ） |
-| 影のカスケード | `main.rs:2204-2206` | 2 / 24.0 / 70.0 | | 直書き | (c) | **不明** |
-| 太陽の高さから昼夜を決める境 | `main.rs:3140` | `height <= 0.0` | ● | 直書き | (a) 「地平線の下＝夜」の定義そのもの | **導出** |
+| `DAY_LENGTH` | `main.rs:147` | 60.0 秒 | ● | `world.rb:21` の `day_length` が上書きする。この数は「規則が黙っているときの既定」 | (e)＋(c) の既定値 | **引用**: `main.rs:140-146`「It is the default now, not the rule (W1)」 |
+| `DAWN_OFFSET` | `main.rs:151` | 0.08 | ● | `Light::dawn_offset`、`light_dawn_offset` | (c) | *理由のみ*「the first thing a run sees is daylight」。0.08 自体は**不明** |
+| ~~`MIDNIGHT`~~ | `main.rs:160` | — | | **`const` が無くなった**（S5b-3）。`midnight(&light)` が `dawn_offset` から導く — 夜明けを動かすと `--at midnight` の指す時刻も動く | (a)→導出 | **導出**（式は `main.rs:152-159`） |
+| `MOON_LUX` | `main.rs:199` | 950.0 | ● | `Light::moon_lux`、`light_moon_lux`。`NightDial`（`night`）が掛かる | (c) の既定値 | **測った**（2026-09-18、G6b）: 真夜中の地面の平均輝度 44/255（目標 40〜50、G6 は 26、午後は 81）。`--shot --at midnight` の、パネルが覆わない帯で測った。**3 つ一組の測定**で、1 つ動かすと 44 は無くなる — rustdoc にそう書いた |
+| `NIGHT_AMBIENT` | `main.rs:200` | 190.0 | ● | `Light::night_ambient`、`light_night_ambient` | (c) の既定値 | **測った**（同じ 1 回の測定。「110 to 190 moved the mean by 1.9」） |
+| `NIGHT_SKY` | `main.rs:203` | `[0.14, 0.18, 0.36]` | ● | `Light::night_sky`、`light_night_sky_r` / `_g` / `_b`（色だが 3 つの数なので構文解析が要らない） | (c) の既定値 | **測った**（同じ 1 回の測定） |
+| `NIGHT_ZENITH` | `main.rs:372` | 0.55 | ● | `Light::night_zenith`、`light_night_zenith` | (c) | *理由のみ*（縁は測った `NIGHT_SKY`、勾配はその上）。0.55 は**不明** |
+| `NightDial` の既定 | `main.rs:363` | 1.0 | ● | `Settings` の `night`（スライダ） | **(e)** | **引用**: 著者に数を尋ねるための仕掛け |
+| `NIGHT_DIAL_MIN` / `MAX` | `main.rs:338-339` | 0.5 / 2.0 | | `Light::dial_min` / `dial_max`、`light_dial_min` / `light_dial_max` | (c) | *理由のみ*「Half the night is still a night; twice it is the author saying the screen is darker than ours」 |
+| 昼の照度 `DAY_LUX` | `main.rs:209` | `1200 + 9000 × noon` | ● | `Light::day_lux`、`light_day_lux` / `light_day_lux_span` | (c) | *理由のみ*（1,200 は「the day's floor、地平線の太陽」）。9,000 は**不明** |
+| 昼の環境光 `DAY_AMBIENT` | `main.rs:210` | `120 + 260 × height` | ● | `Light::day_ambient`、`light_day_ambient` / `light_day_ambient_span` | (c) | **不明** |
+| 太陽・月の距離 | `main.rs:4058` | 60.0 | ● | 直書き | (a) 平行光なので距離は影のカスケードに効くだけ | **不明** |
+| 太陽の照度 `SUN_LUX` | `main.rs:215` | 8,000.0 | | `Light::sun_lux`、`light_sun_lux`（起動時。毎フレーム `day_night` が上書きする） | (c) | **不明** |
+| 影のカスケード `SHADOW_*` | `main.rs:216-218` | 2 / 24.0 / 70.0 | | `Light::shadow_cascades` / `shadow_near` / `shadow_far`、`light_shadow_*` | (c) | **不明** |
+| 太陽の高さから昼夜を決める境 | `main.rs:4042` | `height <= 0.0` | ● | 直書き | (a) 「地平線の下＝夜」の定義そのもの | **導出** |
+| 昼の空と太陽と環境光の**色の傾き** | `main.rs:4012-4013, 4048, 4053, 4066, 4069` | `0.35+0.15×noon` ほか | ● | 直書き | (c) | **一覧の抜け**（S5a も S5b-3 も拾っていない。§7-17） |
 
-### 2.3 地平線と空（G8）
+### 2.3 地平線と空（G8。`Scenery`）
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `HORIZON_HALF` | `main.rs:158` | 300.0 | | `const` | (c) | *理由のみ*（カメラに追従するので「常にこの距離」`main.rs:153-157`）。300 自体は**不明** |
-| `HORIZON_DROP` | `main.rs:160` | −0.02 | | `const` | (a) 2 枚の平面が画素を取り合わないための隙間。0 にすると z ファイティング | *理由のみ*（`main.rs:159`） |
-| `SKY_RADIUS` | `main.rs:167` | 500.0 | | `const` | (c) | **不明** |
-| `SKY_SIDES` / `SKY_RINGS` | `main.rs:168-169` | 12 / 4 | | `const` | (c) | **導出の記述あり**: 84 三角形・49 頂点（`main.rs:162-166`）。12×4 を選んだ理由は**不明** |
-| `SKY_FLOOR` | `main.rs:172` | −0.30 | | `const` | (a) 地面が描く地平線より下でなければ空の縁が見える | *理由のみ*（`main.rs:170-171`） |
-| `NIGHT_ZENITH` | `main.rs:175` | 0.55 | ● | `const` | (c) | *理由のみ*（縁は測った `NIGHT_SKY`、勾配はその上、`main.rs:173-174`）。0.55 は**不明** |
-| `FOG_NEAR` | `main.rs:191` | 14.0 | ● | `const` | (c) | **導出**: 40×30 の遠い隅は中心より約 14 単位遠い（`main.rs:177-182`） |
-| `FOG_DEPTH` | `main.rs:192` | 45.0 | ● | `const` | (c) | **測った**: 既定のカメラは 42 単位・49° 見下ろしで、画面の最遠は 72 単位、畑の隅は 57 — 奥行きは 15 単位しかない（`main.rs:184-190`） |
-| `FOG_NEAR_MAX` | `main.rs:193` | 120.0 | ● | `const` | (a) `HORIZON_HALF` の内側に霧の終わりを収めるための上限 | *理由のみ*（`main.rs:181-182`）。120 という数は**不明** |
-| 霧の色 | `main.rs:2898-2899` | `(0.35,0.5,0.7)`、60→220 | | 直書き（起動時） | (c) | **不明**（毎フレーム `main.rs:3236` が上書き） |
-| `EDGE_TREES` | `main.rs:199` | 16 | | `const` | (c) | *理由のみ* 「the edge of the field reads as the edge of the scenery rather than as a fence」`main.rs:195-198`。16 は**不明** |
-| 縁の木の散らし方 | `main.rs:2096-2104` | ±0.4 / 4〜15 / 1.7〜3.1 | | 直書き | (c) | **不明** |
+| `HORIZON_HALF` | `main.rs:355` | 300.0 | | `Scenery::horizon_half`、`horizon_half` | (c) | *理由のみ*（カメラに追従するので「常にこの距離」）。300 自体は**不明** |
+| `HORIZON_DROP` | `main.rs:357` | −0.02 | | `const` のまま | (a) 2 枚の平面が画素を取り合わないための隙間。0 にすると z ファイティング | *理由のみ* |
+| `SKY_RADIUS` | `main.rs:364` | 500.0 | | `Scenery::sky_radius`、`sky_radius` | (c) | **不明** |
+| `SKY_SIDES` / `SKY_RINGS` | `main.rs:365-366` | 12 / 4 | | `Scenery::sky_sides` / `sky_rings`、`sky_sides` / `sky_rings`（最低 3 / 2 に丸める） | (c) | **導出の記述あり**: 84 三角形・49 頂点。12×4 を選んだ理由は**不明** |
+| `SKY_FLOOR` | `main.rs:369` | −0.30 | | `const` のまま | (a) 地面が描く地平線より下でなければ空の縁が見える | *理由のみ* |
+| `FOG_NEAR` | `main.rs:388` | 14.0 | ● | `Scenery::fog_near`、`fog_near` | (c) | **導出**: 40×30 の遠い隅は中心より約 14 単位遠い |
+| `FOG_DEPTH` | `main.rs:389` | 45.0 | ● | `Scenery::fog_depth`、`fog_depth` | (c) | **測った**: 既定のカメラは 42 単位・49° 見下ろしで、画面の最遠は 72 単位、畑の隅は 57 — 奥行きは 15 単位しかない。**`eye_pitch` / `eye_distance` を動かすとこの測定は別の絵についてのものになる** |
+| `FOG_NEAR_MAX` | `main.rs:390` | 120.0 | ● | `const` のまま | (a) `horizon_half` の内側に霧の終わりを収めるための上限 | *理由のみ*。120 は**不明** |
+| 霧の色と最初の 2 距離 `FOG_COLOR` / `FOG_AT_FIRST` | `main.rs:406-407` | `(0.35,0.5,0.7)`、60→220 | | `Scenery::fog_color` / `fog_at_first`、`fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end`（起動時。毎フレーム `horizon_look` が上書きする） | (c) | **不明** |
+| `EDGE_TREES` | `main.rs:396` | 16 | | `Scenery::edge_trees`、`edge_trees` | (c) | *理由のみ*「the edge of the field reads as the edge of the scenery rather than as a fence」。16 は**不明** |
+| 縁の木の散らし方 `EDGE_JITTER` / `EDGE_OUT` / `EDGE_SCALE` | `main.rs:399-401` | ±0.4 / 4〜15 / 1.7〜3.1 | | `Scenery`、`edge_jitter` / `edge_out_min` / `_max` / `edge_scale_min` / `_max` | (c) | **不明** |
+| 空の勾配の押し上げ | `main.rs:4159` | `t × 1.25 − 0.1` | ● | 直書き | (c) | **一覧の抜け**（§7-17） |
 
-### 2.4 見た目
+### 2.4 見た目（`Picture`）
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `RABBIT_TINT` / `BEETLE_TINT` | `main.rs:206-207` | `(0.93,0.90,0.78)` / `(0.14,0.48,0.56)` | | `pub const` | (a) モデルと HUD が同じ数を使うことが意味（`window::species_color`） | **引用**: `main.rs:201-205`（G8、著者「ウサギと甲虫が見分けられない」） |
-| `WORLD_COLOR` | `window.rs:225` | `(210,214,222)` | ● | `const` | (a) エディタの本文色（`editor.rs:455`）と同じであることが意味 | **引用**: `window.rs:218-224` |
-| 地面の色 | `main.rs:2029` | `(0.36,0.46,0.25)` | | 直書き | (c) | **不明** |
-| 空腹バーの色と境 | `window.rs:1057-1062` | 20.0 / 55.0 | ● | 直書き | (c)。55.0 は甲虫の `hungry_below`（`beetle.rb:10`）と同じ数だが繋がっていない（§7-6） | **不明** |
-| 空腹バーの大きさ | `window.rs:1066` | 64×11 | ● | 直書き | (c) | **不明** |
-| 草のモデルの倍率 | `main.rs:2509` | 2.6 / 2.2 | | 直書き | (c) | **不明** |
-| 木・岩のモデルの倍率 | `main.rs:2528, 2546` | 2.2 / 3.4×3.0 | | 直書き | (c) | **不明** |
-| 生き物のモデルの倍率 | `main.rs:2589-2590` | 0.55 / 0.75 | | 直書き | (c) | **不明** |
-| `BEETLE_MODEL` | `main.rs:222` | `animal-crab.glb` | | `const` | (c)（数ではないが「著者が替えるもの」として書いてある） | **引用**: `main.rs:216-221` |
-| 歩き/食べのアニメの切り替え速度 | `main.rs:5543` | 0.2 | ● | 直書き | (c) | **不明** |
-| アニメの遷移時間 | `main.rs:5557` | 180 ms | ● | 直書き | (c) | **不明** |
+| `RABBIT_TINT` / `BEETLE_TINT` | `main.rs:498-499` | `(0.93,0.90,0.78)` / `(0.14,0.48,0.56)` | | `pub const` のまま | (a) モデルと HUD が同じ数を使うことが意味（`window::species_color`） | **引用**（G8、著者「ウサギと甲虫が見分けられない」） |
+| `WORLD_COLOR` | `window.rs:232` | `(210,214,222)` | ● | `const` のまま | (a) エディタの本文色と同じであることが意味 | **引用** |
+| 窓の大きさ `WINDOW` | `main.rs:519` | 1600×900 | | `Picture::window`、`window_width` / `window_height`（**Battle と同じ 2 つの鍵**） | (c) | **引用**（間接）: 「a 1600-wide window」がカメラの既定距離 42 の根拠。900 は**不明** |
+| 地面の色 `GROUND_COLOR` | `main.rs:522` | `(0.36,0.46,0.25)` | | `Picture::ground_color`、`look_ground_r` / `_g` / `_b` | (c) | **不明** |
+| 空腹バーの色の境 `HUNGER_LOW` / `HUNGER_WARN` | `main.rs:529-530` | 20.0 / 55.0 | ● | `Picture::hunger_low` / `hunger_warn`、`look_hunger_low` / `look_hunger_warn` | (c)。55.0 は `beetle.rb:10` の `hungry_below` と同じ数だが**繋いでいない**（§7-6） | **不明** |
+| 空腹バーの大きさ `HUNGER_BAR` | `main.rs:531` | 64×11 | ● | `Picture::hunger_bar`、`look_hunger_bar_width` / `_height` | (c) | **不明** |
+| 草のモデルの倍率 `TUFT_SCALE` / `BUSH_SCALE` | `main.rs:536-537` | 2.2 / 2.6 | | `Picture`（`Look` が持ち運ぶ）、`look_tuft_scale` / `look_bush_scale` | (c) | **不明** |
+| 木・岩のモデルの倍率 `TREE_SCALE` / `ROCK_SCALE` | `main.rs:538-539` | 2.2 / 3.4×3.0 | | 同上、`look_tree_scale` / `look_rock_scale` / `look_rock_squash` | (c) | **不明** |
+| 生き物のモデルの倍率 `BEETLE_SCALE` / `RABBIT_SCALE` | `main.rs:540-541` | 0.55 / 0.75 | | 同上、`look_beetle_scale` / `look_rabbit_scale` | (c) | **不明** |
+| `BEETLE_MODEL` | `main.rs:514` | `animal-crab.glb` | | `Picture::beetle_model`、`look_beetle_model`（数ではないが「著者が替えるもの」） | (c) | **引用**: `main.rs:508-513` |
+| 歩きに変わる速さ `WALKING_AT` | `main.rs:545` | 0.2 | ● | `Picture::walking_at`（`Look` 経由）、`look_walking_at` | (c) | **不明** |
+| アニメの遷移時間 `GAIT_BLEND_MS` | `main.rs:546` | 180 ms | ● | `Picture::gait_blend_ms`、`look_gait_blend_ms` | (c) | **不明** |
 
-### 2.5 世界の家具（生成時に 1 度だけ）
+### 2.5 世界の家具（生成時に 1 度だけ。`Furniture`）
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `PLANTS_AT_START` | `main.rs:231` | 55 | | `const` | (c) | **不明**（`main.rs:224-230` は「家具として残した」ことを言うだけで、55 の理由は書いていない） |
-| `PLANT_MIN` | `main.rs:232` | 0.18 | | `const` | (c) | **不明** |
-| `PLANT_MAX` | `main.rs:236` | 1.4 | | `const`。**`world.rb:31` の `plant_max` が同じ数を別に持つ** | (c) の既定値 | **引用**: `main.rs:233-235`（2 か所に同じ事実がある理由は書いてある） |
-| `BEETLES` / `RABBITS` | `main.rs:239-240` | 6 / 4 | | `const` | (c) | **不明** |
-| `TREES` / `ROCKS` | `main.rs:313-314` | 7 / 9 | | `const` | (c) | **引用**（数だけ）: `docs/plans/garden-plan.md:89`「木 7・岩 9」。選んだ理由は**不明** |
-| 生成時の空腹の散らし | `main.rs:2308` | 45〜90 | | 直書き | (c) | **不明** |
-| 初期配置の間隔 | `main.rs:2255, 2278, 2298, 2301-2302` | 1.5 / 1.2 / 2.5 / 0.6 / 2.0 | | 直書き | (c) | **引用**（1.5 のみ）: `docs/plans/garden-plan.md:93`「岩どうしは押し戻さないので初期配置の側で 1.5 以上離している」。残りは**不明** |
-| 配置をやり直す回数 | `main.rs:2253, 2296` | 40 | | 直書き | (c) | **不明** |
-| 草が丸い株になる確率 | `main.rs:2282, 3529, 5256` | 0.35 | | 直書き（3 か所に同じ数） | (c) | **不明** |
-| 岩の大きさ | `main.rs:2266, 5262` | 0.8〜1.25 | | 直書き | (c) | **不明** |
-| 新しい芽の最小間隔 | `main.rs:3526` | 1.5 | ● | 直書き | (b) 規則の数なのに Rust に残っている（§8-1） | **不明** |
+| `PLANTS_AT_START` | `main.rs:649` | 55 | | `Furniture::plants`、`start_plants` | (c) | **不明** |
+| `PLANT_MIN` | `main.rs:650` | 0.18 | | `Furniture::plant_min`、`plant_min`（芽の大きさ） | (c) | **不明** |
+| `PLANT_MAX` | `main.rs:654` | 1.4 | | `Furniture::plant_max`、`plant_max`。**`world.rb:31` の `plant_max` が同じ数を別に持つ** | (c) の既定値 | **引用**: 2 か所に同じ事実がある理由は書いてある |
+| `BEETLES` / `RABBITS` | `main.rs:657-658` | 6 / 4 | | `Furniture`、`start_beetles` / `start_rabbits` | (c) | **不明** |
+| `TREES` / `ROCKS` | `main.rs:845-846` | 7 / 9 | | `Furniture`、`start_trees` / `start_rocks` | (c) | **引用**（数だけ）: `garden-plan.md:89`「木 7・岩 9」。選んだ理由は**不明** |
+| 生成時の空腹 `START_HUNGER` | `main.rs:661` | 45〜90 | | `Furniture::hunger`、`start_hunger_min` / `_max` | (c) | **不明** |
+| 配置をやり直す回数 `START_TRIES` | `main.rs:664` | 40 | | `Furniture::tries`、`start_tries`（最低 1 に丸める） | (c) | **不明** |
+| 草が丸い株になる確率 `ROUND_CHANCE` | `main.rs:667` | 0.35 | | `Furniture::round_chance`、`start_round_chance`。**3 か所に散っていた同じ数が 1 つになった**（`spawn_world`・`sprout_plants`、`load_world` は自前の roll） | (c) | **不明** |
+| 岩の大きさ `ROCK_SQUASH` | `main.rs:668` | 0.8〜1.25 | | `Furniture::rock_squash`、`start_rock_squash_min` / `_max` | (c) | **不明** |
+| 初期配置の間隔 5 つ `SOLID_APART` ほか | `main.rs:673-677` | 1.5 / 1.2 / 2.5 / 0.6 / 2.0 | | `Furniture`、`start_solid_apart` / `start_grass_off_solid` / `start_creature_off_grass` / `start_creature_off_solid` / `start_creatures_apart` | (c) | **引用**（1.5 のみ）: `garden-plan.md:93`。残りは**不明** |
+| 最初の草の大きさの下限 | `main.rs:3210` | 0.3 | | 直書き | (c) | **一覧の抜け**（`plant_min` 0.18 とは別の数。S5b-3 は移していない。§7-16） |
+| 新しい芽の最小間隔 | `main.rs:4404` | 1.5 | ● | 直書き | (b) 規則の数なのに Rust に残っている（§8-1） | **不明** |
 
 ### 2.6 規則の既定値（`world.rb` が黙っているときに使われる）
 
+**この節は S5b-3 が触っていない**（(b) と (e) で、S5b-4 の仕事）。
+
 | 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
 |---|---|---|---|---|---|---|
-| `HUNGER_MAX` | `main.rs:244` | 100.0 | ● | `const`。規則の方は `world.rb:63` | (a) HUD のバーの「満」。`world.rb` の `hunger_max` と食い違うとバーが嘘をつく | **引用**: `main.rs:241-243` |
-| `REACH` | `main.rs:252` | 1.1 | ● | `world.rb:69` の `reach` が `garden.rules` で上書きする | (e)＋既定値 | **引用**: `main.rs:245-251` |
-| `TOUCH_REACH` | `main.rs:253` | 1.3 | ● | `const`。`startle` は Rust に残った規則 | (b) 遊びの数だが Ruby に道が無い | **不明**（1.3 という数の理由） |
-| `MATE_REACH` | `main.rs:260` | 2.0 | ● | `world.rb:74` が上書き | (e)＋既定値 | **測った**: 満腹な同種 2 匹の最接近は 1.24、半径の和は 0.80 だったので「1 体分の距離 (2.0) 以内」にした。`docs/plans/garden-plan.md:243-244` |
-| `CHILD_HUNGER` | `main.rs:299` | 50.0 | | `world.rb:84` が上書き | (e)＋既定値 | **引用**: `main.rs:289-298` |
-| `POP_MAX` | `main.rs:305` | 24 | ● | `world.rb:86` が上書き | (e)＋既定値 | **引用**: `main.rs:300-304`。予算の実測もこの上限に立っている（`main.rs:4292`） |
+| `HUNGER_MAX` | `main.rs:776` | 100.0 | ● | `const`。規則の方は `world.rb:63` | (a) HUD のバーの「満」 | **引用** |
+| `REACH` | `main.rs:784` | 1.1 | ● | `world.rb:69` の `reach` が `garden.rules` で上書きする | (e)＋既定値 | **引用** |
+| `TOUCH_REACH` | `main.rs:785` | 1.3 | ● | `const`。`startle` は Rust に残った規則 | (b) 遊びの数だが Ruby に道が無い | **不明** |
+| `MATE_REACH` | `main.rs:792` | 2.0 | ● | `world.rb:74` が上書き | (e)＋既定値 | **測った** |
+| `CHILD_HUNGER` | `main.rs:831` | 50.0 | | `world.rb:84` が上書き | (e)＋既定値 | **引用** |
+| `POP_MAX` | `main.rs:837` | 24 | ● | `world.rb:86` が上書き | (e)＋既定値 | **引用**。予算の実測もこの上限に立っている |
 
 ### 2.7 当たり
 
 | 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
 |---|---|---|---|---|---|---|
-| `BEETLE_RADIUS` | `main.rs:309` | 0.40 | ● | `const` | (b) 体の寸法は遊びの数 | **不明** |
-| `RABBIT_RADIUS` | `main.rs:310` | 0.50 | ● | `const` | (b) | **不明** |
-| `TREE_RADIUS` | `main.rs:311` | 0.70 | ● | `const` | (b) | **不明** |
-| `ROCK_RADIUS` | `main.rs:312` | 0.60 | ● | `const` | (b) | **不明** |
-| `CELL` | `main.rs:317` | 1.6 | ● | `const` | (a) 最大半径の 2 倍以上でなければ近傍を取りこぼす | **導出**: `main.rs:315-316`（`2 × 0.70 = 1.4 ≤ 1.6`）。`docs/plans/garden-plan.md:90` も「1.6 単位のマスの格子」 |
-| `SEPARATE_PASSES` | `main.rs:320` | 4 | ● | `const` | (c) | **測った**: 3 回の 90 秒走行で最接近 0.974 / 0.998 / 1.000、0.9 を下回ったフレーム 0（`docs/plans/garden-plan.md:92`）。理由の文は `main.rs:318-319` |
-| 押し分けの取り分 | `main.rs:3400` | 0.5 / 0.5 | ● | 直書き | (a) 生き物どうしは半分ずつ、木と岩は不動 — 規則の定義 | **引用**: `docs/plans/garden-plan.md:64` |
-| `Collider` の既定半径 | `docs/garden.md:280` の例 | 0.4 | | — | — | 文書の例。数の実体は上の 4 つ |
+| `BEETLE_RADIUS` | `main.rs:841` | 0.40 | ● | `const` | (b) 体の寸法は遊びの数 | **不明** |
+| `RABBIT_RADIUS` | `main.rs:842` | 0.50 | ● | `const` | (b) | **不明** |
+| `TREE_RADIUS` | `main.rs:843` | 0.70 | ● | `const` | (b) | **不明** |
+| `ROCK_RADIUS` | `main.rs:844` | 0.60 | ● | `const` | (b) | **不明** |
+| `CELL` | `main.rs:849` | 1.6 | ● | `const` | (a) 最大半径の 2 倍以上でなければ近傍を取りこぼす | **導出**（`2 × 0.70 = 1.4 ≤ 1.6`） |
+| `SEPARATE_PASSES` | `main.rs:852` | 4 | ● | `Place::separate_passes`、`separate_passes` | (c) | **測った**: 3 回の 90 秒走行で最接近 0.974 / 0.998 / 1.000、0.9 を下回ったフレーム 0（`garden-plan.md:92`）。**変えるとその測定は無くなる** |
+| 押し分けの取り分 | `main.rs:4295` | 0.5 / 0.5 | ● | 直書き | (a) 生き物どうしは半分ずつ、木と岩は不動 — 規則の定義 | **引用** |
 
-### 2.8 カメラ（3D オービット）
+### 2.8 カメラ（3D オービット。`Eye`）
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+`games_shell::CameraControls`（共有 crate の 2D カメラ、`camera_*`）とは**別物**で、箱庭は
+`CameraPlugin` を足していない。鍵を `eye_*` にしたのは、`garden.settings.txt` を読む人が
+どちらのカメラの話かで迷わないようにするため。
+
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `Orbit::default` の pitch | `main.rs:1185` | 0.85 rad（≈49°） | | 直書き | (c) | **引用**（値ではなく効果）: `main.rs:185`「looks down at 49°」— 霧の深さはこの角度を前提に測った |
-| `Orbit::default` の distance | `main.rs:1185` | 42.0 | | 直書き。`--eye` で 1 回だけ変えられる | (c) | **引用**: `main.rs:1493`「At the default 42 a beetle is thirty pixels across in a 1600-wide window」 |
-| `ZOOM_PER_NOTCH` | `main.rs:1204` | 1.10 | ● | `const` | (c) | **測った**（導出も添えてある）: 30 ノッチで全域（`main.rs:1199-1203`、単体テスト `main.rs:6267` が 29〜32 を確かめる） |
-| `PIXELS_PER_NOTCH` | `main.rs:1206` | 100.0 | ● | `const` | (a) ブラウザの 1 ノッチ = 100 px という外の事実 | **引用**: `main.rs:1192-1195`（Chromium は 100、Firefox は 3 行で winit が `Line` に直す） |
-| `ZOOM_MIN` / `ZOOM_MAX` | `main.rs:1209-1210` | 6.0 / 110.0 | ● | `const` | (c) | *理由のみ*: 「Six units is a creature filling a third of the window; a hundred and ten has the whole forty-by-thirty field and its walls in view」`main.rs:1207-1208` |
-| `PAN_PER_PIXEL` | `main.rs:1213` | 0.0016 | ● | `const` | (c) | *理由のみ*（距離に比例させる理由は書いてある。0.0016 は**不明**） |
-| `PAN_PER_SECOND` | `main.rs:1215` | 0.9 | ● | `const` | (c) | **不明** |
-| `PAN_LIMIT` | `main.rs:1217` | 8.0 | ● | `const` | (c) | *理由のみ* 「How far past the wall the eye may wander」`main.rs:1216` |
-| オービットの回転感度 | `main.rs:2989-2990` | 0.005 | ● | 直書き | (c) | **不明** |
-| pitch の範囲 | `main.rs:2990` | 0.12〜1.45 | ● | 直書き | (c) | **不明** |
-| `CLICK_REACH` | `window.rs:82` | 1.6 | ● | `const` | (c) | *理由のみ* 「within about a body's width」`window.rs:92-93`。ただし体の半径は 0.40〜0.50 なので「体の幅」とは言いにくい（§7-5） |
-| `CLICK_SLOP` | `window.rs:85` | 6.0 | ● | `const` | (c) | *理由のみ* 「a press that let go within a few pixels of where it went down was a click」`window.rs:90-91` |
+| `PITCH`（`Orbit::default` の pitch） | `main.rs:1804` | 0.85 rad（≈49°） | | `Eye::pitch`、`eye_pitch` | (c) | **引用**（値ではなく効果）: 「looks down at 49°」— **`FOG_DEPTH` の測定はこの角度を前提にしている** |
+| `DISTANCE`（同 distance） | `main.rs:1805` | 42.0 | | `Eye::distance`、`eye_distance`。`--eye` が上書きし、`Home` が戻す先でもある | (c) | **引用**: 「At the default 42 a beetle is thirty pixels across in a 1600-wide window」 |
+| `ZOOM_PER_NOTCH` | `main.rs:1827` | 1.10 | ● | `Eye::zoom_per_notch`、`eye_zoom_per_notch` | (c) | **測った**（導出も添えてある）: 30 ノッチで全域（単体テストが 29〜32 を確かめる） |
+| `PIXELS_PER_NOTCH` | `main.rs:1829` | 100.0 | ● | `const` のまま | (a) ブラウザの 1 ノッチ = 100 px という外の事実。設定にすると「ブラウザと食い違うブラウザ」が作れてしまう | **引用**（Chromium は 100） |
+| `ZOOM_MIN` / `ZOOM_MAX` | `main.rs:1832-1833` | 6.0 / 110.0 | ● | `Eye::zoom_min` / `zoom_max`、`eye_zoom_min` / `eye_zoom_max` | (c) | *理由のみ*: 「Six units is a creature filling a third of the window; a hundred and ten has the whole field and its walls in view」 |
+| `PAN_PER_PIXEL` | `main.rs:1836` | 0.0016 | ● | `Eye::pan_per_pixel`、`eye_pan_per_pixel` | (c) | *理由のみ*（距離に比例させる理由は書いてある。0.0016 は**不明**） |
+| `PAN_PER_SECOND` | `main.rs:1838` | 0.9 | ● | `Eye::pan_per_second`、`eye_pan_per_second` | (c) | **不明** |
+| `PAN_LIMIT` | `main.rs:1840` | 8.0 | ● | `Eye::pan_limit`、`eye_pan_limit` | (c) | *理由のみ*「How far past the wall the eye may wander」 |
+| オービットの回転感度 `TURN_PER_PIXEL` | `main.rs:1808` | 0.005 | ● | `Eye::turn_per_pixel`、`eye_turn_per_pixel` | (c) | **不明** |
+| pitch の範囲 `PITCH_MIN` / `PITCH_MAX` | `main.rs:1809-1810` | 0.12〜1.45 | ● | `Eye::pitch_min` / `pitch_max`、`eye_pitch_min` / `eye_pitch_max` | (c) | **不明** |
+| `CLICK_REACH` | `window.rs:87` | 1.6 | ● | `Eye::click_reach`、`eye_click_reach` | (c) | *理由のみ*「within about a body's width」。体の半径は 0.40〜0.50 なので文と数が合わない（§7-5）。**どちらにも寄せていない** |
+| `CLICK_SLOP` | `window.rs:90` | 6.0 | ● | `Eye::click_slop`、`eye_click_slop` | (c) | *理由のみ*「a few pixels」。6.0 は**不明** |
 
-### 2.9 実行と予算
+### 2.9 実行と予算（`Budgets`）
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| 世界 VM の予算 | `main.rs:4323` | 45,000 命令 | ● | 直書き | (c) | **測った**（この repo でいちばん出どころのはっきりした数）: 上限（90 株・24 匹）の 392 フレームで最悪 25,837 命令・tick 4.86 ms、45,000 はその 1.74 倍。`main.rs:4290-4322`、`docs/worklog/2026-09-17-garden-world.md` |
-| 世界 VM の `frame_time` | （rubevy の既定のまま） | 8 ms | ● | 触っていない | (c) | **引用**: `main.rs:4315-4322`（命令数の方が先に効くので据え置いた、と書いてある） |
-| 生き物 VM の予算 | （rubevy の既定のまま） | 200,000 命令 | ● | 触っていない | (c) | **引用**: `main.rs:4303` |
-| `RESTORE_PATIENCE` | `main.rs:1162` | 5.0 秒 | ● | `const` | (c) | *理由のみ*（`main.rs:1159-1161`）。5.0 自体は**不明**。0.5.0 では復元に 1.48 s かかっていた（`docs/README.md` の G9 の行）ので効いていた |
-| `SHORTEST_SLEEP` | `main.rs:4747` | 0.05 秒 | ● | `const` | (c) | **引用**: `prelude.rb:438` の `sleep 0.05` と同じ数で、そちらは理由つき（`prelude.rb:430-437`）。`main.rs:4735-4746` |
-| 熱の減衰 | `main.rs:4841` | 0.985 /フレーム | ● | 直書き | (c) | **不明** |
-| `--headless` の既定 | `main.rs:1469` | 10.0 秒 | | 引数 | **(e)** | **不明**（既定値の理由） |
-| `--shot` の既定 | `main.rs:1474` | 6.0 秒 | | 引数 | **(e)** | **不明**。Battle は 3.0（`sabibots/src/main.rs:271`）で食い違う（§7-7） |
-| 窓の大きさ | `main.rs:1574` | 1600×900 | | 直書き | (c) | **引用**（間接）: `main.rs:1493`「a 1600-wide window」がこの数に依っている |
-| headless のフレーム間隔 | `main.rs:1527` | 1/60 s | ● | 直書き | (a) 60 Hz を模すという定義 | **導出** |
-| `Brains` の枠数 | `main.rs:820` | 3（種 2 ＋ world） | | `const`（`Species::ALL.len()` から） | (a) 種を増やすと配列を伸ばす必要がある | **導出**（`main.rs:826`） |
+| 世界 VM の予算 `WORLD_BUDGET` | `main.rs:2205` | 45,000 命令 | ● | `Budgets::world`、`world_script_budget`（`install_world_answers` が書く） | (c) | **測った**（この repo でいちばん出どころのはっきりした数）: 上限（90 株・24 匹）の 392 フレームで最悪 25,837 命令・tick 4.86 ms、45,000 はその 1.74 倍。`docs/worklog/2026-09-17-garden-world.md`。**変えると 1.74 倍という余裕が別の話になる** |
+| 世界 VM の `frame_time` `WORLD_FRAME_TIME_MS` | `main.rs:2208` | 8 ms | ● | `Budgets::world_frame_time_ms`、`world_script_frame_time_ms`（0 以下で「壁時計の番人なし」） | (c) | **引用**: 命令数の方が先に効くので rubevy の既定と同じ数を据え置いた。**S5b-3 でゲームが自分の名前で持つようになった**（前は rubevy の既定のまま） |
+| 生き物 VM の予算 `CREATURE_BUDGET` | `main.rs:2223` | 200,000 命令 | ● | `Budgets::creature`、`script_budget`（**Battle と同じ鍵**） | (c) | **rubevy の既定を引き継いだ。rubevy 側の出どころは不明**（rubevy `docs/numbers.md`）。S5b-3 が上限の庭で**測った**が、**既定値は動かしていない**（測った分布と導ける案は `docs/worklog/2026-09-21-numbers-garden-settings.md` §4） |
+| 生き物 VM の `frame_time` `CREATURE_FRAME_TIME_MS` | `main.rs:2224` | 8 ms | ● | `Budgets::creature_frame_time_ms`、`script_frame_time_ms` | (c) | 同上（rubevy の既定を引き継いだ） |
+| `RESTORE_PATIENCE` | `main.rs:1764` | 5.0 秒 | ● | `Budgets::restore_patience`、`restore_patience` | (c) | *理由のみ*。5.0 自体は**不明** |
+| `SHORTEST_SLEEP` | `main.rs:5673` | 0.05 秒 | ● | `Budgets::shortest_sleep`、`shortest_sleep` | (c) | **引用**: `prelude.rb:438` の `sleep 0.05` と同じ数で、そちらは理由つき |
+| 熱の減衰 `HEAT_DECAY` | `main.rs:2228` | 0.985 /フレーム | ● | `Budgets::heat_decay`、`heat_decay` | (c) | **不明** |
+| `--headless` の既定 | `main.rs:2169` | 10.0 秒 | | 引数、または `Settings` の `headless_seconds`（旗が勝つ） | **(e)** | **不明**（既定値の理由） |
+| `--shot` の既定 | `main.rs:2170-2171` | `shot.png` / 6.0 秒 | | 引数、または `shot_file` / `shot_seconds` | **(e)** | **不明**。Battle は 3.0 で食い違う（§7-7） |
+| `--at` の既定 | — | 無し（0 から） | | `at_seconds`（旗が勝つ）。`--at midnight` は `light_dawn_offset` から導く | **(e)** | S5b-3 が足した |
+| `--eye` の既定 | — | `Eye::distance` | | `eye_distance`（**写しを置かず、カメラの既定距離そのものを使う**） | **(e)** | S5b-3 |
+| 窓のチェックの上限フレーム数 | `window.rs:1351` | 7 = 2 + ceil(200,000 ÷ 45,600) | | **設定から計算する**（S5b-3）。`script_budget` を上げると上限も上がる | (d) | **導出**: `STRUCTURAL_FRAMES` 2（S6 で測った、構造で縮められない）＋ 1 フレームが買う `INSTRUCTIONS_A_FRAME_BUYS` 45,600（S6 の実測）で割った切り上げ |
+| headless のフレーム間隔 | `main.rs:2359` | 1/60 s | ● | 直書き | (a) 60 Hz を模すという定義 | **導出** |
+| `Brains` の枠数 | `main.rs:1119` | 3（種 2 ＋ world） | | `const`（`Species::ALL.len()` から） | (a) 種を増やすと配列を伸ばす必要がある | **導出** |
 
 ### 2.10 セーブ
 
-| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
+| 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類 | 出どころ |
 |---|---|---|---|---|---|---|
-| `SAVE_VERSION` | `main.rs:4873` | 1 | | `const` | **(a)** 形式の版。変えると古いセーブが読めなくなる（10 番目の判定がそれを確かめている） | **引用**: `docs/worklog/2026-09-17-garden-G5.md`（版番号を単独で先に読む） |
-| `localStorage` の接頭辞 | `platform.rs:150` | `"garden:"` | | `const` | **(a)** 変えると公開版の利用者のセーブが消える | **引用**: `docs/plans/shared-crate-plan.md:162` |
+| `SAVE_VERSION` | `main.rs:5800` | 1 | | `const` | **(a)** 形式の版。変えると古いセーブが読めなくなる（10 番目の判定がそれを確かめている） | **引用** |
+| `localStorage` の接頭辞 | `platform.rs:36` | `"garden:"` | | `const` | **(a)** 変えると公開版の利用者のセーブが消える | **引用** |
+| セーブのファイル名 `SAVE_FILE` | `platform.rs:62` | `garden.save.json` | | `Settings` の `save_file`（`--save PATH` が勝つ）。**ブラウザでは `localStorage` の鍵**なので、書くのは「別のセーブを持つ」ことで、古い鍵は残る | (c) | S5b-3 が足した。名前そのものは **引用**（G3） |
 
 ### 2.11 selftest の閾値（(d)）
 
+**この節は S5b-3 が触っていない**（S5b-5 の仕事）。行番号だけ取り直した。
+
 | 何を見るか | 位置 | 閾値 | 出どころ |
 |---|---|---|---|
-| 誰かが食べた | `main.rs:5957` | 10 秒以内 | **不明**（実測は 0.55 s。`docs/garden.md:2109`） |
-| 夜が来た | `main.rs:5964` | 60 秒以内 | **導出**: `DAY_LENGTH` 1 周（`main.rs:74`） |
-| すり抜けていない | `main.rs:5978, 3473` | 半径の和の 0.9 | **引用**: `docs/plans/garden-plan.md:67`「半径の和の 90% を下回るフレームが無い」 |
-| 草に着いた | `main.rs:5618` | `REACH + 0.5` | **不明**（0.5 の余裕の理由） |
-| 向きが変わった | `main.rs:5693` | `dot < 0.7`（≈45°） | *理由のみ* 「anything past a quarter turn is a different course」`main.rs:5680-5683` |
-| 向きが変わった（窓） | `main.rs:5697` | 0.5 秒 | **引用**: `docs/plans/garden-plan.md:35`（G10 で「0.5 秒**以内に**」の仕様に合わせて窓にした） |
-| 寝ている | `main.rs:5765, 6016` | 夜の 1.0 秒後、速さ < 0.05 | **不明**（1.0 と 0.05 の理由） |
-| `NEWBORN_GRACE` | `main.rs:269` | 2.0 秒 | **引用**: `main.rs:262-268`。「実際に耳が聞こえないのは 2 フレーム」に対して十分長い、と `main.rs:5752-5754` |
-| `NEWBORN_DEAF_FRAMES` | `main.rs:282` | 2 フレーム | **測った**: `main.rs:271-281`。夜をまたいで 1 フレームずつずらして生ませた（`docs/worklog/2026-09-17-selftest-flakes.md` §4.2） |
-| `TOUCH_SETTLE` | `main.rs:287` | 1.5 秒 | **導出**: ハンドラが 1 通につき 0.5 秒ハンドルを握る（`beetle.rb:33` の `sleep 0.5`）。`main.rs:284-286` |
-| 壁際の除外 | `main.rs:5738` | 壁から 1.5 | **不明** |
-| 子の遺伝子 | `main.rs:3955` | `RATE = 0.1` | **引用**: `beetle.rb:81` の `mutate(0.1)` の写し（`main.rs:3953`）。**写しなので連動しない**（§7-3） |
-| `FREEZE_AT` | `main.rs:3681` | 20.0 秒 | **導出**: 最初の食事（1 秒未満）・最初の死（1.9 s）・プローブの歩き（1.8 s）の後、夜（25 s）の前（`main.rs:3678-3680`） |
-| `FREEZE_WINDOW` | `main.rs:3677` | 5.0 秒 | **引用**（導出も添えてある）: 計画書 `garden-world-plan.md` §3.1 の 5 秒。`1.6 × appetite` /秒なので 8 点減るはず（`main.rs:3673-3676`） |
-| 季節が伝わった | `main.rs:6095` | 2.0 秒以内 | **不明** |
-| 仕込みの断食甲虫 | `main.rs:2317` | 空腹 3.0 | **不明**（`starve` を必ず踏ませるための値） |
-| 仕込みのプローブ | `main.rs:2327` | 空腹 40.0、草まで 5 単位 | *理由のみ*（`hungry_below 55` より下、`Sight 8` の内側。`docs/worklog/2026-09-17-garden-world-survey.md` §5） |
-| 仕込みのつがい | `main.rs:2473` | 空腹 45.0 | **不明** |
-| `MEADOW_AT` | `main.rs:2358` | `(-14, 9)` | *理由のみ*（他の 2 つの仕込みから離れた場所。`main.rs:2353-2357`） |
-| `MEADOW_CLEAR` | `main.rs:2365` | 8.0 | **引用**: G2 から `clear_of_fixtures` が使っていた数に名前を付けただけ（`main.rs:2360-2364`） |
-| つがいの隅の幾何 | `main.rs:2451-2462` | 規則の `reach` / `mate_reach` / `PLANT_MAX` から組む | **導出**: 不等式ごと `main.rs:2407-2412` に書いてある（`docs/worklog/2026-09-18-corner-and-selftest.md`） |
-| 窓のチェックの開始 | `main.rs:1926` | 3.0 秒 | **不明** |
+| 誰かが食べた | `main.rs:6889` | 10 秒以内 | **不明**（実測は 0.55 s） |
+| 夜が来た | `main.rs:6896` | 60 秒以内 | **導出**: `DAY_LENGTH` 1 周 |
+| すり抜けていない | `main.rs:6910` | 半径の和の 0.9 | **引用**: `garden-plan.md:67` |
+| 草に着いた | `main.rs:6919` | `REACH + 0.5` | **不明**（0.5 の余裕の理由） |
+| 向きが変わった | `main.rs:6623` | `dot < 0.7`（≈45°） | *理由のみ*「anything past a quarter turn is a different course」 |
+| 向きが変わった（窓） | `main.rs:6627` | 0.5 秒 | **引用**: `garden-plan.md:35` |
+| 寝ている | `main.rs:6948` | 夜の 1.0 秒後、速さ < 0.05 | **不明** |
+| `NEWBORN_GRACE` | `main.rs:801` | 2.0 秒 | **引用** |
+| `NEWBORN_DEAF_FRAMES` | `main.rs:814` | 2 フレーム | **測った** |
+| `TOUCH_SETTLE` | `main.rs:819` | 1.5 秒 | **導出**: ハンドラが 1 通につき 0.5 秒ハンドルを握る |
+| 壁際の除外 `by_a_wall` | `main.rs:6667` | 壁から 1.5 | **不明** |
+| 子の遺伝子 | `main.rs:4871` | `RATE = 0.1` | **引用**: `beetle.rb:81` の `mutate(0.1)` の写し。**写しなので連動しない**（§7-3） |
+| `FREEZE_AT` | `main.rs:4594` | 20.0 秒 | **導出** |
+| `FREEZE_WINDOW` | `main.rs:4590` | 5.0 秒 | **引用**（導出も添えてある） |
+| 季節が伝わった | `main.rs:7025` | 2.0 秒以内 | **不明** |
+| 仕込みの断食甲虫 | `main.rs:3247` | 空腹 3.0 | **不明** |
+| 仕込みのプローブ | `main.rs:3257` | 空腹 40.0、草まで 5 単位 | *理由のみ* |
+| 仕込みのつがい | `main.rs:3409` | 空腹 45.0 | **不明** |
+| `meadow_at`（隅の位置） | `main.rs:3288` | 壁から 6.0 | *理由のみ*（他の 2 つの仕込みから離れた場所）。**S5b-3 で `const` から `fn` になった** — 畑の広さから導くため |
+| `MEADOW_CLEAR` | `main.rs:3297` | 8.0 | **引用**: G2 から `clear_of_fixtures` が使っていた数に名前を付けただけ |
+| つがいの隅の幾何 | `main.rs:3399-3407` | 規則の `reach` / `mate_reach` / `plant_max` から組む | **導出**: 不等式ごと rustdoc に書いてある |
+| 窓のチェックの開始 | `main.rs:2807` | 3.0 秒 | **不明** |
+| 窓のチェックの上限フレーム数 | `window.rs:1351` | `scheduler_frames(&budgets)` | **導出**（§2.9 の行） |
+| `STRUCTURAL_FRAMES` | `window.rs:1358` | 2 | **測った**（S6 §4.4） |
+| `INSTRUCTIONS_A_FRAME_BUYS` | `window.rs:1365` | 45,600 | **測った**（S6: 5.7 命令/µs × 8,000 µs）。S5b-3 の上限の庭では 6.85 命令/µs で、同じ桁 |
 
 ### 2.12 遺伝子（`genome.rs`）
+
+**S5b-3 が触っていない**（(b)。S5b-4 の仕事）。
 
 | 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
 |---|---|---|---|---|---|---|
 | 甲虫の種 | `genome.rs:65` | speed 2.2 / sight 8.0 / appetite 1.0 | | `const` 相当（`match`） | (b) 遊びの数 | **不明** |
 | ウサギの種 | `genome.rs:66` | 3.4 / 12.0 / 1.0 | | 同上 | (b) | **不明** |
 | `SPREAD` | `genome.rs:56` | 0.18 | | `const` | (b) | **不明** |
-| 遺伝子の上下限 | `genome.rs:230-232` | speed 0.2〜8.0、sight 1.0〜24.0、appetite 0.2〜4.0 | | 直書き | (a) `garden.spawn` が受け取る値の検査。外すと Ruby から任意の値が入る | **不明**（範囲の理由） |
+| 遺伝子の上下限 | `genome.rs:230-232` | speed 0.2〜8.0、sight 1.0〜24.0、appetite 0.2〜4.0 | | 直書き | (a) `garden.spawn` が受け取る値の検査 | **不明**（範囲の理由） |
 | `mutate` の既定 | `genome.rs:179` | 0.5 | | 直書き（定数が引けないときの保険） | (a) | **不明** |
 
-変異率 0.1 は **Rust の定数ではない**（`docs/worklog/2026-09-17-garden-world-survey.md` §2）。唯一の出どころは
-`beetle.rb:81` の `mutate(0.1)` で、§3.4 に 1 件として数えた。`main.rs:3955` の `RATE` はその写し（§2.11、§7-3）。
+変異率 0.1 は **Rust の定数ではない**。唯一の出どころは `beetle.rb:81` の `mutate(0.1)` で、§3.4 に
+1 件として数えた。`main.rs:4871` の `RATE` はその写し（§2.11、§7-3）。
 
----
+### 2.13 S5b-3 が足した設定の一覧
+
+| 設定 | どこ | `Settings` の鍵 | 既定値 |
+|---|---|---|---|
+| `Place` | `main.rs`（Resource。`main` が `PreStartup` より前に読む） | `field_width` / `field_depth` / `wall_margin` / `separate_passes` | 40 / 30 / 0.5 / 4 |
+| `Furniture` | 同上 | `start_plants` / `plant_min` / `plant_max` / `start_beetles` / `start_rabbits` / `start_trees` / `start_rocks` / `start_hunger_min` / `start_hunger_max` / `start_tries` / `start_round_chance` / `start_rock_squash_min` / `_max` / `start_solid_apart` / `start_grass_off_solid` / `start_creature_off_grass` / `start_creature_off_solid` / `start_creatures_apart` | 55 / 0.18 / 1.4 / 6 / 4 / 7 / 9 / 45 / 90 / 40 / 0.35 / 0.8 / 1.25 / 1.5 / 1.2 / 2.5 / 0.6 / 2.0 |
+| `Light` | 同上 | `light_dawn_offset` / `light_moon_lux` / `light_night_ambient` / `light_night_sky_r` / `_g` / `_b` / `light_night_zenith` / `light_dial_min` / `light_dial_max` / `light_day_lux` / `light_day_lux_span` / `light_day_ambient` / `light_day_ambient_span` / `light_sun_lux` / `light_shadow_cascades` / `light_shadow_near` / `light_shadow_far` | 0.08 / 950 / 190 / 0.14 / 0.18 / 0.36 / 0.55 / 0.5 / 2.0 / 1200 / 9000 / 120 / 260 / 8000 / 2 / 24 / 70 |
+| `Scenery` | 同上 | `horizon_half` / `sky_radius` / `sky_sides` / `sky_rings` / `fog_near` / `fog_depth` / `fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end` / `edge_trees` / `edge_jitter` / `edge_out_min` / `_max` / `edge_scale_min` / `_max` | 300 / 500 / 12 / 4 / 14 / 45 / 0.35 / 0.5 / 0.7 / 60 / 220 / 16 / 0.4 / 4 / 15 / 1.7 / 3.1 |
+| `Picture` | 同上（模型の倍率とアニメの 2 つは `Look` が持ち運ぶ） | `window_width` / `window_height` / `look_ground_r` / `_g` / `_b` / `look_hunger_low` / `look_hunger_warn` / `look_hunger_bar_width` / `_height` / `look_tuft_scale` / `look_bush_scale` / `look_tree_scale` / `look_rock_scale` / `look_rock_squash` / `look_beetle_scale` / `look_rabbit_scale` / `look_walking_at` / `look_gait_blend_ms` / `look_beetle_model` | 1600 / 900 / 0.36 / 0.46 / 0.25 / 20 / 55 / 64 / 11 / 2.2 / 2.6 / 2.2 / 3.4 / 3.0 / 0.55 / 0.75 / 0.2 / 180 / `models/animal-crab.glb` |
+| `Eye` | 同上 | `eye_pitch` / `eye_distance` / `eye_zoom_per_notch` / `eye_zoom_min` / `eye_zoom_max` / `eye_pan_per_pixel` / `eye_pan_per_second` / `eye_pan_limit` / `eye_turn_per_pixel` / `eye_pitch_min` / `eye_pitch_max` / `eye_click_reach` / `eye_click_slop` | 0.85 / 42 / 1.10 / 6 / 110 / 0.0016 / 0.9 / 8 / 0.005 / 0.12 / 1.45 / 1.6 / 6 |
+| `Budgets` | 同上 | `script_budget` / `script_frame_time_ms` / `world_script_budget` / `world_script_frame_time_ms` / `restore_patience` / `shortest_sleep` / `heat_decay` | 200,000 / 8 / 45,000 / 8 / 5.0 / 0.05 / 0.985 |
+| 旗の既定 | `main` が直接読む | `headless_seconds` / `shot_file` / `shot_seconds` / `at_seconds` / `save_file` | 10 / `shot.png` / 6 / （無し） / `garden.save.json` |
 
 ## 3. Garden（Ruby）
 
@@ -586,14 +642,14 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 
 ## 6. 集計
 
-数えたのはこの文書の表の行（§1〜§5）で、**272 件**。
+数えたのはこの文書の表の行（§1〜§5）で、**281 件**。
 `docs/garden.md` の例を引いただけの行と rubevy 側の数を参照しただけの行の 2 つは数えていない。
 消えた数（`UNSET` 2 件と `SHOT_FAST` / `SHOT_SLOW` の写し 1 件）は**取り消し線の行として残し、
 件数からは外した**——どこへ行ったかを次に数える人が探さずに済むように。
 
-**S5a の 260 件からの差は 12 件。** うち 9 件は S5b-1 の分（S3 のパン・ズームのカメラ 8 件、
-コードパネルの字の大きさ、アリーナの床の色、S3 で消えた「ずらす幅 0.16」を落とした）で、
-残り 3 件が S5b-2 の分:
+**S5a の 260 件からの差は 21 件。** うち 9 件は S5b-1 の分（S3 のパン・ズームのカメラ 8 件、
+コードパネルの字の大きさ、アリーナの床の色、S3 で消えた「ずらす幅 0.16」を落とした）、
+3 件が S5b-2 の分:
 
 * **+2**: VM パネルの 7 色を 1 行、説明パネルの余白 3 つを 1 行（S5a の網に掛かっていなかった。§1）。
 * **+3 / −2**: Battle。無名だった数に名前が付いて 1 行になったもの（体力の満 100 は 4 か所 →
@@ -601,16 +657,35 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
   （`NO_MATCH_YET`、VM の予算と `frame_time`、体力バーの高さと浮き、移していない直書き 2 行）と、
   **無くなった 3 件**（`UNSET` の Rust 側と Ruby 側、`SHOT_FAST` / `SHOT_SLOW` の Ruby の写し）。
 
+残り **9 件が S5b-3**（箱庭の Rust、117 → 126）。**新しく決めた数は 0 で、既定値も 1 つも
+動いていない**——増えたのは、これまで関数の途中に無名で書かれていて一覧に 1 行も無かった数に
+名前が付いたぶんである:
+
+* **+8**: 縁の木の散らし方（1 行）、起動時の霧（1 行）、窓の大きさ、地面の色、生成時の空腹、
+  配置のやり直し回数、岩の潰し、初期配置の間隔 5 つ（1 行）、オービットの回転感度、pitch の範囲、
+  `--at` と `--eye` の既定、セーブのファイル名、`STRUCTURAL_FRAMES` と
+  `INSTRUCTIONS_A_FRAME_BUYS`（S7 が `SCHEDULER_FRAMES` の rustdoc に書いていた 2 つの数に
+  名前が付いた）。
+* **+3**: **一覧の抜けとして挙げただけで移していない** 3 行（昼の色の傾き、空の勾配の押し上げ、
+  最初の草の大きさの下限 0.3）。S5b-1 と S5b-2 が同じ判断をしたのと同じ理由——
+  一覧に無い数を移すのは段階が自分で範囲を広げることなので、挙げるだけにした。
+* **−2**: `HALF_W` / `HALF_D` と `MIDNIGHT` が `const` でなくなった（畑の広さと夜明けの位相から
+  導く関数になった）。取り消し線の行として残し、件数からは外した。
+
 ### 分類ごと
 
-| 分類 | 件数 | S5b-1 の後から |
+| 分類 | 件数 | S5b-2 の後から |
 |---|---|---|
-| (a) 不変量 | 32 | −2（`UNSET` の 2 件が無くなった） |
-| (b) 遊びの数 → Ruby 側 | 38 | +4 |
-| (c) 動かす側の数 → `Settings` / 引数 | 105 | +5 |
-| (d) selftest の閾値 | 28 | 変わらず |
-| (e) 既に Ruby か設定から変えられる | 69 | −4 |
-| **合計** | **272** | **+3** |
+| (a) 不変量 | 30 | −2（導出になった `HALF_W` / `HALF_D` と `MIDNIGHT`、足した太陽・月の距離ほか） |
+| (b) 遊びの数 → Ruby 側 | 38 | 変わらず（箱庭の (b) は S5b-4） |
+| (c) 動かす側の数 → `Settings` / 引数 | 110 | +5 |
+| (d) selftest の閾値 | 32 | +4（`STRUCTURAL_FRAMES`、`INSTRUCTIONS_A_FRAME_BUYS`、上限フレーム数、`meadow_at`） |
+| (e) 既に Ruby か設定から変えられる | 71 | +2（`--at` と `--eye` の既定） |
+| **合計** | **281** | **+9** |
+
+**(c) 110 件のうち、箱庭の 64 件は S5b-3 で移し終えた**（§2.13 が移した先の一覧）。
+残る (c) は無い——共有 crate は S5b-1、Battle は S5b-2 が済ませている。
+この表の (c) は「動かす側の数」という**分類**であって「まだ移していない」という意味ではない。
 
 2 つに跨るもの（`DAY_LENGTH` のように「既に Ruby から変えられるが Rust にも既定値がある」）は、
 **先に書いた方**で 1 件として数えた。Battle の `radar` / `incoming` の既定距離はこの形だったが、
@@ -619,7 +694,7 @@ S5b-2 で**両側が同じ 1 つの数を読む**ようになったので跨い�
 **(b) のうち Battle の 32 件は、もう「移す候補」ではなく移し終えたもの**（`Match::MODEL`）。
 残る (b) は箱庭の分で、それは S5b-4。
 
-**毎フレーム読まれる数は 110 件**（全体の 40%）。Battle の機体模型 20 件はこの数に入ったままだが、
+**毎フレーム読まれる数は 112 件**（全体の 40%）。Battle の機体模型 20 件はこの数に入ったままだが、
 **読んでいるのは Rust で、`Res<TheMatch>` のフィールドを読むだけ**——Ruby に問うのは
 robot が起動するときの 1 回（`Rubevy.ask("model")`）と、試合が始まるときの 1 回
 （`Rubevy.ask("rules", …)`）だけである。だから「毎フレーム Ruby に聞く」費用は 0 で、
@@ -629,21 +704,29 @@ S5a が心配していた測定は要らなかった。
 
 | 出どころ | 件数 |
 |---|---|
-| **測った**（日付・条件つきの実測がある） | 14 |
+| **測った**（日付・条件つきの実測がある） | 17 |
 | **導出**（既にある制約から出ている） | 23 |
-| **引用**（文書・計画書・コミットに書いてある） | 51 |
+| **引用**（文書・計画書・コミットに書いてある） | 52 |
 | *理由のみ*（理由らしきことは書いてあるが、測った記録も導出も無い） | 50 |
-| **不明** | **134** |
-| **合計** | **272** |
+| **不明** | **139** |
+| **合計** | **281** |
 
-**出どころ不明が 134 件、全体の 49%。** 内訳:
+**出どころ不明が 139 件、全体の 49%。** 内訳:
 
 | どこ | 件数 | うち不明 |
 |---|---|---|
 | 共有 crate の `src`（`rubevy-egui` + `games-shell`。S5b-2 の後） | 44 | 26 |
-| `garden/src` | 117 | 49 |
+| `garden/src`（S5b-3 の後） | 126 | 54 |
 | `garden/ruby` | 40 | 20 |
 | `sabibots/src` + `sabibots/ruby`（S5b-2 の後） | 71 | 39 |
+
+**「測った」が 14 → 17 に増えたのは、既にあった測定に名前が付いたぶん**である
+（`SEPARATE_PASSES`、世界 VM の予算、夜の 3 つを 1 行ずつ数え直した）。
+**S5b-3 が新しく取った測定**——上限の庭に座った生き物 VM の 1 フレーム——は、
+**既定値を動かしていないので数の出どころにはなっていない**: 200,000 の出どころは今も
+「rubevy の既定を引き継いだ、rubevy 側は不明」である。測った分布は
+`docs/worklog/2026-09-21-numbers-garden-settings.md` §4 にあり、そこから導ける案は
+著者の判断待ち。
 
 Battle の 2 つを分けて数えるのをやめたのは、**数の住所が言語で分かれなくなった**ため:
 機体の模型 32 件はいまや `sabibots/ruby/match_prelude.rb` にあり、それを読むのは Rust である。
@@ -656,18 +739,18 @@ S5b-2 で名前が付いたが、**名前が付いたことと出どころが分
 
 ### 機械的に拾った数と、選んだ数
 
-S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1 と S5b-2 が既定値に名前を付けたので
+S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5b-3 が既定値に名前を付けたので
 リテラルを含む行は増えているが、**利用者から見える数が増えたわけではない**（名前と
 `impl Default` と単体テストのぶん）。
 
 | どこ | `const` 宣言（S5a 時点） | 数値リテラルを含む行（S5a 時点） | 選んだ数（今） |
 |---|---|---|---|
 | 共有 crate の `src` | 20（うち数値 17） | 149 | 44 |
-| `garden/src` | 88（うち数値 68） | 538 | 117 |
+| `garden/src` | 88（うち数値 68） | 538 | 126 |
 | `sabibots/src` | 28（うち数値 21） | 322 | — |
 | `garden/ruby` + `sabibots/ruby` | 8（`NAME = 数` の行） | 237 | — |
 | `sabibots` の `src` + `ruby` | — | — | 71 |
-| **合計** | **144（うち数値 114）** | **1,246** | **272** |
+| **合計** | **144（うち数値 114）** | **1,246** | **281** |
 
 `const` 宣言は `grep -nE '^\s*(pub\s+)?const\s'`、リテラルは
 `grep -nE '(^|[^A-Za-z0-9_.":])[0-9]+(_[0-9]+)*(\.[0-9]+)?'` で拾い、コメントだけの行を落としてから目で選んだ。
@@ -763,6 +846,29 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1 と S5b-2 �
     S5a の網に掛かっておらず、**S5b-2 は範囲を自分で広げないために移していない**
     （S5b-1 が同じ判断をした。§1 の VM パネルの色がその結果 1 段階遅れた）。
     一覧には §4.5 の 2 行として載せた。属する話: 一覧の抜け。
+15. **（S5b-3）箱庭の `world.rb` の `plant_max` 1.4 と Rust の `PLANT_MAX` は、今も 2 つの数である。**
+    Rust の方は `Furniture::plant_max`（`garden.settings.txt` の `plant_max`）になり、
+    Ruby の方は `world.rb:31` にある。**繋いでいない**: Battle の弾の速さと違って、この 2 つは
+    同じことを言っていない——Rust のは「庭を建てるときの株の大きさ」、Ruby のは「成長が止まる
+    上限」で、`main.rs:651-653` がその区別を書いている。同じ値であるのは今日のことで、
+    片方を動かした人は「育ちきらない草」か「最初から育ちきった草」を見ることになる。
+    属する話: (b) と (c) の境目（S5b-4 で `world.rb` 側を見るときに）。
+16. **（S5b-3）新しい庭の最初の草の大きさの下限 0.3 が一覧に無い。**
+    `main.rs:3210` の `dice.between(0.3, plant_max)` で、`plant_min` 0.18（芽の大きさ）とは
+    **別の数**。S5a の網に掛かっておらず、S5b-3 は範囲を自分で広げないために移していない。
+    一覧には §2.5 の 1 行として載せた。属する話: 一覧の抜け。
+17. **（S5b-3）昼の色の傾きが一覧に無い。** `sky_colors` の昼側（`main.rs:4012-4013` の
+    `0.35 + 0.15 × noon` ほか 6 つ）、太陽の色（`:4053`）、月の色（`:4048`）、環境光の 2 色
+    （`:4066, 4069`）、空の勾配の押し上げ（`:4159` の `t × 1.25 − 0.1`）。
+    **夜の 3 つ（測ってある）は一覧にあって、昼の同じ形の数は 1 つも無い**——S5a の網が
+    `const` と名前のある数に寄っていたためで、昼の色は全部関数の途中に書かれている。
+    S5b-3 は移していない。一覧には §2.2 と §2.3 の 1 行ずつとして載せた。属する話: 一覧の抜け。
+18. **（S5b-3）`Picture` の模型の倍率は `Look` が写しを持ち運ぶ。** `make_look` が起動時に
+    6 つの倍率とアニメの 2 つを `Look` に複写する。リテラルの重複ではなく起動時の 1 回の代入で、
+    `spawn_plant` ほか 4 つのヘルパが今までどおり `Option<&Look>` 1 つだけを取るためにそうした
+    （ヘルパが `Look` を持つときだけ倍率を使うので、`Look` は「倍率が要る場所」とちょうど同じ
+    集合である）。ただし**走行中に `Picture` を書き換えても `Look` は変わらない**。
+    属する話: 箱庭（設計）。
 
 ---
 
