@@ -10,10 +10,17 @@
 # here): `SABIBOTS_SELFTEST=1 docker/run.sh sabibots` passes that one through. Until 2026-09-20
 # the name was written out here as `SABIBOTS_SELFTEST`, so the garden's window checks could not
 # be asked for from this script at all and were run by writing the `docker run` out by hand.
+#
+# **Every variable of the game's is handed over now** (S5b-5), not only `_SELFTEST`: the checks
+# read knobs of their own out of the environment (`GARDEN_RELOAD_AT`, and whatever a run being
+# measured wants to turn), and a knob that is silently not passed looks exactly like a knob that
+# had no effect — which cost S7 four runs before anybody noticed. The rule is the game's name in
+# capitals and an underscore, so a third game needs no edit here either.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 IMAGE=rubevy-games-build
+. "$HERE/volumes.sh"
 
 # debug or release, if that is what comes next; anything starting with `-` is the game's own
 # argument and release is meant (`docker/run.sh sabibots --headless 15` used to look for
@@ -31,15 +38,21 @@ else
   GAME="${1:-sabibots}"; shift || true
   MODE="$(take_mode "$@")"; [ -z "$MODE" ] && MODE=release || shift
   BIN="/target/$MODE/$GAME"
-  # `-e NAME` with no `=` hands the variable over from this shell, which is what the caller set
-  PASS=(-e "$(echo "$GAME" | tr 'a-z-' 'A-Z_')_SELFTEST")
+  # `-e NAME` with no `=` hands the variable over from this shell, which is what the caller set.
+  # Every one of the game's, found by its prefix: a name is looked for rather than listed, so
+  # that a knob added to a game's checks needs no edit here.
+  PREFIX="$(echo "$GAME" | tr 'a-z-' 'A-Z_')_"
+  PASS=()
+  while read -r NAME; do
+    PASS+=(-e "$NAME")
+  done < <(env | sed -n "s/^\($PREFIX[A-Za-z0-9_]*\)=.*/\1/p" | sort -u)
 fi
 
 TTY=$([ -t 0 ] && echo -it || echo -t)
 exec docker run --rm $TTY \
   -v "$ROOT":/app \
   -v rubevy-games-cargo:/usr/local/cargo/registry \
-  -v rubevy-games-target:/target \
+  -v "$TARGET_VOLUME":/target \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v /mnt/wslg:/mnt/wslg \
   -e DISPLAY="${DISPLAY:-:0}" \
