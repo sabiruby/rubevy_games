@@ -118,6 +118,29 @@ impl Settings {
     }
 }
 
+/// **What the player chose last time, read before the first frame** — the store and the language
+/// in it, which is the ten lines both games open a window with.
+///
+/// It is read here rather than in a system because the language is wanted *before the first
+/// frame*: the guide opens by itself at startup and would otherwise show one language and then
+/// jump to the other. `lang_asked` is `--lang` from the command line, which wins over the store
+/// and is not written back to it — a picture asked for in Japanese should not change what the
+/// next run shows a person ([`GuideLang::pick`](crate::guide::GuideLang::pick)).
+///
+/// The `"lang"` key is this crate's: the guide's buttons write it (`guide.rs`), and it is the
+/// name it has in every `*.settings.txt` already out there.
+pub fn remembered(
+    path: impl Into<PathBuf>,
+    header: impl Into<String>,
+    read: ReadFn,
+    write: WriteFn,
+    lang_asked: Option<&str>,
+) -> (Settings, crate::guide::GuideLang) {
+    let settings = Settings::load(path, header, read, write);
+    let lang = crate::guide::GuideLang::pick(lang_asked, settings.get("lang"));
+    (settings, lang)
+}
+
 /// The language the machine is set to, as a tag like `ja_JP.UTF-8` or `ja-JP`, if it says.
 ///
 /// Two environments, one question. On a PC it is `LC_ALL` then `LANG`, which is where a Unix

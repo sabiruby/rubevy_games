@@ -174,6 +174,15 @@ impl Guide {
         self
     }
 
+    /// **The guide as the game starts it**: the words are the game's, the language is
+    /// [`GuideLang::pick`]'s, and `open` is whether the panel is up on the first frame.
+    ///
+    /// A picture is asked for one thing and the panel sits over the middle of the window, so a
+    /// `--shot` run starts with it shut unless `--guide` says otherwise. A player gets it open.
+    pub fn opening(self, lang: GuideLang, open: bool) -> Guide {
+        Guide { lang, open, ..self }
+    }
+
     /// What a game's HUD draws to say the panel is there. Both languages, one line. It is here
     /// rather than in a game's `guide_text.rs` because both games show the same words; it is
     /// still guide text, and `tools/subset-font.sh` reads this file for that reason.

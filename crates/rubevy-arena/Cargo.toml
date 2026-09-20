@@ -12,11 +12,21 @@ rubevy.workspace = true
 sabiruby.workspace = true
 bevy_egui.workspace = true
 
-# watching the Ruby directory for edits: there is no directory to watch in a browser
+# watching the Ruby directory for edits: there is no directory to watch in a browser.
+# S1: and the Ruby compiler, which `platform::compile` and `platform::highlight` are on a PC —
+# both games already had it as a dependency of their own for exactly those two functions, so
+# naming it here moves the lines rather than adding anything to a build.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 notify = "8"
+sabiruby-compiler.workspace = true
 
 # G6b: `navigator.language`, so the guide opens in the language the browser was asked for. The PC
 # build reads `LANG` out of the environment, which needs nothing (`src/settings.rs`).
+# S1: and, with `platform` and `checks` here, the rest of what a page is asked — `Storage` for the
+# saves and the scripts, `Location` for `?selftest`, and `js-sys` for the page's compiler bridge,
+# which is looked up by name (`js_sys::Reflect`) rather than bound to one at compile time. Both
+# games already ask for all of this; the versions are theirs.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Window", "Navigator"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Storage", "Location"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"

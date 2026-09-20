@@ -1459,21 +1459,24 @@ end
 
 // ---------------------------------------------------------------------------------------------
 
+/// How long `--headless` runs when it is given no number, and what `--shot` writes to and waits
+/// for when it is given neither. **They are the values that were written into `main` here before
+/// S1**, moved out only because the parsing they were in is `rubevy_arena::Args`' now and the
+/// Battle's `--shot` waits a different three seconds; no run's behaviour turns on them, since
+/// every line in `docs/garden.md` passes its own number.
+const HEADLESS_SECONDS: f32 = 10.0;
+const SHOT_FILE: &str = "shot.png";
+const SHOT_SECONDS: f32 = 6.0;
+
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    // The flags both games take (`--headless`, `--shot`, `--vm`, `--lang`) are read by
+    // `rubevy_arena::Args`; the garden's own four are read off the same words below.
+    let args = rubevy_arena::Args::from_env();
     // `--headless N`: no window, N seconds, the world reported on stdout. It runs exactly the
     // same systems as the windowed one; only the drawing is missing.
-    let headless = args
-        .iter()
-        .position(|a| a == "--headless")
-        .map(|i| args.get(i + 1).and_then(|s| s.parse::<f32>().ok()).unwrap_or(10.0));
+    let headless = args.headless(HEADLESS_SECONDS);
     // `--shot FILE [SECONDS]`: a window, a picture of it, and out.
-    let shot = args.iter().position(|a| a == "--shot").map(|i| {
-        (
-            args.get(i + 1).cloned().unwrap_or_else(|| "shot.png".into()),
-            args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(6.0),
-        )
-    });
+    let shot = args.shot(SHOT_FILE, SHOT_SECONDS);
     // `--at SECONDS`: **where the garden's clock stands when the picture is taken** — or, with no
     // `--shot`, where it starts. G6 wanted a picture of midnight, and waiting forty seconds for
     // one on lavapipe (which draws a shadowed PBR frame in about a second) is not a way to
@@ -1482,9 +1485,7 @@ fn main() {
     // they have had time to get. Only the sun has moved. `--at MIDNIGHT` is the darkest one.
     // `--at midnight` is the one hour anybody asks for by name, so it has one.
     let at = args
-        .iter()
-        .position(|a| a == "--at")
-        .and_then(|i| args.get(i + 1))
+        .value("--at")
         .and_then(|s| if s == "midnight" { Some(MIDNIGHT) } else { s.parse::<f32>().ok() });
     // `--eye UNITS`: **how far back the camera stands when the picture is taken.** The wheel's
     // range, on the command line, and nothing else — the same zoom `Home` puts back. G8 added it
@@ -1493,31 +1494,23 @@ fn main() {
     // default 42 a beetle is thirty pixels across in a 1600-wide window, which is a picture of a
     // decision nobody can make. It is a `--shot` flag in the way `--at` is: a run with a window
     // and a player has a wheel.
-    let eye = args
-        .iter()
-        .position(|a| a == "--eye")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|s| s.parse::<f32>().ok())
-        .map(|d| d.clamp(ZOOM_MIN, ZOOM_MAX));
+    let eye = args.number("--eye").map(|d| d.clamp(ZOOM_MIN, ZOOM_MAX));
     // `GARDEN_SELFTEST=1` on a PC, `?selftest` in the page's address (G5): a browser has no
     // environment, and the checks are what says from outside that the world is alive
     let selftest = platform::selftest_asked();
     // `--save PATH` / `--load PATH` (G3): the same two things F5 and F9 do in the window, for a
     // run that has no keyboard. A `--save` is written when the run ends, which is what makes
     // "save, load in a second process, save again, compare the two files" one shell line each.
-    let after = |flag: &str| {
-        args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
-    };
-    let save_to = after("--save");
-    let load_from = after("--load");
+    let save_to = args.value("--save");
+    let load_from = args.value("--load");
     // `--vm` (G9): open the VM panel. The panel is closed unless somebody asks for it, and on a
     // command line this is the asking — `--shot docs/garden-vm.png 14 --vm` is how the picture in
     // `docs/garden.md` is taken. A player asks with `F2`.
-    let wants_vm = args.iter().any(|a| a == "--vm");
+    let wants_vm = args.has("--vm");
     // `--lang en|ja` (G6b): which language the guide opens in. It is *not* remembered — the
     // player's own click is (`rubevy_arena::Settings`), and a picture asked for in Japanese on
     // the command line should not change what the next run shows a person.
-    let lang_asked = after("--lang");
+    let lang_asked = args.value("--lang");
 
     let mut app = App::new();
     match headless {
@@ -1548,15 +1541,15 @@ fn main() {
             // frame* — the guide opens by itself at startup and would show one language and then
             // jump to the other, and a `--shot` of the night would be taken at the wrong
             // brightness. On a PC this is a file beside the save; in a browser it is a key in
-            // the same local storage the save uses (`platform.rs`).
-            let settings = rubevy_arena::Settings::load(
+            // the same local storage the save uses (`platform.rs`). The store and the language
+            // are `rubevy_arena::remembered`'s since S1; the dial is the garden's own.
+            let (settings, lang) = rubevy_arena::remembered(
                 platform::SETTINGS_FILE,
                 "garden: what the panel remembers. Delete a line to go back to the default.",
                 platform::read,
                 platform::write,
+                lang_asked.as_deref(),
             );
-            let lang =
-                rubevy_arena::GuideLang::pick(lang_asked.as_deref(), settings.get("lang"));
             let night = settings
                 .number("night")
                 .map(|n| n.clamp(NIGHT_DIAL_MIN, NIGHT_DIAL_MAX))
@@ -1597,12 +1590,10 @@ fn main() {
             // window — which would be that thing. So a `--shot` run starts with it shut unless
             // `--guide` says otherwise, and `--shot p 8 --guide` is how the guide's own picture
             // (the one that says the Japanese is not tofu) is taken. A player gets it open.
-            .insert_resource(rubevy_arena::Guide {
-                open: shot.is_none() || args.iter().any(|a| a == "--guide"),
-                // G6b: one language at a time, and this is the one it starts in
-                lang,
-                ..guide_text::guide()
-            })
+            // G6b: one language at a time, and `opening` is the one it starts in
+            .insert_resource(
+                guide_text::guide().opening(lang, shot.is_none() || args.has("--guide")),
+            )
             .insert_resource(NightDial(night))
             .insert_resource(settings)
             .insert_resource(Orbit { distance: eye.unwrap_or(Orbit::default().distance), ..default() })

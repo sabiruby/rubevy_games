@@ -255,33 +255,32 @@ impl Shots {
     }
 }
 
+/// How long `--headless` runs when it is given no number, and what `--shot` writes to and waits
+/// for when it is given neither. **They are the values that were written into `main` here before
+/// S1**, moved out only because the parsing they were in is `rubevy_arena::Args`' now and the
+/// garden's `--shot` waits a different six seconds; no run's behaviour turns on them, since every
+/// line in `docs/sabiruby-battle.md` passes its own number.
+const HEADLESS_SECONDS: f32 = 10.0;
+const SHOT_FILE: &str = "shot.png";
+const SHOT_SECONDS: f32 = 3.0;
+
 fn main() {
     let ruby = platform::ruby_dir();
+    // The flags both games take, read by `rubevy_arena::Args` since S1.
+    let args = rubevy_arena::Args::from_env();
     // `--headless N`: no window, N seconds, the match reported on stdout. It is how the game is
     // tested where there is no GPU, and it runs exactly the same systems as the windowed one.
-    let args: Vec<String> = std::env::args().collect();
-    let headless = args.iter().position(|a| a == "--headless").map(|i| {
-        args.get(i + 1).and_then(|s| s.parse::<f32>().ok()).unwrap_or(10.0)
-    });
+    let headless = args.headless(HEADLESS_SECONDS);
     // `--shot FILE [SECONDS]`: a window, a picture of it, and out. For checking the HUD where
     // the window itself cannot be looked at.
-    let shot = args.iter().position(|a| a == "--shot").map(|i| {
-        (
-            args.get(i + 1).cloned().unwrap_or_else(|| "shot.png".into()),
-            args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(3.0),
-        )
-    });
+    let shot = args.shot(SHOT_FILE, SHOT_SECONDS);
     // `--vm` (G9): open the VM panel. It is closed unless somebody asks, and on a command line
     // this is the asking — `--shot docs/vm-inspector.png 14 --vm` is how the picture in
     // `docs/sabiruby-battle.md` is taken. A player asks with `F2`.
-    let wants_vm = args.iter().any(|a| a == "--vm");
+    let wants_vm = args.has("--vm");
     // `--lang en|ja` (G6b): which language the guide opens in, for its two pictures. Not
     // remembered; the player's own click is.
-    let lang_asked = args
-        .iter()
-        .position(|a| a == "--lang")
-        .and_then(|i| args.get(i + 1))
-        .cloned();
+    let lang_asked = args.value("--lang");
 
     let mut app = App::new();
     match headless {
@@ -308,15 +307,15 @@ fn main() {
             // G6b: the one thing this game remembers between runs — which language the guide is
             // read in. Read before the first frame, because the panel opens by itself and must
             // not show one language and then jump to the other. `platform.rs` decides whether
-            // that is a file beside the game or a key in the browser's local storage.
-            let settings = rubevy_arena::Settings::load(
+            // that is a file beside the game or a key in the browser's local storage, and the
+            // ten lines that read it are `rubevy_arena::remembered`'s since S1.
+            let (settings, lang) = rubevy_arena::remembered(
                 platform::SETTINGS_FILE,
                 "SabiRuby Battle: what the panel remembers. Delete a line for the default.",
                 platform::read,
                 platform::write,
+                lang_asked.as_deref(),
             );
-            let lang =
-                rubevy_arena::GuideLang::pick(lang_asked.as_deref(), settings.get("lang"));
             app.add_plugins((
                 DefaultPlugins
                     .set(AssetPlugin {
@@ -350,12 +349,10 @@ fn main() {
             // window — which would be that thing. So a `--shot` run starts with it shut unless
             // `--guide` says otherwise, and `--shot p 8 --guide` is how the guide's own picture
             // (the one that says the Japanese is not tofu) is taken. A player gets it open.
-            .insert_resource(rubevy_arena::Guide {
-                open: shot.is_none() || args.iter().any(|a| a == "--guide"),
-                // G6b: one language at a time, and this is the one it starts in
-                lang,
-                ..guide_text::guide()
-            })
+            // G6b: one language at a time, and `opening` is the one it starts in
+            .insert_resource(
+                guide_text::guide().opening(lang, shot.is_none() || args.has("--guide")),
+            )
             .insert_resource(settings)
             .init_resource::<Watched>()
             .init_resource::<Hud>()
