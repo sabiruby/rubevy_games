@@ -239,11 +239,13 @@ impl CheckPace {
 /// check wait longer before it says what it was going to say. So the rate that buys *less* per
 /// frame is the safe side, and 45,600 is it.
 ///
-/// **At the budgets the games ship with, the two agree anyway**: `ceil(41,000 / 45,600)` and
-/// `ceil(41,000 / 54,800)` are both 1, so the garden's sum is 3 either way, and Battle's 200,000
-/// gives 5 against 4. The choice shows above 45,600 of budget, which is `script_budget` in
-/// somebody's `*.settings.txt` — and the machine it was measured on is not the machine the next
-/// person runs this on, which is what `checks_instructions_a_frame` is for.
+/// **At the budgets the games ship with, the two agree**: `ceil(41,000 / 45,600)` and
+/// `ceil(41,000 / 54,800)` are both 1, so the garden's sum is 3 either way, and since S10b took
+/// Battle's budget to 114,000 both of its divisors give 3 as well, so its sum is 5 either way.
+/// (They did not agree while Battle ran on the inherited 200,000: 5 against 4.) The choice shows
+/// above 45,600 of budget, which is `script_budget` in somebody's `*.settings.txt` — and the
+/// machine it was measured on is not the machine the next person runs this on, which is what
+/// `checks_instructions_a_frame` is for.
 pub const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 
 #[cfg(test)]
@@ -280,8 +282,11 @@ mod tests {
     #[test]
     fn a_bigger_budget_buys_a_check_more_frames() {
         let pace = CheckPace::default();
-        // the two the games ship with: the garden's 41,000 and Battle's 200,000
+        // the garden's shipped 41,000, Battle's 114,000 since S10b, and the 200,000 both of them
+        // ran on before they were measured — the sum is tested at all three because what is being
+        // tested is the sum and not what anybody's default happens to be today
         assert_eq!(pace.frames_to_wait(2, 41_000), 3);
+        assert_eq!(pace.frames_to_wait(2, 114_000), 5);
         assert_eq!(pace.frames_to_wait(2, 200_000), 7);
         // ten times the budget is not the same wait (S5b-3's lesson, which is why this is worked
         // out rather than written down): `ceil(410,000 / 45,600)` is nine

@@ -260,8 +260,9 @@ pub const HEAT_MEMORY: f32 = 0.8;
 /// **Instructions a frame that fill the thinking bar.** *Reason only*: "a brain that thinks for a
 /// frame spends tens to hundreds; the bar fills as one approaches a timeslice's worth". The 3,000
 /// itself has **no recorded source**, and it cannot be derived from `ScriptWorld::budget` — that
-/// is 200,000 for the whole VM a frame, and rubevy hands the VM the whole of what is left rather
-/// than a slice per task. It was written twice (the scoreboard's bar and `ScriptPanel::budget`)
+/// is [`SCRIPT_BUDGET`] for the whole VM a frame, and rubevy hands the VM the whole of what is
+/// left rather than a slice per task. It was written twice (the scoreboard's bar and
+/// `ScriptPanel::budget`)
 /// and is one setting now.
 pub const BAR_FULL: f32 = 3000.0;
 
@@ -739,6 +740,49 @@ const HEADLESS_SECONDS: f32 = 10.0;
 const SHOT_FILE: &str = "shot.png";
 const SHOT_SECONDS: f32 = 3.0;
 
+/// **What the whole VM is allowed in a frame, in instructions** — the default of `script_budget`
+/// in `sabibots.settings.txt` (S10b, 2026-09-21, the author choosing proposal A of
+/// `docs/worklog/2026-09-21-s10.md` §2.7).
+///
+/// It was **200,000 until 2026-09-21**, which was rubevy's default inherited: the Battle had
+/// never said anything about it, and rubevy's own source for that number is **unknown** (its
+/// `ScriptWorld::budget` rustdoc says so). S9 is where that began to matter, because
+/// [`handler_frames`] divides this number to say how long a check may wait.
+///
+/// **What was measured** (S10, `docs/worklog/2026-09-21-s10.md` §2.4): the largest match, which
+/// is **4 teams of 9 robots, 36 tanks**. The 4 is the game's own — `Match::TEAMS` names four
+/// colours — but **the 9 is not**: nothing in the Battle says how many robots a match may have
+/// (`team :red, robots: %w[…]` takes as many as are written), so it was worked out here from the
+/// ring `Match#start` puts them on, 2π×20 of circumference against a hull 3.2 across holding 39.
+/// Sixteen runs, **26,398 frames**: the worst single frame spent **67,749 instructions**, and the
+/// carry was **0 in every frame of all sixteen**.
+///
+/// **114,000 is `1.74 × 65,704`, rounded to the nearest thousand** — and the honest account of
+/// both halves is:
+///
+/// * **65,704** was the worst frame *at the moment the proposal was written*, ten runs in. The
+///   last six runs took the worst to 67,749 and the number was left where it was rather than a
+///   third one being worked out, which is how the garden treated 23,686 becoming 23,912.
+/// * **1.74 is the garden's margin and not a factor derived from anything in the Battle.** It is
+///   the garden's world VM budget 45,000 ÷ that VM's own measured worst 25,837 — a ratio computed
+///   backwards from a number the author chose. **A factor out of the Battle's own reasons could
+///   not be found**, and §2.6 of that worklog says so rather than inventing one: what a margin
+///   here has to cover is matches nobody has written yet and a robot count nobody has bounded.
+///
+/// So the margin this actually ships with is `114,000 ÷ 67,749` = **1.68**.
+///
+/// **What moving it does.** Raised, a match larger than 36 tanks or a genuinely heavier brain
+/// gets to finish its thinking inside one frame — and a runaway script, a loop with no `sleep`
+/// in it, gets to spend more of the frame before the scheduler stops it. Measured with one such
+/// robot in the match (§2.9): at 200,000 that frame costs about 212,600 instructions and a
+/// **7.9 ms** tick, at 114,000 about 122,600 and **3.2 ms** — against the 16.7 ms of a frame at
+/// 60 Hz, 47% of it against 19%. Lowered, the other way about. Either is a line in
+/// `sabibots.settings.txt`, which is why moving the default is safe to do at all.
+///
+/// [`handler_frames`] is worked out from this, so the checks' patience moved with it:
+/// `2 + ceil(114,000 / 45,600)` is **5** frames where it was 7.
+const SCRIPT_BUDGET: u64 = 114_000;
+
 fn main() {
     let ruby = platform::ruby_dir();
     // The flags both games take, read by `games_shell::Args` since S1.
@@ -855,11 +899,11 @@ fn main() {
             .add_systems(bevy_egui::EguiPrimaryContextPass, draw_scoreboard);
         }
     }
-    // **What the scripts are allowed a frame** (S5b-2). Battle has never set either of them: the
-    // VM runs on rubevy's own defaults (200,000 instructions and 8 ms, neither of which rubevy
-    // can say where it got — its `ScriptWorld::budget` rustdoc says so). Nothing is measured here
-    // and nothing is chosen here; what changes is that a player can now say, which is what the
-    // thinking bar in the scoreboard is for reading the effect of.
+    // **What the scripts are allowed a frame** (S5b-2 made both of them the store's; S10b gave
+    // the budget a default of the Battle's own). The instructions are [`SCRIPT_BUDGET`], measured
+    // in the largest match this game can be given; the wall clock is still rubevy's 8 ms, which
+    // nothing here has measured and which rubevy cannot say where it got either. The thinking bar
+    // in the scoreboard is what the effect of moving either of them is read off.
     let budget = settings.number("script_budget");
     let frame_time = settings.number("script_frame_time_ms");
     // **How fast this machine's VM is, as far as the handler check needs to know** (S10): the
@@ -952,12 +996,17 @@ fn main() {
     } else {
         warn!("could not watch {ruby:?}: saving a robot will not reload it");
     }
-    // the two the store may move, written after the plugin has made the VM. Left alone where
-    // nobody asked, so the default is rubevy's and not a copy of rubevy's kept here.
-    if budget.is_some() || frame_time.is_some() {
+    // the two the store may move, written after the plugin has made the VM — a plugin's resource
+    // can only be written once the plugin has been added. **The budget is written whether or not
+    // anybody asked** (S10b): its default is the Battle's own measured number now, so leaving it
+    // to the library would be leaving 200,000 in. `frame_time` is still rubevy's where nobody
+    // asked, because nothing here has measured it.
+    {
         let mut world = app.world_mut().resource_mut::<ScriptWorld>();
-        if let Some(budget) = budget {
-            world.budget = budget.max(0.0) as u64;
+        world.budget = budget.map(|n| n.max(0.0) as u64).unwrap_or(SCRIPT_BUDGET);
+        // and the line is printed only where the store moved it, so that "setting:" goes on
+        // meaning "somebody's `sabibots.settings.txt` said this"
+        if budget.is_some() {
             info!("setting: the scripts get {} instructions a frame", world.budget);
         }
         if let Some(ms) = frame_time {
@@ -2099,10 +2148,10 @@ const HIT_WINDOW: f32 = 0.3;
 ///   headless runs of twenty-five seconds gave 105 counted hits and the handler's turn came
 ///   **2 frames after the hit in every one of them**.
 /// * plus **one whole frame's allowance of the VM's turns**, `ceil(budget ÷ what a frame of this
-///   machine buys)`, which is five at the budget the Battle ships with — because a frame of wall
-///   clock (`script_frame_time_ms`) runs out long before 200,000 instructions do. Past that the VM
-///   has been handed a whole allowance without reaching a task that was ready, which is the
-///   scheduler having stopped handing turns out rather than a machine that is busy.
+///   machine buys)`, which is three at the budget the Battle ships with — because a frame of wall
+///   clock (`script_frame_time_ms`) runs out long before [`SCRIPT_BUDGET`] instructions do. Past
+///   that the VM has been handed a whole allowance without reaching a task that was ready, which
+///   is the scheduler having stopped handing turns out rather than a machine that is busy.
 ///
 /// **S10 moved the divisor.** It was a `const` in this file *and* one in `garden/src/window.rs`,
 /// same name, same value, same paragraph of provenance beside each — which is not two games
@@ -2112,13 +2161,15 @@ const HIT_WINDOW: f32 = 0.3;
 /// (`checks_instructions_a_frame`). [`HANDLER_STRUCTURAL_FRAMES`] stayed here, because the
 /// garden's two frames are a *different* errand that happens to cost the same two.
 ///
-/// **Seven, and the measurement says it is not too many.** In five browser runs at 1600×900 with
+/// **Five, and the measurement says it is not too few.** In five browser runs at 1600×900 with
 /// Chromium's CPU throttled twenty times — the nearest this machine could come to F0's failing
 /// page, which would not fail here unthrottled — the eleven counted hits had their handler's turn
 /// after **2, 3 and 4** frames. Two would have judged three of those eleven before there was
 /// anything to see. It is **worked out from the budget** rather than written down, because the
 /// budget is `script_budget` in somebody's `sabibots.settings.txt` (S5b-3's lesson: a run given
-/// ten times the budget would otherwise be judged after the same seven frames).
+/// ten times the budget would otherwise be judged after the same five frames) — and S10b is
+/// where that stopped being hypothetical here: [`SCRIPT_BUDGET`] went from 200,000 to 114,000 and
+/// this sum went from seven to five with no edit of its own.
 fn handler_frames(budget: u64, pace: &games_shell::CheckPace) -> u32 {
     pace.frames_to_wait(HANDLER_STRUCTURAL_FRAMES, budget)
 }
