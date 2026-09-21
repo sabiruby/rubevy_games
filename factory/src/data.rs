@@ -10,24 +10,25 @@
 //! recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made_in: :furnace
 //! ```
 //!
-//! **The port is `sabiruby_serde::declare`**, and the whole of the reading is seven of them:
+//! **The port is `sabiruby_serde::declare`**, and the whole of the reading is eight of them:
 //! `Declarations::<T>::install(vm).define(vm, "item")` puts a method on `Object`, the script calls
 //! it, and each call's keyword arguments are deserialized into a `T` **inside the native** — which
 //! is what puts the error on the declaration's own line.
 //!
-//! # Why seven words and not three
+//! # Why eight words and not three
 //!
 //! The plan names `item`, `recipe` and `machine`, which are about *what is made*. The fittings the
-//! world has built in — the belt, the miner, the chest and the ore in the ground — are made by no
-//! recipe and in no machine, and each has numbers of its own with names of its own. Giving them
-//! one `machine` shape with five optional fields would mean `capacity:` on a furnace deserializing
-//! perfectly and being refused afterwards by hand-written code; giving each its own word means
-//! **serde** refuses it, at the line, which is the whole reason the declarations are read through
-//! serde at all.
+//! world has built in — the belt, the miner, the chest, the ore in the ground and the inserter —
+//! are made by no recipe and in no machine, and each has numbers of its own with names of its own.
+//! Giving them one `machine` shape with five optional fields would mean `capacity:` on a furnace
+//! deserializing perfectly and being refused afterwards by hand-written code; giving each its own
+//! word means **serde** refuses it, at the line, which is the whole reason the declarations are
+//! read through serde at all.
 //!
-//! **`ore` is F2a's**, and it is a word rather than a field on `miner` for exactly that reason:
-//! how much a tile of ground holds is not one of the drill's numbers, and putting it there would
-//! be the `capacity:`-on-a-furnace shape again ([`OreDecl`]).
+//! **`ore` is F2a's and `inserter` is F3's**, and each is a word rather than a field on `miner`
+//! for exactly that reason: how much a tile of ground holds is not one of the drill's numbers and
+//! neither is how long an arm's swing takes, and putting either there would be the
+//! `capacity:`-on-a-furnace shape again ([`OreDecl`], [`InserterDecl`]).
 //!
 //! # Where an error says it is
 //!
@@ -39,10 +40,13 @@
 //!   backtrace is `data.rb:4` ([`Trouble::from_raise`]).
 //! * **between declarations** — a recipe naming an item nothing declares, a `made_in:` naming no
 //!   machine, a machine whose `size` and `sprite` disagree. These can only be asked once every
-//!   declaration has been read, and **[`sabiruby_serde::declare::Declarations::take`] hands over a
-//!   `Vec<(String, T)>` with no line numbers in it**, so the line is found by looking the
-//!   declaration up in the source text ([`line_of`]). That is a workaround and it is written down
-//!   as one in `docs/worklog/2026-09-21-factory-F2.md`.
+//!   declaration has been read, and the line comes back with the declaration:
+//!   [`sabiruby_serde::declare::Declarations::take_with_lines`] hands over a `Vec<Declared<T>>`
+//!   whose `line` is **the line serde's own refusal would land on**, so the two kinds of error
+//!   point at the same place. F2 had no such thing — `take` gave names and values and nothing else
+//!   — and looked the declaration up in the source text instead, which found the line a
+//!   declaration *starts* on where serde says the line it *ends* on. That workaround was reported
+//!   (`docs/worklog/2026-09-21-factory-F2.md` §9) and is what F3 took out.
 //!
 //! # It can be read again
 //!
@@ -57,7 +61,7 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use sabiruby::error::VmError;
 use sabiruby::{Value, Vm};
-use sabiruby_serde::declare::{expose, Declarations};
+use sabiruby_serde::declare::{expose, Declarations, Declared};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -133,8 +137,6 @@ struct BeltDecl {
 struct MinerDecl {
     #[serde(deserialize_with = "more_than_zero")]
     seconds_per_item: f32,
-    /// What it brings up out of the ground.
-    digs: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -144,8 +146,30 @@ struct ChestDecl {
     capacity: u32,
 }
 
+/// **The arm the player writes Ruby for** (F3), and a fitting of the world like the four above
+/// it: no recipe makes it and no machine makes it in.
+///
+/// It has **one** number — how long a swing takes — and the word for it is the miner's, because
+/// it means the same thing: how long this thing takes over one item. How far an inserter can
+/// reach is not a number here and is not meant to become one: it takes from the tile behind it
+/// and puts into the tile in front, which is what "one tile, with a direction" already says
+/// (`crate::grid::What::Inserter`). A number for it would be a number with nothing behind it.
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+struct InserterDecl {
+    #[serde(deserialize_with = "more_than_zero")]
+    seconds_per_item: f32,
+}
+
 /// **What is in the ground**, which is a fitting of the world like the three above it: no recipe
 /// makes it and no machine makes it in.
+///
+/// **Its name is the item that comes out of it** (the author, 2026-09-21): `ore :iron_ore,
+/// per_tile: 60` says what the ground is made of, and a miner brings up whatever the ground it
+/// stands on is. F2a wrote it the other way — the name was a label and `miner :drill, digs:
+/// :iron_ore` said what came up — which put "what comes out of the ground" in two places and
+/// made the miner the one that had to change when a second kind of ore was added. Now there is
+/// one place, and a second kind of ore is a second `ore` line.
 ///
 /// F2 left `ore_per_tile` in `factory.settings.txt` because its neighbour — how *wide* a patch is
 /// — is wanted in `main`, before there is a VM to have read any Ruby with, and the two were one
@@ -311,9 +335,13 @@ impl Data {
     /// **Which tiles a machine built at `origin` covers.** The footprint is in the map's own axes
     /// and does not turn with the machine's direction: the pack's machines are drawn one tile
     /// each and a machine of several tiles is drawn out of several pictures, so turning the
-    /// footprint would need a second set of pictures for the turned shape. What the direction
-    /// says is where the machine *puts what it makes* ([`Data::output_of`]), which is the half a
-    /// player is actually aiming.
+    /// footprint would need a second set of pictures for the turned shape.
+    ///
+    /// **Since F3 a machine's direction says nothing at all.** It used to say where the machine
+    /// pushed what it made; nothing comes out of a machine now but through an inserter's hand,
+    /// and an inserter reaches into whichever tile of the footprint it is standing behind. That
+    /// is Factorio's shape as well — an assembler there has no direction either — and it is why
+    /// `Data::output_of` is gone.
     pub fn footprint(&self, machine: MachineId, origin: UVec2) -> Vec<UVec2> {
         let Some(m) = self.machines.get(machine as usize) else { return Vec::new() };
         let mut tiles = Vec::with_capacity(m.tiles() as usize);
@@ -325,19 +353,6 @@ impl Data {
         tiles
     }
 
-    /// **Where a machine puts what it made**: the tile just outside its footprint, one step
-    /// `dir` from the origin corner. For a machine one tile big that is the neighbour, which is
-    /// what a miner and a belt already mean by the word.
-    pub fn output_of(&self, machine: MachineId, origin: UVec2, dir: crate::grid::Dir) -> IVec2 {
-        let size = self.machines.get(machine as usize).map(|m| m.size).unwrap_or(UVec2::ONE);
-        let o = origin.as_ivec2();
-        match dir {
-            crate::grid::Dir::East => IVec2::new(o.x + size.x as i32, o.y),
-            crate::grid::Dir::North => IVec2::new(o.x, o.y + size.y as i32),
-            crate::grid::Dir::West => IVec2::new(o.x - 1, o.y),
-            crate::grid::Dir::South => IVec2::new(o.x, o.y - 1),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -457,35 +472,6 @@ fn from_compiler(message: &str) -> Trouble {
     Trouble { at, what }
 }
 
-/// **The line a declaration is on, found in the source text.**
-///
-/// The table a host takes out of the VM is names and values with no line numbers in it, so a
-/// check that needs *two* declarations to be wrong — a recipe naming an item nothing declared —
-/// has nothing to say where it is. This looks the declaration up instead: the first line whose
-/// first word is `word` and whose next word is the name, written as `:name`, `"name"` or
-/// `'name'`. It is a workaround for a gap in `sabiruby_serde::declare` and is reported as one.
-fn line_of(source: &str, word: &str, name: &str) -> Option<u32> {
-    for (i, line) in source.lines().enumerate() {
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix(word) else { continue };
-        let rest = rest.trim_start();
-        let named = rest
-            .strip_prefix(':')
-            .or_else(|| rest.strip_prefix('"'))
-            .or_else(|| rest.strip_prefix('\''));
-        let Some(named) = named else { continue };
-        if !named.starts_with(name) {
-            continue;
-        }
-        // the name has to end there and not be the start of a longer one
-        let after = named[name.len()..].chars().next();
-        if after.is_none_or(|c| !c.is_alphanumeric() && c != '_') {
-            return Some(i as u32 + 1);
-        }
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------------------------
 // Reading one data file
 // ---------------------------------------------------------------------------------------------
@@ -508,6 +494,8 @@ pub fn read_the_declarations(
 ) -> Result<(Data, Rules), Trouble> {
     let bytes = compile(source, name).map_err(|e| from_compiler(&e))?;
 
+    // `source` is not read past this line any more. F2 kept it to the end so that a check between
+    // two declarations could find the line one was written on; `take_with_lines` carries it now.
     let items = Declarations::<ItemDecl>::install(vm).define(vm, "item");
     let recipes = Declarations::<RecipeDecl>::install(vm).define(vm, "recipe");
     let machines = Declarations::<MachineDecl>::install(vm).define(vm, "machine");
@@ -515,25 +503,27 @@ pub fn read_the_declarations(
     let miners = Declarations::<MinerDecl>::install(vm).define(vm, "miner");
     let chests = Declarations::<ChestDecl>::install(vm).define(vm, "chest");
     let ores = Declarations::<OreDecl>::install(vm).define(vm, "ore");
+    let arms = Declarations::<InserterDecl>::install(vm).define(vm, "inserter");
 
     let ran = vm.load_and_run(&bytes);
 
     // **Taken whether the run went well or not.** A file that raised half way through has already
     // put its first declarations in the tables, and leaving them in the VM would mean the next
     // call to this function shares a table with a file that failed.
-    let items = items.take(vm);
-    let recipes = recipes.take(vm);
-    let machines = machines.take(vm);
-    let belts = belts.take(vm);
-    let miners = miners.take(vm);
-    let chests = chests.take(vm);
-    let ores = ores.take(vm);
+    let items = items.take_with_lines(vm);
+    let recipes = recipes.take_with_lines(vm);
+    let machines = machines.take_with_lines(vm);
+    let belts = belts.take_with_lines(vm);
+    let miners = miners.take_with_lines(vm);
+    let chests = chests.take_with_lines(vm);
+    let ores = ores.take_with_lines(vm);
+    let arms = arms.take_with_lines(vm);
 
     if let Err(e) = ran {
         return Err(Trouble::from_raise(vm, &e));
     }
 
-    let tables = tables_of(source, items, recipes, machines, belts, miners, chests, ores)?;
+    let tables = tables_of(items, recipes, machines, belts, miners, chests, ores, arms)?;
     Ok(tables)
 }
 
@@ -546,16 +536,16 @@ fn article(word: &str) -> &'static str {
     }
 }
 
-/// One of a word that has to be declared exactly once.
-fn exactly_one<T>(source: &str, word: &str, mut all: Vec<(String, T)>) -> Result<(String, T), Trouble> {
+/// One of a word that has to be declared exactly once — and its name and line, for whatever has
+/// to be said about it afterwards.
+fn exactly_one<T>(word: &str, mut all: Vec<Declared<T>>) -> Result<Declared<T>, Trouble> {
     match all.len() {
         1 => Ok(all.remove(0)),
         0 => Err(Trouble { at: None, what: format!("nothing declares {} {word}", article(word)) }),
         n => {
             // the second one is the one that is too many, and it is the one to point at
-            let (name, _) = &all[1];
             Err(Trouble {
-                at: line_of(source, word, name),
+                at: all[1].line,
                 what: format!("{n} {word}s are declared and the game has room for one"),
             })
         }
@@ -565,34 +555,36 @@ fn exactly_one<T>(source: &str, word: &str, mut all: Vec<(String, T)>) -> Result
 /// The names turned into numbers, and every reference checked.
 #[allow(clippy::too_many_arguments)]
 fn tables_of(
-    source: &str,
-    items: Vec<(String, ItemDecl)>,
-    recipes: Vec<(String, RecipeDecl)>,
-    machines: Vec<(String, MachineDecl)>,
-    belts: Vec<(String, BeltDecl)>,
-    miners: Vec<(String, MinerDecl)>,
-    chests: Vec<(String, ChestDecl)>,
-    ores: Vec<(String, OreDecl)>,
+    items: Vec<Declared<ItemDecl>>,
+    recipes: Vec<Declared<RecipeDecl>>,
+    machines: Vec<Declared<MachineDecl>>,
+    belts: Vec<Declared<BeltDecl>>,
+    miners: Vec<Declared<MinerDecl>>,
+    chests: Vec<Declared<ChestDecl>>,
+    ores: Vec<Declared<OreDecl>>,
+    arms: Vec<Declared<InserterDecl>>,
 ) -> Result<(Data, Rules), Trouble> {
     if items.is_empty() {
         return Err(Trouble { at: None, what: "nothing declares an item".into() });
     }
     let mut by_item = BTreeMap::new();
     let mut made_items = Vec::new();
-    for (i, (name, decl)) in items.into_iter().enumerate() {
+    // `Declared` is `#[non_exhaustive]`, so a pattern that takes it apart says `..`: a field the
+    // VM's crate adds later is not a change here.
+    for (i, Declared { name, value: decl, .. }) in items.into_iter().enumerate() {
         by_item.insert(name.clone(), i as ItemId);
         made_items.push(Item { name, icon: decl.icon });
     }
 
     let mut by_machine = BTreeMap::new();
     let mut made_machines = Vec::new();
-    for (i, (name, decl)) in machines.into_iter().enumerate() {
+    for (i, Declared { name, value: decl, line, .. }) in machines.into_iter().enumerate() {
         // the one thing about a machine that two of its fields have to agree on, which is why it
         // is here and not in a `deserialize_with`
         let wanted = decl.size[0] * decl.size[1];
         if decl.sprite.len() as u32 != wanted {
             return Err(Trouble {
-                at: line_of(source, "machine", &name),
+                at: line,
                 what: format!(
                     "{name} covers {} by {} tiles, which is {wanted} pictures, and it gives {}",
                     decl.size[0],
@@ -612,13 +604,13 @@ fn tables_of(
     }
 
     let mut made_recipes: Vec<Recipe> = Vec::new();
-    for (name, decl) in recipes {
+    for Declared { name, value: decl, line, .. } in recipes {
         let amounts = |what: &str, from: BTreeMap<String, u32>| -> Result<Vec<(ItemId, u32)>, Trouble> {
             from.into_iter()
                 .map(|(item, n)| match by_item.get(&item) {
                     Some(&id) => Ok((id, n)),
                     None => Err(Trouble {
-                        at: line_of(source, "recipe", &name),
+                        at: line,
                         what: format!("{name} has {item} {what} and nothing declares an item called that"),
                     }),
                 })
@@ -627,14 +619,11 @@ fn tables_of(
         let inputs = amounts("in it", decl.inputs)?;
         let outputs = amounts("out of it", decl.out)?;
         if outputs.is_empty() {
-            return Err(Trouble {
-                at: line_of(source, "recipe", &name),
-                what: format!("{name} makes nothing"),
-            });
+            return Err(Trouble { at: line, what: format!("{name} makes nothing") });
         }
         let Some(&made_in) = by_machine.get(&decl.made_in) else {
             return Err(Trouble {
-                at: line_of(source, "recipe", &name),
+                at: line,
                 what: format!(
                     "{name} is made in {} and nothing declares a machine called that",
                     decl.made_in
@@ -645,14 +634,17 @@ fn tables_of(
         made_recipes.push(Recipe { name, inputs, outputs, time: decl.time, made_in });
     }
 
-    let (_, belt) = exactly_one(source, "belt", belts)?;
-    let (miner_name, miner) = exactly_one(source, "miner", miners)?;
-    let (_, chest) = exactly_one(source, "chest", chests)?;
-    let (_, ore) = exactly_one(source, "ore", ores)?;
-    let Some(&digs) = by_item.get(&miner.digs) else {
+    let belt = exactly_one("belt", belts)?.value;
+    let miner = exactly_one("miner", miners)?.value;
+    let chest = exactly_one("chest", chests)?.value;
+    let arm = exactly_one("inserter", arms)?.value;
+    // **the ground is named after what comes out of it**, so this is the one reference between
+    // declarations the ore has — and, since there is one ground, it is what a miner digs
+    let Declared { name: ore_name, value: ore, line: ore_line, .. } = exactly_one("ore", ores)?;
+    let Some(&digs) = by_item.get(&ore_name) else {
         return Err(Trouble {
-            at: line_of(source, "miner", &miner_name),
-            what: format!("the miner digs {} and nothing declares an item called that", miner.digs),
+            at: ore_line,
+            what: format!("the ground is {ore_name} and nothing declares an item called that"),
         });
     };
 
@@ -662,6 +654,7 @@ fn tables_of(
         mine_seconds: miner.seconds_per_item,
         chest_capacity: chest.capacity,
         digs,
+        swing_seconds: arm.seconds_per_item,
         ore_per_tile: ore.per_tile,
     };
     let data = Data {
@@ -708,13 +701,15 @@ struct MachineSeen {
 /// The plan writes them `recipes[:iron_plate]` and `items[:gear]`; what `expose` defines is a
 /// **method**, so they are `recipe_of(:iron_plate)` and `item_of(:gear)` here, and a prelude that
 /// wants the bracket shape can wrap them in three lines when a stage has a use for it (F3's
-/// inserters and F4's control stage are the callers; F2 only proves they answer).
+/// inserters read them through [`crate::inserters`]'s prelude).
 ///
-/// **The names inside an answer come back as Strings, not Symbols.** The fields of the Hash are
-/// Symbols (`Options::symbol_keys`, which is what `expose` uses), but a *map's* keys are written
-/// as they serialize and a `String` serializes as a Ruby String — so `recipe_of(:iron_plate)[:in]`
-/// is `{"iron_ore" => 1}`. That is `sabiruby-serde`'s shape and not something this game can ask
-/// for differently; it is in the report as a thing the VM's crate could offer.
+/// **The names inside an answer are Symbols, all the way down** —
+/// `recipe_of(:iron_plate)[:in][:iron_ore]`. F2 met the other answer: a map's keys came back as
+/// Strings while a struct's fields were Symbols, so a name a data file had written as `:iron_ore`
+/// read back as `"iron_ore"`. That was reported as a gap in the VM's crate and is what
+/// `Options::symbols` — which `expose` now uses — fixed (sabiruby
+/// `docs/worklog/2026-09-21-serde-lines.md`). It matters here because the prelude an inserter is
+/// written in reads these tables, and the spelling a player types is the spelling they wrote.
 pub fn expose_the_tables(vm: &mut Vm, data: &Data) {
     let items = data
         .items
@@ -803,9 +798,10 @@ mod tests {
         "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n",         // 4
         "       time: 2.0, made_in: :furnace\n",                                      // 5
         "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",                 // 6
-        "miner :drill, seconds_per_item: 1.0, digs: :iron_ore\n",                     // 7
+        "miner :drill, seconds_per_item: 1.0\n",                                      // 7
         "chest :crate, capacity: 60\n",                                               // 8
-        "ore :patch, per_tile: 60\n",                                                 // 9
+        "ore :iron_ore, per_tile: 60\n",                                              // 9
+        "inserter :arm, seconds_per_item: 1.0\n",                                     // 10
     );
 
     #[test]
@@ -824,19 +820,26 @@ mod tests {
         assert_eq!(rules.items_per_tile, 2);
         assert_eq!(rules.mine_seconds, 1.0);
         assert_eq!(rules.chest_capacity, 60);
-        assert_eq!(rules.digs, 0, "the miner brings up the ore");
+        assert_eq!(rules.digs, 0, "what the ground is made of is what a miner brings up");
+        assert_eq!(rules.swing_seconds, 1.0, "and an inserter takes a second over one item");
     }
 
     /// **Each kind of mistake, and the line it is on.** The four the plan names, and the two
     /// `Rules` asked F2 for in its rustdoc (a number that is not more than zero).
+    ///
+    /// **Since F3, the two kinds of mistake give the same number for the same declaration.** The
+    /// recipe in [`GOOD`] is written over lines 4 and 5 on purpose, and both roads — serde
+    /// refusing a field inside it, and this game refusing a name between declarations — say 5,
+    /// the line it ends on. F2's look-up in the source text said 4 for the second road.
     #[test]
     fn a_mistake_in_a_declaration_says_which_line_it_is_on() {
         let wrong = |line: &str, replacing: &str| GOOD.replace(replacing, line);
         let cases: Vec<(String, u32, &str)> = vec![
             // an unknown field: serde's own message, at the declaration
             (wrong("item :iron_ore, icon: 0, colour: \"red\"\n", "item :iron_ore, icon: 0\n"), 1, "unknown field"),
-            // a recipe that names an item nothing declares — the one that needs two declarations
-            (wrong("recipe :iron_plate, in: { coal: 1 }, out: { iron_plate: 1 },\n", "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n"), 4, "coal"),
+            // a recipe that names an item nothing declares — the one that needs two declarations,
+            // and so the one whose line used to come from a look-up rather than from the VM
+            (wrong("recipe :iron_plate, in: { coal: 1 }, out: { iron_plate: 1 },\n", "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n"), 5, "coal"),
             // a time that is not more than zero
             (wrong("       time: 0.0, made_in: :furnace\n", "       time: 2.0, made_in: :furnace\n"), 5, "not more than zero"),
             // a machine no tiles wide
@@ -911,12 +914,14 @@ mod tests {
 
         let source = GOOD.replace("made_in: :furnace", "made_in: :smelter");
         let trouble = read(&source).expect_err("no such machine");
-        // **the line a look-up in the source finds is the line the declaration *starts* on**,
-        // where serde's own refusals land on the line it *ends* on (the `SEND` instruction's).
-        // The recipe in `GOOD` runs over lines 4 and 5, and `made_in:` is on 5; this says 4.
-        // Both are the declaration and neither is wrong, but they are not the same number, which
-        // is the price of the look-up standing in for a line the table does not carry.
-        assert_eq!(trouble.at, Some(4), "{}", trouble.say("data.rb"));
+        // **The line a declaration carries and the line serde raises at are the same number**,
+        // which is what F3's bump of the VM bought: both are the line the declaration *ends* on,
+        // the one the `SEND` instruction holds. The recipe in `GOOD` runs over lines 4 and 5, so
+        // this says 5 — and so does
+        // [`a_declaration_over_two_lines_is_reported_at_the_second`], which is the same recipe
+        // refused by serde instead. F2 said 4 here, because it looked the declaration up in the
+        // source text and found the line it *starts* on.
+        assert_eq!(trouble.at, Some(5), "{}", trouble.say("data.rb"));
         assert!(trouble.what.contains("smelter"), "{}", trouble.what);
     }
 
@@ -925,7 +930,7 @@ mod tests {
     fn a_name_declared_twice_is_refused_at_the_second_one() {
         let source = format!("{GOOD}item :iron_ore, icon: 7\n");
         let trouble = read(&source).expect_err("declared twice");
-        assert_eq!(trouble.at, Some(10), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
         assert!(trouble.what.contains("already declared"), "{}", trouble.what);
     }
 
@@ -937,18 +942,45 @@ mod tests {
         assert!(trouble.say("data.rb").starts_with("data.rb:1: "), "{}", trouble.say("data.rb"));
     }
 
-    /// **The four fittings are declared exactly once each**, which is the shape the world has room
-    /// for. `ore` is F2a's, and it is one of them for the same reason the other three are: the
-    /// ground is a thing of the world with a number of its own, and the game has one ground.
+    /// **The five fittings are declared exactly once each**, which is the shape the world has
+    /// room for. `ore` is F2a's and `inserter` is F3's, and each is one of them for the same
+    /// reason the first three are: a thing of the world with a number of its own, and the game
+    /// has one of it.
     #[test]
-    fn the_world_has_one_belt_one_miner_one_chest_and_one_ore() {
+    fn the_world_has_one_belt_one_miner_one_chest_one_ore_and_one_inserter() {
         let none = GOOD.replace("chest :crate, capacity: 60\n", "");
         assert_eq!(read(&none).expect_err("no chest").what, "nothing declares a chest");
-        let none = GOOD.replace("ore :patch, per_tile: 60\n", "");
+        let none = GOOD.replace("ore :iron_ore, per_tile: 60\n", "");
         assert_eq!(read(&none).expect_err("no ore").what, "nothing declares an ore");
+        let none = GOOD.replace("inserter :arm, seconds_per_item: 1.0\n", "");
+        assert_eq!(read(&none).expect_err("no arm").what, "nothing declares an inserter");
         let two = format!("{GOOD}belt :fast, tiles_per_second: 8.0, items_per_tile: 2\n");
         let trouble = read(&two).expect_err("two belts");
-        assert_eq!(trouble.at, Some(10), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
+    }
+
+    /// **The ground is named after what comes out of it** (the author, 2026-09-21), and both
+    /// ways of getting that wrong are refused at their own line.
+    ///
+    /// `ore :coal` with no `item :coal` is a reference between two declarations, so the line is
+    /// the one `take_with_lines` carried. `miner … digs:` is a field that no longer exists, so it
+    /// is serde's own refusal and needs nothing written here at all — which is the whole reason
+    /// each fitting has a word of its own (the head of this file).
+    #[test]
+    fn the_ground_is_named_after_what_comes_out_of_it() {
+        let (_, rules) = read(GOOD).expect("a good file");
+        assert_eq!(rules.digs, 0, "iron_ore, which is item 0");
+
+        let unknown = GOOD.replace("ore :iron_ore,", "ore :coal,");
+        let trouble = read(&unknown).expect_err("nothing declares coal");
+        assert_eq!(trouble.at, Some(9), "{}", trouble.say("data.rb"));
+        assert!(trouble.what.contains("coal"), "{}", trouble.what);
+
+        let old_spelling =
+            GOOD.replace("miner :drill, seconds_per_item: 1.0", "miner :drill, seconds_per_item: 1.0, digs: :iron_ore");
+        let trouble = read(&old_spelling).expect_err("digs: is gone");
+        assert_eq!(trouble.at, Some(7), "{}", trouble.say("data.rb"));
+        assert!(trouble.what.contains("unknown field"), "{}", trouble.what);
     }
 
     /// **The same VM reads a second file.** This is what F5's reload will be and what the checks
@@ -977,7 +1009,10 @@ mod tests {
             "$icon  = item_of(:iron_plate)[:icon]\n",
             "$time  = recipe_of(:iron_plate)[:time]\n",
             "$where = recipe_of(:iron_plate)[:made_in]\n",
-            "$ore   = recipe_of(:iron_plate)[:in][\"iron_ore\"]\n",
+            // **a Symbol, as the data file wrote it**: the keys of a map inside an answer are
+            // Symbols since `expose` took `Options::symbols` (sabiruby, 2026-09-21). F2 had to
+            // write `["iron_ore"]` here, which is the spelling a player would not have guessed.
+            "$ore   = recipe_of(:iron_plate)[:in][:iron_ore]\n",
             "$size  = machine_of(:furnace)[:size].inspect\n",
             "$none  = item_of(:gear)\n",
         );
@@ -996,11 +1031,11 @@ mod tests {
         assert_eq!(says(size, &mut vm), "[1, 1]");
     }
 
-    /// The footprint and the output tile of a machine bigger than one tile — the two things the
-    /// grid needs to know about one, and the whole of what `size` means.
+    /// The footprint of a machine bigger than one tile, which is the whole of what `size` means
+    /// — and, since F3, the whole of what the grid needs to know about one: a machine has no
+    /// output tile any more, because nothing comes out of it but through an inserter's hand.
     #[test]
-    fn a_machine_of_four_tiles_covers_four_and_puts_things_outside_them() {
-        use crate::grid::Dir;
+    fn a_machine_of_four_tiles_covers_four_tiles() {
         let source = GOOD
             .replace(
                 "machine :furnace, size: [1, 1], sprite: [109], speed: 1.0\n",
@@ -1014,14 +1049,8 @@ mod tests {
             vec![UVec2::new(10, 4), UVec2::new(11, 4), UVec2::new(10, 5), UVec2::new(11, 5)],
             "row by row from the bottom left"
         );
-        // out of the footprint, from the origin corner, one step the way it faces
-        assert_eq!(data.output_of(big, at, Dir::East), IVec2::new(12, 4));
-        assert_eq!(data.output_of(big, at, Dir::North), IVec2::new(10, 6));
-        assert_eq!(data.output_of(big, at, Dir::West), IVec2::new(9, 4));
-        assert_eq!(data.output_of(big, at, Dir::South), IVec2::new(10, 3));
-        // and a machine of one tile means by it what a miner already meant
+        // and a machine of one tile covers the tile it was built on and no other
         let furnace = data.machine("furnace").expect("declared");
         assert_eq!(data.footprint(furnace, at), vec![at]);
-        assert_eq!(data.output_of(furnace, at, Dir::East), IVec2::new(11, 4));
     }
 }

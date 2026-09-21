@@ -30,7 +30,7 @@ The pack as it came is in `factory/art/`, with its own licence text beside it as
 strip of the same 132 tiles, in the pack's own order and numbering, and the drawn ones after
 them, with blank tiles on the end **when the count needs them** (the script's own comment says
 why: a browser will not bind an array texture whose square layers number a multiple of six; at
-142 layers it needs none). The strip is `factory/assets/tiles/factory-tiles.png`, with a copy of
+143 layers it needs none). The strip is `factory/assets/tiles/factory-tiles.png`, with a copy of
 the licence text beside it, because that is the file that redistributes the art.
 
 | tile of the pack | used as |
@@ -67,12 +67,22 @@ are and the band between them blown up by exactly three. **Every pixel of it is 
 Kenney's** and it uses no colour the tile did not, which is a stronger promise than "the same
 palette"; the arrangement is this repository's, **MIT** (`LICENSE`).
 
-**The items on the belts** (`factory/assets/items/items.png`, three 8 × 8 icons in a strip) are
-not Kenney's: two items have to sit on a 16 px tile without touching, and a 16 px rock does not
-survive being halved. `tools/factory-items.py` draws all three pixel by pixel — the ore nugget in
-the four oranges the ground ore was recoloured into (F1 drew it and it has not changed), the
-plate and the gear in Tiny Factory's own greys. The gear is the pack's tile 114 read by eye and
-redrawn at half the size. **MIT, the same as the rest of this repository.**
+Tile **142** is the **inserter's base**, drawn by `tools/factory-inserter.py` in the pack's own
+greys and its own orange rail: a plinth with a light pivot in the middle and an orange mouth on
+the side things are put down on. The pack has nothing that reads as an arm on a post, and the
+base has to be **asymmetric left to right** or turning it would draw the same picture four times
+(the script refuses to write one that is not). The arm itself is not a tile at all — a tile has
+eight orientations and nothing in between, and an arm moves — so it is a sprite. **MIT, the same
+as the rest of this repository.**
+
+**The 8 px pictures** (`factory/assets/items/items.png`, five of them in one strip) are not
+Kenney's either. Three are the items: two of those have to sit on a 16 px tile without touching,
+and a 16 px rock does not survive being halved, so `tools/factory-items.py` draws them pixel by
+pixel — the ore nugget in the four oranges the ground ore was recoloured into (F1 drew it and it
+has not changed), the plate and the gear in Tiny Factory's own greys, the gear being the pack's
+tile 114 read by eye and redrawn at half the size. The other two are F3's and are **not items**:
+the inserter's hand, drawn travelling with whatever it is carrying, and the orange mark that sits
+over an inserter whose script has stopped. **MIT, the same as the rest of this repository.**
 
 CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is how
 anyone who wants more of it finds the pack.

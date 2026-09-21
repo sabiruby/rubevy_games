@@ -8,13 +8,31 @@
 //! model as much as the belts' four are ([`crate::belts::step`]):
 //!
 //! 4. **dig** — a miner that has finished puts an item of [`Rules::digs`] into what it faces;
-//! 5. **deliver** — a machine pushes what it has made into what it faces, one item at a time;
+//! 5. **swing** — an inserter whose arm is on its way puts down what it is carrying when it
+//!    arrives ([`crate::inserters`] is the half of that a script drives);
 //! 6. **craft** — a machine with nothing waiting to go out takes a recipe it has the parts for,
 //!    consumes them and works at it.
 //!
-//! Deliver comes before craft so that a machine that finished last frame is empty again when it
-//! is asked whether it can start, which is what makes a machine with somewhere to put things run
-//! back to back rather than every other craft.
+//! **F2's fifth pass was `deliver`** — a machine pushing what it made into what it faces — and F3
+//! took it out. Nothing goes into or out of a machine now but through an inserter's hand, which
+//! is what makes the player's Ruby the thing that joins a factory up (plan §4).
+//!
+//! # Who may hand a thing to what
+//!
+//! One table, and it is the whole of the rule F3 added ([`hand_to`], [`Offer`]):
+//!
+//! | into | a belt or a miner offering | an inserter offering |
+//! |---|---|---|
+//! | a belt | yes, if there is a gap | yes, if there is a gap |
+//! | a chest | yes, if it has room | yes, if it has room |
+//! | a machine | **no** | yes, if some recipe of its kind wants it |
+//!
+//! **A chest takes from a belt and a machine does not**, and that is a decision rather than an
+//! oversight (`docs/worklog/2026-09-21-factory-F3.md`): Factorio needs an inserter for both, and
+//! taking the chest away as well would mean the first thing a player builds — a miner, a belt, a
+//! chest, which is what F1's checks build and what the game opens on — could not be built without
+//! writing Ruby. The line that has to be joined by a script is the one with a *machine* in it,
+//! because that is the line the game is about.
 //!
 //! # How much a machine holds
 //!
@@ -94,6 +112,16 @@ impl Stock {
 
 // ---------------------------------------------------------------------------------------------
 
+/// **Who is holding the thing out**, which is the whole of what F3 added to [`hand_to`]: a
+/// machine takes from an inserter's hand and from nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offer {
+    /// A belt carrying something into the next tile, or a miner putting a dig down.
+    Direct,
+    /// An inserter's hand at the end of its swing.
+    Inserter,
+}
+
 /// **The machine a tile belongs to**: itself if it is an origin, the origin if it is covered.
 pub fn machine_at(grid: &Grid, tile: usize) -> Option<usize> {
     match grid.at(tile).map(|b| b.what) {
@@ -160,7 +188,7 @@ pub fn dig(
             }
             continue;
         }
-        let placed = put_into(grid, lanes, rules, data, t, dir, rules.digs);
+        let placed = put_into(grid, lanes, rules, data, t, dir, rules.digs, Offer::Direct);
         if let Some(miner) = grid.at_mut(t) {
             // **blocked is not lost**: the dig stays finished and is delivered the moment there
             // is somewhere to put it, and it does not bank a second one meanwhile
@@ -176,35 +204,93 @@ pub fn dig(
     }
 }
 
-/// **Pass 5: deliver.** What a machine made goes into what it faces — a belt, a chest, or another
-/// machine that wants it — one item at a time, and it stops at the first one that is refused.
-pub fn deliver(
+/// **What a `move` does at the start of a swing**: an empty hand reaches into the tile behind, a
+/// full one carries on with what it was refused, and either way the arm sets off. It answers
+/// whether it is now swinging — `false` is an arm with an empty hand and nothing behind it.
+///
+/// **The picking up is now and not at the end**, which is what makes the item travel with the
+/// arm: it is out of the belt and in the hand from this moment, which is where the picture draws
+/// it and where the sum that says nothing is lost counts it.
+///
+/// It is here, beside the arm, rather than in the system that answers a `move`, so that a test of
+/// the arm can drive one with no Ruby and no `App` — and so that there is one place that says
+/// what a swing begins with.
+pub fn start_swing(grid: &mut Grid, lanes: &mut Lanes, tile: usize) -> bool {
+    let Some(&Building { what: What::Inserter, dir, .. }) = grid.at(tile) else { return false };
+    if grid.at(tile).is_none_or(|b| b.held.is_empty()) {
+        let picked =
+            grid.step_from(tile, dir.back()).and_then(|from| take_from(grid, lanes, from));
+        match picked {
+            Some(item) => {
+                if let Some(arm) = grid.at_mut(tile) {
+                    arm.held.add(item, 1);
+                }
+            }
+            None => return false,
+        }
+    }
+    if let Some(arm) = grid.at_mut(tile) {
+        arm.swinging = true;
+        arm.work = 0.0;
+    }
+    true
+}
+
+/// **Pass 5: swing.** An inserter whose arm is on its way moves it on, and puts down what it is
+/// carrying the moment the swing is over.
+///
+/// The *decision* to start a swing is not here: it is a line of Ruby, answered in
+/// [`crate::inserters`]. What is here is the arm — how long it takes and what happens at the end
+/// of it — because an arm is physics and physics is Rust (plan §1).
+///
+/// **A swing that ends over a full belt is not a swing wasted.** The hand keeps what it picked
+/// up, the arm stops, and the script is told the answer was no; the same "blocked is not lost"
+/// rule a miner keeps with a finished dig. What the script does about it is the script's.
+pub fn swing(
     grid: &mut Grid,
     lanes: &mut Lanes,
     rules: &Rules,
     data: &Data,
     order: &[u32],
+    seconds: f32,
     moves: &mut Moves,
 ) {
     for &t in order {
         let t = t as usize;
-        let Some(&Building { what: What::Machine(kind), dir, .. }) = grid.at(t) else { continue };
-        let tile = grid.tile_of(t);
-        let out = data.output_of(kind, tile, dir);
-        let last = grid.tiles as i32;
-        if out.x < 0 || out.y < 0 || out.x >= last || out.y >= last {
+        let Some(&Building { what: What::Inserter, dir, work, swinging, .. }) = grid.at(t) else {
+            continue;
+        };
+        if !swinging {
             continue;
         }
-        let into = (out.y as u32 * grid.tiles + out.x as u32) as usize;
-        while let Some(item) = grid.at(t).and_then(|b| b.made.first()) {
-            if !hand_to(grid, lanes, rules, data, into, item) {
-                break;
+        let work = work + seconds;
+        if work < rules.swing_seconds {
+            if let Some(arm) = grid.at_mut(t) {
+                arm.work = work;
             }
-            if let Some(machine) = grid.at_mut(t) {
-                machine.made.take(item, 1);
+            continue;
+        }
+        // the arm has arrived: put down what it is carrying, if the tile in front will take it
+        let carrying = grid.at(t).and_then(|b| b.held.first());
+        let placed = match carrying {
+            Some(item) => {
+                put_into(grid, lanes, rules, data, t, dir, item, Offer::Inserter).is_some()
             }
+            // nothing in the hand at the end of a swing is an arm that was told to move when
+            // there was nothing behind it: the swing happened and moved nothing
+            None => false,
+        };
+        if let Some(arm) = grid.at_mut(t) {
+            arm.swinging = false;
+            arm.work = 0.0;
+            if placed && let Some(item) = carrying {
+                arm.held.take(item, 1);
+            }
+        }
+        if placed && let Some(into) = grid.step_from(t, dir) {
             moves.0.push(Move::Made { at: into });
         }
+        moves.0.push(Move::Swung { at: t, placed });
     }
 }
 
@@ -272,8 +358,10 @@ fn start(grid: &mut Grid, data: &Data, tile: usize, kind: u16) -> Option<RecipeI
 
 // ---------------------------------------------------------------------------------------------
 
-/// **Puts one item into the tile `dir` of `from`**, which is what a miner does with a dig. It
-/// answers the tile it went into, so that the caller can say where.
+/// **Puts one item into the tile `dir` of `from`**, which is what a miner does with a dig and
+/// what an inserter's arm does at the end of a swing. It answers the tile it went into, so that
+/// the caller can say where.
+#[allow(clippy::too_many_arguments)]
 fn put_into(
     grid: &mut Grid,
     lanes: &mut Lanes,
@@ -282,13 +370,15 @@ fn put_into(
     from: usize,
     dir: crate::grid::Dir,
     item: ItemId,
+    by: Offer,
 ) -> Option<usize> {
     let into = grid.step_from(from, dir)?;
-    hand_to(grid, lanes, rules, data, into, item).then_some(into)
+    hand_to(grid, lanes, rules, data, into, item, by).then_some(into)
 }
 
 /// **Whether a tile took an item**, and it takes it if it did: the one place that knows what each
-/// kind of thing does with something handed to it.
+/// kind of thing does with something handed to it, and — since F3 — **who is allowed to hand it**
+/// (the table at the head of this file).
 pub fn hand_to(
     grid: &mut Grid,
     lanes: &mut Lanes,
@@ -296,6 +386,7 @@ pub fn hand_to(
     data: &Data,
     into: usize,
     item: ItemId,
+    by: Offer,
 ) -> bool {
     match grid.at(into).map(|b| b.what) {
         Some(What::Belt) => {
@@ -316,13 +407,75 @@ pub fn hand_to(
             }
             false
         }
-        Some(What::Machine(_)) | Some(What::Covered { .. }) => {
+        // **an inserter's hand and nothing else** (F3). A belt running into a machine jams, which
+        // is what makes a factory with no inserters in it a factory that does not run.
+        Some(What::Machine(_)) | Some(What::Covered { .. }) if by == Offer::Inserter => {
             let Some(origin) = machine_at(grid, into) else { return false };
             if wants(grid, data, origin, item) {
                 take_in(grid, origin, item);
                 return true;
             }
             false
+        }
+        _ => false,
+    }
+}
+
+/// **What the tile at `from` would let an inserter take**, without taking it: the item on the
+/// front of a belt, what a chest holds, or what a machine has made and not got rid of.
+///
+/// It is the question an inserter's `behind` asks and the first half of what its `move` does, so
+/// the two cannot disagree about what is there. A miner is not in the list: a miner puts its own
+/// dig down (`dig`), and an arm reaching into one would be a second way for the same item to
+/// leave the ground.
+pub fn would_give(grid: &Grid, lanes: &Lanes, from: usize) -> Option<ItemId> {
+    match grid.at(from).map(|b| b.what) {
+        // the one nearest the end of the tile, which is the one a belt would hand on next
+        Some(What::Belt) => lanes.on(from).front().map(|on| on.item),
+        Some(What::Chest) => grid.at(from).and_then(|b| b.held.first()),
+        Some(What::Machine(_)) | Some(What::Covered { .. }) => {
+            machine_at(grid, from).and_then(|origin| grid.at(origin)).and_then(|b| b.made.first())
+        }
+        _ => None,
+    }
+}
+
+/// **Takes what [`would_give`] said was there**, and answers it. Nothing is taken where nothing
+/// was offered.
+pub fn take_from(grid: &mut Grid, lanes: &mut Lanes, from: usize) -> Option<ItemId> {
+    let item = would_give(grid, lanes, from)?;
+    match grid.at(from).map(|b| b.what) {
+        Some(What::Belt) => {
+            lanes.of[from].pop_front();
+        }
+        Some(What::Chest) => {
+            if let Some(chest) = grid.at_mut(from) {
+                chest.held.take(item, 1);
+            }
+        }
+        Some(What::Machine(_)) | Some(What::Covered { .. }) => {
+            let origin = machine_at(grid, from)?;
+            if let Some(machine) = grid.at_mut(origin) {
+                machine.made.take(item, 1);
+            }
+        }
+        _ => return None,
+    }
+    Some(item)
+}
+
+/// **Whether the tile at `into` would take this item from an inserter**, without giving it one:
+/// the question an inserter's `front_takes?` asks.
+pub fn would_take(grid: &Grid, lanes: &Lanes, rules: &Rules, data: &Data, into: usize, item: ItemId) -> bool {
+    match grid.at(into).map(|b| b.what) {
+        Some(What::Belt) => {
+            lanes.on(into).back().is_none_or(|last| last.along >= rules.spacing())
+        }
+        Some(What::Chest) => {
+            grid.at(into).is_some_and(|b| b.held.count() < rules.chest_capacity)
+        }
+        Some(What::Machine(_)) | Some(What::Covered { .. }) => {
+            machine_at(grid, into).is_some_and(|origin| wants(grid, data, origin, item))
         }
         _ => false,
     }

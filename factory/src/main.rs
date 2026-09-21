@@ -15,7 +15,8 @@
 //! | `src/grid.rs` | the tiles, what is built on them, the ore, and which way an item arrives |
 //! | `src/belts.rs` | **the rule**: one step of the whole factory, and the tests of it |
 //! | `src/items.rs` | where an item lives, and the measurement that settled it |
-//! | `src/build.rs` | the keys and the click |
+//! | `src/build.rs` | the keys, the click, and the order they write |
+//! | `src/inserters.rs` | **the one machine with a mind**: the scripts, the questions, the swing |
 //! | `src/draw.rs` | the two chunks, the sprites, and the zoom |
 //!
 //! **Where the numbers are.** Every number the factory is *played by* is a line of `ruby/data.rb`
@@ -33,9 +34,11 @@ mod build;
 mod data;
 mod draw;
 mod grid;
+mod inserters;
 mod items;
 mod machines;
 mod platform;
+mod window;
 
 use std::path::PathBuf;
 
@@ -43,7 +46,7 @@ use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunk, TilemapChunkTileData};
 use games_shell::camera::{CameraControls, CameraPlugin, CameraSet, WorldClick};
-use rubevy::{RubevyPlugin, ScriptWorld};
+use rubevy::{RubevyPlugin, RubevySet, ScriptWorld};
 
 use belts::{Lanes, OnBelt, Rules};
 use build::Hand;
@@ -77,8 +80,9 @@ pub const TILE_PX: u32 = 16;
 /// and the script put a blank on the end: 139. **F2 added four** — the assembler's, two tiles by
 /// two — and 142 is not a multiple of six, so the blank was not needed and is not there. The
 /// script decides that; nobody edits it. The check below reads the count back out of the loaded
-/// image so that it cannot stop working quietly.
-const TILESET_LAYERS: u32 = 142;
+/// image so that it cannot stop working quietly. **F3 added one** — the inserter's base — and 143
+/// is not a multiple of six either.
+const TILESET_LAYERS: u32 = 143;
 
 // ---------------------------------------------------------------------------------------------
 // The defaults, every one of which `factory.settings.txt` can move
@@ -117,20 +121,24 @@ const WINDOW: [f32; 2] = [1600.0, 900.0];
 /// `--headless` with no number, and `--shot` with no file or seconds.
 ///
 /// **The headless default is an upper bound and not a wait.** The checks wait for conditions and
-/// end the run the moment they are all answered, and they build **two** little factories one
-/// after the other:
+/// end the run the moment they are all answered; what this has to clear is the sum of the bounds
+/// they would wait to, which is what a run where something is wrong takes. Each bound is the
+/// game's own numbers times [`CHECK_SLACK`]:
 ///
-/// * F1's — a miner, three belts and a chest — `mine_seconds + 4 ÷ belt_tiles_per_second`, which
-///   is 3.0 s with what `data.rb` says today (measured: 2.3 to 2.4 s);
-/// * F2's — a belt into a furnace into a belt into a chest, and the same for an assembler —
-///   `2 ÷ belt + time ÷ speed + 1 ÷ belt`, which is 3.5 s for the furnace's.
+/// * F1's line — a miner, three belts and a chest — `mine_seconds + 4 ÷ belt`, 3.0 s, so 6;
+/// * the jam — two tiles of belt running into a machine with no arm beside it, 1.0 s, so 1
+///   (it is a condition that is true in one tile's time and the bound is barely reached);
+/// * the two machine lines — `swing (the script's first look) + one swing per thing the recipe
+///   eats + time ÷ speed + swing + 1 ÷ belt`, 5.5 s, so 11;
+/// * an arm whose script raises — a swing, so 2.
 ///
-/// Six and a half seconds of the game's own time, then, and twenty is three times it.
-const HEADLESS_SECONDS: f32 = 20.0;
+/// **Twenty seconds of the game's own time**, then, and thirty is half as much again. What a run
+/// where nothing is wrong takes is 10.5 s, measured 2026-09-21.
+const HEADLESS_SECONDS: f32 = 30.0;
 const SHOT_FILE: &str = "shot.png";
-/// `--shot` with no seconds. The picture wants the factory working, not only laid out: the two
-/// little factories above are finished by 6.5 s of the game's own time, so this is just past the
-/// second of them.
+/// `--shot` with no seconds. The picture wants the factory **working**: the two machine lines
+/// start at about 4 s of the game's own time and their first item is in the chest at 9.5 s
+/// (measured 2026-09-21), so this is in the middle of them, with arms mid-swing.
 const SHOT_SECONDS: f32 = 8.0;
 
 /// **How long the checks wait for the tileset to arrive, in frames.** They wait for the thing
@@ -140,6 +148,55 @@ const SHOT_SECONDS: f32 = 8.0;
 /// frame. Measured: the tileset was in `Assets<Image>` on **frame 3** in the container and
 /// **frame 4** in the browser, so this is a hundred times the worst of the two.
 const TILESET_WAIT_FRAMES: u32 = 400;
+
+/// **How long the checks wait for the panel and what it applied, in frames.** What is waited for
+/// happens once a frame, so the bound is in frames rather than in seconds (S7's rule), and three
+/// things are waited for in a row:
+///
+/// * the panel opening — an order is read on the frame it is written or the one after (a Bevy
+///   message is readable for two) and the panel is filled in that frame;
+/// * the button being taken — the system that does it runs after the checks, so the same frame;
+/// * **the program being in the VM** — the crew is put in step with the texts on the next frame,
+///   the new `Script` lands at the sync point after that, and rubevy loads it at the head of the
+///   frame after *that*.
+///
+/// Three frames is the longest of the three, and six is twice it.
+const PANEL_WAIT_FRAMES: u32 = 6;
+
+/// **How many instructions this game's VM may run in a frame**, and the one number here that came
+/// out of an instrument rather than out of an argument.
+///
+/// The recipe is rubevy's own (`docs/host-api.md`, "Choosing `budget` and `frame_time`") and it
+/// has three steps, none of which is a multiplier somebody liked:
+///
+/// 1. **measure the rate.** `--arms 3000`, with the scripts' first look spread as it is in play,
+///    runs **10,800 instructions in 1,102 µs** of tick at the median — about **9,800 instructions
+///    a millisecond** (2026-09-21, release, this machine; the same instrument at 1,000 arms says
+///    13,800, and the lower of the two is the one to be conservative at because it is the busier
+///    factory). The garden measured 9,300 for its rules, which is the same kind of Ruby doing the
+///    same kind of thing.
+/// 2. **decide the share of the frame.** A sixtieth of a second is 16.7 ms and this game has one
+///    VM, so a quarter of the frame is 4.2 ms of it.
+/// 3. **what that time buys**: 4 ms × 9,800 ≈ **39,000**.
+///
+/// **What it leaves for a player.** The factory's own inserters at the biggest chain the default
+/// map holds — about 340 arms (`docs/numbers.md` §9.6) — cost about 2,000 instructions in the
+/// worst frame measured, so this is twenty times what the scripts that ship use. At three
+/// thousand arms, which no map here is big enough for, the worst frame measured was 14,040 and
+/// this is still 2.8 times it.
+///
+/// **The budget is what bites and the clock is the guard**, which is the way round rubevy
+/// recommends for a game that wants its scripts to behave the same everywhere: instructions are a
+/// fact about the scripts and are the same number in a browser several times slower, where
+/// milliseconds are a fact about the machine. `frame_time` is left at rubevy's 8 ms, which at the
+/// rate above is about 78,000 instructions — twice this.
+const SCRIPT_BUDGET: f32 = 39_000.0;
+
+/// **The tick's wall-clock bound, in milliseconds.** rubevy's own default, kept rather than
+/// chosen: the measurement above says the scripts that ship use 1.1 ms of it at three thousand
+/// arms and 0.2 ms at the three hundred a map holds, so it is a guard with room and not a
+/// reservation. Zero means no guard at all, which is rubevy's rule and not this game's.
+const SCRIPT_FRAME_TIME_MS: f32 = 8.0;
 
 /// How far the checks are allowed past the time the game's own numbers say their little factory
 /// needs, before they call it stuck. Two, for a frame's granularity at each end and for a browser
@@ -221,10 +278,20 @@ struct Shot {
 #[derive(Resource, Debug)]
 struct Stress {
     items: usize,
+    /// **How many inserters to stand beside it** (F3): each one is a chest with something in it,
+    /// an arm, and an empty chest, so every one of them has work to do for as long as the stock
+    /// lasts. It is the scripts' side of the measurement, where `items` is the belts'.
+    arms: usize,
     /// Frames to watch before saying anything, and again between each saying.
     every: u32,
     seen: Vec<f32>,
     steps: Vec<f32>,
+    /// What the VM's own tick came to, frame by frame ([`ScriptWorld::last_frame`]).
+    instructions: Vec<f32>,
+    ticks: Vec<f32>,
+    woke: Vec<f32>,
+    carried: Vec<f32>,
+    dropped: u64,
     said: u32,
 }
 
@@ -278,6 +345,21 @@ fn main() {
         .or_else(|| settings.number("stress_items"))
         .unwrap_or(0.0)
         .max(0.0) as usize;
+    let arms = args
+        .value("--arms")
+        .and_then(|n| n.parse::<f32>().ok())
+        .or_else(|| games_shell::checks::asked_number("FACTORY_ARMS"))
+        .or_else(|| settings.number("stress_arms"))
+        .unwrap_or(0.0)
+        .max(0.0) as usize;
+    // **the measuring instrument's one knob that is not a size**: zero takes the spreading of
+    // the scripts' first look away, which is how the stress run shows what it is worth
+    let stagger = inserters::Stagger(
+        games_shell::checks::asked_number("FACTORY_STAGGER")
+            .or_else(|| settings.number("inserter_stagger"))
+            .unwrap_or(1.0)
+            .max(0.0),
+    );
 
     let mut app = App::new();
     match headless {
@@ -300,9 +382,10 @@ fn main() {
             .init_asset::<Image>()
             // **The click still exists here**, it is just that nobody writes one: `WorldClick`
             // is registered by `CameraPlugin`, which a run with no window does not add, and
-            // without the message the reader below would not even start. Registering it keeps
-            // one code path for the click in both modes — which is what lets the checks forge
-            // one and build a factory where there is no mouse.
+            // without the message `build::clicks` would not even start. It is registered so
+            // that there is one code path for the mouse in both modes — and since F3 the checks
+            // do not write one at all: they write the order a click turns into (`build::Order`),
+            // which is the message that carries what was meant.
             .add_message::<WorldClick>()
             .insert_resource(Headless { until: seconds })
             .add_systems(Update, stop_when_over);
@@ -341,7 +424,23 @@ fn main() {
                     ..default()
                 }),
                 RubevyPlugin::default(),
+                // **F3's half of the window and not F5's**: the panel an inserter's script is
+                // edited in, and nothing else. `crate::window` says what each of its buttons
+                // means here.
+                window::the_editor(&settings),
             ))
+            .init_resource::<window::Watched>()
+            .add_systems(
+                Update,
+                (
+                    window::follow_the_orders.before(build::orders),
+                    window::show_code,
+                    window::do_editor_actions,
+                    window::watch_the_programs,
+                )
+                    .chain()
+                    .run_if(the_factory_is_up),
+            )
             .init_resource::<items::Pool>()
             .init_resource::<draw::Animation>()
             .insert_resource(draw::SnapZoom(
@@ -381,27 +480,69 @@ fn main() {
         // at all unless it gave the game a [`Rules`] and a [`Data`]. That is the Battle's rule
         // from S5b-2 (`Match::MODEL`: no default model in Rust, nothing starts until one arrives)
         // applied to a factory: **there are no numbers of play in this binary**.
+        .init_resource::<inserters::Arms>()
+        .insert_resource(stagger)
+        .add_systems(Startup, set_the_budget)
         .add_systems(Startup, read_the_data_stage)
         .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
+        // **the inserters' half**, and every line of it is after the data stage: what an arm is
+        // written in is compiled with the item names and the swing in front of it, and both of
+        // those are `ruby/data.rb`'s
+        .add_systems(
+            Startup,
+            (inserters::read_the_scripts, inserters::install_answers).after(read_the_data_stage),
+        )
         .add_systems(
             Update,
-            (build::clicks, build::follow_the_flow)
+            inserters::keep_the_crew
+                .after(build::orders)
+                .before(FactorySet::Step)
+                .run_if(the_factory_is_up),
+        )
+        .add_systems(Update, inserters::answer_moves.in_set(RubevySet::Answer))
+        .add_systems(
+            Update,
+            (inserters::finish_swings, inserters::watch_endings)
+                .after(FactorySet::Step)
+                .run_if(the_factory_is_up),
+        )
+        // **The game's own message for "build this here"** (F3). A mouse becomes one of these and
+        // so does a check; `build::orders` is the only thing that builds, and it is ordered before
+        // the step so that a belt laid this frame carries this frame.
+        .add_message::<build::Order>()
+        .add_systems(
+            Update,
+            (build::clicks, build::orders, build::follow_the_flow)
                 .chain()
                 .before(FactorySet::Step)
                 .run_if(the_factory_is_up),
         );
+    // **The step is after the scripts have run and been answered**, and that is the whole of the
+    // order an inserter rests on: a script reads the world in `RubevySet::Tick` (its three
+    // questions are answered there, out of the world as it stands), the `move` it asked for is
+    // taken in `RubevySet::Answer` and picks the item up, and *then* the factory moves. So what a
+    // script saw is what its arm picked up, with nothing in between.
     app.add_systems(
         Update,
-        items::run_the_factory.in_set(FactorySet::Step).run_if(the_factory_is_up),
+        items::run_the_factory
+            .in_set(FactorySet::Step)
+            .after(RubevySet::Answer)
+            .run_if(the_factory_is_up),
     );
-    if stress > 0 {
+    if stress > 0 || arms > 0 {
         app.insert_resource(Stress {
             items: stress,
+            arms,
             // a second of frames at a sixtieth each, which is long enough for the numbers to
             // stop being the first frame's and short enough to see three of them in a run
             every: 60,
             seen: Vec::new(),
             steps: Vec::new(),
+            instructions: Vec::new(),
+            ticks: Vec::new(),
+            woke: Vec::new(),
+            carried: Vec::new(),
+            dropped: 0,
             said: 0,
         })
         .add_systems(
@@ -411,7 +552,10 @@ fn main() {
                 .before(lay_the_land)
                 .run_if(resource_exists::<Rules>),
         )
-        .add_systems(Startup, lay_the_snake.after(lay_the_land).run_if(the_factory_is_up))
+        .add_systems(
+            Startup,
+            (lay_the_snake, lay_the_arms).chain().after(lay_the_land).run_if(the_factory_is_up),
+        )
         .add_systems(
             Update,
             watch_the_frames.after(FactorySet::Step).run_if(the_factory_is_up),
@@ -419,17 +563,22 @@ fn main() {
     }
 
     if platform::selftest_asked() {
-        // **before the clicks, and that is not decoration.** The checks forge a `WorldClick` and
-        // set what is in hand in the same frame; `build::clicks` reads the hand *when it runs*.
-        // With no ordering between the two, a frame in which the click system ran first reads
-        // last frame's message with this frame's hand — and the check built a chest where it
-        // meant a belt. It never happened under `MinimalPlugins`, where the order was stable by
-        // accident, and it happened in the window, where Bevy's multi-threaded scheduler is free
-        // to pick. Measured 2026-09-21: two runs of `docker/run.sh factory release` apart, one
-        // clean and one with two FAILs (`worklog/2026-09-21-factory-F2.md` §8.4).
+        // **Before the orders are carried out, and the reason changed at F3.**
+        //
+        // F2 wrote `.before(build::clicks)` because the checks set what was in hand and forged a
+        // `WorldClick` in the same frame, and the system that answered a click read the hand
+        // *when it ran*: a frame in which it ran first built this frame's hand at last frame's
+        // place, and a window run built a chest where it meant a belt (`worklog/…-F2.md` §8.4a).
+        // **That hole is gone**: a check writes a `build::Order`, which carries the tile, the
+        // thing and the way round, so nothing about it depends on when anything else runs.
+        //
+        // What is left is a property of *checking* and not of building: a check gives an order
+        // on one frame and looks at what it did on the next, so it has to be on the same side of
+        // `build::orders` every frame or it looks a frame early. Hence this line, and hence it
+        // names `orders` rather than `clicks` — what a mouse does is no longer its business.
         app.init_resource::<SelfTest>().add_systems(
             Update,
-            selftest.before(build::clicks).before(FactorySet::Step).run_if(the_factory_is_up),
+            selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
         );
     }
     if let Some((path, after)) = shot {
@@ -438,9 +587,27 @@ fn main() {
     app.run();
 }
 
-/// Where `ruby/` is, for the one system that reads it.
+/// **What the scripts may spend in a frame**, said by the game rather than inherited.
+///
+/// Both numbers are settings, so a run that writes another one in `factory.settings.txt` is a run
+/// the rustdoc on [`SCRIPT_BUDGET`] is not about — which is the whole of what "measured" buys and
+/// the whole of what changing it costs. A `script_frame_time_ms` of zero or less is rubevy's
+/// "no clock at all", so it is passed through rather than refused.
+fn set_the_budget(settings: Res<games_shell::Settings>, mut world: ResMut<ScriptWorld>) {
+    world.budget = settings.number("script_budget").unwrap_or(SCRIPT_BUDGET).max(0.0) as u64;
+    let ms = settings.number("script_frame_time_ms").unwrap_or(SCRIPT_FRAME_TIME_MS);
+    world.frame_time =
+        (ms > 0.0).then(|| std::time::Duration::from_secs_f32(ms / 1000.0));
+    info!(
+        "the scripts may run {} instructions a frame, and the tick stops at {} ms",
+        world.budget,
+        ms.max(0.0)
+    );
+}
+
+/// Where `ruby/` is, for the two systems that read it.
 #[derive(Resource, Debug)]
-struct RubyDir(PathBuf);
+pub struct RubyDir(pub PathBuf);
 
 /// **The data file**, and the name its errors are reported under — in a browser the compiler calls
 /// every program `playground.rb`, and this is the name a player would recognise
@@ -574,10 +741,10 @@ fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>, data: 
         .machines
         .iter()
         .enumerate()
-        .map(|(i, m)| format!("{} {}", i + 4, m.name))
+        .map(|(i, m)| format!("{} {}", i + 5, m.name))
         .collect();
     info!(
-        "keys: 1 belt, 2 miner, 3 chest, {}, 0 take away, R turn; click to build",
+        "keys: 1 belt, 2 miner, 3 chest, 4 inserter, {}, 0 take away, R turn; click to build, and click an inserter to write its Ruby",
         machines.join(", ")
     );
     commands.insert_resource(Grid::new(map.tiles));
@@ -599,6 +766,11 @@ fn lay_the_snake(
     mut grid: ResMut<Grid>,
     mut lanes: ResMut<Lanes>,
 ) {
+    // a run that asked only for arms gets only arms: a loop of belt round them would be the
+    // belts' measurement and the scripts' measuring each other
+    if stress.items == 0 {
+        return;
+    }
     // the inside of the map, 1..=n each way, and an even number of rows so that the serpentine
     // comes back to the left-hand column rather than to the right
     let n = grid.tiles - 2;
@@ -653,6 +825,51 @@ fn lay_the_snake(
     );
 }
 
+/// **The stress run's inserters**: `arms` little shuttles, each one a stocked chest, an arm and an
+/// empty chest, laid in rows above the snake.
+///
+/// A shuttle rather than a belt because what is being measured is the **scripts**: every arm in it
+/// has something behind it and room in front of it for as long as the stock lasts, so every one of
+/// them runs the busy path of `ruby/inserter.rb` — read, decide, swing — rather than the idle one.
+/// How long that lasts is the chest's own capacity over the arm's own rate, which at what
+/// `data.rb` says today is sixty seconds, and a stress run says its piece three times in three.
+///
+/// **They are not in the snake.** An arm standing in the loop would be a hole in it, and then the
+/// belts' measurement and the scripts' would be measuring each other.
+fn lay_the_arms(stress: Res<Stress>, rules: Res<Rules>, mut grid: ResMut<Grid>) {
+    if stress.arms == 0 {
+        return;
+    }
+    // a shuttle is three tiles and a gap, and a row of them has a row's gap above it, so that
+    // nothing reaches into its neighbour
+    let across = ((grid.tiles.saturating_sub(2)) / 4).max(1);
+    let mut laid = 0usize;
+    'rows: for row in (1..grid.tiles - 1).step_by(2) {
+        for unit in 0..across {
+            if laid == stress.arms {
+                break 'rows;
+            }
+            let x = 1 + unit * 4;
+            if x + 2 >= grid.tiles {
+                break;
+            }
+            let from = grid.index(UVec2::new(x, row));
+            let arm = grid.index(UVec2::new(x + 1, row));
+            let to = grid.index(UVec2::new(x + 2, row));
+            let mut stocked = Building::new(What::Chest, Dir::East);
+            stocked.held.add(rules.digs, rules.chest_capacity);
+            grid.place(from, stocked);
+            grid.place(arm, Building::new(What::Inserter, Dir::East));
+            grid.place(to, Building::new(What::Chest, Dir::East));
+            laid += 1;
+        }
+    }
+    info!(
+        "stress: {laid} inserters asked for {}, each with {} things to move",
+        stress.arms, rules.chest_capacity
+    );
+}
+
 /// **A stress run sizes its own map**, once the data stage has said how many items fit on a tile.
 ///
 /// The loop it lays holds `items_per_tile` to a tile, so the map it needs is the square root of
@@ -667,6 +884,11 @@ fn size_the_map_for_the_stress_run(
     controls: Option<ResMut<CameraControls>>,
 ) {
     let side = (stress.items as f32 / rules.items_per_tile as f32).sqrt().ceil() as u32;
+    // **and the arms want room too** (F3): a shuttle is three tiles and a gap across and takes a
+    // row of its own with a row's gap above it, so `arms` of them fit on a square of side
+    // √(8 × arms) — four tiles by two, per arm
+    let for_arms = (stress.arms as f32 * 8.0).sqrt().ceil() as u32;
+    let side = side.max(for_arms);
     // an even number of rows, so that the serpentine comes home (`lay_the_snake`)
     let tiles = map.tiles.max(side + side % 2 + 2);
     if tiles == map.tiles {
@@ -681,33 +903,69 @@ fn size_the_map_for_the_stress_run(
 }
 
 /// The stress run's own report: the frame times and what the factory's own step took inside them.
+#[allow(clippy::too_many_arguments)]
 fn watch_the_frames(
     time: Res<Time<Real>>,
     tally: Res<Tally>,
     grid: Res<Grid>,
+    world: Res<ScriptWorld>,
+    crew: inserters::Crew,
     mut stress: ResMut<Stress>,
     mut exit: MessageWriter<AppExit>,
 ) {
     stress.seen.push(time.delta_secs() * 1000.0);
     let step = tally.last_step_us;
     stress.steps.push(step);
+    // **the VM's own frame, kept per frame rather than read off at the end** (`FrameStats` is the
+    // last tick and not a total, rubevy `docs/host-api.md`). Instructions are the number to watch:
+    // they are a fact about the scripts and are the same on a machine several times slower,
+    // where milliseconds are a fact about the machine.
+    let f = world.last_frame();
+    stress.instructions.push(f.instructions as f32);
+    stress.ticks.push(f.time_ns as f32 / 1000.0);
+    stress.woke.push((f.reflect_answers + f.in_tick_answers) as f32);
+    stress.carried.push((f.carried_reflect + f.carried_in_tick) as f32);
+    stress.dropped += f.dropped;
     if stress.seen.len() < stress.every as usize {
         return;
     }
     let frame = spread(&mut stress.seen);
     let inner = spread(&mut stress.steps);
+    let insn = spread(&mut stress.instructions);
+    let tick = spread(&mut stress.ticks);
+    let woke = spread(&mut stress.woke);
+    let carried = spread(&mut stress.carried);
     info!(
-        "stress: items={} belts={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
+        "stress: items={} belts={} arms={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
         tally.items,
         grid.built().len(),
+        crew.how_many(),
         frame.0,
         frame.1,
         1000.0 / frame.0.max(0.001),
         inner.0,
         inner.1,
     );
+    info!(
+        "stress: vm insn p50 {:.0} p95 {:.0} of {} | tick us p50 {:.0} p95 {:.0} | answers p50 {:.0} p95 {:.0} | carried p50 {:.0} p95 {:.0} | dropped {} | programs {}",
+        insn.0,
+        insn.1,
+        world.budget,
+        tick.0,
+        tick.1,
+        woke.0,
+        woke.1,
+        carried.0,
+        carried.1,
+        stress.dropped,
+        world.loaded_programs(),
+    );
     stress.seen.clear();
     stress.steps.clear();
+    stress.instructions.clear();
+    stress.ticks.clear();
+    stress.woke.clear();
+    stress.carried.clear();
     stress.said += 1;
     if stress.said >= STRESS_REPORTS && platform::CHECKS_EXIT_WHEN_DONE {
         exit.write(AppExit::Success);
@@ -774,10 +1032,11 @@ fn stop_when_over(time: Res<Time>, headless: Res<Headless>, mut exit: MessageWri
 /// shape the other two games print and `tools/fixedlines.sh` compares
 /// (`docs/verification/selftest-lines.md`).
 ///
-/// **It builds its factory with clicks**, because that is the road a player takes and the only
-/// road there is: the checks write a `WorldClick` and the same system that answers a mouse
-/// answers them. A run with no window has no mouse and this is the whole of why the message is
-/// registered there too.
+/// **It builds its factory the way a player does**, because that is the only road there is: the
+/// checks write a [`build::Order`] — the tile, the thing, the way round — and the same system
+/// that carries out a mouse's order carries out theirs. F2 forged the mouse itself (a
+/// `WorldClick` and a `Hand` in the same frame) and paid for it with an ordering line and a
+/// flaky window run; F3 moved the seam one system along, to where what was meant is written down.
 #[derive(Resource, Default)]
 struct SelfTest {
     step: u8,
@@ -793,20 +1052,72 @@ struct SelfTest {
     /// F2's two little factories: where each machine is, the belt that feeds it, the chest it
     /// fills, what it is meant to make, and what the numbers say each takes
     machines: Vec<MachineCheck>,
-    /// **What is left to build, one tile a frame.** A click is answered by a system that reads
-    /// [`Hand`] when it runs, not when the click was written, so a frame that writes five clicks
-    /// with five different things in hand builds five of the last one. F1 never noticed because
-    /// it laid one belt a frame; this is the same thing said out loud.
+    /// **What is left to build.** One tile a frame, which since F3 is a convenience and not a
+    /// rule: an order carries what was meant, so five of them in one frame build five different
+    /// things. It stays one a frame because a check that builds a tile a frame is a check whose
+    /// log says which tile went wrong.
     to_build: Vec<(UVec2, Option<What>)>,
+    /// **The arms, kept back on purpose.** The lines are built without them, watched until they
+    /// stop at the machine's edge, and only then joined up — which is the whole of F3 said as a
+    /// check.
+    arms_to_build: Vec<(UVec2, Option<What>)>,
+    /// The tiles the inserters ended up on, for the checks that are about them.
+    arms: Vec<UVec2>,
+    /// The one arm given a script that will not do (step 20), and then taken away (step 22).
+    broken: Option<usize>,
+    /// How many arms had a script before one of them was taken away — and, later, how many
+    /// programs the VM was holding before the editor applied one.
+    before: usize,
+    /// What every arm but the one in the panel was running, so that "and left the others alone"
+    /// is a comparison and not a hope.
+    others: Vec<String>,
+    /// Frames spent waiting for the panel to catch up ([`PANEL_WAIT_FRAMES`]).
+    waited: u32,
     done: bool,
 }
 
-/// One of F2's two little factories: a belt into a machine into a belt into a chest.
+/// **A script that does nothing but wait**, for the editor to apply. It compiles and runs, which
+/// is what is being measured — in a browser that means the page's own compiler was called
+/// synchronously and answered — and what it does is of no interest here.
+const AN_IDLE_SCRIPT: &str = concat!(
+    "inserter \"Idle\" do\n",
+    "  def run\n",
+    "    loop { idle }\n",
+    "  end\n",
+    "end\n",
+);
+
+/// **A script that will not do**, for the check that says one of those stops one arm and nothing
+/// else. It raises rather than failing to compile because a raise is the harder half: the program
+/// loads, the task starts, and what goes wrong goes wrong in the middle of a frame with the rest
+/// of the factory running.
+const A_BROKEN_SCRIPT: &str = concat!(
+    "inserter \"Broken\" do\n",
+    "  def run\n",
+    "    loop do\n",
+    "      nothing.at.all\n",
+    "    end\n",
+    "  end\n",
+    "end\n",
+);
+
+/// One of the two little factories: three belts, an arm, a machine, an arm, a belt and a chest.
+///
+/// **The two arms are F3's**, and the reason there are five tiles here rather than two is that a
+/// line is looked at twice — once with the machine standing next to a belt that will not feed it,
+/// and once with the arms in place.
 #[derive(Debug, Clone)]
 struct MachineCheck {
     what: String,
     makes: data::ItemId,
     made_of: String,
+    /// the machine's own tile
+    at: usize,
+    /// the belt that runs up to it, which is what jams while there is no arm
+    feed: usize,
+    /// where the arm that feeds it goes — the same tile the feeding belt is on, because the belt
+    /// is replaced by the arm
+    arm_in: usize,
     chest: usize,
     /// what the recipe and the belt say this takes, in seconds
     needs: f32,
@@ -840,9 +1151,9 @@ fn selftest(
     chunks: Query<(&TilemapChunk, &TilemapChunkTileData)>,
     images: Res<Assets<Image>>,
     mut world: ResMut<ScriptWorld>,
-    mut hand: ResMut<Hand>,
+    mut crew: inserters::Crew,
     shot: Option<Res<Shot>>,
-    mut clicks: MessageWriter<WorldClick>,
+    mut orders: MessageWriter<build::Order>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if test.done {
@@ -957,9 +1268,7 @@ fn selftest(
         3 => {
             // the middle of the map, which `Ore::laid_out` leaves bare on purpose
             let bare = UVec2::splat(map.tiles / 2);
-            hand.what = Some(What::Miner);
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, bare));
+            orders.write(build::Order { at: bare, what: Some(What::Miner), dir: Dir::East });
             test.line = vec![bare];
             test.step = 4;
         }
@@ -977,25 +1286,20 @@ fn selftest(
             // the middle of the first patch of ore, which is where `Ore::laid_out` puts one
             let pit = UVec2::splat(map.tiles / 4);
             test.line = vec![pit];
-            hand.what = Some(What::Miner);
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, pit));
+            orders.write(build::Order { at: pit, what: Some(What::Miner), dir: Dir::East });
             test.ore_before = ore.total();
             test.step = 6;
         }
         6 | 7 | 8 => {
             // three belts, one a frame, running east from the miner
             let next = UVec2::new(test.line[0].x + test.step as u32 - 5, test.line[0].y);
-            hand.what = Some(What::Belt);
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, next));
+            orders.write(build::Order { at: next, what: Some(What::Belt), dir: Dir::East });
             test.line.push(next);
             test.step += 1;
         }
         9 => {
             let chest = UVec2::new(test.line[0].x + 4, test.line[0].y);
-            hand.what = Some(What::Chest);
-            clicks.write(click_on(&map, chest));
+            orders.write(build::Order { at: chest, what: Some(What::Chest), dir: Dir::East });
             test.line.push(chest);
             // **what the game's own numbers say this takes**: one dig, then three tiles of belt
             // and the step into the chest
@@ -1055,8 +1359,7 @@ fn selftest(
         // ---- and a click takes it away again ------------------------------------------------
         13 => {
             let belt = test.line[1];
-            hand.what = None;
-            clicks.write(click_on(&map, belt));
+            orders.write(build::Order { at: belt, what: None, dir: Dir::East });
             test.step = 14;
         }
         14 => {
@@ -1073,30 +1376,69 @@ fn selftest(
         }
         // ---- F2: the data stage's tables, and what they say ---------------------------------
         15 => {
-            // the two little factories: a belt, a machine, a belt and a chest each
+            // the two little factories: two belts, a machine, a belt and a chest each — and the
+            // two arms each needs, which are built later, on purpose (step 17)
             match lay_out_the_machine_lines(&map, &data, &rules, &mut test) {
                 true => test.step = 16,
                 false => {
                     say("FAIL", "there was nowhere to build the machines the data file declares");
-                    test.step = 18;
+                    test.step = 20;
                 }
             }
         }
-        // one tile a frame, because the hand is read when the click is answered
+        // one tile a frame: five orders in one frame would build in one frame, but a check whose
+        // log says which tile went wrong is worth more than four frames
         16 if !test.to_build.is_empty() => {
             let (tile, what) = test.to_build.remove(0);
-            hand.what = what;
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, tile));
+            orders.write(build::Order { at: tile, what, dir: Dir::East });
         }
         16 => {
-            // the frame after the clicks: the buildings are there, so the feeding belts can be
+            // the frame after the orders: the buildings are there, so the feeding belts can be
             // loaded with what each machine eats
             seed_the_machine_lines(&map, &data, &rules, &grid, &mut lanes);
             test.started = time.elapsed_secs();
             test.step = 17;
         }
+        // ---- F3: with no arm beside it, a machine takes nothing ------------------------------
         17 => {
+            // **waited for as a condition and not as a length of time**: the claim is that the
+            // belt in front of the machine stops, so what is waited for is a belt whose front
+            // item has reached the end of its tile with the machine still empty. The bound is
+            // what the belt's own numbers say two tiles take.
+            let waited = time.elapsed_secs() - test.started;
+            let jammed = test
+                .machines
+                .iter()
+                .filter(|m| {
+                    lanes.on(m.feed).front().is_some_and(|on| on.along >= rules.tile())
+                        && grid.at(m.at).is_some_and(|b| b.held.is_empty() && b.made.is_empty())
+                })
+                .count();
+            let bound = 2.0 / rules.belt_tiles_per_second * CHECK_SLACK;
+            if jammed < test.machines.len() && waited < bound {
+                return;
+            }
+            say(
+                if jammed == test.machines.len() { "ok  " } else { "FAIL" },
+                &format!(
+                    "with no inserter in the gap nothing reaches the machine: {}/{} lines are jammed on the belt with the machine empty",
+                    jammed,
+                    test.machines.len()
+                ),
+            );
+            test.step = 18;
+        }
+        // and now the arms, which are what joins the line up
+        18 if !test.arms_to_build.is_empty() => {
+            let (tile, what) = test.arms_to_build.remove(0);
+            test.arms.push(tile);
+            orders.write(build::Order { at: tile, what, dir: Dir::East });
+        }
+        18 => {
+            test.started = time.elapsed_secs();
+            test.step = 19;
+        }
+        19 => {
             let waited = time.elapsed_secs() - test.started;
             let longest = test.machines.iter().map(|m| m.needs).fold(0.0f32, f32::max);
             // each one's own moment, caught on the frame it happens rather than read off at the
@@ -1125,10 +1467,243 @@ fn selftest(
                     ),
                 );
             }
-            test.step = 18;
+            // every arm the lines needed has a script, and no more than that
+            say(
+                if crew.how_many() == test.arms.len() { "ok  " } else { "FAIL" },
+                &format!(
+                    "every inserter on the map has a script of its own: {} arms, {} scripts",
+                    test.arms.len(),
+                    crew.how_many()
+                ),
+            );
+            test.step = 20;
+        }
+        // ---- F3: a script that will not do stops one arm and nothing else --------------------
+        20 => {
+            // **the first line's feeding arm**, given a script of its own that raises. It is one
+            // arm and not all of them on purpose: what is being measured is that the other line
+            // goes on working.
+            let broken = test.machines[0].arm_in;
+            crew.minds.give_to_one(broken, A_BROKEN_SCRIPT.to_string());
+            test.broken = Some(broken);
+            test.started = time.elapsed_secs();
+            test.step = 21;
+        }
+        21 => {
+            let Some(broken) = test.broken else {
+                test.step = 22;
+                return;
+            };
+            let waited = time.elapsed_secs() - test.started;
+            // it has to be started, run and raised, which is a frame or three; the bound is a
+            // swing, which is the slowest thing an arm does
+            if !crew.arms.has_stopped(broken) && waited < rules.swing_seconds * CHECK_SLACK {
+                return;
+            }
+            let at = crew.arms.stopped_at(broken).unwrap_or("nowhere").to_string();
+            say(
+                // **the place as well as the fact**: a task that has ended has no frames left to
+                // ask, so an arm that says only "stopped" is an arm whose script the player has
+                // to find the fault in by reading it (`inserters::where_it_broke`)
+                if at.starts_with(inserters::SCRIPT_FILE) && !at.ends_with('?') { "ok  " } else { "FAIL" },
+                &format!(
+                    "an inserter whose script raises stops, and the game knows where: {at} (after {waited:.1} s)"
+                ),
+            );
+            // and the game is still running: the *other* line's chest goes on filling
+            let other = test.machines.last().cloned();
+            let held = other
+                .as_ref()
+                .map(|m| grid.at(m.chest).map(|b| b.held.of(m.makes)).unwrap_or(0))
+                .unwrap_or(0);
+            let stopped = crew.arms.how_many_stopped();
+            say(
+                if stopped == 1 && held > 0 { "ok  " } else { "FAIL" },
+                &format!(
+                    "the rest of the factory is untouched: {stopped} of {} inserters stopped, and the {} line has {held} in its chest",
+                    crew.how_many(),
+                    other.map(|m| m.what).unwrap_or_default()
+                ),
+            );
+            test.step = 22;
+        }
+        // ---- F3: and an arm that is taken away leaves nothing behind -------------------------
+        22 => {
+            let Some(gone) = test.broken else {
+                test.step = 24;
+                return;
+            };
+            test.before = crew.how_many();
+            orders.write(build::Order { at: grid.tile_of(gone), what: None, dir: Dir::East });
+            test.step = 23;
+        }
+        23 => {
+            let Some(gone) = test.broken else {
+                test.step = 24;
+                return;
+            };
+            let ok = grid.at(gone).is_none()
+                && crew.at(gone).is_none()
+                && !crew.arms.has_stopped(gone)
+                && crew.how_many() + 1 == test.before;
+            say(
+                if ok { "ok  " } else { "FAIL" },
+                &format!(
+                    "an inserter taken away leaves no script behind: {} scripts where there were {}, and none of them is waiting on an arm that is gone ({})",
+                    crew.how_many(),
+                    test.before,
+                    crew.arms.how_many_waiting()
+                ),
+            );
+            test.step = 24;
+        }
+        // ---- F3: the panel, where there is one -----------------------------------------------
+        24 => {
+            // **A run with no window has no `Editor` at all**, so there is nothing here to
+            // measure and saying `ok` would be claiming a check that never ran. It is known on
+            // the first frame, so it says so at once rather than sitting out a wait.
+            // **the last arm and not the first**: the first is the one step 20 gave a broken
+            // script to and step 22 took away, and a check that drives a tile with nothing on it
+            // is a check about nothing. (It passed in a window and failed in a page, which is
+            // what a check that leans on one system running before another looks like.)
+            let arm = test.arms.last().map(|&t| grid.index(t));
+            let (Some(arm), true) = (arm, crew.panel.is_some()) else {
+                say("--  ", "the editor was not driven (this run has no window)");
+                test.step = 29;
+                return;
+            };
+            // what the rest are running, to say afterwards that they still are
+            test.others = crew
+                .standing
+                .iter()
+                .filter(|(_, i)| i.tile != arm)
+                .map(|(_, i)| crew.minds.text_for(i.tile).to_string())
+                .collect();
+            test.before = world.loaded_programs();
+            test.broken = Some(arm);
+            // **the panel is opened the way a player opens it**: an order that would build an
+            // inserter on a tile that already has one is a click on that inserter
+            // (`crate::window::follow_the_orders`), and nothing is rebuilt.
+            orders.write(build::Order {
+                at: grid.tile_of(arm),
+                what: Some(What::Inserter),
+                dir: Dir::East,
+            });
+            test.waited = 0;
+            test.step = 25;
+        }
+        25 => {
+            let Some(arm) = test.broken else {
+                test.step = 29;
+                return;
+            };
+            // **waited for and not assumed.** The order is read by the system that opens the
+            // panel on the frame it is written or the one after — a Bevy message is readable for
+            // two frames — and the panel is filled in that same frame, so two frames is the
+            // answer and [`PANEL_WAIT_FRAMES`] is the bound with room.
+            let opened = crew.panel.as_ref().and_then(|p| p.key) == Some(arm as u64);
+            test.waited += 1;
+            if !opened && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if opened { "ok  " } else { "FAIL" },
+                "clicking an inserter with an inserter in hand opens its script rather than building over it",
+            );
+            if let Some(panel) = crew.panel.as_mut() {
+                panel.text = AN_IDLE_SCRIPT.to_string();
+                panel.action = Some(rubevy_egui::EditorAction::Apply);
+            }
+            test.waited = 0;
+            test.step = 26;
+        }
+        26 => {
+            let Some(arm) = test.broken else {
+                test.step = 29;
+                return;
+            };
+            // the action is taken on the frame it is set, by a system after this one, and the
+            // program is compiled there — **in a browser that is the page's own compiler, called
+            // synchronously**, which is the half of this check only a page can fail
+            let mine = crew.minds.text_for(arm) == AN_IDLE_SCRIPT;
+            let others: Vec<String> = crew
+                .standing
+                .iter()
+                .filter(|(_, i)| i.tile != arm)
+                .map(|(_, i)| crew.minds.text_for(i.tile).to_string())
+                .collect();
+            let grew = world.loaded_programs();
+            // **what is waited for is the whole of what is said**, and the dearest part of it is
+            // the VM holding one more program, which is three frames after the button
+            test.waited += 1;
+            let ready = mine && others == test.others && grew > test.before;
+            if !ready && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if mine && crew.minds.is_its_own(arm) && others == test.others && grew > test.before {
+                    "ok  "
+                } else {
+                    "FAIL"
+                },
+                &format!(
+                    "the editor applied a script to one inserter and left the other {} alone ({} programs in the VM, was {})",
+                    others.len(),
+                    grew,
+                    test.before
+                ),
+            );
+            test.before = grew;
+            if let Some(panel) = crew.panel.as_mut() {
+                panel.action = Some(rubevy_egui::EditorAction::ApplyAll);
+            }
+            test.step = 27;
+        }
+        27 => {
+            let all =
+                crew.standing.iter().all(|(_, i)| crew.minds.text_for(i.tile) == AN_IDLE_SCRIPT);
+            test.waited += 1;
+            if !all && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            // **the same text is the same program**: applying it to every arm loads nothing new,
+            // which is what "one program, one irep" means where it is spent (rubevy)
+            let grew = world.loaded_programs();
+            say(
+                if all && grew == test.before { "ok  " } else { "FAIL" },
+                &format!(
+                    "Apply to every inserter reached all {} of them and loaded no new program ({} in the VM)",
+                    crew.how_many(),
+                    grew
+                ),
+            );
+            if let Some(panel) = crew.panel.as_mut() {
+                panel.action = Some(rubevy_egui::EditorAction::Revert);
+            }
+            test.step = 28;
+        }
+        28 => {
+            let file = crew.minds.file().to_string();
+            let back = crew.standing.iter().all(|(_, i)| crew.minds.text_for(i.tile) == file);
+            test.waited += 1;
+            if !back && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if back { "ok  " } else { "FAIL" },
+                &format!(
+                    "Revert put all {} of them back on {}",
+                    crew.how_many(),
+                    inserters::SCRIPT_FILE
+                ),
+            );
+            test.step = 29;
         }
         // ---- a data file that is wrong says which line it is wrong on ------------------------
-        18 => {
+        29 => {
             // **The same door the real file went through**, on the game's own VM, in whatever
             // build this is — which is the whole point: a browser's compiler names every program
             // `playground.rb` and this proves that what a player is told is still `data.rb:4`.
@@ -1156,10 +1731,10 @@ fn selftest(
                     "a wrong {DATA_FILE} is refused with the line it is wrong on ({right}/{all})"
                 ),
             );
-            test.step = 19;
+            test.step = 30;
         }
         // ---- and the tables can be read back from Ruby ----------------------------------------
-        19 => {
+        30 => {
             let asked = read_the_tables_back(&mut world.vm, &data);
             say(
                 if asked.is_some() { "ok  " } else { "FAIL" },
@@ -1168,7 +1743,7 @@ fn selftest(
                     asked.unwrap_or_else(|| "it could not".into())
                 ),
             );
-            test.step = 20;
+            test.step = 31;
         }
         _ => {
             test.done = true;
@@ -1185,11 +1760,6 @@ fn selftest(
     }
 }
 
-/// A click in the middle of a tile, as the camera would have written it.
-fn click_on(map: &Map, tile: UVec2) -> WorldClick {
-    WorldClick { at: map.tile_centre(tile), button: MouseButton::Left, cursor: Vec2::ZERO }
-}
-
 /// **F2's two little factories, built with clicks**: for each machine the data file declares, a
 /// belt, the machine, a belt and a chest, in a row.
 ///
@@ -1204,6 +1774,7 @@ fn lay_out_the_machine_lines(
 ) -> bool {
     test.machines.clear();
     test.to_build.clear();
+    test.arms_to_build.clear();
     let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
     let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
     // a row per machine, `tall` apart so that a machine's footprint never reaches the next row,
@@ -1216,34 +1787,54 @@ fn lay_out_the_machine_lines(
         let Some(&recipe) = machine.recipes.first() else { continue };
         let recipe = &data.recipes[recipe as usize];
         let Some(&(makes, _)) = recipe.outputs.first() else { continue };
-        let out = left + 2 + machine.size.x;
-        if row + tall >= map.tiles || out + 1 >= map.tiles {
+        // belt, belt, [arm], machine, [arm], belt, chest — with the two arms' tiles left empty
+        // to begin with, which is where a player leaves them too
+        let at = left + 3;
+        let out = at + machine.size.x;
+        if row + tall >= map.tiles || out + 2 >= map.tiles {
             return false;
         }
         for (x, what) in [
             (left, Some(What::Belt)),
             (left + 1, Some(What::Belt)),
-            (left + 2, Some(What::Machine(kind as data::MachineId))),
-            (out, Some(What::Belt)),
-            (out + 1, Some(What::Chest)),
+            (at, Some(What::Machine(kind as data::MachineId))),
+            (out + 1, Some(What::Belt)),
+            (out + 2, Some(What::Chest)),
         ] {
             test.to_build.push((UVec2::new(x, row), what));
+        }
+        // and the two arms, built after the line has been watched stopping without them. They go
+        // in the gaps, so nothing that was already on a belt is taken away with the tile it was
+        // on — which is what building over one does, and would have made this check a check of
+        // itself.
+        for x in [left + 2, out] {
+            test.arms_to_build.push((UVec2::new(x, row), Some(What::Inserter)));
         }
         let made_of: Vec<String> = recipe
             .inputs
             .iter()
             .map(|&(item, n)| format!("{n} {}", data.item_name(item)))
             .collect();
-        // **what the game's own numbers say this takes**: two tiles of belt to reach it, one
-        // craft at the machine's own speed, and one tile of belt out of it into the chest
-        let needs = 2.0 / rules.belt_tiles_per_second
+        // **what the game's own numbers say this takes**, from the moment the arms are there.
+        // Four things, and the first of them is the one F3 added: a script waits a part of a
+        // swing before its first look, so that a thousand of them do not wake on one frame
+        // (`ruby/prelude.rb`), and the most that can be is a whole swing. Then one swing per
+        // thing the recipe eats — an arm carries one at a time — then the craft at the machine's
+        // own speed, then a swing out and a tile of belt into the chest.
+        let eats: u32 = recipe.inputs.iter().map(|&(_, n)| n).sum();
+        let needs = rules.swing_seconds
+            + eats as f32 * rules.swing_seconds
             + recipe.time / machine.speed
+            + rules.swing_seconds
             + 1.0 / rules.belt_tiles_per_second;
         test.machines.push(MachineCheck {
             what: machine.name.clone(),
             makes,
             made_of: made_of.join(" and "),
-            chest: (row * map.tiles + out + 1) as usize,
+            at: (row * map.tiles + at) as usize,
+            feed: (row * map.tiles + left + 1) as usize,
+            arm_in: (row * map.tiles + left + 2) as usize,
+            chest: (row * map.tiles + out + 2) as usize,
             needs,
             done_at: None,
         });
@@ -1287,15 +1878,16 @@ fn seed_the_machine_lines(
 /// serde refusing a field, serde refusing a number, a reference between two declarations, and the
 /// compiler refusing to parse it at all.
 fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
-    // 1 item, 2 machine, 3 recipe, 4 belt, 5 miner, 6 chest
+    // 1 item, 2 machine, 3 recipe, 4 belt, 5 miner, 6 chest, 7 ore, 8 inserter
     let good = concat!(
         "item :rock, icon: 0\n",
         "machine :oven, size: [1, 1], sprite: [109], speed: 1.0\n",
         "recipe :rock, in: {}, out: { rock: 1 }, time: 1.0, made_in: :oven\n",
         "belt :line, tiles_per_second: 1.0, items_per_tile: 1\n",
-        "miner :drill, seconds_per_item: 1.0, digs: :rock\n",
+        "miner :drill, seconds_per_item: 1.0\n",
         "chest :box, capacity: 1\n",
-        "ore :patch, per_tile: 1\n",
+        "ore :rock, per_tile: 1\n",
+        "inserter :arm, seconds_per_item: 1.0\n",
     );
     vec![
         (good.replace("item :rock, icon: 0", "item :rock, icon: 0, colour: :grey"), 1, "an unknown field"),
@@ -1305,11 +1897,14 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         (good.replace("tiles_per_second: 1.0", "tiles_per_second: -1.0"), 4, "a belt that runs backwards"),
         // F2a's: a gap that is not a whole number of steps (`crate::data::fits_a_tile`)
         (good.replace("items_per_tile: 1", "items_per_tile: 3"), 4, "a gap that does not divide a tile"),
+        // F3's: the ground named after an item nothing declares — the one reference the `ore`
+        // word has, and the only check left that needs two declarations to be wrong
+        (good.replace("ore :rock,", "ore :coal,"), 7, "ground nothing declares"),
         // **last, and on purpose**: a half-written line is reported where the parser gives up,
         // which is the *next* token — so `icon:` on line 1 of a file with six more lines is
         // reported at line 2. At the end of the file the next token is the end of the file, and
         // the line is the line. That is the compiler's reading and not something to work around.
-        (format!("{good}item :half, icon:\n"), 8, "Ruby that will not parse"),
+        (format!("{good}item :half, icon:\n"), 9, "Ruby that will not parse"),
     ]
 }
 

@@ -1,15 +1,31 @@
-//! **Building and unbuilding**: the keys that choose what is in hand and the click that puts it
-//! down.
+//! **Building and unbuilding**: the keys that choose what is in hand, the click that puts it down,
+//! and — since F3 — the **order** the two of them write.
 //!
 //! F1 has no window furniture at all — the editor, the HUD and the guide are F5 — so what is in
-//! hand is said in the log and in `docs/factory.md`, and the checks forge the clicks rather than
+//! hand is said in the log and in `docs/factory.md`, and the checks forge the orders rather than
 //! press anything. The one rule that is not "put it where the mouse was" is that **a miner has to
 //! stand on ore**, which is what makes a patch worth finding.
 //!
-//! **F2's machines are the keys after the three fittings**, `4` onwards, in the order `data.rb`
-//! declares them: the three built-in things keep the numbers they have had since F1, and what a
-//! data file adds is added after. Ten fingers is what stops it, which is why a file with more
-//! machines than that says so in the log rather than quietly leaving some unreachable.
+//! # Why there is an [`Order`] between the click and the building
+//!
+//! There are two halves and F1 and F2 had them as one system. [`clicks`] turns a mouse — a
+//! [`WorldClick`], which is the shared crate's and carries a point in the world and nothing else
+//! — together with what is in [`Hand`] into an order: **a tile, a thing, and a way round**.
+//! [`orders`] is the only thing that builds, and it knows nothing about a mouse or a hand.
+//!
+//! **What that is worth is that the order carries what was meant.** With one system, what got
+//! built was `Hand` *as it stood when that system ran*, not as it stood when the click was made,
+//! and the two are different things the moment anything writes both in one frame. F2's checks did,
+//! and a window run built a chest where it meant a belt — an hour after the same binary had run
+//! clean, because Bevy's multi-threaded scheduler is free to order two systems that have not said
+//! (`worklog/2026-09-21-factory-F2.md` §8.4a). F2 fixed that run by writing one ordering line;
+//! what is here fixes the shape, which is what the plan asked for (§7, 09-21 F2): **the checks
+//! write an order, and so does the editor, and so would a blueprint.**
+//!
+//! One ordering line is still wanted and its reason is a different one, written where it is said
+//! (`crate::main`'s `selftest`): a check that gives an order and then looks at what it did has to
+//! be on the same side of [`orders`] in every frame, or it looks a frame too early. That is a
+//! property of *checking*, not of building, and nothing a player does is affected by it.
 
 use bevy::prelude::*;
 use games_shell::camera::WorldClick;
@@ -18,6 +34,24 @@ use crate::belts::Lanes;
 use crate::data::Data;
 use crate::grid::{Building, Dir, Flow, Grid, Ore, What};
 use crate::Map;
+
+/// **Build this here, facing this way** — or, where `what` is `None`, take away whatever is there.
+///
+/// It is the game's own message and not [`WorldClick`], which is the shared crate's and cannot
+/// carry a tile or a building: this crate's vocabulary has no business in a camera. Everything
+/// that puts something on the map writes one of these — the mouse ([`clicks`]), the checks, and
+/// whatever F5's editor and a later blueprint want.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct Order {
+    /// Which tile, which is already the answer to "where" — a point in the world is the click's
+    /// business and is turned into this before the order is written.
+    pub at: UVec2,
+    /// What to put there. `None` is the wrecking ball.
+    pub what: Option<What>,
+    /// Which way round. A thing with no direction keeps it anyway, so that turning one is not a
+    /// special case ([`Building::dir`]).
+    pub dir: Dir,
+}
 
 /// What a click will put down, and which way round.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -35,31 +69,44 @@ impl Default for Hand {
 
 impl Hand {
     pub fn word(&self, data: &Data) -> String {
-        match self.what {
-            Some(What::Machine(kind)) => data
-                .machines
-                .get(kind as usize)
-                .map(|m| m.name.clone())
-                .unwrap_or_else(|| "a machine".into()),
-            Some(what) => what.word().to_string(),
-            None => "the wrecking ball".into(),
-        }
+        word_for(self.what, data)
     }
 }
 
-/// **What each digit puts in hand**, worked out from the data file: `1` `2` `3` are the belt, the
-/// miner and the chest, and the machines follow in the order they were declared.
+/// **What to call a thing in a sentence.** A machine is called whatever `data.rb` called it, which
+/// is the only name a player has for one; the three fittings have words of their own; nothing in
+/// hand is the wrecking ball.
 ///
-/// `0` is the wrecking ball, which is why the machines start at 4 and not at 3, and why there is
-/// room for six of them.
+/// It is a function over [`What`] rather than a method on [`Hand`] because [`orders`] says these
+/// sentences and has no hand — the order carries what was meant (see the module's note).
+pub fn word_for(what: Option<What>, data: &Data) -> String {
+    match what {
+        Some(What::Machine(kind)) => data
+            .machines
+            .get(kind as usize)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "a machine".into()),
+        Some(what) => what.word().to_string(),
+        None => "the wrecking ball".into(),
+    }
+}
+
+/// **What each digit puts in hand**, worked out from the data file: `1` `2` `3` `4` are the belt,
+/// the miner, the chest and the inserter, and the machines follow in the order they were declared.
+///
+/// `0` is the wrecking ball, which is why the machines start at 5 and not at 4, and why there is
+/// room for five of them.
 pub fn what_the_digits_hold(data: &Data) -> Vec<(KeyCode, Option<What>)> {
     let mut keys = vec![
         (KeyCode::Digit1, Some(What::Belt)),
         (KeyCode::Digit2, Some(What::Miner)),
         (KeyCode::Digit3, Some(What::Chest)),
+        // **F3's, and it is fourth rather than last** because it is the thing this game is about:
+        // the four world's fittings a player can put down, and then whatever `data.rb` declares
+        (KeyCode::Digit4, Some(What::Inserter)),
         (KeyCode::Digit0, None),
     ];
-    let digits = [KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
+    let digits = [KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
     for (i, digit) in digits.into_iter().enumerate() {
         match data.machines.get(i) {
             Some(_) => keys.push((digit, Some(What::Machine(i as crate::data::MachineId)))),
@@ -97,29 +144,49 @@ pub fn choose(
     }
 }
 
-/// **The click.** One tile, one building — or one machine's worth of tiles, or one tile emptied.
+/// **The mouse, as an order**: the tile the click was in, and what was in hand at the moment the
+/// click is read. Nothing is built here.
 ///
-/// The items on a belt that is taken away go with it. They have to: a lane belongs to its tile,
-/// and leaving them there would mean a tile with no belt on it carrying things.
+/// A click off the map is said and dropped — there is no tile to name in an order, and the
+/// sentence is the useful half of it.
 pub fn clicks(
     mut clicked: MessageReader<WorldClick>,
     map: Res<Map>,
     hand: Res<Hand>,
-    ore: Res<Ore>,
-    data: Res<Data>,
-    mut grid: ResMut<Grid>,
-    mut lanes: ResMut<Lanes>,
+    mut orders: MessageWriter<Order>,
 ) {
     for click in clicked.read() {
         if click.button != MouseButton::Left {
             continue;
         }
-        let Some(tile) = map.tile_at(click.at) else {
-            info!("clicked {:.1}, {:.1} — off the map", click.at.x, click.at.y);
+        match map.tile_at(click.at) {
+            Some(tile) => {
+                orders.write(Order { at: tile, what: hand.what, dir: hand.dir });
+            }
+            None => info!("clicked {:.1}, {:.1} — off the map", click.at.x, click.at.y),
+        }
+    }
+}
+
+/// **The orders, carried out.** One tile, one building — or one machine's worth of tiles, or one
+/// tile emptied.
+///
+/// The items on a belt that is taken away go with it. They have to: a lane belongs to its tile,
+/// and leaving them there would mean a tile with no belt on it carrying things.
+pub fn orders(
+    mut asked: MessageReader<Order>,
+    ore: Res<Ore>,
+    data: Res<Data>,
+    mut grid: ResMut<Grid>,
+    mut lanes: ResMut<Lanes>,
+) {
+    for &Order { at: tile, what, dir } in asked.read() {
+        if tile.x >= grid.tiles || tile.y >= grid.tiles {
+            info!("nowhere to build at {}, {}: that is off the map", tile.x, tile.y);
             continue;
-        };
+        }
         let at = grid.index(tile);
-        match hand.what {
+        match what {
             None => match take_away(&mut grid, &mut lanes, at) {
                 Some(gone) => info!("took away the {} at {}, {}", gone, tile.x, tile.y),
                 None => info!("nothing at {}, {} to take away", tile.x, tile.y),
@@ -129,18 +196,26 @@ pub fn clicks(
             Some(What::Miner) if ore.left[at] == 0 => {
                 info!("no ore at {}, {}: a miner needs some", tile.x, tile.y);
             }
+            // **an inserter on an inserter is not a building order, it is a click on that arm.**
+            // There is no mode to switch into and no key to learn: a click on a tile that already
+            // has one cannot have meant "build one", so it means "show me this one", which is
+            // what `crate::window::follow_the_orders` reads the same message for. It also keeps a
+            // second click from resetting an arm that is in the middle of a swing.
+            Some(What::Inserter) if grid.at(at).map(|b| b.what) == Some(What::Inserter) => {
+                info!("the inserter at {}, {} is already there", tile.x, tile.y);
+            }
             Some(What::Machine(kind)) => {
-                match build_a_machine(&mut grid, &mut lanes, &data, kind, tile, hand.dir) {
+                match build_a_machine(&mut grid, &mut lanes, &data, kind, tile, dir) {
                     true => info!(
                         "built a {} at {}, {} facing {}",
-                        hand.word(&data),
+                        word_for(what, &data),
                         tile.x,
                         tile.y,
-                        hand.dir.word()
+                        dir.word()
                     ),
                     false => info!(
                         "a {} does not fit at {}, {}: it would go off the map",
-                        hand.word(&data),
+                        word_for(what, &data),
                         tile.x,
                         tile.y
                     ),
@@ -148,11 +223,11 @@ pub fn clicks(
             }
             // a covered tile is not something a player can put down; only a machine makes one
             Some(What::Covered { .. }) => {}
-            Some(what) => {
+            Some(one) => {
                 take_away(&mut grid, &mut lanes, at);
                 lanes.of[at].clear();
-                grid.place(at, Building::new(what, hand.dir));
-                info!("built a {} at {}, {} facing {}", what.word(), tile.x, tile.y, hand.dir.word());
+                grid.place(at, Building::new(one, dir));
+                info!("built a {} at {}, {} facing {}", one.word(), tile.x, tile.y, dir.word());
             }
         }
     }
