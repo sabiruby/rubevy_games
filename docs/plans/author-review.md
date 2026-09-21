@@ -5,7 +5,9 @@
 覆したいものは、その行の「変えるなら」を見れば場所が分かる。理由の全文は各段階の worklog と、計画書 7 章（`factory-plan.md`・`shared-crate-plan.md`）にある。
 sabiruby・rubevy・playground の件もここに集める（3 つの repo に散らさない）。
 
-**ここに足さずに、その場で聞くもの**: crates.io への公開と版上げ、VM 本体（sabiruby）の unsafe、公開中のページを壊しうる変更。
+**2026-09-22 の著者の追加の決定**: 「公開とバージョンアップもしてよい。VM 本体の unsafe は禁止。公開中のページの内容は今は開発中なので変えてもよい」。
+だから **crates.io への公開と版上げも本体がやり、やったことを下の C に記録する**。**VM 本体（sabiruby）の unsafe は聞くものではなく禁止**（選択肢としても進めない）。
+公開中のページ（箱庭・Battle・Playground）は開発中なので内容が変わってよい。取り返しのつかない操作（`cargo publish` は yank しかできない）は、先例の手順書どおりに dry-run を通してから打つ。
 
 ## A. 本体が決めて進めたもの（覆せる）
 
@@ -35,8 +37,13 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 
 | 件 | 材料 | 場所 |
 |---|---|---|
-| **版上げと crates.io への公開**: sabiruby は次 0.6.0（`current_line` を消したので破壊的）、`sabiruby-serde` 0.2.0、rubevy は `Held`・`ScriptEnded::at` の後 | 0.6.0 にするとき版の要求を直す 6 か所と順番（rubevy → games） | sabiruby `docs/worklog/2026-09-21-serde-lines.md` §7.6 |
 | **factory の地図の既定の大きさ**（今 32×32 = F0 の仮の値） | スクリプトの上限は縛らない（3,000 台で tick p95 2.2 ms）。残る不明は描画で、この機械はソフトウェア描画しか無い。著者の実機のブラウザで `?stress` を 1 度 | `docs/numbers.md` §9.6 |
 | `implementer.md` に足す確認の作法（条件で待つのはフレームでも同じ／交互だけでなく向きも入れ替える／版が名乗る行を見る／`main()` の `warn!` は出ない） | S11 の担当が文面の案を出す | `docs/worklog/2026-09-22-s11.md` |
 | Battle に機体数の上限がどこにも無い（予算 114,000 は担当が輪の幾何から導いた 36 台で測った） | 上限をゲームが言うか、言わないままにするか | `docs/worklog/2026-09-21-s10.md` §4 |
 | 本（book）の findings に写す素材: f32 の詰まりの個数、飽和演算の値段、別々の理由の待ちを 1 つの数で賄う、版を名乗る行、`#[expect(deprecated)]` | — | 各 worklog の「気づいた点」 |
+
+## C. 公開と版上げの記録（本体がやったもの）
+
+| 日付 | 何を | 版 | 記録 |
+|---|---|---|---|
+| 09-22 | sabiruby 0.6.0 の準備を開始（worktree `sabiruby-wt-release-0.6`。`Vm::current_line` を消した = 破壊的、`sabiruby-serde` は `#[non_exhaustive]` で 0.2.0）。publish とタグは dry-run が通ってから本体が打つ | 準備中 | sabiruby `docs/worklog/2026-09-22-release-0.6.md` |
