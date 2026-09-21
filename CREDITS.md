@@ -36,7 +36,7 @@ the licence text beside it, because that is the file that redistributes the art.
 |---|---|
 | 0, 1, 2 | the factory floor plates |
 | 3 | the plain ground, which F0 lays as a border |
-| 110 | the drilling rig, which F1 places as **the miner** |
+| 110 | a machine front of orange blocks between grey posts, which F1 places as **the miner** (the pack names none of its tiles) |
 | 85 | a wooden crate, which F1 places as **the chest** |
 | the rest | in the sheet, not used yet: the machines, the pipes and the gear that later stages will place. `docs/factory.md` has the numbered table |
 

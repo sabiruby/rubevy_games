@@ -154,6 +154,7 @@ it was wrong is marked.
 | 99 100 101 | in green |
 | 111 112 113 | in blue |
 | 73, 85, 97 | wooden **crates**, three sizes |
+| 108, 109, 110 | three more machine fronts — grey, brown, and one of **orange blocks between grey posts on pale feet**. The pack names none of its tiles (`art/Tilesheet-tiny-factory.txt` is sizes and counts only), so what 110 is meant to be is a guess; F1 uses it as the **miner** because it is the one that reads as apparatus rather than as a cabinet |
 | 114 | a **gear** |
 | 6, 74, 86, 90, 91 | a bench, two tanks, and an orange head on a stand |
 | 132, 133 | a conveyor **straight**, seen from above, frames A and B (`tools/factory-belts.py`) |
@@ -161,8 +162,7 @@ it was wrong is marked.
 | 136, 137 | **ore in the ground**: plenty left, and nearly gone (`tools/factory-ore.py`) |
 | 138 | blank — the padding tile the paragraph above is about |
 
-Of Kenney's own, F1 places **110** (the drilling rig) as the miner and **85** (a wooden crate) as
-the chest. The pack's conveyor tiles (24–27, 4/16/28 and the railed ones) are in the sheet and
+Of Kenney's own, F1 places **110** as the miner and **85** (a wooden crate) as the chest. The pack's conveyor tiles (24–27, 4/16/28 and the railed ones) are in the sheet and
 **not used**: they are three-quarter pictures and the belts are drawn from above.
 
 **What the pack does not have**, and what `tools/factory-belts.py` is for. The survey said the
@@ -223,6 +223,17 @@ of the six are set against each other rather than picked — a full belt carries
 four of them fill one belt, a chest is a minute of one miner, a tile of ore is one chestful — and
 the one with no reason behind it, the belt's speed, says so in `numbers.md` rather than being
 given a plausible one.
+
+**A setting that is not more than zero is refused**, said in the log, and the default stands. A
+belt speed of zero is not a slow belt and a gap of zero is not a crowded tile; both are a
+division. That is where the check lives rather than inside the arithmetic, because a floor inside
+the arithmetic (`1 / items_per_tile.max(0.001)`) is a number with nowhere to have come from.
+
+**And a gap is only as exact as `f32` is.** "A jammed tile holds one more than `items_per_tile`"
+is true of the default, and of everything whose gap divides a tile exactly — but at
+`items_per_tile = 3` a jammed tile holds three, not four, because three gaps of `f32(1/3)` are a
+hair longer than a tile. Nothing is lost and no two items are ever closer than a gap; the tile
+just buffers one less. The test at the bottom of `src/belts.rs` runs seven values and says which.
 
 **Two numbers are not settings**, because moving them does not draw the same picture differently
 — it draws a wrong one, or none: the pack's 16 px, and how many tiles the sheet has. Nor are the

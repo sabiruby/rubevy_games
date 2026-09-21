@@ -384,7 +384,8 @@ selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N
 The tileset line checks the **number** of layers as well as their size, because a count that is a
 multiple of six is what a browser draws a black page over (`docs/factory.md`). It is not a check
 that anything was *drawn* — nothing in a log can be — and the evidence for that is a screenshot
-with its pixels counted, in `worklog/2026-09-21-factory-F1.md`.
+with its pixels counted, in `worklog/2026-09-21-factory-F0.md` for the floor and
+`worklog/2026-09-21-factory-F1.md` §5.4 for the factory built on it.
 
 ## Factory, a browser — 9 lines
 
