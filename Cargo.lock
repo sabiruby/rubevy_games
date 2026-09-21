@@ -2393,6 +2393,7 @@ dependencies = [
  "sabiruby",
  "sabiruby-serde",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

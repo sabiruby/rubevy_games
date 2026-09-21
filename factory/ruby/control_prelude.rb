@@ -138,6 +138,8 @@ class Control
       item = items[payload[0].to_i]
       next if item.nil? || !wanted.key?(item)
       @got[item] += payload[1].to_i
+      # where the last thing the goal counted went, so that `win!` can point the camera at it
+      @where = [payload[2].to_i, payload[3].to_i]
       say_where_it_is
       done = true
       wanted.each { |name, upto| done = false if @got[name].to_i < upto }
@@ -153,6 +155,11 @@ class Control
     @won = true
     say_where_it_is
     log "the goal is reached"
+    # **Ruby moving the camera.** `look_at` is rubevy's optional `Rubevy::Camera` layer and
+    # nothing the game answers; `@where` is the tile the last delivery the goal counted went
+    # into, so winning leaves you looking at the chest you won in. A run with no window has no
+    # camera and this does nothing.
+    look_at(@where[0], @where[1]) if @where
   end
 
   def won?
@@ -200,6 +207,29 @@ class Control
 
   def log(text)
     Rubevy.log "control.rb: #{text}"
+  end
+
+  # === looking at the factory ==================================================
+
+  # **Where a tile is in the world**, as `[x, y]`. The map is centred on the origin and a tile is
+  # `tile_px` across, both of which the game writes in front of this file out of `data.rb`.
+  def world_of(column, row)
+    across, up = self.class.map_size
+    px = self.class.tile_px.to_f
+    [column * px + px / 2 - across * px / 2, row * px + px / 2 - up * px / 2]
+  end
+
+  # **Point the camera at a tile.** `Rubevy::Camera` is rubevy's optional layer (the game loads it
+  # with `ScriptWorld::load_and_run`), so this is ordinary Ruby over `e[:Transform] =` and not
+  # something the game answers — and a run with no window has no camera at all, where it is nil
+  # and this does nothing.
+  #
+  # It is here rather than in `control.rb` so that a rewritten control stage still has the word.
+  def look_at(column, row)
+    camera = Rubevy::Camera.find
+    return nil if camera.nil?
+    at = world_of(column, row)
+    camera.move_to(at[0], at[1])
   end
 
 end

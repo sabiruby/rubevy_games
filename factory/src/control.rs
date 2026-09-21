@@ -230,12 +230,20 @@ pub struct TheControl {
     pub dropped: u64,
     /// So that the log says the win once rather than every frame.
     said_won: bool,
+    /// **Whether what is running came out of the panel rather than out of the file** (F5). The
+    /// editor draws the same mark it draws for an arm; Save is what clears it.
+    pub in_memory: bool,
 }
 
 impl TheControl {
     /// `ruby/control.rb`, or whatever has been applied over it — for the editor and the save.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// How far down the program the player's first line is, for the VM panel.
+    pub fn prelude_lines(&self) -> u32 {
+        self.prelude_lines
     }
 }
 
@@ -298,6 +306,7 @@ pub fn read_the_control_stage(
         seen: [0; EVENTS.len()],
         dropped: 0,
         said_won: false,
+        in_memory: false,
     };
     if control.trouble.is_none() {
         match compile(&control.prelude, &data, &rules, &control.text, &mut mrb) {
@@ -383,7 +392,7 @@ const WRAPPER_LINES: u32 = 1;
 /// They are methods on the class rather than constants for the same reason the inserters' are: a
 /// program is compiled again every time a text changes, and a constant written twice is a warning
 /// nobody asked for. A name is quoted so that a data file may call a thing whatever it likes.
-fn names_and_numbers(data: &Data, _rules: &Rules) -> String {
+fn names_and_numbers(data: &Data, rules: &Rules) -> String {
     let quoted = |name: &str| format!(":\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
     let items: Vec<String> = data.items.iter().map(|i| quoted(&i.name)).collect();
     let buildings: Vec<String> = FITTINGS
@@ -400,9 +409,18 @@ fn names_and_numbers(data: &Data, _rules: &Rules) -> String {
          \x20 def self.declared_buildings\n\
          \x20   [{}]\n\
          \x20 end\n\
+         \x20 def self.map_size\n\
+         \x20   [{}, {}]\n\
+         \x20 end\n\
+         \x20 def self.tile_px\n\
+         \x20   {}\n\
+         \x20 end\n\
          end\n",
         items.join(", "),
         buildings.join(", "),
+        rules.map_tiles.x,
+        rules.map_tiles.y,
+        crate::TILE_PX,
     )
 }
 
@@ -551,33 +569,15 @@ pub fn watch_the_control_ending(
 }
 
 // ---------------------------------------------------------------------------------------------
-// The line on the screen
+// What it says
 // ---------------------------------------------------------------------------------------------
 
-/// The one line of text a window shows while F5 has no HUD in it yet: what the goal is, how much
-/// of what the game published the script has heard, and **what was dropped**.
-#[derive(Component)]
-pub struct ControlLine;
-
-/// `Startup`, in a run with a window: the text node, empty until there is something to say.
-pub fn put_the_line_on_the_screen(mut commands: Commands) {
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            left: Val::Px(8.0),
-            ..default()
-        },
-        children![(
-            ControlLine,
-            Text::new(""),
-            TextFont { font_size: 16.0.into(), ..default() },
-            TextColor(Color::srgb(0.95, 0.9, 0.75)),
-        )],
-    ));
-}
-
-/// What that line says, worked out from what the script said and what the VM counted.
+/// **What the control stage has to say**, worked out from what the script said and what the VM
+/// counted — one string, whoever is showing it.
+///
+/// F4 put it on a `Text` node of its own in the top left. F5's HUD is egui and has this line in
+/// it ([`crate::window::draw_hud`]), so the node and the two systems that kept it are gone and
+/// this is what is left: the sentence, with nothing about where it is drawn.
 pub fn what_it_says(control: &TheControl, dropped_in_the_vm: u64) -> String {
     let mut lines: Vec<String> = Vec::new();
     match (&control.trouble, &control.saying) {
@@ -595,19 +595,6 @@ pub fn what_it_says(control: &TheControl, dropped_in_the_vm: u64) -> String {
         dropped_in_the_vm,
     ));
     lines.join("\n")
-}
-
-/// The line, kept up to date. Only a run with a window has one.
-pub fn show_what_it_says(
-    control: Res<TheControl>,
-    scripts: Res<ScriptWorld>,
-    mut line: Query<&mut Text, With<ControlLine>>,
-) {
-    let Ok(mut text) = line.single_mut() else { return };
-    let says = what_it_says(&control, scripts.dropped());
-    if text.0 != says {
-        text.0 = says;
-    }
 }
 
 /// **A run with no window has the same two numbers in its log, said once.**

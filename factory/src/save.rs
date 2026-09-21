@@ -394,7 +394,7 @@ fn the_factory_as_a_file(
             .left
             .iter()
             .enumerate()
-            .filter(|(_, &left)| left > 0)
+            .filter(|&(_, &left)| left > 0)
             .map(|(t, &left)| (t as u32, left))
             .collect(),
         buildings,
@@ -590,8 +590,7 @@ pub fn restore_memories(
                 vm.ivar_set(being, "@got", value);
             }
             if restoring.control.won {
-                let yes = sabiruby::Value::Bool(true);
-                vm.ivar_set(being, "@won", yes);
+                vm.ivar_set(being, "@won", sabiruby::Value::bool(true));
                 control.won = true;
             }
             placed_control = true;

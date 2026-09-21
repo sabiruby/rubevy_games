@@ -74,15 +74,6 @@ const CONTROL: u64 = 1;
 const ARM: u64 = 2;
 
 impl Watched {
-    fn key(self) -> Option<u64> {
-        match self {
-            Watched::Arm(tile) => Some(ARM + tile as u64),
-            Watched::Data => Some(DATA),
-            Watched::Control => Some(CONTROL),
-            Watched::Nothing => None,
-        }
-    }
-
     fn of_key(key: u64) -> Watched {
         match key {
             DATA => Watched::Data,
@@ -269,7 +260,7 @@ pub fn show_code(
             editor.show(CONTROL, || text);
             editor.file = crate::control::SCRIPT_FILE.into();
             editor.label = "what the factory is for".into();
-            editor.in_memory = control.in_memory();
+            editor.in_memory = control.in_memory;
             editor.elsewhere = control.trouble.clone();
             editor.current = None;
             editor.heat.clear();
@@ -303,26 +294,45 @@ pub fn show_code(
 /// says so rather than showing an empty one.
 pub fn show_vm(
     watched: Res<Watched>,
-    control: Query<Entity, With<crate::control::ControlScript>>,
+    control: Res<crate::control::TheControl>,
+    control_task: Query<&rubevy::ScriptTask, With<crate::control::ControlScript>>,
     crew: Crew,
     mut panel: ResMut<VmInspector>,
     scripts: Res<ScriptWorld>,
     tasks: Query<&rubevy::ScriptTask>,
-    names: Query<&rubevy::Script>,
 ) {
     if !panel.open {
         return;
     }
-    let who = match *watched {
-        Watched::Arm(tile) => crew.at(tile),
-        Watched::Control => control.single().ok(),
+    match *watched {
+        Watched::Arm(tile) => {
+            let Some(entity) = crew.at(tile) else {
+                return panel.clear("this inserter has no script running");
+            };
+            let Ok(task) = tasks.get(entity) else {
+                return panel.clear("this inserter has no script running");
+            };
+            panel.fill(
+                &scripts,
+                task.task(),
+                format!("inserter {tile}"),
+                crew.minds.prelude_lines_for(tile).unwrap_or(0),
+            );
+        }
+        Watched::Control => match control_task.single() {
+            Ok(task) => panel.fill(
+                &scripts,
+                task.task(),
+                crate::control::SCRIPT_FILE.into(),
+                control.prelude_lines(),
+            ),
+            Err(_) => panel.clear("the control stage is not running"),
+        },
         // the data stage is not a script that runs: it was compiled, run and finished before the
         // first frame, and a panel about its frames would be a panel about nothing
-        Watched::Data | Watched::Nothing => None,
-    };
-    match who {
-        Some(entity) => panel.fill(entity, &scripts, &tasks, &names),
-        None => panel.clear("the data stage ran once, in Startup, and has no task"),
+        Watched::Data | Watched::Nothing => {
+            panel.clear("the data stage ran once, in Startup, and has no task")
+        }
     }
 }
 
@@ -548,14 +558,14 @@ pub fn draw_hud(
             });
             ui.horizontal_wrapped(|ui| {
                 let budget = scripts.budget;
-                let spent = clock.insn_per_frame();
+                let spent = scripts.last_frame().instructions;
                 let over = budget > 0 && spent >= budget;
                 let text = egui::RichText::new(format!(
                     "scripts {spent} / {budget} insn · {:.2} / {:.1} ms · {} waiting · {} carried over",
                     clock.mean_ms,
                     clock.budget_ms,
                     crew.how_many_waiting(),
-                    scripts.last_frame().carried_over,
+                    scripts.last_frame().carried_reflect + scripts.last_frame().carried_in_tick,
                 ))
                 .monospace();
                 ui.label(if over { text.color(amber).strong() } else { text }).on_hover_text(
@@ -564,10 +574,11 @@ pub fn draw_hud(
             });
             ui.horizontal_wrapped(|ui| {
                 let dropped = control.dropped + scripts.dropped();
-                let text = egui::RichText::new(match &control.saying {
-                    Some(saying) => format!("control.rb: {saying}"),
-                    None => "control.rb: no goal".into(),
-                });
+                // **the same sentence a headless run would have in its log**, so that there is
+                // one wording of what the control stage has to say (`control::what_it_says`)
+                let text = egui::RichText::new(
+                    crate::control::what_it_says(&control, scripts.dropped()).replace('\n', " · "),
+                );
                 ui.label(if control.won { text.color(amber).strong() } else { text });
                 if dropped > 0 {
                     ui.label(

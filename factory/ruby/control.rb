@@ -14,6 +14,9 @@
 #     about it — a jammed machine wants an arm taking what it made away.
 #   * nothing says a goal has to be about delivering. Count what you like in a handler of your own
 #     and call `win!`.
+#   * `look_at(column, row)` points the camera at a tile — it is rubevy's optional `Rubevy::Camera`
+#     layer, which is Ruby over an entity's `Transform` and not something the game answers. Winning
+#     already does it (the chest the goal was finished in); a handler may do it whenever it likes.
 
 # **Sixty gears.**
 #

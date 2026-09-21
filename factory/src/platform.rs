@@ -37,10 +37,16 @@ const STORE: &str = "factory:";
 const COMPILE_BRIDGE: &str = "factoryCompile";
 const HIGHLIGHT_BRIDGE: &str = "factoryHighlight";
 
-// `games_shell::platform` also has what the Save button says (`SAVE_LABEL`) and a clock for a
-// seed that works in a page as well (`clock_seed`, which is why no `std::time` goes near the
-// browser's road). Neither is re-exported here yet: F5 is the first stage with a Save button,
-// and a `pub use` nothing calls is a warning.
+/// **Where a saved factory goes** (F5): a JSON file in the directory the game was started from,
+/// and in a browser the `localStorage` key `factory:factory.save.json`, which survives the page
+/// being closed. `save_file` in the store moves it, and `--save PATH` / `--load PATH` move it for
+/// one run; in a browser a different name is a second factory to keep rather than a rename, since
+/// the old key is still there.
+pub const SAVE_FILE: &str = "factory.save.json";
+
+// `games_shell::platform` also has a clock for a seed that works in a page as well (`clock_seed`,
+// which is why no `std::time` goes near the browser's road). It is not re-exported here: a
+// `pub use` nothing calls is a warning.
 
 /// **What this run was asked for besides being a factory**, and the end of the run (S11): the
 /// checks and a `--shot`, each of which used to be able to cut the other short. F1 and F2 mended

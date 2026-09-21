@@ -37,8 +37,10 @@ mod draw;
 mod grid;
 mod inserters;
 mod items;
+mod guide_text;
 mod machines;
 mod platform;
+mod save;
 mod window;
 
 use std::path::PathBuf;
@@ -48,6 +50,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunk, TilemapChunkTileData};
 use games_shell::camera::{CameraControls, CameraPlugin, CameraSet, WorldClick};
 use rubevy::{HoldRequests, RubevyPlugin, RubevySet, ScriptWorld};
+use rubevy_egui::{VmInspector, VmInspectorPlugin};
 
 use belts::{Lanes, OnBelt, Rules};
 use build::Hand;
@@ -287,7 +290,7 @@ fn main() {
     let args = games_shell::Args::from_env();
     // The store, read before either branch: the window's size comes out of it, and so do the
     // flags' own defaults, so a headless run reads it too.
-    let (settings, _lang) = games_shell::remembered(
+    let (settings, lang) = games_shell::remembered(
         platform::SETTINGS_FILE,
         "Factory: what the game remembers. Delete a line for the default.",
         platform::read,
@@ -342,6 +345,18 @@ fn main() {
             .map(|n| n.max(0.0))
             .unwrap_or_else(|| settings.number("inserter_stagger").unwrap_or(1.0).max(0.0)),
     );
+
+    // **`--save PATH` / `--load PATH`** (F5): the same two things F5 and F9 do in a window, for a
+    // run that has no keyboard. A `--save` is written as the run ends, which is what makes
+    // "save, load in a second process, save again, compare the two files" one shell line each.
+    let save_to = args.value("--save");
+    let load_from = args.value("--load");
+    // **Where a save goes**, settled before the store is handed to the app: `--save`'s path, or
+    // `save_file` in the store, or the game's own name. In a browser it is a `localStorage` key
+    // and not a file (`crate::platform`).
+    let save_file = save_to
+        .clone()
+        .unwrap_or_else(|| settings.get("save_file").unwrap_or(platform::SAVE_FILE).to_string());
 
     let mut app = App::new();
     match headless {
@@ -401,23 +416,59 @@ fn main() {
                 // `Startup`, once the data stage has said how big the world is.
                 CameraPlugin::showing(half_height),
                 RubevyPlugin::default(),
-                // **F3's half of the window and not F5's**: the panel an inserter's script is
-                // edited in, and nothing else. `crate::window` says what each of its buttons
-                // means here.
+                // **F5: the window, all of it.** The editor an inserter's script is edited in
+                // (and `data.rb`, and `control.rb` — `crate::window` says what Apply means for
+                // each), the VM panel behind `F2`, the `H` guide in English and Japanese, and the
+                // wiring that lets every one of them be resized out of `factory.settings.txt`.
                 window::the_editor(&settings),
+                VmInspectorPlugin,
+                games_shell::GuidePlugin::default(),
+                games_shell::PanelSettingsPlugin,
             ))
+            // A picture is asked for one thing and the guide sits over the middle of the window,
+            // so a `--shot` run starts with it shut unless `--guide` says otherwise — the
+            // garden's rule, and how the picture that shows the Japanese is not tofu is taken.
+            .insert_resource(
+                guide_text::guide().opening(lang, shot.is_none() || args.has("--guide")),
+            )
+            // **Closed** (the garden's G9): a debugger thrown over the middle of the window is
+            // not what somebody came to look at a factory for. `F2` opens it, and `--vm` does for
+            // a picture.
+            .insert_resource(VmInspector::following().opened(args.has("--vm")))
             .init_resource::<window::Watched>()
+            .init_resource::<window::Paused>()
             .add_systems(
                 Update,
                 (
                     window::follow_the_orders.before(build::orders),
+                    window::panel_keys,
                     window::show_code,
+                    window::show_vm,
                     window::do_editor_actions,
                     window::watch_the_programs,
                 )
                     .chain()
                     .run_if(the_factory_is_up),
             )
+            // F5 and F9, and the two buttons in the HUD that mean the same thing
+            .add_systems(Update, save_load_keys.before(save::save_the_factory))
+            // the window's half of a rebuild: the floor's chunks are the size of the map, and the
+            // camera's edges are the map's (`draw_the_new_world`, then the two `Startup` systems
+            // again — there is one road, and this is it being walked a second time)
+            .add_systems(
+                Update,
+                (
+                    draw_the_new_world,
+                    draw::start_drawing.run_if(not(resource_exists::<draw::Chunks>)),
+                    point_the_camera_at_the_map,
+                )
+                    .chain()
+                    .after(lay_the_land_again)
+                    .before(FactorySet::Step)
+                    .run_if(on_message::<RebuildTheWorld>)
+                    .run_if(resource_exists::<Map>),
+            )
+            .add_systems(bevy_egui::EguiPrimaryContextPass, window::draw_hud)
             .init_resource::<items::Pool>()
             .init_resource::<draw::Animation>()
             .insert_resource(draw::SnapZoom(
@@ -429,15 +480,8 @@ fn main() {
                     draw::start_drawing.run_if(resource_exists::<Map>),
                     point_the_camera_at_the_map.run_if(resource_exists::<Map>),
                     say_the_trouble,
-                    control::put_the_line_on_the_screen,
                 )
                     .after(lay_the_land),
-            )
-            // **F4's one line of screen, and F5's egui HUD replaces it**: what the goal is, what
-            // the control stage has heard, and what was dropped
-            .add_systems(
-                Update,
-                control::show_what_it_says.run_if(resource_exists::<control::TheControl>),
             )
             // **the keys are the window's**: a run with no window has no `ButtonInput` at all
             // (it is `InputPlugin`'s, and `MinimalPlugins` is not that), and the checks work the
@@ -449,7 +493,14 @@ fn main() {
                     .after(FactorySet::Step)
                     .run_if(resource_exists::<draw::Chunks>),
             )
-            .add_systems(Update, draw::snap_zoom.after(CameraSet::Drive));
+            .add_systems(Update, draw::snap_zoom.after(CameraSet::Drive))
+            // **Ruby moving the camera** (F5): after the scripts' writes have landed and after
+            // the player's own driving, so that a `look_at` in `control.rb` is the last word on
+            // where the camera is that frame and a hand on the mouse is the last word otherwise.
+            .add_systems(
+                Update,
+                let_a_script_move_the_camera.after(CameraSet::Drive).after(RubevySet::Answer),
+            );
             app.add_systems(
                 Update,
                 draw::draw_items.after(FactorySet::Step).run_if(resource_exists::<draw::Chunks>),
@@ -475,6 +526,12 @@ fn main() {
         .init_resource::<inserters::Arms>()
         .insert_resource(stagger)
         .add_systems(Startup, set_the_budget)
+        // **The camera, in the words a script uses about one** — rubevy's optional layer (R9).
+        // It is Ruby the crate carries and does not run, over `Rubevy.find` and
+        // `e[:Transform] =`, so loading it is what gives `control.rb` a `Rubevy::Camera` and an
+        // app that does not load it has none. A headless run loads it too and finds no camera,
+        // which is exactly what `look_at` is written for.
+        .add_systems(Startup, take_up_the_camera_layer)
         .add_systems(Startup, say_where_the_map_went)
         .add_systems(Startup, read_the_data_stage)
         .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
@@ -537,6 +594,53 @@ fn main() {
             (inserters::finish_swings, inserters::watch_endings)
                 .after(FactorySet::Step)
                 .run_if(the_factory_is_up),
+        )
+        // **F5: the world written down and read back.** Four systems and an order that matters:
+        // a load is put in before the step (so nothing ever steps half a world), the memories are
+        // handed over after it (a script started this frame has reached `run` by then), and the
+        // save is last, so a run that loads and saves in one go writes the world it read rather
+        // than that world plus a frame.
+        .insert_resource(save::SaveFile {
+            path: save_file,
+            on_exit: save_to.is_some(),
+        })
+        .init_resource::<save::Asked>()
+        .init_resource::<save::SaveNote>()
+        .add_message::<window::Reread>()
+        .add_message::<RebuildTheWorld>()
+        .init_resource::<window::DataFile>()
+        // **one road from "the declarations changed" to "the factory is this world now"**, and
+        // it is after the re-reading and before anything steps
+        .add_systems(
+            Update,
+            lay_the_land_again
+                .after(reread_the_data_stage)
+                .before(FactorySet::Step)
+                .before(build::orders)
+                .run_if(resource_exists::<Rules>),
+        )
+        .add_systems(Startup, read_the_data_file_text.after(read_the_data_stage))
+        .add_systems(
+            Update,
+            reread_the_data_stage
+                .before(FactorySet::Step)
+                .before(build::orders)
+                .run_if(resource_exists::<Rules>),
+        )
+        .add_systems(
+            Update,
+            save::load_the_factory
+                .before(FactorySet::Step)
+                .before(inserters::keep_the_crew)
+                .run_if(the_factory_is_up),
+        )
+        .add_systems(
+            Update,
+            (save::restore_memories.run_if(resource_exists::<save::Restoring>), save::save_the_factory)
+                .chain()
+                .after(FactorySet::Step)
+                .run_if(the_factory_is_up)
+                .run_if(resource_exists::<control::TheControl>),
         )
         // **The game's own message for "build this here"** (F3). A mouse becomes one of these and
         // so does a check; `build::orders` is the only thing that builds, and it is ordered before
@@ -637,7 +741,60 @@ fn main() {
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
+    // **`--load PATH`**: the file is read here and put into the world by `load_the_factory` on the
+    // first frame, which is the same door F9 uses. A file that will not be read is said and the
+    // game starts an ordinary factory — the world is built by `lay_the_land` either way, because
+    // a load fills a grid rather than making one.
+    if let Some(path) = &load_from {
+        match save::read_save(path) {
+            Ok(file) => {
+                app.insert_resource(save::Loading(file));
+            }
+            Err(e) => {
+                error!("{e}");
+                app.insert_resource(save::SaveNote { text: e, at: 0.0, bad: true });
+            }
+        }
+    }
     app.run();
+}
+
+/// `Startup`: the camera layer, so that `ruby/control_prelude.rb`'s `look_at` has a
+/// `Rubevy::Camera` to talk to.
+fn take_up_the_camera_layer(mut world: ResMut<ScriptWorld>) {
+    if let Err(why) = world.load_and_run(rubevy::layers::CAMERA) {
+        error!("the camera layer would not load: {why}");
+    }
+}
+
+/// **What a script wrote to the camera, taken as where the player is looking.**
+///
+/// The camera here is driven by a resource and not by its `Transform` — `games_shell`'s
+/// `CameraPlugin` writes the transform out of [`CameraView`] every frame in `PostUpdate` — so a
+/// `Rubevy::Camera#move_to`, which writes the `Transform`, would be painted over before anybody
+/// saw it. This is the two halves joined: what the transform says now, *minus* what the panels
+/// cover, becomes the view.
+///
+/// **It settles rather than drifts.** After a script has moved the camera this sets
+/// `focus = t - shift`, `place_camera` writes `t = focus + shift` back, and the next frame finds
+/// the transform where it left it and does nothing — so a window with an editor open does not
+/// walk the camera sideways by the width of the panel every frame. The remembered value is what
+/// tells "somebody else moved this" from "this is what we wrote", and it is the whole of the
+/// arrangement.
+fn let_a_script_move_the_camera(
+    mut view: ResMut<games_shell::camera::CameraView>,
+    insets: Res<rubevy_egui::ViewInsets>,
+    windows: Query<&Window>,
+    cameras: Query<&Transform, With<Camera2d>>,
+    mut seen: Local<Option<Vec2>>,
+) {
+    let Some(at) = cameras.iter().next().map(|t| t.translation.truncate()) else { return };
+    let was = seen.replace(at);
+    if was != Some(at) && was.is_some() {
+        let height = windows.iter().next().map(|w| w.height()).unwrap_or(1.0).max(1.0);
+        let world_per_px = (view.half_height * 2.0) / height;
+        view.focus = at - insets.shift(world_per_px);
+    }
 }
 
 /// **What the scripts may spend in a frame**, said by the game rather than inherited.
@@ -732,6 +889,164 @@ fn read_the_data_stage(
     }
 }
 
+/// **`F5` writes the factory down and `F9` reads it back**, and the two buttons in the HUD mean
+/// the same thing — which is why both go through [`save::Asked`] rather than one of them being a
+/// key and the other a call.
+///
+/// Neither is behind `EguiWantsInput::wants_keyboard_input()`, and that is the garden's finding
+/// rather than an oversight: egui does not give keyboard focus back when the pointer clicks the
+/// world, so a guarded `F5` is a save key that stops working for the rest of the session after
+/// the first edit. `F5` and `F9` are keys egui never wants; `P` is a letter and is guarded
+/// ([`window::panel_keys`]).
+fn save_load_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut asked: ResMut<save::Asked>,
+    file: Res<save::SaveFile>,
+    time: Res<Time>,
+    mut note: ResMut<save::SaveNote>,
+    mut commands: Commands,
+) {
+    if keys.just_pressed(KeyCode::F5) {
+        asked.save = true;
+    }
+    if asked.load || keys.just_pressed(KeyCode::F9) {
+        asked.load = false;
+        match save::read_save(&file.path) {
+            Ok(read) => commands.insert_resource(save::Loading(read)),
+            Err(e) => {
+                error!("{e}");
+                note.say(time.elapsed_secs(), true, e);
+            }
+        }
+    }
+}
+
+/// `Startup`: the text of `ruby/data.rb` as it was read, so that the editor has something to show
+/// and Revert has something to go back to. It is read again rather than kept by
+/// [`read_the_data_stage`], because that one runs whether or not there is a window and a string
+/// nobody reads is a string nobody should be holding.
+fn read_the_data_file_text(mut file: ResMut<window::DataFile>, ruby: Res<RubyDir>) {
+    file.text = platform::read(&ruby.0.join(DATA_FILE)).unwrap_or_default();
+}
+
+/// **`data.rb`, read again while the game runs** — the stage's own point, and what makes the size
+/// of the map something a player can change in a page without restarting anything.
+///
+/// The three outcomes are written out on [`window`]; what is here is the arithmetic of the third,
+/// which is **what the world is indexed by**. A tile is a place on a map of a particular size, an
+/// item on a belt is a number into `data.rb`'s items, and a machine on the grid is a number into
+/// its machines. Change any of those and every number in the world means something else, so the
+/// world has to be laid out again — and laying it out again loses what was built, which is not a
+/// thing to do to somebody who pressed a button once. Everything else (a belt's speed, a recipe's
+/// time, a chest's capacity) is read out of [`Rules`] every frame, so swapping the tables is the
+/// whole of applying it.
+#[allow(clippy::too_many_arguments)]
+fn reread_the_data_stage(
+    mut commands: Commands,
+    mut asked: MessageReader<window::Reread>,
+    mut file: ResMut<window::DataFile>,
+    mut world: ResMut<ScriptWorld>,
+    mut rules: ResMut<Rules>,
+    mut data: ResMut<Data>,
+    mut editor: Option<ResMut<rubevy_egui::Editor>>,
+    mut rebuild: MessageWriter<RebuildTheWorld>,
+) {
+    let Some(window::Reread(text)) = asked.read().last().cloned() else { return };
+    let read = data::read_the_declarations(&mut world.vm, DATA_FILE, &text, platform::compile);
+    let (tables, new_rules) = match read {
+        Ok(both) => both,
+        Err(trouble) => {
+            // **the world is not touched at all**: the tables in use are still the ones that
+            // built it, and what is wrong is said with the line of the player's own file it is on
+            let says = trouble.say(DATA_FILE);
+            error!("{says}");
+            file.trouble = Some(says.clone());
+            file.confirming = None;
+            if let Some(editor) = editor.as_mut() {
+                editor.message = format!("not applied — {}", says.lines().next().unwrap_or(&says));
+            }
+            return;
+        }
+    };
+    let changes_the_world = what_the_world_is_built_on(&rules, &data, &new_rules, &tables);
+    if let Some(why) = &changes_the_world
+        && file.confirming.as_deref() != Some(text.as_str())
+    {
+        // **one click of confirmation**, and it is asked for rather than assumed: a player who
+        // widened the map does mean to rebuild, and a player who changed a recipe's time and
+        // happened to add an item does not mean to lose the factory
+        file.confirming = Some(text.clone());
+        let says = format!("this rebuilds the world and loses what is built — {why}. Apply again to do it");
+        warn!("{DATA_FILE}: {says}");
+        if let Some(editor) = editor.as_mut() {
+            editor.message = says;
+        }
+        return;
+    }
+    file.confirming = None;
+    file.trouble = None;
+    file.text = text.clone();
+    file.in_memory = true;
+    data::expose_the_tables(&mut world.vm, &tables);
+    *rules = new_rules;
+    *data = tables;
+    let says = match &changes_the_world {
+        Some(why) => {
+            rebuild.write(RebuildTheWorld);
+            format!("read again, and the world is laid out anew — {why}")
+        }
+        None => "read again; the factory goes on with the new numbers".into(),
+    };
+    info!("{DATA_FILE}: {says}");
+    if let Some(editor) = editor.as_mut() {
+        editor.applied(says);
+    }
+    // the arms' programs carry the item names and the swing, which the game writes in front of
+    // the prelude out of these tables — so every one of them is compiled again
+    commands.run_system_cached(forget_the_compiled_scripts);
+}
+
+/// Every arm's program is thrown away, because the block the game writes in front of the prelude
+/// is made of `data.rb`'s own names and numbers (`inserters::names_and_numbers`).
+fn forget_the_compiled_scripts(mut minds: ResMut<inserters::Minds>) {
+    minds.forget_the_programs();
+}
+
+/// **What the world is built on**, and the sentence saying which of it moved — or `None` where
+/// nothing did, which is the case a factory goes on running through.
+fn what_the_world_is_built_on(
+    rules: &Rules,
+    data: &Data,
+    new_rules: &Rules,
+    new_data: &Data,
+) -> Option<String> {
+    if rules.map_tiles != new_rules.map_tiles {
+        return Some(format!(
+            "the map was {} by {} and is now {} by {}",
+            rules.map_tiles.x, rules.map_tiles.y, new_rules.map_tiles.x, new_rules.map_tiles.y
+        ));
+    }
+    let ore_of = |r: &Rules| (r.ore_per_tile, r.ore_patch_radius.to_bits(), r.ore_patches);
+    if ore_of(rules) != ore_of(new_rules) {
+        return Some("the ore in the ground is laid out differently".into());
+    }
+    let names = |d: &Data| {
+        (
+            d.items.iter().map(|i| i.name.clone()).collect::<Vec<_>>(),
+            d.machines.iter().map(|m| m.name.clone()).collect::<Vec<_>>(),
+            d.recipes.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+        )
+    };
+    (names(data) != names(new_data))
+        .then(|| "the items, machines or recipes are not the same list".into())
+}
+
+/// The game's own message for "lay the land again". It is a message rather than a call because
+/// what it does — despawn the chunks, remake the grid, point the camera — is several systems'
+/// work and only a window has two of them.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct RebuildTheWorld;
+
 /// **A window with no factory in it says why.** One line of text in the middle of the screen, and
 /// the same sentence the log has. There is no egui here until F5, and `bevy_ui`'s default font is
 /// already in the build for the two games that have one.
@@ -810,6 +1125,53 @@ fn lay_the_land(mut commands: Commands, rules: Res<Rules>, data: Res<Data>) {
     commands.insert_resource(Lanes::for_map(map.tiles));
     commands.insert_resource(ore);
     commands.insert_resource(map);
+}
+
+/// **The world, laid out again** — one system, so that there is one road from "the declarations
+/// changed" to "the factory is this world now" (F3a's rule: `lay_the_land` is the only thing that
+/// makes a world).
+///
+/// **It loses what was built**, which is why it is asked for twice ([`reread_the_data_stage`]).
+/// The pieces it takes away are the three things whose length is the map's: the grid, the lanes
+/// and the ore. In a window two more follow it and they are separate systems because only a
+/// window has them at all — the chunks the floor is drawn into ([`draw::start_drawing`]) and the
+/// camera's edges ([`point_the_camera_at_the_map`]).
+fn lay_the_land_again(
+    mut commands: Commands,
+    mut asked: MessageReader<RebuildTheWorld>,
+    rules: Res<Rules>,
+    data: Res<Data>,
+) {
+    if asked.read().next().is_none() {
+        return;
+    }
+    // the arms go with the grid: `keep_the_crew` despawns every entity whose tile is not an
+    // inserter any more, and after this none of them is
+    lay_the_land(commands.reborrow(), rules, data);
+}
+
+/// The window's half of a rebuild: the floor's chunks are the size of the map, so the old ones go
+/// and [`draw::start_drawing`] makes new ones, and the camera is told where the new edges are.
+fn draw_the_new_world(
+    mut commands: Commands,
+    mut asked: MessageReader<RebuildTheWorld>,
+    chunks: Option<Res<draw::Chunks>>,
+    mut pool: ResMut<items::Pool>,
+) {
+    if asked.read().next().is_none() {
+        return;
+    }
+    if let Some(chunks) = chunks {
+        commands.entity(chunks.floor).despawn();
+        commands.entity(chunks.buildings).despawn();
+        commands.remove_resource::<draw::Chunks>();
+    }
+    // the item sprites are borrowed from a pool that is refilled as the lanes need it; the
+    // entities are still good, but the pool is rebuilt with the rest so that nothing is holding a
+    // sprite for an item that is not there any more
+    for sprite in pool.sprites.drain(..) {
+        commands.entity(sprite).despawn();
+    }
 }
 
 /// **The camera, given a world to look at** — which since F3a is not known until the data stage
@@ -1151,11 +1513,25 @@ fn take_shot(
 
 /// `--headless N`: the bound on a run whose checks never answered. A run that finished them has
 /// already exited (`games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
-fn stop_when_over(time: Res<Time>, headless: Res<Headless>, mut exit: MessageWriter<AppExit>) {
-    if time.elapsed_secs() >= headless.until {
-        info!("headless: {:.1} s, done", time.elapsed_secs());
-        exit.write(AppExit::Success);
+fn stop_when_over(
+    time: Res<Time>,
+    headless: Res<Headless>,
+    file: Res<save::SaveFile>,
+    mut asked: ResMut<save::Asked>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if time.elapsed_secs() < headless.until {
+        return;
     }
+    // **`--save PATH` is written as the run ends**, on this frame: the save system is ordered
+    // after the step and this is `Update`, so what reaches the file is the world of the last
+    // frame this run had rather than that world plus one.
+    if file.on_exit && !asked.save {
+        asked.save = true;
+        return;
+    }
+    info!("headless: {:.1} s, done", time.elapsed_secs());
+    exit.write(AppExit::Success);
 }
 
 // ---------------------------------------------------------------------------------------------

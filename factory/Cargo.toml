@@ -17,13 +17,19 @@ rubevy.workspace = true
 games-shell.workspace = true
 # F2's data stage. The VM itself, for the `Vm` the declarations are collected in and for the
 # exception a bad `data.rb` raises; `sabiruby-serde` for `declare`, which is the port the whole of
-# `src/data.rs` is written against. Both are named by version and sent to git by the workspace's
-# `[patch.crates-io]`, which is what keeps one VM — and one `Value` — in the binary.
+# `src/data.rs` is written against. Both are named by version, exactly as rubevy names them, which
+# is what keeps one VM — and one `Value` — in the binary.
 sabiruby.workspace = true
 sabiruby-serde.workspace = true
 serde = { version = "1", features = ["derive"] }
-# F3: the panel an inserter's script is edited in. `rubevy-egui` brings `bevy_egui` with it; this
-# game takes the `Editor` and none of the rest yet (the VM panel and the watch list are F5's).
+# F5's save file. `preserve_order` (already on through `sabiruby-serde`; named here because this
+# crate depends on it too) keeps a Hash an inserter remembered in the order it wrote it, and
+# `float_roundtrip` is what makes save → load → save the same *text*: without it the parser may
+# come back a unit in the last place out, and a machine half way through a craft would be a hair
+# further back each time the factory was written down (the garden measured it, `garden/Cargo.toml`).
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# The panels: F3's editor, and F5's VM panel. `rubevy-egui` brings `bevy_egui` with it, and this
+# game names it as well because its own HUD is drawn with it (`crate::window::draw_hud`).
 rubevy-egui.workspace = true
 bevy_egui.workspace = true
 

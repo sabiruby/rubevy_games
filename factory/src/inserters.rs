@@ -132,6 +132,13 @@ impl Minds {
             .unwrap_or(self.file.as_str())
     }
 
+    /// **How far down the program the player's first line is**, for the arm on `tile` — which is
+    /// what the VM panel subtracts to show a script's own numbering. `None` where this text has
+    /// not been compiled (an arm whose script will not compile has no program at all).
+    pub fn prelude_lines_for(&self, tile: usize) -> Option<u32> {
+        self.programs.get(self.text_for(tile)).map(|(_, lines)| *lines)
+    }
+
     /// The file as it was read, for Revert.
     pub fn file(&self) -> &str {
         &self.file
@@ -158,6 +165,24 @@ impl Minds {
     pub fn give_to_all(&mut self, text: String) {
         self.own.clear();
         self.everyone = Some(text);
+        self.generation += 1;
+    }
+
+    /// **The file on disk now says this** (F5's Save). Whatever was applied in memory is what
+    /// the file holds, so it stops being "in memory" and Revert goes back to this.
+    pub fn take_as_the_file(&mut self, text: &str) {
+        self.file = text.to_string();
+        self.own.clear();
+        self.everyone = None;
+        self.generation += 1;
+    }
+
+    /// **Every compiled program forgotten**, because `data.rb` has been read again: the block the
+    /// game writes in front of the prelude is made of that file's item names and its swing
+    /// ([`names_and_numbers`]), so a program compiled against the old tables would answer a
+    /// question with the wrong name. The texts are kept; what is thrown away is the compiling.
+    pub fn forget_the_programs(&mut self) {
+        self.programs.clear();
         self.generation += 1;
     }
 
