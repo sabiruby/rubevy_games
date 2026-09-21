@@ -135,9 +135,20 @@ pub fn choose(
             said = true;
         }
     }
+    // **A machine has nothing to turn** (F4). A direction used to say where a machine pushed what
+    // it made; nothing comes out of one but through an inserter's hand since F3, so turning one
+    // changes nothing at all — and an operation that changes nothing is one to refuse rather than
+    // to accept quietly. Factorio's assembler has no direction either.
     if keys.just_pressed(KeyCode::KeyR) {
-        hand.dir = hand.dir.left();
-        said = true;
+        match hand.what {
+            Some(What::Machine(_)) => {
+                info!("a {} has no direction: nothing goes in or out of one but through an arm", hand.word(&data));
+            }
+            _ => {
+                hand.dir = hand.dir.left();
+                said = true;
+            }
+        }
     }
     if said {
         info!("in hand: {} facing {}", hand.word(&data), hand.dir.word());
@@ -225,7 +236,7 @@ pub fn orders(
             Some(What::Covered { .. }) => {}
             Some(one) => {
                 take_away(&mut grid, &mut lanes, at);
-                lanes.of[at].clear();
+                lanes.forget(at);
                 grid.place(at, Building::new(one, dir));
                 info!("built a {} at {}, {} facing {}", one.word(), tile.x, tile.y, dir.word());
             }
@@ -252,10 +263,10 @@ pub fn take_away(grid: &mut Grid, lanes: &mut Lanes, at: usize) -> Option<String
         .collect();
     for t in covered {
         grid.remove(t as usize);
-        lanes.of[t as usize].clear();
+        lanes.forget(t as usize);
     }
     grid.remove(origin);
-    lanes.of[origin].clear();
+    lanes.forget(origin);
     Some(word)
 }
 
@@ -281,7 +292,7 @@ pub fn build_a_machine(
     }
     for (i, tile) in footprint.iter().enumerate() {
         let t = grid.index(*tile);
-        lanes.of[t].clear();
+        lanes.forget(t);
         let what = if i == 0 { What::Machine(kind) } else { What::Covered { origin: at as u32 } };
         grid.place(t, Building::new(what, dir));
     }

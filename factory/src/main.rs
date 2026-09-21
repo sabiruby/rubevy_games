@@ -882,7 +882,7 @@ fn lay_the_snake(
         let upto = (wanted * (i + 1)) / belts.max(1);
         let mut along = rules.tile();
         while laid < upto {
-            lanes.of[t as usize].push_back(OnBelt { along, item: rules.digs });
+            lanes.put_on(t as usize, OnBelt { along, item: rules.digs });
             along -= spacing;
             laid += 1;
         }
@@ -1172,6 +1172,9 @@ const A_BROKEN_SCRIPT: &str = concat!(
 struct MachineCheck {
     what: String,
     makes: data::ItemId,
+    /// which recipe it will run, so that the belt that feeds it can be given what it eats
+    /// without working out where the line is a second time (`seed_the_machine_lines`)
+    recipe: data::RecipeId,
     made_of: String,
     /// the machine's own tile
     at: usize,
@@ -1328,9 +1331,14 @@ fn selftest(
         }
         // ---- a miner cannot stand anywhere but on ore -----------------------------------------
         3 => {
-            // the middle of the map, which `Ore::laid_out` leaves bare on purpose — for any even
-            // number of patches, because their middles are at the middles of the cells
-            let bare = map.tiles / 2;
+            // **a tile with no ore in it, asked for rather than worked out** (F4). It was the
+            // middle of the map, which is bare for an even number of patches and is the middle of
+            // one for an odd number — and how many there are is a line of `ruby/data.rb`.
+            let Some(bare) = somewhere_clear(&map, &grid, &ore, UVec2::ONE) else {
+                say("FAIL", "there is nowhere on this map without ore in it");
+                test.step = 5;
+                return;
+            };
             orders.write(build::Order { at: bare, what: Some(What::Miner), dir: Dir::East });
             test.line = vec![bare];
             test.step = 4;
@@ -1445,7 +1453,7 @@ fn selftest(
         15 => {
             // the two little factories: two belts, a machine, a belt and a chest each — and the
             // two arms each needs, which are built later, on purpose (step 17)
-            match lay_out_the_machine_lines(&map, &data, &rules, &mut test) {
+            match lay_out_the_machine_lines(&map, &data, &rules, &grid, &ore, &mut test) {
                 true => test.step = 16,
                 false => {
                     say("FAIL", "there was nowhere to build the machines the data file declares");
@@ -1462,7 +1470,8 @@ fn selftest(
         16 => {
             // the frame after the orders: the buildings are there, so the feeding belts can be
             // loaded with what each machine eats
-            seed_the_machine_lines(&map, &data, &rules, &grid, &mut lanes);
+            let lines = test.machines.clone();
+            seed_the_machine_lines(&data, &rules, &mut lanes, &lines);
             test.started = time.elapsed_secs();
             test.step = 17;
         }
@@ -1827,42 +1836,102 @@ fn selftest(
     }
 }
 
+/// **Somewhere to build the machine lines**: a rectangle with no ore under it and nothing built
+/// on it yet, looked for **outwards from the middle of the map**.
+///
+/// It was `the middle of the map` until F4, with a comment saying `Ore::laid_out` keeps the middle
+/// bare — which is true of an even number of patches and not of an odd one, because their middles
+/// are at the middles of the cells (`worklog/2026-09-21-factory-F3a.md`, the third thing it
+/// noticed). A check that knows where the ore is *because it has done the same arithmetic* stops
+/// being true the moment the arithmetic changes, and `patches: [3, 3]` in `ruby/data.rb` is a line
+/// anybody may write. So this asks the ore and the grid instead.
+///
+/// The middle is still where it starts, so nothing moves on the default map — and the picture
+/// `--shot` takes is still the one it was, because the camera opens looking at the middle.
+fn room_for_the_machine_lines(map: &Map, data: &Data, grid: &Grid, ore: &Ore) -> Option<UVec2> {
+    let how_many = data.machines.len() as u32;
+    let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
+    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
+    // one row per machine, `tall + 1` apart so that a footprint never reaches the next row; and
+    // `wide + 6` across, which is belt, belt, arm, machine, arm, belt, chest at its widest
+    let block = UVec2::new(
+        wide + 6,
+        how_many.saturating_sub(1) * (tall + 1) + tall,
+    );
+    somewhere_clear(map, grid, ore, block)
+}
+
+/// **The bottom-left corner of a rectangle of this size with no ore in it and nothing built on
+/// it**, looked for outwards from the middle of the map — or `None` where the map has no such
+/// room anywhere.
+///
+/// It is what the checks ask instead of knowing where the ore is: how many patches there are and
+/// how wide they are are `ruby/data.rb`'s, so **a check that works the bare ground out for itself
+/// is a check that a line of Ruby can break** (F3a's third note). Both of the places that wanted
+/// bare ground go through here — the tile a miner may not be built on, and the machine lines.
+fn somewhere_clear(map: &Map, grid: &Grid, ore: &Ore, block: UVec2) -> Option<UVec2> {
+    if block.x > map.tiles.x || block.y > map.tiles.y {
+        return None;
+    }
+    let clear = |left: u32, bottom: u32| {
+        (bottom..bottom + block.y).all(|y| {
+            (left..left + block.x).all(|x| {
+                let t = grid.index(UVec2::new(x, y));
+                ore.left[t] == 0 && grid.at(t).is_none()
+            })
+        })
+    };
+    // **the middle first, and then outwards**: the block is centred on the middle of the map,
+    // and the search walks away from there a row and a column at a time
+    let middle = (map.tiles - block) / 2;
+    for bottom in outwards(middle.y, map.tiles.y - block.y + 1) {
+        for left in outwards(middle.x, map.tiles.x - block.x + 1) {
+            if clear(left, bottom) {
+                return Some(UVec2::new(left, bottom));
+            }
+        }
+    }
+    None
+}
+
+/// The whole numbers below `upto`, **nearest to `from` first** — the order a search for somewhere
+/// to build walks. Ties go to the lower number, so a run is the same run twice.
+fn outwards(from: u32, upto: u32) -> Vec<u32> {
+    let mut all: Vec<u32> = (0..upto).collect();
+    all.sort_by_key(|&i| (i as i64 - from as i64).abs());
+    all
+}
+
 /// **F2's two little factories, built with clicks**: for each machine the data file declares, a
 /// belt, the machine, a belt and a chest, in a row.
 ///
-/// The rows are worked out from the map rather than written down, so that a map of another size
-/// still has somewhere to put them; `Ore::laid_out` keeps the middle of the map bare, which is
-/// where they go. The machine with the largest footprint decides how far apart the rows are.
+/// Where they go is [`room_for_the_machine_lines`]'s: somewhere with no ore in it and nothing on
+/// it, so that a map whose patches land in the middle is a map the checks still work on. The
+/// machine with the largest footprint decides how far apart the rows are.
 fn lay_out_the_machine_lines(
     map: &Map,
     data: &Data,
     rules: &Rules,
+    grid: &Grid,
+    ore: &Ore,
     test: &mut SelfTest,
 ) -> bool {
     test.machines.clear();
     test.to_build.clear();
     test.arms_to_build.clear();
     let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
-    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
-    // a row per machine, `tall` apart so that a machine's footprint never reaches the next row,
-    // starting in the middle of the map and going up. **Saturating since F3a**: a map may be as
-    // small as its ore allows now (five tiles across, at a small enough patch), and a check that
-    // has nowhere to build says so below rather than overflowing here.
-    let first_row = map.tiles.y / 2;
-    let left = (map.tiles.x / 2).saturating_sub(wide + 4);
+    let Some(corner) = room_for_the_machine_lines(map, data, grid, ore) else { return false };
+    let (left, first_row) = (corner.x, corner.y);
     for (kind, machine) in data.machines.iter().enumerate() {
         let row = first_row + kind as u32 * (tall + 1);
         // the recipe it will run: the first one made in it, which is the one it will pick
-        let Some(&recipe) = machine.recipes.first() else { continue };
-        let recipe = &data.recipes[recipe as usize];
+        let Some(&recipe_id) = machine.recipes.first() else { continue };
+        let recipe = &data.recipes[recipe_id as usize];
         let Some(&(makes, _)) = recipe.outputs.first() else { continue };
         // belt, belt, [arm], machine, [arm], belt, chest — with the two arms' tiles left empty
         // to begin with, which is where a player leaves them too
         let at = left + 3;
         let out = at + machine.size.x;
-        if row + tall >= map.tiles.y || out + 2 >= map.tiles.x {
-            return false;
-        }
         for (x, what) in [
             (left, Some(What::Belt)),
             (left + 1, Some(What::Belt)),
@@ -1899,6 +1968,7 @@ fn lay_out_the_machine_lines(
         test.machines.push(MachineCheck {
             what: machine.name.clone(),
             makes,
+            recipe: recipe_id,
             made_of: made_of.join(" and "),
             at: (row * map.tiles.x + at) as usize,
             feed: (row * map.tiles.x + left + 1) as usize,
@@ -1913,26 +1983,19 @@ fn lay_out_the_machine_lines(
 
 /// **What each machine eats, put on the belt that feeds it** — which is what a miner up the line
 /// would have put there, and what F3's inserters will hand over.
-fn seed_the_machine_lines(
-    map: &Map,
-    data: &Data,
-    rules: &Rules,
-    grid: &Grid,
-    lanes: &mut Lanes,
-) {
-    let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
-    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
-    let first_row = map.tiles.y / 2;
-    let left = (map.tiles.x / 2).saturating_sub(wide + 4);
-    for (kind, machine) in data.machines.iter().enumerate() {
-        let row = first_row + kind as u32 * (tall + 1);
-        let Some(&recipe) = machine.recipes.first() else { continue };
-        let recipe = &data.recipes[recipe as usize];
-        let feed = grid.index(UVec2::new(left, row));
+///
+/// **It is told where the lines are rather than working it out again** (F4). It did the same
+/// arithmetic as [`lay_out_the_machine_lines`] until then, which was two copies of one thing and
+/// stopped being possible the moment where they go became a search.
+fn seed_the_machine_lines(data: &Data, rules: &Rules, lanes: &mut Lanes, lines: &[MachineCheck]) {
+    for line in lines {
+        let Some(recipe) = data.recipes.get(line.recipe as usize) else { continue };
+        // the belt behind the one that runs up to the machine, which is where the line starts
+        let start = line.feed - 1;
         let mut along = 0;
         for &(item, n) in &recipe.inputs {
             for _ in 0..n {
-                lanes.of[feed].push_back(OnBelt { along, item });
+                lanes.put_on(start, OnBelt { along, item });
                 along -= rules.spacing();
             }
         }
