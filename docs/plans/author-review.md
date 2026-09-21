@@ -52,12 +52,16 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 | 09-22 S11 | 走行の終わり方は Resource 兼 Plugin の `games_shell::checks::Errands` 1 つ（`checks_end_the_run()` は消えた）。`AppExit` と `done` の行を書くのは 1 か所。PC の `--shot` つきの走行は `done` の理由を「the picture is still to be taken」と言う | 「絵はもう撮ったか」は走行の事実で command line の事実ではなく、ページには command line が無い。何も頼まれていない走行は終わらない | `crates/games-shell/src/checks.rs` の `Errands` |
 | 09-22 S11 | 設定の読みは `Settings::positive` / `counted(key, least, default)`。0・負・文字は黙って丸めず `Startup` で `setting refused: …` と log に出して既定値を使う（3 本で 20 か所）。既定値は動いていない | 黙って切り上げた設定は「効かなかった設定」と見分けがつかない。床は呼ぶ側の理由（木 0・影 1・空のドーム 3）なので引数 | `crates/games-shell/src/settings.rs`、一覧は `docs/numbers.md` §10 |
 | 09-22 S11 | `web/build.sh` は `wasm-opt` が PATH に無ければ `~/.local/binaryen-*/bin` を探し、無ければ止めずに最後にもう一度 `NOT SHRUNK` と言う | 縮んでいなくても動く。大きさが効く CI は自分で PATH に入れるのでこの道を通らない | `web/build.sh` |
+| 09-22 F6 | `script_budget` 39,000 を動かさない（F4・F5 の後に取り直した） | 導出をやり直すと 36,000 だが、差 8% は tick µs 自身のばらつき 25% より小さい。持ち越しも `dropped` も 24 報告すべて 0 | `factory.settings.txt` の `script_budget`、根拠は `numbers.md` §9.8a |
+| 09-22 F6 | URL から地図の大きさを渡す口を作らない（`?arms=1` + エディタで `data.rb`） | 地図は宣言で、ページでも Apply できる。URL に 2 つ目の綴りを作らない | `factory/src/main.rs` の stress のつまみ、手順は `verification/factory-on-a-real-gpu.md` |
+| 09-22 F6 | 公開用の絵を足さない。入口のページの Kenney CC0 は footer に 1 段落 | README にも入口にも絵を置く流儀が無い。3 本とも Kenney なので 1 か所で言えば全部について真 | `README.md` / `web/index.html` |
+| 09-22 F6 | `stress:` の行に地図の大きさと GPU のアダプタ名、`control.rb` / `inserter.rb` のコンパイルの ms を 1 行 | ms は何を何で描いていたかが無ければ意味がない。ページではコンパイルの間キャンバスが白い | `factory/src/main.rs` の `watch_the_frames`、`control::compile` / `inserters::compile` |
 
 ## B. 著者にしか決められないもの（公開後に）
 
 | 件 | 材料 | 場所 |
 |---|---|---|
-| **factory の地図の既定の大きさ**（今 32×32 = F0 の仮の値） | スクリプトの上限は縛らない（3,000 台で tick p95 2.2 ms）。残る不明は描画で、この機械はソフトウェア描画しか無い。著者の実機のブラウザで `?stress` を 1 度 | `docs/numbers.md` §9.6 |
+| **factory の地図の既定の大きさ**（今 32×32 = F0 の仮の値） | スクリプトの上限は縛らない。残る不明は描画で、この機械はソフトウェア描画しか無い。**著者が実機のブラウザで https://sabiruby.github.io/rubevy_games/factory/?arms=1 を開き、console の `stress: map …` の行を 3 行**（大きい地図は `F1` → `data.rb` → `size:` を変えて Apply → `Ctrl+S` → 再読み込み）。見るのは `frame ms` が 16.7 を離れるのはどの地図からか | `docs/verification/factory-on-a-real-gpu.md`、`docs/numbers.md` §9.6 |
 | `implementer.md` に足す確認の作法（条件で待つのはフレームでも同じ／交互だけでなく向きも入れ替える／バージョンが自分を名乗る行を見る／`main()` の `warn!` は出ない） | S11 の担当が文面の案を出す | `docs/worklog/2026-09-22-s11.md` |
 | `rubevy-egui` の 4 つの設定の床（`vm_regs_frames`・`vm_value_chars`・`code_rows`・`code_chars`）に「断る口」が届かない。この crate は `Settings` を知らない設計で、届かせるには公開の署名を変えることになる | S11 の担当は実装せず報告 | `docs/worklog/2026-09-22-s11.md` の気づいた点 2 |
 | `--shot` の後の猶予の秒（箱庭 2.0、Battle と factory 1.0）の出どころが不明で、3 本で違う理由もどこにも無い | `docs/numbers.md` §10.3 に「不明」と書いた | 3 本の `take_shot` |
