@@ -14,10 +14,15 @@
 #     script is still running, `find` is one of the four rubevy answers itself, a write and a
 #     despawn are commands the script does not wait for, and `garden.within` is a closure the game
 #     registered with `answer_in_tick`;
-#   * `Rubevy.ask("frame")` is the one question the *game* answers in a system, and it therefore
-#     costs exactly one frame. So `run_world` at the foot of this file waits on it, once, and that
-#     is what makes the loop turn once per frame — not `sleep 0`, which would run several times in
-#     one frame, and not `sleep 1.0/60`, which would drift against the frame it is meant to be.
+#   * `Rubevy.next_frame` — which is what `Rubevy.each_frame` is a loop around — parks the task
+#     until the head of the next frame's tick and is woken there, **before anything else of that
+#     frame runs**. So `run_world` at the foot of this file waits on it, once, and that is what
+#     makes the loop turn once per frame — not `sleep 0`, which would run several times in one
+#     frame, and not `sleep 1.0/60`, which would drift against the frame it is meant to be.
+#     (Until S9 the garden asked `Rubevy.ask("frame")` and a system of its own answered it, which
+#     cost a frame for the same reason. rubevy makes the promise itself now — it is the one thing
+#     a `sleep` cannot spell — so the game's answer is gone and the spelling is the one every
+#     rubevy game can read.)
 #
 # **A write lands at the end of the frame**, as it always did, so a value written here cannot be
 # read back here. The rules are written as `dt` integrations for that reason: everything a pass
@@ -347,16 +352,22 @@ def run_world
   # creature's `on` (`prelude.rb`), with a `sleep` where that one has a queue.
   timers = start_timers(being, klass)
 
-  loop do
-    # **The one round trip, and the reason there is one.** The game answers this in
-    # `RubevySet::<World>::answer()`, so the task wakes in the next frame's tick: one pass of the
-    # loop is one frame, exactly, with nothing to keep in step and nothing to drift.
-    n = Rubevy.ask("frame").pop
+  # **The one wait, and the reason there is one.** `Rubevy.each_frame` is `Rubevy.next_frame` and
+  # a loop: the task is parked until the head of the next frame's tick and woken there, before
+  # anything else of that frame runs, so **one pass of this block is one frame, exactly**, with
+  # nothing to keep in step and nothing to drift. `dt` is that frame's delta and `n` its number,
+  # both handed over rather than asked for.
+  #
+  # Until S9 this was the garden's own `Rubevy.ask("frame")`, answered by a system of the game's
+  # (`answer_world`) — which cost a frame for the same reason and worked, but was a second
+  # spelling of a promise rubevy now makes itself (rubevy's R11). The difference the swap makes
+  # is that the number is the frame the block *runs* in rather than the frame the question was
+  # answered in, one earlier; nothing here reads it but `begin_frame`, which keeps it for a
+  # `world.rb` that wants to know.
+  Rubevy.each_frame do |dt, n|
     break if n.nil?
     being.begin_frame(n)
-    # `$rubevy` is refreshed at the head of this VM's own tick, so this is this frame's delta and
-    # it costs no question at all.
-    being.each_frame($rubevy[:delta])
+    being.each_frame(dt)
   end
 rescue => e
   Rubevy.log "world: #{e.class}: #{e.message}"

@@ -757,7 +757,8 @@ pub fn inspect_keys(
 /// Everything the panel says about a creature it can say about the rules, because none of it was
 /// ever about creatures: **what it is waiting for** is worked out from the frames alone
 /// (`rubevy_egui::inspect::why`), and the world's task waits for exactly two things — one pass
-/// of `each_frame` ends on `Rubevy.ask("frame")`, which is a `Rubevy::Proxy` ask like any other,
+/// of `each_frame` ends on `Rubevy.next_frame` (S9; the garden's own `Rubevy.ask("frame")` until
+/// then),
 /// and a timer task made by `every` is asleep. **Where it is waiting** is the innermost frame of
 /// `world.rb` itself, once the world's prelude has been taken off it (`crate::WorldPrelude`, the
 /// world's half of what a creature keeps in its `Mind`). The two numbers are `WorldMeter`'s — the
@@ -929,7 +930,7 @@ pub fn draw_hud(
             // **W3: what the rules cost, beside what the creatures cost.**
             //
             // The world's script runs exactly one pass of `each_frame` per frame (it waits on
-            // `Rubevy.ask("frame")`, and nothing else it asks costs a frame — `world_prelude.rb`),
+            // `Rubevy.next_frame`, and nothing else it asks costs a frame — `world_prelude.rb`),
             // so the instructions it ran between two frames *are* one pass of the rules. That is
             // what makes this a plainer number than the creatures' `insn/decision` column, and it
             // is the number the world VM's budget was chosen from (`crate::WorldMeter`,

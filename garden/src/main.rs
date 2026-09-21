@@ -1730,8 +1730,9 @@ const SPROUT_GAP: f32 = 1.5;
 /// **What one pass of `world.rb`'s `each_frame` costs** (W1), and the wall time this VM's tick
 /// took — the two numbers `ScriptWorld<World>`'s `budget` and `frame_time` were chosen from.
 ///
-/// The world's script is one task that waits on one `Rubevy.ask("frame")` and therefore runs
-/// **exactly one pass per frame**, so the instructions it ran between two frames *are* a pass:
+/// The world's script is one task that waits on one `Rubevy.next_frame` (S9; the garden's own
+/// `Rubevy.ask("frame")` until then) and therefore runs **exactly one pass per frame**, so the
+/// instructions it ran between two frames *are* a pass:
 /// there is nothing to separate out and no gap to interpret, which is what makes this a simpler
 /// measurement than the creatures' `insn/decision` (`watch_minds`).
 #[derive(Resource, Default)]
@@ -1742,7 +1743,7 @@ struct WorldMeter {
     /// the name says that rather than "passes" (S5b-5).
     ///
     /// The two are the same number for the rules as they are written: the script waits on
-    /// `Rubevy.ask("frame")`, which is the only thing it asks that costs a frame, so one frame is
+    /// `Rubevy.next_frame`, which is the only thing it waits on, so one frame is
     /// one pass of `each_frame` and a run counts 5,372 of them in 5,373 frames (`docs/garden.md`).
     /// But that is a fact about *these* rules and not about the measurement: a `world.rb` that
     /// asks two questions costing a frame, or one whose pass does not finish inside a frame,
@@ -3011,7 +3012,7 @@ fn main() {
         // `is_still` is the run condition the deleted rule chain carried, now where the rules
         // are: a garden that is being read back from a file does not age while its minds are
         // starting, and `P` stops the world. Skipping the set skips the tick, so the pass simply
-        // does not happen — the world's task is parked on `Rubevy.ask("frame")` either way, and
+        // does not happen — the world's task is parked on `Rubevy.next_frame` either way, and
         // the delta it wakes with is one frame's and not the pause's.
         //
         // `VmClockSet` is the pair of systems that time the creatures' tick (`rubevy-egui`). They
@@ -5813,15 +5814,18 @@ fn install_world_answers(
 /// asked different things by different people, and which VM asked is which resource the system
 /// reads. What they do share — `garden.spawn`, `garden.count` — is shared as a function.
 ///
-/// `"frame"` is the smallest of them and the one the whole design rests on. It answers the frame
-/// number, and `run_world` waits on it once a pass: a question a *system* answers costs exactly one
-/// frame (rubevy `docs/host-api.md`, "Where the game's systems go in the frame"), so waiting on it
-/// once is what makes one pass of `each_frame` one frame — no `sleep` to keep in step and nothing
-/// to drift.
+/// **`"frame"` used to be here and is not any more** (S9). It answered the frame number, and
+/// `run_world` waited on it once a pass, because a question a *system* answers costs exactly one
+/// frame (rubevy `docs/host-api.md`, "Where the game's systems go in the frame") — which is what
+/// made one pass of `each_frame` one frame, with no `sleep` to keep in step and nothing to drift.
+/// rubevy makes that promise itself now (`Rubevy.next_frame`, and `Rubevy.each_frame` around it),
+/// so the garden's own spelling of it is gone: `world_prelude.rb`'s loop is
+/// `Rubevy.each_frame { |dt, n| … }`, the wait is rubevy's reserved `frame.next` and no game can
+/// answer it, and one question fewer crosses this boundary. A `world.rb` that still asks
+/// `Rubevy.ask("frame")` gets `Answer::Nil` like any other unknown question.
 fn answer_world(world: &mut bevy::ecs::world::World) {
     let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else { return };
     let registry = registry.read();
-    let frame = world.resource::<bevy::diagnostic::FrameCount>().0;
     let mut newborn: Vec<Birth> = Vec::new();
     let mut refused: Option<String> = None;
     let mut pairings: Vec<(Entity, Genome, Genome, Option<f32>)> = Vec::new();
@@ -5850,7 +5854,6 @@ fn answer_world(world: &mut bevy::ecs::world::World) {
                 })
                 .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>());
             match request.kind.as_str() {
-                "frame" => scripts.answer(&request, Answer::Num(frame as f64)),
                 // the numbers a rule keeps but the game has to build or draw with. Read with
                 // serde, like the spawn Hash and for the same reason: the message a bad one gets
                 // back is worth as much as the reading

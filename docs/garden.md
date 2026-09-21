@@ -477,9 +477,10 @@ so `P` and a save being read back stop the rules the way they stopped the system
 each_frame do |dt|   # every blade, every creature, once
 ```
 
-is a loop that waits on `Rubevy.ask("frame")`, and one round trip is one frame. It works because
-that is the **only** thing the rules ask that costs a frame (the table under **The questions**),
-so the count comes out exact: over a ninety-second run, 5,373 frames and 5,372 passes, the two
+is `Rubevy.each_frame`, which is `Rubevy.next_frame` and a loop: the task is parked until the head
+of the next frame's tick and woken there, before anything else of that frame runs. One pass is one
+frame. It works because that is the **only** thing the rules wait on (the table under
+**The questions**), so the count comes out exact: over a ninety-second run, 5,373 frames and 5,372 passes, the two
 missing ones being the script starting up.
 
 That is a fact about *these* rules, though, and not about the meter that counts them:
@@ -745,7 +746,7 @@ two closures registered with `ScriptWorld::answer_in_tick`. The important column
 
 | the rules say | what it is | frames |
 |---|---|---|
-| `Rubevy.ask("frame").pop` | `answer_world`, a system. One round trip is one frame, which is what makes `each_frame` run **exactly once** a frame | **1** |
+| `Rubevy.next_frame` (inside `Rubevy.each_frame`) | rubevy's own reserved question — the task is parked and woken at the head of the next frame's tick, which is what makes `each_frame` run **exactly once** a frame. Until 2026-09-21 (S9) the garden asked `Rubevy.ask("frame")` and answered it in a system of its own; that cost a frame for the same reason and is gone | **1** |
 | `garden.within(c, 1.1, :Plant)` | `answer_in_tick`: a closure the tick calls between two runs of the VM, walking the world in Rust and answering `Answer::Rows` — `[the entity's bits, how far]`, nearest first | 0 |
 | `garden.now` | `answer_in_tick`: the garden's own clock, the one `P` holds and a save carries | 0 |
 | `garden.seed` | `answer_in_tick`: one roll of the game's `Dice`, which is seeded from the wall clock, so the rules' own dice differ between runs | 0 |
@@ -1366,9 +1367,8 @@ from: the two panels stay on the same file, and `Tab` or a click on a creature b
 
 Everything the panel says about a creature it says about the rules, because none of it was ever
 about creatures. *Why* it is waiting is read off the frames by the same table above — one pass of
-`each_frame` ends on `Rubevy.ask("frame")`, which is the fourth row (a question to the game, named
-by the method that asked, because `Rubevy.ask` is a module function and not a `Rubevy::Proxy`), and
-a timer task made by `every` is the fifth. *Where* is the innermost frame of `world.rb` with the
+`each_frame` ends on `Rubevy.next_frame`, which is the fourth row, and a timer task made by `every`
+is the fifth. *Where* is the innermost frame of `world.rb` with the
 world's prelude taken off, which is what `WorldPrelude` is for — the world's half of what a
 creature keeps in its `Mind`, kept as a resource because there is one set of rules, and written
 wherever they are put on so that saving `world_prelude.rb` moves the line numbers with it. The two
