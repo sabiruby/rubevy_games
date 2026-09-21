@@ -161,6 +161,26 @@ struct InserterDecl {
     seconds_per_item: f32,
 }
 
+/// **How big the world is** (F3a), which is a declaration for the same reason the fittings are:
+/// what a map is big enough for is what the game *is* — how many chains fit on it, how far the
+/// ore is from the smelters, how much walking there is — and that is played rather than
+/// configured. `factory.settings.txt` had it until F3a, where a page had no way of saying it at
+/// all, and the author asked for the size to be free before any default was settled.
+///
+/// **`size:` is the machine's word, because it means the machine's thing**: how many tiles this
+/// covers, across and up. The same reason `inserter` borrowed `seconds_per_item:` from `miner` at
+/// F3 — one meaning, one spelling — and the reason not to invent `tiles:` for the same idea.
+///
+/// The floor and the ceiling are not here but in [`tables_of`]: the floor needs the ore's radius
+/// and count, which are another declaration's, and a refusal that can name both numbers is worth
+/// more than one that can only say "too small".
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+struct MapDecl {
+    /// Tiles across and up, and **they may differ**: a map 96 by 16 is a valley.
+    size: [u32; 2],
+}
+
 /// **What is in the ground**, which is a fitting of the world like the three above it: no recipe
 /// makes it and no machine makes it in.
 ///
@@ -172,17 +192,28 @@ struct InserterDecl {
 /// one place, and a second kind of ore is a second `ore` line.
 ///
 /// F2 left `ore_per_tile` in `factory.settings.txt` because its neighbour — how *wide* a patch is
-/// — is wanted in `main`, before there is a VM to have read any Ruby with, and the two were one
-/// number in the same struct. They are not one number: how much a tile holds is a number of play
-/// (a tile of ore is a chest's worth, which is a minute of one miner, and all three of those live
-/// in this file now), while how wide a patch is is where the map's own smallest size comes from.
-/// So this word holds the first and the setting keeps the second, and each says where the other
-/// is (`ruby/data.rb`, `docs/numbers.md` §9.2).
+/// — was wanted in `main`, before there is a VM to have read any Ruby with, and the two were one
+/// number in the same struct. F2a moved the first; **F3a moves the other two and the line is
+/// gone**, because the map's own size is a declaration now and nothing about the world is worked
+/// out before the data stage.
+///
+/// **Three fields and no defaults.** A patch's width and how many patches there are decide
+/// whether a map can be played on at all — four patches on a map of two hundred tiles is a
+/// factory with nothing to feed it — so they are the data file's to say, like everything else
+/// here (`docs/numbers.md` §9.3: there are no numbers of play in the binary).
 #[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 struct OreDecl {
     #[serde(deserialize_with = "at_least_one")]
     per_tile: u32,
+    /// How wide one patch is, in tiles, measured from its middle.
+    #[serde(deserialize_with = "more_than_zero")]
+    patch_radius: f32,
+    /// **How many patches there are, across and up** — one in the middle of each cell of that
+    /// grid ([`crate::grid::Ore::laid_out`]). `[2, 2]` is the four in the corners the game had
+    /// before this was something a file could say, tile for tile.
+    #[serde(deserialize_with = "at_least_one_each_way")]
+    patches: [u32; 2],
 }
 
 /// **A number the factory divides by or runs on has to be more than zero**, and this is where
@@ -254,6 +285,17 @@ fn a_size<'de, D: Deserializer<'de>>(d: D) -> Result<[u32; 2], D::Error> {
             "a machine covers at least one tile each way, not {} by {}",
             size[0], size[1]
         )))
+    }
+}
+
+/// The same shape for something counted in both directions: `patches: [2, 2]`. A map with no
+/// patches of ore across it is a map with no ore on it.
+fn at_least_one_each_way<'de, D: Deserializer<'de>>(d: D) -> Result<[u32; 2], D::Error> {
+    let n = <[u32; 2]>::deserialize(d)?;
+    if n[0] >= 1 && n[1] >= 1 {
+        Ok(n)
+    } else {
+        Err(D::Error::custom(format!("this counts things, so it is at least 1 each way, not {} by {}", n[0], n[1])))
     }
 }
 
@@ -504,6 +546,7 @@ pub fn read_the_declarations(
     let chests = Declarations::<ChestDecl>::install(vm).define(vm, "chest");
     let ores = Declarations::<OreDecl>::install(vm).define(vm, "ore");
     let arms = Declarations::<InserterDecl>::install(vm).define(vm, "inserter");
+    let maps = Declarations::<MapDecl>::install(vm).define(vm, "map");
 
     let ran = vm.load_and_run(&bytes);
 
@@ -518,12 +561,13 @@ pub fn read_the_declarations(
     let chests = chests.take_with_lines(vm);
     let ores = ores.take_with_lines(vm);
     let arms = arms.take_with_lines(vm);
+    let maps = maps.take_with_lines(vm);
 
     if let Err(e) = ran {
         return Err(Trouble::from_raise(vm, &e));
     }
 
-    let tables = tables_of(items, recipes, machines, belts, miners, chests, ores, arms)?;
+    let tables = tables_of(items, recipes, machines, belts, miners, chests, ores, arms, maps)?;
     Ok(tables)
 }
 
@@ -552,6 +596,57 @@ fn exactly_one<T>(word: &str, mut all: Vec<Declared<T>>) -> Result<Declared<T>, 
     }
 }
 
+/// **How big the map may be, and what says so** (F3a) — the one check in this file that reads two
+/// declarations and the only one whose numbers come from outside the data file altogether.
+///
+/// The author asked for the size to be free, so **nothing here is a size somebody preferred**.
+/// Two things refuse a map, and each is something that actually breaks:
+///
+/// * **too small for its own ore.** A patch that reaches the border ring is ore nobody can see
+///   or stand a miner on, so the floor is [`crate::grid::Ore::smallest_map`] — and it is asked of each side
+///   separately, because a map 96 by 16 is two rows of patches on a wide floor and neither number
+///   says anything about the other. The floor depends on the radius and the count, which is why
+///   the sentence names all three numbers: the size is one of three ways to fix it.
+/// * **too big for the picture.** [`crate::draw::MOST_TILES_ACROSS`] is the tile data texture's
+///   own limit, which is the drawing's and not this game's.
+///
+/// **Neither is clamped.** A map quietly made bigger than the file said is a file that lies about
+/// the world, and the whole of F3a is that the file says. The refusal lands on the `map` line,
+/// with the number that would do.
+fn a_map_that_can_be_played_on(
+    world: &MapDecl,
+    ore: &OreDecl,
+    line: Option<u32>,
+) -> Result<UVec2, Trouble> {
+    let asked = UVec2::new(world.size[0], world.size[1]);
+    let patches = UVec2::new(ore.patches[0], ore.patches[1]);
+    let most = crate::draw::MOST_TILES_ACROSS;
+    for (side, tiles, count, way) in [
+        ("across", asked.x, patches.x.max(1), "wide"),
+        ("up", asked.y, patches.y.max(1), "tall"),
+    ] {
+        let least = crate::grid::Ore::smallest_map(ore.patch_radius, count);
+        if tiles < least {
+            return Err(Trouble {
+                at: line,
+                what: format!(
+                    "a map {tiles} tiles {side} has no room for {count} patches of ore of radius {} without them touching the wall: make it {least} tiles {side}, or ask for fewer patches, or a smaller patch_radius",
+                    ore.patch_radius
+                ),
+            });
+        }
+        if tiles > most {
+            return Err(Trouble {
+                at: line,
+                what: format!(
+                    "a map {tiles} tiles {side} cannot be drawn: the floor is one texture of one texel a tile and {most} is as {way} as one goes"
+                ),
+            });
+        }
+    }
+    Ok(asked)
+}
+
 /// The names turned into numbers, and every reference checked.
 #[allow(clippy::too_many_arguments)]
 fn tables_of(
@@ -563,6 +658,7 @@ fn tables_of(
     chests: Vec<Declared<ChestDecl>>,
     ores: Vec<Declared<OreDecl>>,
     arms: Vec<Declared<InserterDecl>>,
+    maps: Vec<Declared<MapDecl>>,
 ) -> Result<(Data, Rules), Trouble> {
     if items.is_empty() {
         return Err(Trouble { at: None, what: "nothing declares an item".into() });
@@ -648,6 +744,9 @@ fn tables_of(
         });
     };
 
+    let Declared { value: world, line: map_line, .. } = exactly_one("map", maps)?;
+    let map_tiles = a_map_that_can_be_played_on(&world, &ore, map_line)?;
+
     let rules = Rules {
         belt_tiles_per_second: belt.tiles_per_second,
         items_per_tile: belt.items_per_tile,
@@ -656,6 +755,9 @@ fn tables_of(
         digs,
         swing_seconds: arm.seconds_per_item,
         ore_per_tile: ore.per_tile,
+        ore_patch_radius: ore.patch_radius,
+        ore_patches: UVec2::new(ore.patches[0], ore.patches[1]),
+        map_tiles,
     };
     let data = Data {
         items: made_items,
@@ -800,8 +902,9 @@ mod tests {
         "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",                 // 6
         "miner :drill, seconds_per_item: 1.0\n",                                      // 7
         "chest :crate, capacity: 60\n",                                               // 8
-        "ore :iron_ore, per_tile: 60\n",                                              // 9
+        "ore :iron_ore, per_tile: 60, patch_radius: 3.0, patches: [2, 2]\n",          // 9
         "inserter :arm, seconds_per_item: 1.0\n",                                     // 10
+        "map :world, size: [32, 32]\n",                                               // 11
     );
 
     #[test]
@@ -930,7 +1033,7 @@ mod tests {
     fn a_name_declared_twice_is_refused_at_the_second_one() {
         let source = format!("{GOOD}item :iron_ore, icon: 7\n");
         let trouble = read(&source).expect_err("declared twice");
-        assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(12), "{}", trouble.say("data.rb"));
         assert!(trouble.what.contains("already declared"), "{}", trouble.what);
     }
 
@@ -942,21 +1045,88 @@ mod tests {
         assert!(trouble.say("data.rb").starts_with("data.rb:1: "), "{}", trouble.say("data.rb"));
     }
 
-    /// **The five fittings are declared exactly once each**, which is the shape the world has
-    /// room for. `ore` is F2a's and `inserter` is F3's, and each is one of them for the same
-    /// reason the first three are: a thing of the world with a number of its own, and the game
-    /// has one of it.
+    /// **The five fittings and the map are declared exactly once each**, which is the shape the
+    /// world has room for. `ore` is F2a's, `inserter` is F3's and `map` is F3a's, and each is one
+    /// of them for the same reason the first three are: a thing of the world with a number of its
+    /// own, and the game has one of it.
     #[test]
-    fn the_world_has_one_belt_one_miner_one_chest_one_ore_and_one_inserter() {
+    fn the_world_has_one_belt_one_miner_one_chest_one_ore_one_inserter_and_one_map() {
         let none = GOOD.replace("chest :crate, capacity: 60\n", "");
         assert_eq!(read(&none).expect_err("no chest").what, "nothing declares a chest");
-        let none = GOOD.replace("ore :iron_ore, per_tile: 60\n", "");
+        let none = GOOD.replace("ore :iron_ore, per_tile: 60, patch_radius: 3.0, patches: [2, 2]\n", "");
         assert_eq!(read(&none).expect_err("no ore").what, "nothing declares an ore");
+        let none = GOOD.replace("map :world, size: [32, 32]\n", "");
+        assert_eq!(read(&none).expect_err("no map").what, "nothing declares a map");
+        let two = format!("{GOOD}map :another, size: [40, 40]\n");
+        let trouble = read(&two).expect_err("two maps");
+        assert_eq!(trouble.at, Some(12), "{}", trouble.say("data.rb"));
         let none = GOOD.replace("inserter :arm, seconds_per_item: 1.0\n", "");
         assert_eq!(read(&none).expect_err("no arm").what, "nothing declares an inserter");
         let two = format!("{GOOD}belt :fast, tiles_per_second: 8.0, items_per_tile: 2\n");
         let trouble = read(&two).expect_err("two belts");
+        assert_eq!(trouble.at, Some(12), "{}", trouble.say("data.rb"));
+    }
+
+    /// **How big the map may be, and what says so** (F3a).
+    ///
+    /// The author asked for the size to be free, so what is asserted here is that **the two
+    /// refusals are the only two** and that each lands exactly where the thing it is about
+    /// breaks: one tile inside each is a map the game starts on, one tile outside is a sentence
+    /// with the line on it. The floor is the ore's (a patch on the border ring is ore nobody can
+    /// see) and the ceiling is the picture's (the floor is one texture of one texel a tile).
+    #[test]
+    fn a_map_is_refused_when_its_ore_or_its_picture_says_so_and_not_before() {
+        let sized = |w: u32, h: u32| GOOD.replace("size: [32, 32]", &format!("size: [{w}, {h}]"));
+        // the floor, exactly: fifteen tiles at radius 3 with two patches each way (`Ore`)
+        let least = crate::grid::Ore::smallest_map(3.0, 2);
+        assert_eq!(least, 15);
+        let (_, rules) = read(&sized(least, least)).expect("the smallest map there is");
+        assert_eq!(rules.map_tiles, UVec2::splat(least));
+        // …and one tile under it, each way separately, because the two sides are two questions
+        for (w, h) in [(least - 1, least), (least, least - 1)] {
+            let trouble = read(&sized(w, h)).expect_err("too small for its own ore");
+            assert_eq!(trouble.at, Some(11), "{w} by {h}: {}", trouble.say("data.rb"));
+            assert!(
+                trouble.what.contains(&least.to_string()) && trouble.what.contains("patch"),
+                "the refusal has to say what would do, and which numbers make it: {:?}",
+                trouble.what
+            );
+        }
+        // **the floor moves with the ore, which is the whole reason it is not a number**: more
+        // patches, or wider ones, and the same map is too small
+        let more = sized(least, least).replace("patches: [2, 2]", "patches: [3, 2]");
+        let trouble = read(&more).expect_err("three patches want more room");
         assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
+        let wider = sized(least, least).replace("patch_radius: 3.0", "patch_radius: 4.0");
+        assert!(read(&wider).is_err(), "a wider patch wants a bigger map");
+        // and a smaller one wants less: the floor is a formula and not a constant
+        let (_, rules) = read(
+            &sized(least, least)
+                .replace("patch_radius: 3.0", "patch_radius: 1.0")
+                .replace("patches: [2, 2]", "patches: [1, 1]"),
+        )
+        .expect("one small patch fits easily");
+        assert_eq!(rules.map_tiles, UVec2::splat(least));
+
+        // the ceiling, either side of it
+        let most = crate::draw::MOST_TILES_ACROSS;
+        let (_, rules) = read(&sized(most, 32)).expect("as wide as a texture goes");
+        assert_eq!(rules.map_tiles, UVec2::new(most, 32));
+        for (w, h) in [(most + 1, 32), (32, most + 1)] {
+            let trouble = read(&sized(w, h)).expect_err("too big to draw");
+            assert_eq!(trouble.at, Some(11), "{w} by {h}: {}", trouble.say("data.rb"));
+            assert!(
+                trouble.what.contains(&most.to_string()) && trouble.what.contains("drawn"),
+                "the refusal has to say what breaks and where it stops: {:?}",
+                trouble.what
+            );
+        }
+
+        // **and in between, the two sides are free and need not agree** — which is what F3a is
+        for (w, h) in [(96u32, 16u32), (15, 512), (33, 32)] {
+            let (_, rules) = read(&sized(w, h)).expect("a map between the two");
+            assert_eq!(rules.map_tiles, UVec2::new(w, h), "{w} by {h}");
+        }
     }
 
     /// **The ground is named after what comes out of it** (the author, 2026-09-21), and both

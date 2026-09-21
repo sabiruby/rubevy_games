@@ -11,11 +11,38 @@
 #   item   :name, icon:                      something that can be on a belt
 #   recipe :name, in:, out:, time:, made_in: what a machine turns things into
 #   machine :name, size:, sprite:, speed:    what runs a recipe
+#   map    :name, size:                      how big the world is, in tiles
 #   belt / miner / chest / ore / inserter    the five fittings the world has built in
 #
 # `icon:` is which picture of `assets/items/items.png` (tools/factory-items.py prints the list),
 # and `sprite:` is which tile of `assets/tiles/factory-tiles.png` (docs/factory-tiles.png is the
 # same sheet with the numbers on it). One picture per tile the machine covers, top row first.
+
+# ---------------------------------------------------------------------------------------------
+# The world
+# ---------------------------------------------------------------------------------------------
+
+# **How big the map is, in tiles across and up — and they do not have to be the same.**
+# `size:` is the machine's own word because it means the machine's own thing: how many tiles this
+# covers, across and up.
+#
+# **32 by 32 is still the provisional value F0 picked**, and it is here rather than in
+# `factory.settings.txt` (where it was until 2026-09-21) because what a map is big enough for is
+# what the game is, not how the game is run — and because a page has no settings file to write, so
+# the size could not be changed there at all. One chain of the factory below is 2 miners, 4
+# furnaces, 1 assembler and 10 inserters — about 30 tiles — so 1,024 tiles is room for about 34 of
+# them. Make it bigger and say `patches:` to match, or the ore runs out before the map does.
+#
+# Two sizes are refused at this line rather than quietly changed:
+#
+#   * smaller than the ore needs — the patches below would touch the wall, where nothing can be
+#     built and nothing can be seen. The message says how many tiles would do;
+#   * larger than 2048 either way, which is where the drawing stops: the floor is one texture with
+#     one texel per tile, and 2048 is the size every WebGL2 machine is guaranteed to manage.
+#
+# Everything in between is yours. A big map costs memory — the game logs how many megabytes when
+# it lays the land — and that is a fact about your machine rather than a rule of the game.
+map :world, size: [32, 32]
 
 # ---------------------------------------------------------------------------------------------
 # The things
@@ -61,11 +88,22 @@ chest :crate, capacity: 60
 # purpose — before F2a this one lived in `factory.settings.txt` and the chest did not, so moving
 # the chest moved nothing.
 #
-# **How wide a patch is stayed a setting** (`ore_patch_radius` in factory.settings.txt): the
-# smallest map the four patches fit on without touching the border is worked out from it before
-# the game has a VM to read this file with, so it cannot be here. This number is read once the
-# world is laid out, which is after.
-ore :iron_ore, per_tile: 60
+# **How wide a patch is and how many there are** came here on 2026-09-21 with the map's own size,
+# and for the same reason: the radius was the last number of the world's layout left in
+# `factory.settings.txt`, kept there because the smallest map it allows was worked out before the
+# game had a VM to read this file with. The map is a declaration now, so nothing about the world
+# is worked out before this file is read.
+#
+# **`patches: [2, 2]` is two across and two up** — one in the middle of each quarter of the map,
+# which is where the four have always been. It is a grid rather than a count so that the places
+# are the same in every run (a scattering would want a seed, which would be a number with nothing
+# behind it) and so that a map that is not square gets patches where its cells are: `[6, 2]` on a
+# 96 by 16 map is twelve patches, evenly spread, none of them on the wall.
+#
+# **Radius 3 is about 29 tiles**, which at 60 each is 1,740 ore — six chains' worth of iron for
+# the whole patch. Four patches on a map much bigger than this one is a factory with nothing to
+# feed it: the rule of thumb is a patch per thousand tiles or so.
+ore :iron_ore, per_tile: 60, patch_radius: 3.0, patches: [2, 2]
 
 # **One item a second is a quarter of a full belt** — and it is exactly one miner's output, which
 # is the whole derivation: one inserter keeps up with one miner, one keeps two furnaces fed (they

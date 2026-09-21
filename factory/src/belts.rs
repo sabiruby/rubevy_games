@@ -97,9 +97,30 @@ pub struct Rules {
     /// **How many items can be dug out of one tile of ore.** It is here rather than in
     /// [`crate::Map`] because it is a number of *play* — how long a patch lasts is how long a line
     /// of miners is worth building — and because `Ore::laid_out` runs in `Startup`, after the data
-    /// stage, so there is a VM to have read it with. How *wide* a patch is stayed a setting: the
-    /// smallest map is derived from that one in `main`, where there is not.
+    /// stage, so there is a VM to have read it with.
     pub ore_per_tile: u32,
+    /// **How wide a patch of ore is**, in tiles, and **how many of them there are** across and up
+    /// — `ore :iron_ore, patch_radius:, patches:` in `ruby/data.rb`.
+    ///
+    /// Both were on the other side of the line until F3a. The radius was the last number of the
+    /// world's layout left in `factory.settings.txt`, and the reason was that the smallest map it
+    /// allows was wanted in `main`, before there was a VM; now the map's own size is a
+    /// declaration too, so nothing about the world is worked out before the data stage and the
+    /// reason is gone ([`Rules::map_tiles`]).
+    pub ore_patch_radius: f32,
+    /// See [`Rules::ore_patch_radius`]. `[2, 2]` is the four F1 laid by hand.
+    pub ore_patches: UVec2,
+    /// **How big the map is, in tiles across and up** — `map :world, size: [w, h]`.
+    ///
+    /// It is a number of play like the rest of this struct and not a setting, because what a map
+    /// is big enough for is what the game *is*: how many chains fit, how far the ore is from the
+    /// smelters, how much walking there is. `factory.settings.txt` had it until F3a and a page
+    /// had no way of saying it at all ([`crate::Map`]).
+    ///
+    /// The floor under it is [`crate::grid::Ore::smallest_map`] on each side and the ceiling is
+    /// [`crate::draw::MOST_TILES_ACROSS`]; both are refused at the line the size is written on
+    /// rather than clamped (`crate::data`).
+    pub map_tiles: UVec2,
 }
 
 impl Rules {
@@ -187,8 +208,8 @@ pub struct Lanes {
 }
 
 impl Lanes {
-    pub fn for_map(tiles: u32) -> Lanes {
-        let n = (tiles * tiles) as usize;
+    pub fn for_map(tiles: UVec2) -> Lanes {
+        let n = crate::grid::how_many(tiles);
         Lanes {
             of: vec![VecDeque::new(); n],
             tails: vec![Steps::MAX; n],
@@ -467,7 +488,8 @@ mod tests {
         "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",
         "miner :drill, seconds_per_item: 1.0\n",
         "chest :crate, capacity: 4\n",
-        "ore :ore, per_tile: 10\n",
+        "ore :ore, per_tile: 10, patch_radius: 1.0, patches: [1, 1]\n",
+        "map :world, size: [16, 16]\n",
         "inserter :arm, seconds_per_item: 1.0\n",
     );
 
@@ -491,13 +513,17 @@ mod tests {
 
     /// A map with a line of belts along row 1, running east from (1, 1).
     fn line(length: u32) -> (Grid, Ore, Lanes) {
-        let tiles = length + 4;
+        let tiles = UVec2::splat(length + 4);
         let mut grid = Grid::new(tiles);
         for x in 1..=length {
             let at = grid.index(UVec2::new(x, 1));
             grid.place(at, Building::new(What::Belt, Dir::East));
         }
-        (grid, Ore { left: vec![0; (tiles * tiles) as usize], changed: false }, Lanes::for_map(tiles))
+        (
+            grid,
+            Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false },
+            Lanes::for_map(tiles),
+        )
     }
 
     /// One sixtieth of a second, which is the frame the game steps by.
@@ -667,9 +693,9 @@ mod tests {
     #[test]
     fn two_belts_merge_into_one_and_keep_the_gap() {
         let (rules, data) = world();
-        let tiles = 8;
+        let tiles = UVec2::splat(8);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         // one belt running east into (4, 4), one running north into it, and one carrying on east
         let from_west = grid.index(UVec2::new(3, 4));
@@ -709,9 +735,9 @@ mod tests {
     #[test]
     fn belts_facing_each_other_do_not_pass_an_item_back_and_forth() {
         let (rules, data) = world();
-        let tiles = 6;
+        let tiles = UVec2::splat(6);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let left = grid.index(UVec2::new(2, 2));
         let right = grid.index(UVec2::new(3, 2));
@@ -731,10 +757,10 @@ mod tests {
     #[test]
     fn a_miner_digs_onto_a_belt_and_the_chest_at_the_end_fills_up() {
         let (rules, data) = world();
-        let tiles = 8;
+        let tiles = UVec2::splat(8);
         let mut grid = Grid::new(tiles);
         let mut lanes = Lanes::for_map(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let pit = grid.index(UVec2::new(1, 1));
         let belt = grid.index(UVec2::new(2, 1));
         let chest = grid.index(UVec2::new(3, 1));
@@ -762,10 +788,10 @@ mod tests {
     #[test]
     fn a_miner_with_nowhere_to_put_it_takes_nothing_out_of_the_ground() {
         let (rules, data) = world();
-        let tiles = 6;
+        let tiles = UVec2::splat(6);
         let mut grid = Grid::new(tiles);
         let mut lanes = Lanes::for_map(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let pit = grid.index(UVec2::new(2, 2));
         o.left[pit] = 5;
         grid.place(pit, Building::new(What::Miner, Dir::East));
@@ -874,9 +900,9 @@ mod tests {
     #[test]
     fn a_furnace_makes_what_the_recipe_says_in_the_time_it_says() {
         let (rules, data) = world();
-        let tiles = 10;
+        let tiles = UVec2::splat(10);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
         let arm_in = grid.index(UVec2::new(2, 1));
@@ -921,9 +947,9 @@ mod tests {
     #[test]
     fn a_belt_running_into_a_machine_jams_because_nothing_goes_in_but_through_an_arm() {
         let (rules, data) = world();
-        let tiles = 8;
+        let tiles = UVec2::splat(8);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
         let furnace = grid.index(UVec2::new(2, 1));
@@ -952,9 +978,9 @@ mod tests {
     #[test]
     fn an_arm_carries_one_thing_a_swing_and_holds_it_on_the_way() {
         let (rules, data) = world();
-        let tiles = 6;
+        let tiles = UVec2::splat(6);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
         let arm = grid.index(UVec2::new(2, 1));
@@ -991,9 +1017,9 @@ mod tests {
         let (base, data) = world();
         // a chest that is full before the arm ever reaches it
         let rules = Rules { chest_capacity: 1, ..base };
-        let tiles = 6;
+        let tiles = UVec2::splat(6);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
         let arm = grid.index(UVec2::new(2, 1));
@@ -1026,9 +1052,9 @@ mod tests {
     #[test]
     fn a_machine_will_not_take_what_it_has_no_recipe_for() {
         let (rules, data) = world();
-        let tiles = 6;
+        let tiles = UVec2::splat(6);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
         let furnace = grid.index(UVec2::new(2, 1));
@@ -1052,9 +1078,9 @@ mod tests {
     #[test]
     fn a_machine_of_four_tiles_is_fed_through_any_of_them() {
         let (rules, data) = world();
-        let tiles = 10;
+        let tiles = UVec2::splat(10);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let kind = data.machine("works").expect("declared");
         let origin = UVec2::new(3, 3);
@@ -1089,9 +1115,9 @@ mod tests {
     #[test]
     fn a_machine_holding_what_it_made_does_not_start_another_craft() {
         let (rules, data) = world();
-        let tiles = 6;
+        let tiles = UVec2::splat(6);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
         let arm_in = grid.index(UVec2::new(2, 1));
@@ -1196,12 +1222,12 @@ mod tests {
         // a chest nothing fills, so that the line keeps flowing for the whole run rather than
         // backing up into a stopped factory after the first few seconds
         let rules = Rules { chest_capacity: 10_000, ..base };
-        let tiles = 16;
+        let tiles = UVec2::splat(16);
         let mut grid = Grid::new(tiles);
         let mut lanes = Lanes::for_map(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
 
-        let at = |x: u32, y: u32| (y * tiles + x) as usize;
+        let at = |x: u32, y: u32| (y * tiles.x + x) as usize;
         let put = |grid: &mut Grid, x: u32, y: u32, what: What, dir: Dir| {
             grid.place(at(x, y), Building::new(what, dir));
         };
@@ -1263,9 +1289,9 @@ mod tests {
     #[test]
     fn a_machines_speed_divides_the_recipes_time() {
         let (rules, data) = world();
-        let tiles = 8;
+        let tiles = UVec2::splat(8);
         let mut grid = Grid::new(tiles);
-        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let kind = data.machine("works").expect("declared");
         let origin = UVec2::new(2, 2);

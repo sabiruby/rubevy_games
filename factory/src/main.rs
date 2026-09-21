@@ -88,22 +88,6 @@ const TILESET_LAYERS: u32 = 143;
 // The defaults, every one of which `factory.settings.txt` can move
 // ---------------------------------------------------------------------------------------------
 
-/// **How big the map is, in tiles each way. Still F0's provisional value**, and F1 could not
-/// settle it honestly — the plan (§3.7) says it comes from "how many machines have to fit", and
-/// two of the three things that would say are not known yet:
-///
-/// * **what the drawing can carry.** F1 measured the factory's own step at 16,000 items (0.3 ms,
-///   `docs/worklog/2026-09-21-factory-F1.md` §3), which is nowhere near a frame; what runs out
-///   first is the picture. Both renderers on the machine this was written on are **software**
-///   (lavapipe in the container, SwiftShader in the browser) and neither says anything about a
-///   real one: a browser there drew 900 belts at the same five frames a second with two items on
-///   them as with eighteen hundred.
-/// * **how many scripted inserters a frame holds**, which is F3's measurement.
-///
-/// So it stays where F0 put it, with the reason written down rather than a number invented to
-/// replace it (`docs/numbers.md` §9.2). A stress run sizes its own map and ignores this.
-const MAP_TILES: f32 = 32.0;
-
 /// **Half of how much world the window holds, top to bottom, in world units** — and one world
 /// unit is one pixel of the art. Derived: F0's provisional 128 was 3.515625 screen pixels to one
 /// pixel of the art in the default 900 px window, and a zoom that is not a whole number is what
@@ -213,43 +197,34 @@ const CHECK_SLACK: f32 = 2.0;
 /// there is one convention here and not two.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct Map {
-    /// How many tiles across and down. Square, for now.
-    pub tiles: u32,
-    /// **How wide a patch of ore is**, in tiles, and the one number of the world's layout that is
-    /// still a setting: the smallest map the four patches fit on is derived from it right here in
-    /// `main` — **before there is a VM to have read any Ruby with**. That is the line, and F2a
-    /// moved the number that was on the other side of it (`ore_per_tile`, which `Ore::laid_out`
-    /// reads in `Startup`, after the data stage) into `ruby/data.rb` with the rest of the numbers
-    /// of play.
-    pub ore_patch_radius: f32,
+    /// **How many tiles across and up**, which since F3a is two numbers and `ruby/data.rb`'s:
+    /// `map :world, size: [32, 32]`. It was a square in `factory.settings.txt` before that, read
+    /// in `main` before there was a VM — and a page, which has no settings file to write, could
+    /// not say it at all.
+    pub tiles: UVec2,
 }
 
 impl Map {
-    /// How wide the whole map is, in world units.
-    fn span(&self) -> f32 {
-        (self.tiles * TILE_PX) as f32
+    /// How wide and how tall the whole map is, in world units.
+    fn span(&self) -> Vec2 {
+        (self.tiles * TILE_PX).as_vec2()
     }
 
     /// **The tile a world point is in**, or `None` if the point is off the map. The map is
     /// centred on the origin, which is where the chunk puts itself.
     fn tile_at(&self, world: Vec2) -> Option<UVec2> {
         let half = self.span() / 2.0;
-        let col = ((world.x + half) / TILE_PX as f32).floor();
-        let row = ((world.y + half) / TILE_PX as f32).floor();
-        let last = self.tiles as f32;
-        (col >= 0.0 && col < last && row >= 0.0 && row < last)
-            .then(|| UVec2::new(col as u32, row as u32))
+        let at = ((world + half) / TILE_PX as f32).floor();
+        let last = self.tiles.as_vec2();
+        (at.x >= 0.0 && at.x < last.x && at.y >= 0.0 && at.y < last.y)
+            .then(|| at.as_uvec2())
     }
 
     /// **The middle of a tile, in world units.** The same arithmetic
     /// [`TilemapChunk::calculate_tile_transform`] does, written here because the game needs it
     /// before anything has been spawned.
     pub fn tile_centre(&self, tile: UVec2) -> Vec2 {
-        let half = self.span() / 2.0;
-        Vec2::new(
-            tile.x as f32 * TILE_PX as f32 + TILE_PX as f32 / 2.0 - half,
-            tile.y as f32 * TILE_PX as f32 + TILE_PX as f32 / 2.0 - half,
-        )
+        tile.as_vec2() * TILE_PX as f32 + TILE_PX as f32 / 2.0 - self.span() / 2.0
     }
 }
 
@@ -315,19 +290,13 @@ fn main() {
         args.value("--lang").as_deref(),
     );
 
-    // **The floor under the map's size is derived and not chosen.** F1 wrote `.max(8.0)` and
-    // could not say where the 8 came from; what says it is the ore, because a map too small for
-    // the four patches to clear its border ring is a map the game cannot be played on
-    // (`Ore::smallest_map`, which is 15 tiles at the default radius). It is read before the map
-    // so that the map can be clamped by it, which is the whole reason `ore_patch_radius` stays a
-    // setting rather than moving into `data.rb` with the rest of the numbers of play: this is
-    // wanted here, before there is a VM to have read any Ruby.
-    let ore_patch_radius = positive(&settings, "ore_patch_radius", 3.0);
-    let smallest_map = Ore::smallest_map(ore_patch_radius);
-    let map = Map {
-        tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(smallest_map as f32) as u32,
-        ore_patch_radius,
-    };
+    // **There is no map here any more** (F3a). How big the world is, how wide a patch of ore is
+    // and how many patches there are are all `ruby/data.rb`'s now, so the world is laid out in
+    // `Startup` after the data stage (`lay_the_land`), and everything that wanted the map's size
+    // in `main` went with it: the grid, the lanes, the chunk and the camera's edges. What F1 had
+    // here was a `.max` that raised a too-small map without saying so; what says no now is the
+    // data stage, at the line the size is written on.
+    say_where_the_map_went(&settings);
     let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
     let window = [
         settings.number("window_width").unwrap_or(WINDOW[0]),
@@ -414,15 +383,11 @@ fn main() {
                         }),
                         ..default()
                     }),
-                // The camera the player drives (S3). The world has an edge and this crate could
-                // not have guessed where, so the game says: the map, and no further.
-                CameraPlugin::showing(half_height).with(CameraControls {
-                    bounds: Some(Rect::from_center_half_size(
-                        Vec2::ZERO,
-                        Vec2::splat(map.span() / 2.0),
-                    )),
-                    ..default()
-                }),
+                // The camera the player drives (S3). **Where the world's edge is is not known
+                // here any anymore** — the map is a declaration since F3a — so the plugin is
+                // given the view and [`point_the_camera_at_the_map`] gives it the edges in
+                // `Startup`, once the data stage has said how big the world is.
+                CameraPlugin::showing(half_height),
                 RubevyPlugin::default(),
                 // **F3's half of the window and not F5's**: the panel an inserter's script is
                 // edited in, and nothing else. `crate::window` says what each of its buttons
@@ -448,7 +413,11 @@ fn main() {
             ))
             .add_systems(
                 Startup,
-                (draw::start_drawing.run_if(resource_exists::<Rules>), say_the_trouble)
+                (
+                    draw::start_drawing.run_if(resource_exists::<Map>),
+                    point_the_camera_at_the_map.run_if(resource_exists::<Map>),
+                    say_the_trouble,
+                )
                     .after(lay_the_land),
             )
             // **the keys are the window's**: a run with no window has no `ButtonInput` at all
@@ -469,8 +438,7 @@ fn main() {
         }
     }
 
-    app.insert_resource(map)
-        .insert_resource(settings)
+    app.insert_resource(settings)
         .insert_resource(RubyDir(ruby))
         .init_resource::<Hand>()
         .init_resource::<Flow>()
@@ -728,14 +696,34 @@ pub enum FactorySet {
 /// It runs after the data stage and only when that left a [`Rules`] behind, which is what lets the
 /// ore in the ground be a number of play: `ore_per_tile` is `data.rb`'s since F2a, and this is the
 /// one place that reads it.
-fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>, data: Res<Data>) {
-    let ore = Ore::laid_out(map.tiles, map.ore_patch_radius, rules.ore_per_tile);
+fn lay_the_land(mut commands: Commands, rules: Res<Rules>, data: Res<Data>) {
+    let map = Map { tiles: rules.map_tiles };
+    let ore =
+        Ore::laid_out(map.tiles, rules.ore_patch_radius, rules.ore_patches, rules.ore_per_tile);
     info!(
-        "a map of {} by {} tiles, {} of them with ore in ({} in the ground)",
-        map.tiles,
-        map.tiles,
+        "a map of {} by {} tiles, {} of them with ore in ({} in the ground, in {} patches of radius {})",
+        map.tiles.x,
+        map.tiles.y,
         ore.tiles_with_ore(),
         ore.total(),
+        rules.ore_patches.x * rules.ore_patches.y,
+        rules.ore_patch_radius,
+    );
+    // **What a map of this size costs to hold**, said rather than refused: how much memory there
+    // is is a fact about the machine — a page in a phone's browser and a PC are not the same
+    // number — so the data stage's ceiling is the drawing's alone (`draw::MOST_TILES_ACROSS`) and
+    // this is how a player finds out what they asked for. It is counted from the types rather
+    // than written down, so it cannot go stale: every one of these is one per tile.
+    let per_tile = size_of::<Option<Building>>()
+        + size_of::<std::collections::VecDeque<OnBelt>>()
+        + size_of::<belts::Steps>()
+        + size_of::<u32>()
+        + size_of::<Dir>();
+    info!(
+        "{} tiles is about {:.1} MB of grid, lanes and ore ({} bytes a tile)",
+        grid::how_many(map.tiles),
+        (grid::how_many(map.tiles) * per_tile) as f32 / (1024.0 * 1024.0),
+        per_tile,
     );
     let machines: Vec<String> = data
         .machines
@@ -750,6 +738,82 @@ fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>, data: 
     commands.insert_resource(Grid::new(map.tiles));
     commands.insert_resource(Lanes::for_map(map.tiles));
     commands.insert_resource(ore);
+    commands.insert_resource(map);
+}
+
+/// **The camera, given a world to look at** — which since F3a is not known until the data stage
+/// has run, so it is said here rather than where the plugin is added.
+///
+/// Three things, and each of them is the map's and not a number this game preferred:
+///
+/// * **how far the camera may be walked**: the map, and no further. `CameraControls::bounds` is
+///   the shared crate's way of being told, because a world's edge is not something it can guess.
+/// * **how much world the window holds at rest**: `camera_half_height`, which is a setting and is
+///   derived from the *window* (whole-number zoom, see [`CAMERA_HALF_HEIGHT`]) — **except that it
+///   never shows more world than there is**. A map sixteen tiles tall is 128 world units, and
+///   showing 150 of them would be a strip of nothing above and below the world. That `min` is a
+///   fact about the map, which is why it is here.
+/// * **how far the wheel may go out**: the shared camera's limits are a multiple of the view at
+///   rest (`games_shell::camera::zoom_by`), which on a big map would mean never being able to see
+///   where anything is. The limit is raised — never lowered — until the whole map fits, so that
+///   a player on a 512-tile map can zoom out to the whole of it and a player on the default map
+///   has exactly what they had before.
+fn point_the_camera_at_the_map(
+    map: Res<Map>,
+    mut controls: ResMut<CameraControls>,
+    mut home: ResMut<games_shell::camera::CameraHome>,
+    mut view: ResMut<games_shell::camera::CameraView>,
+) {
+    let half = map.span() / 2.0;
+    controls.bounds = Some(Rect::from_center_half_size(Vec2::ZERO, half));
+    home.half_height = home.half_height.min(half.y);
+    view.half_height = home.half_height;
+    // the wheel measures in multiples of the view at rest, so "the whole map" is that ratio —
+    // and the taller of the two sides, because the window's own shape decides which one runs out
+    // first and showing a little more than the map is not a fault
+    let to_the_whole_map = half.max_element() / home.half_height.max(f32::MIN_POSITIVE);
+    controls.zoom_out_limit = controls.zoom_out_limit.max(to_the_whole_map);
+    info!(
+        "the camera shows {:.0} world units top to bottom and may be walked over {} by {} tiles",
+        home.half_height * 2.0,
+        map.tiles.x,
+        map.tiles.y
+    );
+}
+
+/// **The keys that have moved out of the store**, and the declaration each is now — the table the
+/// sentence below is built from, so that a key that moves later is one line here.
+const MOVED_TO_THE_DATA_FILE: [(&str, &str); 2] = [
+    ("map_tiles", "map :world, size: [w, h]"),
+    ("ore_patch_radius", "ore :iron_ore, patch_radius:"),
+];
+
+/// **A setting that has moved says so once, rather than being ignored in silence** (F3a).
+///
+/// `map_tiles` and `ore_patch_radius` were keys of `factory.settings.txt` until F3a and are
+/// declarations now, so a store written by an older build has lines in it that no longer do
+/// anything. A player who wrote one of them meant it, and a number quietly ignored is the worst
+/// of the three things that can happen to it.
+///
+/// The line is left where it is: nothing here writes to the store, and a file rewritten behind
+/// somebody's back is worse again. What is said is where the number lives now.
+fn moved_settings(settings: &games_shell::Settings) -> Vec<String> {
+    MOVED_TO_THE_DATA_FILE
+        .iter()
+        .filter_map(|(key, now)| {
+            let value = settings.get(key)?;
+            Some(format!(
+                "{key}={value} in {} does nothing any more: it is `{now}` in {DATA_FILE} now, which is where the size of the world is said since F3a",
+                platform::SETTINGS_FILE,
+            ))
+        })
+        .collect()
+}
+
+fn say_where_the_map_went(settings: &games_shell::Settings) {
+    for says in moved_settings(settings) {
+        warn!("{says}");
+    }
 }
 
 /// **The stress test's factory**: nearly the whole map laid as **one closed loop of belt**, with
@@ -771,10 +835,11 @@ fn lay_the_snake(
     if stress.items == 0 {
         return;
     }
-    // the inside of the map, 1..=n each way, and an even number of rows so that the serpentine
-    // comes back to the left-hand column rather than to the right
-    let n = grid.tiles - 2;
-    let rows = if n % 2 == 0 { n } else { n - 1 };
+    // the inside of the map, and an even number of rows so that the serpentine comes back to the
+    // left-hand column rather than to the right
+    let n = grid.tiles.x - 2;
+    let tall = grid.tiles.y - 2;
+    let rows = if tall % 2 == 0 { tall } else { tall - 1 };
     let lay = |grid: &mut Grid, x: u32, y: u32, dir: Dir| {
         let at = grid.index(UVec2::new(x, y));
         grid.place(at, Building::new(What::Belt, dir));
@@ -842,15 +907,15 @@ fn lay_the_arms(stress: Res<Stress>, rules: Res<Rules>, mut grid: ResMut<Grid>) 
     }
     // a shuttle is three tiles and a gap, and a row of them has a row's gap above it, so that
     // nothing reaches into its neighbour
-    let across = ((grid.tiles.saturating_sub(2)) / 4).max(1);
+    let across = ((grid.tiles.x.saturating_sub(2)) / 4).max(1);
     let mut laid = 0usize;
-    'rows: for row in (1..grid.tiles - 1).step_by(2) {
+    'rows: for row in (1..grid.tiles.y - 1).step_by(2) {
         for unit in 0..across {
             if laid == stress.arms {
                 break 'rows;
             }
             let x = 1 + unit * 4;
-            if x + 2 >= grid.tiles {
+            if x + 2 >= grid.tiles.x {
                 break;
             }
             let from = grid.index(UVec2::new(x, row));
@@ -874,15 +939,15 @@ fn lay_the_arms(stress: Res<Stress>, rules: Res<Rules>, mut grid: ResMut<Grid>) 
 ///
 /// The loop it lays holds `items_per_tile` to a tile, so the map it needs is the square root of
 /// the items asked for. It is worked out here rather than left to whoever runs it, because a page
-/// has no way of setting `map_tiles` and a measurement that cannot be taken in a browser is not a
-/// measurement of the browser — and it is worked out *here*, in `Startup`, rather than in `main`,
-/// because `items_per_tile` is `data.rb`'s now and `main` has no VM yet.
-fn size_the_map_for_the_stress_run(
-    stress: Res<Stress>,
-    rules: Res<Rules>,
-    mut map: ResMut<Map>,
-    controls: Option<ResMut<CameraControls>>,
-) {
+/// has no command line and a measurement that cannot be taken in a browser is not a measurement
+/// of the browser — and it is worked out *here*, in `Startup`, rather than in `main`, because
+/// `items_per_tile` is `data.rb`'s and `main` has no VM yet.
+///
+/// **It writes the size the data file asked for**, before [`lay_the_land`] reads it, so the grid,
+/// the lanes, the chunk and the camera are all made once, at the size that is going to be used.
+/// F3 had it write into the `Map` afterwards and patch the camera up; there is nothing to patch
+/// now, because nothing has been built from the old number yet.
+fn size_the_map_for_the_stress_run(stress: Res<Stress>, mut rules: ResMut<Rules>) {
     let side = (stress.items as f32 / rules.items_per_tile as f32).sqrt().ceil() as u32;
     // **and the arms want room too** (F3): a shuttle is three tiles and a gap across and takes a
     // row of its own with a row's gap above it, so `arms` of them fit on a square of side
@@ -890,16 +955,10 @@ fn size_the_map_for_the_stress_run(
     let for_arms = (stress.arms as f32 * 8.0).sqrt().ceil() as u32;
     let side = side.max(for_arms);
     // an even number of rows, so that the serpentine comes home (`lay_the_snake`)
-    let tiles = map.tiles.max(side + side % 2 + 2);
-    if tiles == map.tiles {
-        return;
-    }
-    map.tiles = tiles;
-    // the camera was given the old map's edges in `main`; a bigger world needs bigger ones
-    if let Some(mut controls) = controls {
-        controls.bounds =
-            Some(Rect::from_center_half_size(Vec2::ZERO, Vec2::splat(map.span() / 2.0)));
-    }
+    let wanted = UVec2::splat(side + side % 2 + 2).max(rules.map_tiles);
+    // and no larger than a map may be at all, which is the drawing's limit and applies to a
+    // measurement exactly as it applies to a game
+    rules.map_tiles = wanted.min(UVec2::splat(draw::MOST_TILES_ACROSS));
 }
 
 /// The stress run's own report: the frame times and what the factory's own step took inside them.
@@ -1189,8 +1248,8 @@ fn selftest(
                 if ok { "ok  " } else { "FAIL" },
                 &format!(
                     "the map is {} by {} tiles with {} of them holding {} of ore",
-                    map.tiles,
-                    map.tiles,
+                    map.tiles.x,
+                    map.tiles.y,
                     patches,
                     ore.total()
                 ),
@@ -1199,17 +1258,17 @@ fn selftest(
         }
         // ---- the arithmetic the building is built on -----------------------------------------
         1 => {
-            let last_tile = map.tiles - 1;
+            let last_tile = map.tiles - UVec2::ONE;
             let corners = [
                 UVec2::new(0, 0),
-                UVec2::new(last_tile, 0),
-                UVec2::new(0, last_tile),
-                UVec2::new(last_tile, last_tile),
-                UVec2::splat(map.tiles / 2),
+                UVec2::new(last_tile.x, 0),
+                UVec2::new(0, last_tile.y),
+                last_tile,
+                map.tiles / 2,
             ];
             let agreed =
                 corners.iter().filter(|&&t| map.tile_at(map.tile_centre(t)) == Some(t)).count();
-            let off = map.tile_at(Vec2::splat(map.span())).is_none();
+            let off = map.tile_at(map.span()).is_none();
             say(
                 if agreed == corners.len() && off { "ok  " } else { "FAIL" },
                 &format!(
@@ -1266,8 +1325,9 @@ fn selftest(
         }
         // ---- a miner cannot stand anywhere but on ore -----------------------------------------
         3 => {
-            // the middle of the map, which `Ore::laid_out` leaves bare on purpose
-            let bare = UVec2::splat(map.tiles / 2);
+            // the middle of the map, which `Ore::laid_out` leaves bare on purpose — for any even
+            // number of patches, because their middles are at the middles of the cells
+            let bare = map.tiles / 2;
             orders.write(build::Order { at: bare, what: Some(What::Miner), dir: Dir::East });
             test.line = vec![bare];
             test.step = 4;
@@ -1283,8 +1343,12 @@ fn selftest(
         }
         // ---- the line: a miner on ore, belts, a chest -------------------------------------
         5 => {
-            // the middle of the first patch of ore, which is where `Ore::laid_out` puts one
-            let pit = UVec2::splat(map.tiles / 4);
+            // **the middle of the first patch of ore**, asked of the thing that put it there
+            // rather than written out as "a quarter of the map": how many patches there are is
+            // `data.rb`'s since F3a, and a check that knows where the ore is because it has done
+            // the same arithmetic is a check that stops being true when the arithmetic changes
+            let pit =
+                Ore::patch_middle(map.tiles, rules.ore_patches, UVec2::ZERO).floor().as_uvec2();
             test.line = vec![pit];
             orders.write(build::Order { at: pit, what: Some(What::Miner), dir: Dir::East });
             test.ore_before = ore.total();
@@ -1778,9 +1842,11 @@ fn lay_out_the_machine_lines(
     let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
     let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
     // a row per machine, `tall` apart so that a machine's footprint never reaches the next row,
-    // starting in the middle of the map and going up
-    let first_row = map.tiles / 2;
-    let left = map.tiles / 2 - (wide + 4);
+    // starting in the middle of the map and going up. **Saturating since F3a**: a map may be as
+    // small as its ore allows now (five tiles across, at a small enough patch), and a check that
+    // has nowhere to build says so below rather than overflowing here.
+    let first_row = map.tiles.y / 2;
+    let left = (map.tiles.x / 2).saturating_sub(wide + 4);
     for (kind, machine) in data.machines.iter().enumerate() {
         let row = first_row + kind as u32 * (tall + 1);
         // the recipe it will run: the first one made in it, which is the one it will pick
@@ -1791,7 +1857,7 @@ fn lay_out_the_machine_lines(
         // to begin with, which is where a player leaves them too
         let at = left + 3;
         let out = at + machine.size.x;
-        if row + tall >= map.tiles || out + 2 >= map.tiles {
+        if row + tall >= map.tiles.y || out + 2 >= map.tiles.x {
             return false;
         }
         for (x, what) in [
@@ -1831,10 +1897,10 @@ fn lay_out_the_machine_lines(
             what: machine.name.clone(),
             makes,
             made_of: made_of.join(" and "),
-            at: (row * map.tiles + at) as usize,
-            feed: (row * map.tiles + left + 1) as usize,
-            arm_in: (row * map.tiles + left + 2) as usize,
-            chest: (row * map.tiles + out + 2) as usize,
+            at: (row * map.tiles.x + at) as usize,
+            feed: (row * map.tiles.x + left + 1) as usize,
+            arm_in: (row * map.tiles.x + left + 2) as usize,
+            chest: (row * map.tiles.x + out + 2) as usize,
             needs,
             done_at: None,
         });
@@ -1853,8 +1919,8 @@ fn seed_the_machine_lines(
 ) {
     let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
     let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
-    let first_row = map.tiles / 2;
-    let left = map.tiles / 2 - (wide + 4);
+    let first_row = map.tiles.y / 2;
+    let left = (map.tiles.x / 2).saturating_sub(wide + 4);
     for (kind, machine) in data.machines.iter().enumerate() {
         let row = first_row + kind as u32 * (tall + 1);
         let Some(&recipe) = machine.recipes.first() else { continue };
@@ -1878,7 +1944,7 @@ fn seed_the_machine_lines(
 /// serde refusing a field, serde refusing a number, a reference between two declarations, and the
 /// compiler refusing to parse it at all.
 fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
-    // 1 item, 2 machine, 3 recipe, 4 belt, 5 miner, 6 chest, 7 ore, 8 inserter
+    // 1 item, 2 machine, 3 recipe, 4 belt, 5 miner, 6 chest, 7 ore, 8 inserter, 9 map
     let good = concat!(
         "item :rock, icon: 0\n",
         "machine :oven, size: [1, 1], sprite: [109], speed: 1.0\n",
@@ -1886,8 +1952,9 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         "belt :line, tiles_per_second: 1.0, items_per_tile: 1\n",
         "miner :drill, seconds_per_item: 1.0\n",
         "chest :box, capacity: 1\n",
-        "ore :rock, per_tile: 1\n",
+        "ore :rock, per_tile: 1, patch_radius: 1.0, patches: [1, 1]\n",
         "inserter :arm, seconds_per_item: 1.0\n",
+        "map :world, size: [8, 8]\n",
     );
     vec![
         (good.replace("item :rock, icon: 0", "item :rock, icon: 0, colour: :grey"), 1, "an unknown field"),
@@ -1900,11 +1967,22 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         // F3's: the ground named after an item nothing declares — the one reference the `ore`
         // word has, and the only check left that needs two declarations to be wrong
         (good.replace("ore :rock,", "ore :coal,"), 7, "ground nothing declares"),
+        // **F3a's two, and they are the map's**: too small for its own ore, and too big for the
+        // picture. Both are refused at the `map` line even though the first of them is decided by
+        // the *ore*'s radius and count, because the line a player would change is this one — and
+        // both of them are the numbers something really breaks at rather than a size anybody
+        // preferred (`crate::draw::MOST_TILES_ACROSS`, `crate::grid::Ore::smallest_map`).
+        (good.replace("size: [8, 8]", "size: [3, 8]"), 9, "a map too small for its ore"),
+        (
+            good.replace("size: [8, 8]", &format!("size: [{}, 8]", draw::MOST_TILES_ACROSS + 1)),
+            9,
+            "a map too big to draw",
+        ),
         // **last, and on purpose**: a half-written line is reported where the parser gives up,
         // which is the *next* token — so `icon:` on line 1 of a file with six more lines is
         // reported at line 2. At the end of the file the next token is the end of the file, and
         // the line is the line. That is the compiler's reading and not something to work around.
-        (format!("{good}item :half, icon:\n"), 9, "Ruby that will not parse"),
+        (format!("{good}item :half, icon:\n"), 10, "Ruby that will not parse"),
     ]
 }
 
@@ -1943,9 +2021,20 @@ mod tests {
     /// run because a run needs a window for one of its checks and this needs nothing.
     #[test]
     fn a_tiles_middle_is_in_that_tile() {
-        let map = Map { tiles: 32, ore_patch_radius: 3.0 };
-        for tile in [UVec2::ZERO, UVec2::new(31, 0), UVec2::new(0, 31), UVec2::new(31, 31), UVec2::new(8, 11)] {
-            assert_eq!(map.tile_at(map.tile_centre(tile)), Some(tile), "tile {tile}");
+        // **a square and an oblong**, because the arithmetic that was right with one number for
+        // both sides is the arithmetic F3a had to take apart
+        for tiles in [UVec2::splat(32), UVec2::new(96, 16), UVec2::new(15, 41)] {
+            let map = Map { tiles };
+            let last = tiles - UVec2::ONE;
+            for tile in [
+                UVec2::ZERO,
+                UVec2::new(last.x, 0),
+                UVec2::new(0, last.y),
+                last,
+                tiles / 3,
+            ] {
+                assert_eq!(map.tile_at(map.tile_centre(tile)), Some(tile), "{tiles}: tile {tile}");
+            }
         }
     }
 
@@ -1954,12 +2043,20 @@ mod tests {
     /// something outside the world.
     #[test]
     fn the_edges_belong_to_one_tile_and_outside_is_outside() {
-        let map = Map { tiles: 32, ore_patch_radius: 3.0 };
-        let half = map.span() / 2.0;
-        assert_eq!(map.tile_at(Vec2::new(-half, -half)), Some(UVec2::ZERO));
-        assert_eq!(map.tile_at(Vec2::new(-half - 0.01, -half)), None);
-        assert_eq!(map.tile_at(Vec2::new(half - 0.01, half - 0.01)), Some(UVec2::splat(31)));
-        assert_eq!(map.tile_at(Vec2::new(half, half)), None, "the far edge is the next tile, which is not there");
+        for tiles in [UVec2::splat(32), UVec2::new(96, 16)] {
+            let map = Map { tiles };
+            let half = map.span() / 2.0;
+            let last = tiles - UVec2::ONE;
+            assert_eq!(map.tile_at(-half), Some(UVec2::ZERO));
+            assert_eq!(map.tile_at(Vec2::new(-half.x - 0.01, -half.y)), None);
+            assert_eq!(map.tile_at(Vec2::new(-half.x, -half.y - 0.01)), None);
+            assert_eq!(map.tile_at(half - 0.01), Some(last));
+            assert_eq!(
+                map.tile_at(half),
+                None,
+                "{tiles}: the far edge is the next tile, which is not there"
+            );
+        }
     }
 
     /// **The data stage is done before the first `Update`.**
@@ -2024,6 +2121,49 @@ mod tests {
         for item in &data.items {
             assert!(item.icon < draw::ITEM_ICONS, "{}: icon {} is off the strip", item.name, item.icon);
         }
+        // **and the default world is the one it was before F3a**, which is the promise that stage
+        // made: the size moved out of `factory.settings.txt` and into `ruby/data.rb` without
+        // moving. 32 by 32 is still F0's provisional value and still nobody's measurement
+        // (`docs/numbers.md` §9.6); what changed is who may change it.
+        let rules = app.world().resource::<Rules>();
+        assert_eq!(rules.map_tiles, UVec2::splat(32), "ruby/data.rb's map");
+        assert_eq!(rules.ore_patches, UVec2::splat(2), "four patches, one to a quarter");
+        assert_eq!(rules.ore_patch_radius, 3.0);
+        // the four are where `Ore::laid_out` puts them and clear of the wall, which is the floor
+        // the data stage refuses under
+        assert!(rules.map_tiles.min_element() >= Ore::smallest_map(rules.ore_patch_radius, 2));
+    }
+
+    /// **A store written by an older build is told where its numbers went** (F3a), and a store
+    /// that has neither of them says nothing at all — which is every store this build writes.
+    #[test]
+    fn a_setting_that_moved_into_the_data_file_says_so() {
+        // a store read out of a string rather than off the disk: `Settings::load` takes the two
+        // functions, which is what lets a page keep its store in `localStorage`
+        fn an_old_file(_: &std::path::Path) -> Result<String, String> {
+            Ok("map_tiles=64\ncamera_half_height=150\nore_patch_radius=2\n".into())
+        }
+        fn nothing(_: &std::path::Path) -> Result<String, String> {
+            Err("no such store".into())
+        }
+        fn unwritable(_: &std::path::Path, _: &str) -> Result<(), String> {
+            Err("the test does not write".into())
+        }
+
+        let old = games_shell::Settings::load("factory.settings.txt", "", an_old_file, unwritable);
+        let said = moved_settings(&old);
+        assert_eq!(said.len(), 2, "both of the keys that moved: {said:?}");
+        assert!(said[0].contains("map_tiles=64") && said[0].contains("map :world"), "{}", said[0]);
+        assert!(
+            said[1].contains("ore_patch_radius=2") && said[1].contains("patch_radius"),
+            "{}",
+            said[1]
+        );
+        assert!(said.iter().all(|s| s.contains(DATA_FILE)), "and where to write it now");
+        // the key that did not move is not mentioned, and a store with none of them is quiet
+        assert!(said.iter().all(|s| !s.contains("camera_half_height")));
+        let new = games_shell::Settings::load("factory.settings.txt", "", nothing, unwritable);
+        assert!(moved_settings(&new).is_empty());
     }
 
     /// The middle and the ninety-fifth, which the stress run's numbers are.

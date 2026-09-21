@@ -125,9 +125,9 @@ pub fn belt_picture(came_in: Dir, goes_out: Dir, frame: usize) -> (u16, TileOrie
 /// `per_tile` is how much a full tile of ore holds — `data.rb`'s since F2a — because what the
 /// picture says is *how much is left of it*, which is a fraction and not an amount.
 pub fn floor_picture(map: &Map, ore: &Ore, per_tile: u32, tile: UVec2) -> u16 {
-    let last = map.tiles - 1;
-    let at = (tile.y * map.tiles + tile.x) as usize;
-    if tile.x == 0 || tile.y == 0 || tile.x == last || tile.y == last {
+    let last = map.tiles - UVec2::ONE;
+    let at = (tile.y * map.tiles.x + tile.x) as usize;
+    if tile.x == 0 || tile.y == 0 || tile.x == last.x || tile.y == last.y {
         GROUND
     } else if ore.left[at] > 0 {
         // half a patch left is where it starts looking dug out
@@ -140,6 +140,41 @@ pub fn floor_picture(map: &Map, ore: &Ore, per_tile: u32, tile: UVec2) -> u16 {
 // ---------------------------------------------------------------------------------------------
 // The two chunks
 // ---------------------------------------------------------------------------------------------
+
+/// **How long a side of the map may be, in tiles** — the one ceiling `map :world, size:` has, and
+/// it is the drawing's rather than anything this game preferred (F3a).
+///
+/// **What breaks.** A [`TilemapChunk`] keeps its tiles in a texture of **one texel per tile**
+/// (`Rgba16Uint`, `bevy_sprite_render::tilemap_chunk::make_chunk_tile_data_image`), so a map whose
+/// side is longer than the device's `max_texture_dimension_2d` cannot be handed to the GPU at all:
+/// wgpu refuses the texture and the floor is never drawn. Nothing else in the game has a smaller
+/// limit — a tile index is a `u32` ([`crate::grid::how_many`]) and 2048² is 4.2 million, which
+/// fits with three bits to spare.
+///
+/// **Where the number comes from.** That limit is the *device's*, and Bevy asks the adapter for
+/// its own rather than for a fixed set (`bevy_render::renderer`, `WgpuSettingsPriority::
+/// Functionality`), so it differs from machine to machine — which is exactly what a game that is
+/// published as a page cannot depend on. What does not differ is the floor under it: **WebGL2
+/// guarantees 2048** (`wgpu-types-29.0.4/src/limits.rs:498`, `downlevel_defaults`, which is what
+/// `downlevel_webgl2_defaults` inherits and what the WebGL2 specification requires of
+/// `MAX_TEXTURE_SIZE`). A map inside this is a map that draws on any machine the page reaches;
+/// one outside it might draw here and be a black page for somebody else, which is the bug F0
+/// spent a day on in another form. Measured on the two renderers this was written with —
+/// lavapipe in the container and SwiftShader in the browser both report more than this, and
+/// [`start_drawing`] logs what the machine actually said so that the guarantee can be compared
+/// with the fact.
+///
+/// **It is not what runs out first, and that is on purpose.** A map this big is 4.2 million tiles
+/// and about half a gigabyte of grid, lanes and ore; what a machine can hold is a fact about the
+/// machine, so it is logged (`crate::lay_the_land` says how many megabytes a map costs) and not
+/// made into a refusal. The ceiling refuses only what is certainly broken everywhere.
+///
+/// **Why the map is not cut into several chunks**, which would lift this: the split is real work
+/// — the floor and the buildings become grids of chunks, every write to a tile has to find its
+/// chunk, and the two `TilemapChunkTileData` walks in this file become nested ones — and what it
+/// would buy is maps larger than the memory of the machine drawing them. If a real map ever wants
+/// to be 3,000 tiles across, this is the line to come back to.
+pub const MOST_TILES_ACROSS: u32 = 2048;
 
 #[derive(Resource, Debug)]
 pub struct Chunks {
@@ -171,7 +206,26 @@ pub fn start_drawing(
     assets: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
     map: Res<Map>,
+    device: Option<Res<bevy::render::renderer::RenderDevice>>,
 ) {
+    // **What this machine's own limit turned out to be**, beside the one the data stage refuses
+    // by ([`MOST_TILES_ACROSS`], which is the guarantee every WebGL2 machine gives rather than
+    // what any one of them has). It is logged and not checked, because a run that got here has a
+    // map the guarantee already allows; what it is for is that the guarantee can be read against
+    // the fact, in a container and in a page, without taking anybody's word for it.
+    if let Some(device) = device {
+        let most = device.limits().max_texture_dimension_2d;
+        info!(
+            "the floor is one texture of {} by {} texels; this renderer allows {most} (the size a data file may ask for is capped at {})",
+            map.tiles.x, map.tiles.y, MOST_TILES_ACROSS
+        );
+        if map.tiles.max_element() > most {
+            error!(
+                "this renderer cannot draw a map {} by {}: {most} is as far as it goes",
+                map.tiles.x, map.tiles.y
+            );
+        }
+    }
     // The tileset is one image and the chunk wants an array texture with one layer per tile, so
     // the cut is asked for through the loader's settings — it cannot be asked for in a `.meta`
     // file beside the image, because `AssetMetaCheck::Never` is what keeps a page from being
@@ -182,11 +236,11 @@ pub fn start_drawing(
             settings.array_layout = Some(ImageArrayLayout::RowHeight { pixels: TILE_PX });
         })
         .load("tiles/factory-tiles.png");
-    let empty = vec![None; (map.tiles * map.tiles) as usize];
+    let empty = vec![None; crate::grid::how_many(map.tiles)];
     let floor = commands
         .spawn((
             TilemapChunk {
-                chunk_size: UVec2::splat(map.tiles),
+                chunk_size: map.tiles,
                 tile_display_size: UVec2::splat(TILE_PX),
                 tileset: tileset.clone(),
                 ..default()
@@ -198,7 +252,7 @@ pub fn start_drawing(
     let buildings = commands
         .spawn((
             TilemapChunk {
-                chunk_size: UVec2::splat(map.tiles),
+                chunk_size: map.tiles,
                 tile_display_size: UVec2::splat(TILE_PX),
                 tileset,
                 // **over the floor**: a belt's corners and a crate's edges are transparent, and
@@ -232,9 +286,9 @@ pub fn draw_floor(
         return;
     }
     let Ok(mut picture) = tiles.get_mut(chunks.floor) else { return };
-    for y in 0..map.tiles {
-        for x in 0..map.tiles {
-            let at = (y * map.tiles + x) as usize;
+    for y in 0..map.tiles.y {
+        for x in 0..map.tiles.x {
+            let at = (y * map.tiles.x + x) as usize;
             picture.0[at] = Some(TileData::from_tileset_index(floor_picture(
                 &map,
                 &ore,
