@@ -145,11 +145,18 @@ pub struct OnBelt {
 #[derive(Resource, Debug, Default)]
 pub struct Lanes {
     pub of: Vec<VecDeque<OnBelt>>,
-    /// Scratch: where each lane's last item was at the *start* of the frame, or `None` for a lane
-    /// with nothing on it — which is "as far ahead as you like: nothing is in the way". Every belt
+    /// Scratch: where each lane's last item was at the *start* of the frame, or [`Steps::MAX`] for
+    /// a lane with nothing on it — which is "as far ahead as you like: nothing is in the way", and
+    /// is what F1 wrote as `f32::INFINITY` before the positions were whole numbers. Every belt
     /// asks its neighbour how much room there is, and asking one snapshot makes the answer the
     /// same whatever order the tiles happen to be walked in.
-    tails: Vec<Option<Steps>>,
+    ///
+    /// **A sentinel rather than an `Option`**, which is what F1's `f32::INFINITY` was: this is
+    /// written once per tile of the map and read once per belt every frame, and `Option<i32>` is
+    /// eight bytes where the number is four, with a branch to unwrap it in the middle of the
+    /// carrying. The arithmetic that reads it widens, so the sentinel needs no special case — a
+    /// tail that far ahead lands on the cap by itself.
+    tails: Vec<Steps>,
     /// Scratch: the tiles with something on them, copied out of the grid at the start of the
     /// step. A copy because the passes below reach into the grid to fill a chest and to move a
     /// miner on, and a list borrowed from it cannot be walked while that happens.
@@ -176,7 +183,7 @@ impl Lanes {
         let n = (tiles * tiles) as usize;
         Lanes {
             of: vec![VecDeque::new(); n],
-            tails: vec![None; n],
+            tails: vec![Steps::MAX; n],
             order: Vec::new(),
             part_of_a_step: 0.0,
         }
@@ -285,12 +292,12 @@ pub fn step(
 
     // ---- 1. the tails as they were ---------------------------------------------------------
     for tail in &mut lanes.tails {
-        *tail = None;
+        *tail = Steps::MAX;
     }
     for i in 0..lanes.order.len() {
         let t = lanes.order[i] as usize;
         if grid.at(t).is_some_and(|b| b.what == What::Belt) {
-            lanes.tails[t] = lanes.of[t].back().map(|i| i.along);
+            lanes.tails[t] = lanes.of[t].back().map_or(Steps::MAX, |i| i.along);
         }
     }
 
@@ -309,8 +316,10 @@ pub fn step(
         // At a tile a frame it would, and then *whether* the second join is crossed in the same
         // frame depends on the neighbour's index — see the F1 worklog's notes.
         let room = match room_ahead(grid, t, dir) {
-            Some(next) => lanes.tails[next]
-                .map_or(2 * tile, |tail| (tile + tail - spacing).min(2 * tile)),
+            // in 64 bits, so that the empty lane's sentinel tail lands on the cap rather than
+            // wrapping round to a tile with no room in it at all
+            Some(next) => ((tile as i64 + lanes.tails[next] as i64 - spacing as i64)
+                .min(2 * tile as i64)) as Steps,
             None => tile,
         };
         carry(&mut lanes.of[t], forward, spacing, room.max(0));
@@ -386,21 +395,27 @@ fn room_ahead(grid: &Grid, tile: usize, dir: Dir) -> Option<usize> {
 /// It is the one piece of arithmetic the conveyors are, which is why it is a plain function over a
 /// lane and not a system.
 pub fn carry(lane: &mut VecDeque<OnBelt>, forward: Steps, spacing: Steps, head_max: Steps) {
-    let mut limit = head_max;
+    // **The chain is worked out in 64 bits**, which is what makes it exact rather than careful:
+    // a data file may ask for any speed it likes, so a frame's step is as large as it likes, and
+    // a queue longer than its tile runs off the back of it by a gap at a time. Neither sum can
+    // leave the range of an `i64`, and what lands back in the item is `min`ed against a limit of
+    // at most two tiles, so the narrowing is exact. Saturating the 32-bit arithmetic instead says
+    // the same thing and costs a test and a move per item (`worklog/…-F2a.md` §7).
+    let mut limit = head_max as i64;
     for p in lane.iter_mut() {
-        // saturating, both ways: a data file may ask for any speed it likes and a queue may run
-        // any distance off the back of its tile, and neither is worth an overflow
-        p.along = p.along.saturating_add(forward).min(limit);
-        limit = p.along.saturating_sub(spacing);
+        let at = (p.along as i64 + forward as i64).min(limit);
+        p.along = at as Steps;
+        limit = at - spacing as i64;
     }
 }
 
 /// The lane brought back behind a front item that could not go on.
 fn hold(lane: &mut VecDeque<OnBelt>, spacing: Steps, head: Steps) {
-    let mut limit = head;
+    let mut limit = head as i64;
     for p in lane.iter_mut() {
-        p.along = p.along.min(limit);
-        limit = p.along.saturating_sub(spacing);
+        let at = (p.along as i64).min(limit);
+        p.along = at as Steps;
+        limit = at - spacing as i64;
     }
 }
 

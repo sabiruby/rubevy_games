@@ -18,11 +18,13 @@
 //! | `src/build.rs` | the keys and the click |
 //! | `src/draw.rs` | the two chunks, the sprites, and the zoom |
 //!
-//! **Where the numbers are.** Every number the factory is played by is a line of
-//! `factory.settings.txt` ([`belts::Rules`]), and F2 moves the ones that are numbers of *play*
-//! into `ruby/data.rb`, which is what the data stage is for. The `const`s in this file are the
-//! names of the defaults and two invariants: the pack's 16 px and how many tiles the sheet has.
-//! `docs/numbers.md` §9 has the table, with where each default came from.
+//! **Where the numbers are.** Every number the factory is *played by* is a line of `ruby/data.rb`
+//! ([`belts::Rules`]), which is what the data stage is for; what is left in `factory.settings.txt`
+//! moves the game rather than being played by it — the window, the camera, the map's size, and
+//! how wide a patch of ore is, which is the one number of the world's layout that is wanted here
+//! in `main` before there is a VM. The `const`s in this file are the names of the defaults and
+//! two invariants: the pack's 16 px (which is also the steps a belt tile is long) and how many
+//! tiles the sheet has. `docs/numbers.md` §9 has the table, with where each default came from.
 //!
 //! [rubevy]: https://github.com/sabiruby/rubevy
 
