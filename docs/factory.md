@@ -331,7 +331,24 @@ camera_snap_zoom=1
 window_width=1600
 window_height=900
 ore_patch_radius=3
+script_budget=39000
+script_frame_time_ms=8
 ```
+
+**`script_budget` is the one number here that came out of an instrument.** rubevy's default is
+200,000 and this game says 39,000 instead, by rubevy's own three steps: the scripts run **9,800
+instructions a millisecond** (measured at three thousand inserters), a 60 Hz frame is 16.7 ms and
+this game has one VM, so a quarter of it is 4 ms, and 4 ms buys 39,000. What that leaves is
+twenty times what the inserters that ship use at the biggest factory the default map holds.
+`script_frame_time_ms` stays at rubevy's 8 ms as the guard with room, so **the budget is what
+bites** — instructions are a fact about the scripts and are the same number in a browser several
+times slower. `numbers.md` §9.8 has the table the two came out of, including what happens when
+the scripts' first look is *not* spread: 92,589 instructions in one frame instead of 14,040.
+
+Two more keys are the measuring instrument's rather than the game's: `stress_items` and
+`stress_arms` (also `--stress N` / `--arms N`, `FACTORY_STRESS` / `FACTORY_ARMS`, `?stress=` /
+`?arms=`), and `inserter_stagger`, which is 1 in play and is set to 0 only to show what the
+spreading is worth.
 
 **Why `ore_patch_radius` did not go into `data.rb` with the rest.** The smallest map the four
 patches fit on without touching the border is derived from it, and that floor is wanted in
