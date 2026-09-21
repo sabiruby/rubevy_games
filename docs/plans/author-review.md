@@ -37,6 +37,9 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 | 09-22 F4 | 目標は `control.rb` の `goal deliver: { gear: 60 }`。control がゲームに働きかける口は `win!` だけ | 60 = 鎖 1 本 × 1 分 = 箱 1 杯（`data.rb` の他の数と同じ「1 分」）。目標は遊び方なので `data.rb` ではない。建てる口は F5 と絡むので広げない | `factory/ruby/control.rb`、`factory/src/control.rs` |
 | 09-22 F4 | スクリプトは ivar を読まれることで答える（`@won`・`@saying`・`@dropped`）。control の優先度は腕より 1 つ前。`control.rb` を差し替えると目標と数はゼロから | `ask` だと納品 1 件に 1 フレーム。3,000 台の腕が control を飢えさせない。新しい目標は新しいゲーム | `control::hear_the_control_stage`、`control::the_script` |
 | 09-22 F4 | `headless_seconds` の既定 30 → 66 | 判定自身の待ちの上限の和（44 秒）の 1.5 倍 | `factory.settings.txt` の `headless_seconds` |
+| 09-22 S11 | 走行の終わり方は Resource 兼 Plugin の `games_shell::checks::Errands` 1 つ（`checks_end_the_run()` は消えた）。`AppExit` と `done` の行を書くのは 1 か所。PC の `--shot` つきの走行は `done` の理由を「the picture is still to be taken」と言う | 「絵はもう撮ったか」は走行の事実で command line の事実ではなく、ページには command line が無い。何も頼まれていない走行は終わらない | `crates/games-shell/src/checks.rs` の `Errands` |
+| 09-22 S11 | 設定の読みは `Settings::positive` / `counted(key, least, default)`。0・負・文字は黙って丸めず `Startup` で `setting refused: …` と log に出して既定値を使う（3 本で 20 か所）。既定値は動いていない | 黙って切り上げた設定は「効かなかった設定」と見分けがつかない。床は呼ぶ側の理由（木 0・影 1・空のドーム 3）なので引数 | `crates/games-shell/src/settings.rs`、一覧は `docs/numbers.md` §10 |
+| 09-22 S11 | `web/build.sh` は `wasm-opt` が PATH に無ければ `~/.local/binaryen-*/bin` を探し、無ければ止めずに最後にもう一度 `NOT SHRUNK` と言う | 縮んでいなくても動く。大きさが効く CI は自分で PATH に入れるのでこの道を通らない | `web/build.sh` |
 
 ## B. 著者にしか決められないもの（公開後に）
 
@@ -44,6 +47,8 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 |---|---|---|
 | **factory の地図の既定の大きさ**（今 32×32 = F0 の仮の値） | スクリプトの上限は縛らない（3,000 台で tick p95 2.2 ms）。残る不明は描画で、この機械はソフトウェア描画しか無い。著者の実機のブラウザで `?stress` を 1 度 | `docs/numbers.md` §9.6 |
 | `implementer.md` に足す確認の作法（条件で待つのはフレームでも同じ／交互だけでなく向きも入れ替える／バージョンが自分を名乗る行を見る／`main()` の `warn!` は出ない） | S11 の担当が文面の案を出す | `docs/worklog/2026-09-22-s11.md` |
+| `rubevy-egui` の 4 つの設定の床（`vm_regs_frames`・`vm_value_chars`・`code_rows`・`code_chars`）に「断る口」が届かない。この crate は `Settings` を知らない設計で、届かせるには公開の署名を変えることになる | S11 の担当は実装せず報告 | `docs/worklog/2026-09-22-s11.md` の気づいた点 2 |
+| `--shot` の後の猶予の秒（箱庭 2.0、Battle と factory 1.0）の出どころが不明で、3 本で違う理由もどこにも無い | `docs/numbers.md` §10.3 に「不明」と書いた | 3 本の `take_shot` |
 | Battle に機体数の上限がどこにも無い（予算 114,000 は担当が輪の幾何から導いた 36 台で測った） | 上限をゲームが言うか、言わないままにするか | `docs/worklog/2026-09-21-s10.md` §4 |
 | 本（book）の findings に写す素材: f32 の詰まりの個数、飽和演算の値段、別々の理由の待ちを 1 つの数で賄う、バージョンを名乗る行、`#[expect(deprecated)]` | — | 各 worklog の「気づいた点」 |
 
@@ -54,5 +59,5 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 | 09-22 | **sabiruby 0.6.0 を crates.io に公開、タグ `v0.6.0`（`9780874`）**。CI 緑を確かめてから、crate ごとに dry-run → publish。1 度目は保存されていた token が 403 で通らず（何も上がっていない）、著者が `cargo login` し直して通った | `sabiruby` 0.6.0（`Vm::current_line` を消した）、`sabiruby-serde` 0.2.0（`Options` に `#[non_exhaustive]`、`declare`）、`sabiruby-compiler` 0.3.0（中身は同じ。`sabiruby` が公開依存なので 0.2.4 にしなかった）、`sabiruby-cli` 0.6.0。`sabiruby-macros` は出していない（無変更、VM に依らない） | sabiruby `docs/worklog/2026-09-22-release-0.6.md`（11 節が打ったコマンド）、`CHANGELOG.md` の「Coming from 0.5.2」 |
 | 09-22 | 使う側のバージョンの指定（rubevy 5 行 → games 3 行 + rubevy の rev → playground の `SABIRUBY_REF`）は**まだ**。rubevy と games で担当が作業中なので、その仕事が main に入るときに一緒に上げる | — | 同上 §9・§11 |
 | 09-22 | **SabiRuby 0.6.1 を公開、タグ `v0.6.1`（`479924e`）— 文書だけ**。著者「各クレートの説明が古いようにみえる」を受けて、crates.io に出る文面（`description`・README）を今の実物と 1 つずつ突き合わせた。見出し「Status (2026-09-17, 0.5.0)」、`declare`／`highlight()`／`next_line`・`backtrace_line`／ホストブリッジが書かれていない、cli の「`-r` は未実装」（実装済みだった）、ベンチの比が 1 つ前の測定、など。docs.rs の最初のページの「1819 of 1866」→ 2344 of 2507 | `sabiruby` 0.6.1、`sabiruby-compiler` 0.3.1、`sabiruby-serde` 0.2.1、`sabiruby-cli` 0.6.1、`sabiruby-macros` 0.1.1（5 つとも文面を直したので 5 つとも） | sabiruby `docs/worklog/2026-09-22-readmes.md`（棚卸しの表） |
-| 09-22 | **rubevy を SabiRuby 0.6 に**（`sabiruby "0.6"`・`sabiruby-compiler "0.3"`・`sabiruby-serde "0.2"`、テスト 207 通過）と、`Held`／`ScriptEnded::at` を main に入れて push（`c9b52a3`）。rubevy の crates.io の次のバージョン（0.0.1 の次）は準備中 — 説明と README も同じ目で直す | 準備中 | rubevy `docs/worklog/2026-09-22-held-requests.md`、`-release.md` |
+| 09-22 | **rubevy を SabiRuby 0.6 に**（`sabiruby "0.6"`・`sabiruby-compiler "0.3"`・`sabiruby-serde "0.2"`、テスト 207 通過）と、`Held`／`ScriptEnded::at` を main に入れて push（`c9b52a3`）。その後 **`rubevy` 0.1.0 を crates.io に公開、タグ `v0.1.0`（`017c6db`）** — 説明と README を実物に合わせ（今日までの機能 13 件が README に無かった）、0.0.1 から来る人の移行 5 点を CHANGELOG に。**`rubevy-build` 0.1.0（初公開）は 403 で出ていない**: 保存されている token に新しい crate を作る権限（`publish-new`）が無い。**著者が `publish-new` つきの token で `cargo login` し直せば、本体が `cargo publish -p rubevy-build` を打つ**。それまで rubevy の README の rubevy-build へのリンクは 404 | `rubevy` 0.1.0（公開済み）、`rubevy-build` 0.1.0（未公開）| rubevy `docs/worklog/2026-09-22-held-requests.md`、`-release.md` |
 

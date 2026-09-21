@@ -95,9 +95,9 @@ impl HudStyle {
         take("hud_line_font", &mut self.line_font);
         take("hud_panel_font", &mut self.panel_font);
         take("hud_margin", &mut self.margin);
-        if let Some(value) = settings.number("hud_bar_ticks") {
-            self.bar_ticks = value.max(0.0) as u64;
-        }
+        // **a bar of no ticks is a bar nobody drew**, which is a thing somebody may want; what
+        // is not a thing is half a tick or minus three of them (S11)
+        self.bar_ticks = settings.counted("hud_bar_ticks", 0, self.bar_ticks);
     }
 }
 

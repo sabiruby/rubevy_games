@@ -469,11 +469,14 @@ impl Look {
         take("look_heat_memory", &mut self.heat_memory);
         take("look_bar_full", &mut self.bar_full);
         take("look_floor_tile", &mut self.floor_tile);
-        take("window_width", &mut self.window[0]);
-        take("window_height", &mut self.window[1]);
-        if let Some(value) = settings.number("look_floor_pattern") {
-            self.floor_pattern = value.max(1.0) as i32;
-        }
+        // **a window is a whole number of pixels and at least one of them** (S11): these two
+        // were clamped where the window is opened, which meant a `window_width=0` in a store
+        // opened a window one pixel wide and said nothing about it
+        self.window[0] = settings.counted("window_width", 1, self.window[0] as u64) as f32;
+        self.window[1] = settings.counted("window_height", 1, self.window[1] as u64) as f32;
+        // a floor of no tiles across is no floor
+        self.floor_pattern =
+            settings.counted("look_floor_pattern", 1, self.floor_pattern as u64) as i32;
         // S9: the drawing that was written into the systems themselves. A colour is three keys
         // and not one string, for S5b-1's reason — reading a colour out of a text file would
         // need a parser, and three numbers need none.
@@ -807,12 +810,14 @@ fn main() {
     look.read_from(&settings);
     // `--headless N`: no window, N seconds, the match reported on stdout. It is how the game is
     // tested where there is no GPU, and it runs exactly the same systems as the windowed one.
-    let headless = args.headless(settings.number("headless_seconds").unwrap_or(HEADLESS_SECONDS));
+    // **a run of no seconds is not a shorter run, it is no run** (S11), and the same of a
+    // picture taken before the match has begun
+    let headless = args.headless(settings.positive("headless_seconds", HEADLESS_SECONDS));
     // `--shot FILE [SECONDS]`: a window, a picture of it, and out. For checking the HUD where
     // the window itself cannot be looked at.
     let shot = args.shot(
         settings.get("shot_file").unwrap_or(SHOT_FILE),
-        settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
+        settings.positive("shot_seconds", SHOT_SECONDS),
     );
     // `--vm` (G9): open the VM panel. It is closed unless somebody asks, and on a command line
     // this is the asking — `--shot docs/vm-inspector.png 14 --vm` is how the picture in
@@ -852,7 +857,7 @@ fn main() {
                     .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SabiRuby Battle".into(),
-                        resolution: (look.window[0].max(1.0) as u32, look.window[1].max(1.0) as u32).into(),
+                        resolution: (look.window[0] as u32, look.window[1] as u32).into(),
                         // in the browser: the page's canvas, as large as its box
                         canvas: Some("#sabibots".into()),
                         fit_canvas_to_parent: true,
@@ -904,7 +909,9 @@ fn main() {
     // in the largest match this game can be given; the wall clock is still rubevy's 8 ms, which
     // nothing here has measured and which rubevy cannot say where it got either. The thinking bar
     // in the scoreboard is what the effect of moving either of them is read off.
-    let budget = settings.number("script_budget");
+    // **a budget of nothing is a VM that runs nothing**, which is a thing to ask for (the pause
+    // key does it every run); a negative one or half an instruction is not (S11)
+    let budget = settings.counted("script_budget", 0, SCRIPT_BUDGET);
     let frame_time = settings.number("script_frame_time_ms");
     // **How fast this machine's VM is, as far as the handler check needs to know** (S10): the
     // divisor [`handler_frames`] turns that budget into a number of frames with. It is
@@ -912,6 +919,11 @@ fn main() {
     // time, and it is read from the store here — `checks_instructions_a_frame` — because the
     // machine it was measured on is not everybody's machine.
     let pace = games_shell::CheckPace::of(&settings);
+    // **What the store asked for and did not get** (S11). The settings are read at the top of
+    // `main`, where a `warn!` has no log to go to yet (F3a), so the refusals are kept and said
+    // in `Startup` — in both builds, because the budget and the match are the headless run's
+    // settings too.
+    app.add_plugins(games_shell::SettingsRefusalsPlugin);
     app.insert_resource(RubyDir(ruby.clone()))
         .insert_resource(settings)
         .insert_resource(look)
@@ -987,6 +999,16 @@ fn main() {
         app.insert_resource(SelfTest { at: 2.0, ..default() })
             .add_systems(Update, selftest.before(inspect_keys));
     }
+    // **What this run was asked for besides being a match, and the end of the run** (S11). Both
+    // errands are known here — the checks are the `if` above and the picture is the line below —
+    // and neither of them ends the run itself any more: `games_shell::checks::end_the_run` does,
+    // when nothing is left. The checks that count are the editor's, which are the ones that say
+    // when they are finished; the handler checks of a headless run end with the match.
+    app.add_plugins(platform::Errands::of(
+        "the match",
+        checks_asked && headless.is_none(),
+        shot.is_some(),
+    ));
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false })
             .add_systems(Update, take_shot);
@@ -1003,10 +1025,10 @@ fn main() {
     // asked, because nothing here has measured it.
     {
         let mut world = app.world_mut().resource_mut::<ScriptWorld>();
-        world.budget = budget.map(|n| n.max(0.0) as u64).unwrap_or(SCRIPT_BUDGET);
+        world.budget = budget;
         // and the line is printed only where the store moved it, so that "setting:" goes on
         // meaning "somebody's `sabibots.settings.txt` said this"
-        if budget.is_some() {
+        if budget != SCRIPT_BUDGET {
             info!("setting: the scripts get {} instructions a frame", world.budget);
         }
         if let Some(ms) = frame_time {
@@ -1644,7 +1666,9 @@ fn selftest(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut restart: ResMut<Restart>,
     mut edits: ResMut<EditChecks>,
-    mut exit: MessageWriter<AppExit>,
+    // S11: what this run was asked for, and what is left of it — the checks are one errand of
+    // two and no longer end the run themselves (`games_shell::checks::Errands`)
+    mut errands: ResMut<platform::Errands>,
 ) {
     let now = time.elapsed_secs();
     if now < test.at {
@@ -1874,16 +1898,14 @@ fn selftest(
             ok(moved, "and the match moves again: somebody has driven");
             ok(match_clock.0 > test.clock, "the match's clock runs again");
             keys.release(KeyCode::KeyP);
-            // A PC run was asked for the checks on a command line and should give the prompt
-            // back. A page was asked for them in its address, by somebody who is looking at the
-            // arena — and `AppExit` there does not end a run, it stops the canvas for good. And a
-            // run that was asked for a picture as well is not over until the picture is taken
-            // (`platform::checks_end_the_run`, S9).
-            if platform::checks_end_the_run() {
-                exit.write(AppExit::Success);
-            } else {
-                info!("selftest: done — the match keeps running (a page has nothing to exit to)");
-            }
+            // **The checks have said their last word, which is not the same as the run being
+            // over** (S11). A PC run was asked for them on a command line and should give the
+            // prompt back; a page was asked in its address by somebody who is looking at the
+            // arena, and `AppExit` there does not end a run, it stops the canvas for good; and a
+            // run that was asked for a picture as well is not over until the picture is taken.
+            // All three of those are `games_shell::checks::end_the_run`'s to weigh, and the
+            // `done` line with its reason is written there.
+            errands.the_checks_are_done();
             test.step = 12;
         }
         _ => {}
@@ -1898,10 +1920,19 @@ struct Shot {
     taken: bool,
 }
 
-fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mut exit: MessageWriter<AppExit>) {
+/// `--shot`: the picture, and then — since S11 — nothing else. **Whether the run ends here is not
+/// this system's to say**: the checks may still be talking (`games_shell::checks::Errands`), and
+/// the second below is how long the observer that writes the file is given, not how long the rest
+/// of the run is worth.
+fn take_shot(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut shot: ResMut<Shot>,
+    mut errands: ResMut<platform::Errands>,
+) {
     if shot.taken {
         if time.elapsed_secs() > shot.after + 1.0 {
-            exit.write(AppExit::Success);
+            errands.the_picture_is_taken();
         }
         return;
     }
@@ -3597,7 +3628,15 @@ mod tests {
         look.read_from(&settings);
         assert_eq!(look.bar_full, 500.0);
         assert_eq!(look.life_warn, 0.75);
-        assert_eq!(look.floor_pattern, 1, "a pattern of nothing would be a modulo by zero");
+        // **a pattern of minus two tiles is refused, not raised** (S11): a modulo by nothing is
+        // what the old `.max(1.0)` was there to prevent, and the store is told rather than
+        // silently given a floor nobody chose
+        assert_eq!(look.floor_pattern, Look::default().floor_pattern);
+        assert!(
+            settings.refused().iter().any(|said| said.starts_with("look_floor_pattern = -2")),
+            "{:?}",
+            settings.refused()
+        );
         assert_eq!(look.life_low, LIFE_LOW, "a key nobody wrote leaves the default alone");
         assert_eq!(look.window, WINDOW);
 
