@@ -1773,7 +1773,9 @@ pub fn window_selftest(
     mut pointing: FakePointer,
     // S9: and the garden's own Save, pressed at a path of the check's own
     mut save: TheSave,
-    mut exit: MessageWriter<AppExit>,
+    // S11: what this run was asked for, and what is left of it — the checks are one errand of
+    // two and no longer end the run themselves (`games_shell::checks::Errands`)
+    mut errands: ResMut<platform::Errands>,
 ) {
     let now = time.elapsed_secs();
     if now < test.at {
@@ -2308,16 +2310,14 @@ pub fn window_selftest(
             );
             // nothing of the check is left behind: the file goes, the page's key is emptied
             platform::forget(Path::new(&test.save_path));
-            // A PC run was asked for the checks on a command line and should give the prompt
-            // back. A page was asked for them in its address, by somebody who is looking at the
-            // garden — and `AppExit` there does not end a run, it stops the canvas for good. And
-            // a run that was asked for a picture as well is not over until the picture is taken
-            // (`platform::checks_end_the_run`, S9).
-            if platform::checks_end_the_run() {
-                exit.write(AppExit::Success);
-            } else {
-                info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
-            }
+            // **The checks have said their last word, which is not the same as the run being
+            // over** (S11). A PC run was asked for them on a command line and should give the
+            // prompt back; a page was asked in its address by somebody who is looking at the
+            // garden, and `AppExit` there does not end a run, it stops the canvas for good; and a
+            // run that was asked for a picture as well is not over until the picture is taken.
+            // All three of those are `games_shell::checks::end_the_run`'s to weigh, and the
+            // `done` line with its reason is written there.
+            errands.the_checks_are_done();
             test.step = 19;
         }
         _ => {}

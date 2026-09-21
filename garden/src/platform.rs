@@ -47,10 +47,10 @@ const HIGHLIGHT_BRIDGE: &str = "gardenHighlight";
 
 /// What the Save button says, since what it does differs; and a clock for the dice.
 pub use games_shell::platform::{clock_seed, SAVE_LABEL};
-/// Whether the window's checks end the run when they are done — `false` in a page, which has
-/// nothing to exit to (`docs/web.md`), and on a PC `false` as well when the same command line
-/// asked for a `--shot` the picture of which has not been taken yet (S9).
-pub use games_shell::checks::checks_end_the_run;
+/// **What this run was asked for besides being a garden**, and the end of the run (S11): the
+/// checks and a `--shot`, each of which used to be able to cut the other short. A page has
+/// nothing to exit to (`docs/web.md`), which is one of the reasons this run may go on.
+pub use games_shell::checks::Errands;
 
 /// Where a saved garden goes (G3): a file in the directory the game was started from, which is
 /// the workspace root when it is `cargo run`; `--save PATH` overrides it. In a browser there are

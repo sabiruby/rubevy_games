@@ -28,6 +28,7 @@
 //! document, and this is two lines.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use bevy::prelude::*;
 
@@ -49,6 +50,10 @@ pub struct Settings {
     pairs: Vec<(String, String)>,
     /// the line at the head of the file, so whoever opens it knows what it is
     header: String,
+    /// **What the store asked for and did not get** (S11), in the order it was asked for, each
+    /// one once. See [`Settings::refused`] for why it is kept rather than said on the spot, and
+    /// why a `Mutex` rather than a `&mut self` on every reader.
+    refusals: Mutex<Vec<String>>,
 }
 
 impl Settings {
@@ -57,8 +62,14 @@ impl Settings {
     /// (a private window with site data blocked) is the same case.
     pub fn load(path: impl Into<PathBuf>, header: impl Into<String>, read: ReadFn, write: WriteFn) -> Settings {
         let path = path.into();
-        let mut settings =
-            Settings { path, read, write, pairs: Vec::new(), header: header.into() };
+        let mut settings = Settings {
+            path,
+            read,
+            write,
+            pairs: Vec::new(),
+            header: header.into(),
+            refusals: Mutex::new(Vec::new()),
+        };
         let text = match (settings.read)(&settings.path) {
             Ok(text) => text,
             Err(_) => return settings,
@@ -79,9 +90,94 @@ impl Settings {
         self.pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
     }
 
-    /// A stored number, if it is one.
+    /// A stored number, if it is one — and **if a line of the file says something that is not a
+    /// number at all, that is refused rather than passed over** (S11). A key nobody wrote is not
+    /// a refusal; a key somebody wrote `fast` beside is.
     pub fn number(&self, key: &str) -> Option<f32> {
-        self.get(key).and_then(|v| v.parse::<f32>().ok())
+        let text = self.get(key)?;
+        match text.parse::<f32>() {
+            Ok(n) if n.is_finite() => Some(n),
+            _ => {
+                self.refuse(format!("{key} = {text} is not a number; the default stands"));
+                None
+            }
+        }
+    }
+
+    /// **A stored number that has to be more than zero** (S11, out of Factory's F1), and the
+    /// reason there is no floor inside the arithmetic that uses one.
+    ///
+    /// A belt speed of zero is not a slow belt, it is a division; a gap of zero is not a crowded
+    /// tile, it is every item in the same place; a frame that buys no instructions at all is a
+    /// check that waits four thousand million frames. There is no sensible number to clamp such a
+    /// setting to — **the smallest belt speed that still means anything is not something anybody
+    /// measured**, and a floor invented on the spot is a number with nowhere to have come from
+    /// (`/home/kishima/book/CLAUDE.md`). So the store is told it is wrong and the default stands,
+    /// which is a number that does have somewhere to have come from.
+    ///
+    /// Three games had grown the same shape: `.max(0.001)` and `.max(1.0)` and `.max(3.0)` inside
+    /// the line that read the value, quietly turning a nought in a file into a number nobody
+    /// chose. F1 wrote this out in Factory and said the other two would want it.
+    pub fn positive(&self, key: &str, default: f32) -> f32 {
+        match self.number(key) {
+            Some(n) if n > 0.0 => n,
+            Some(wrong) => {
+                self.refuse(format!("{key} = {wrong} is not more than zero; using {default}"));
+                default
+            }
+            None => default,
+        }
+    }
+
+    /// **A stored number of things**: whole, and no fewer than `least` of them.
+    ///
+    /// `least` is the caller's because the reason is the caller's — a polygon of sky needs three
+    /// sides, a shadow needs one cascade, and a run that may draw no trees at all takes a nought.
+    /// A floor that cannot say why it is where it is does not belong in a store's reader any more
+    /// than it belongs in the arithmetic.
+    pub fn counted(&self, key: &str, least: u64, default: u64) -> u64 {
+        let Some(asked) = self.number(key) else { return default };
+        // **the floor first, because it is also what catches a negative**: `as u64` saturates, so
+        // a minus one would otherwise arrive here as a nought and be called "not whole"
+        if asked < least as f32 {
+            self.refuse(format!("{key} = {asked} is not a count of {least} or more; using {default}"));
+            return default;
+        }
+        let whole = asked as u64;
+        if whole as f32 != asked {
+            self.refuse(format!("{key} = {asked} is not a whole number of things; using {default}"));
+            return default;
+        }
+        whole
+    }
+
+    /// **What the store asked for and did not get**, in the order it was asked for.
+    ///
+    /// It is kept rather than said on the spot because of where it is read: all three games read
+    /// their settings in `main`, **before `App::run`**, and a `warn!` there goes nowhere at all —
+    /// `LogPlugin` is inside `DefaultPlugins`, so until the app is built there is no subscriber
+    /// and the line is dropped. F3a wrote a warning about a moved key in exactly that place and
+    /// found out by running the game and seeing nothing
+    /// (`docs/worklog/2026-09-21-factory-F3a.md`). So the refusals are collected and
+    /// [`SettingsRefusalsPlugin`] says them in `Startup`, where there is a log.
+    ///
+    /// The list is behind a `Mutex` rather than the readers taking `&mut self` because of who
+    /// reads: the panels are handed a plain `impl Fn(&str) -> Option<f32>` closure over a
+    /// `Res<Settings>` (S5b-1), and every `read_from` in three games takes a `&Settings`. Making
+    /// all of them mutable to record a refusal would be a wide change to say a narrow thing. The
+    /// lock is taken at startup and never in a frame.
+    pub fn refused(&self) -> Vec<String> {
+        self.refusals.lock().map(|list| list.clone()).unwrap_or_default()
+    }
+
+    /// Keeps one refusal, once: a key read twice — `CheckPace::of` is asked for by two games'
+    /// `main` and by a check — must not say the same sentence twice.
+    fn refuse(&self, said: String) {
+        if let Ok(mut list) = self.refusals.lock()
+            && !list.contains(&said)
+        {
+            list.push(said);
+        }
     }
 
     /// Remembers a value and writes the store out.
@@ -139,6 +235,33 @@ pub fn remembered(
     let settings = Settings::load(path, header, read, write);
     let lang = crate::guide::GuideLang::pick(lang_asked, settings.get("lang"));
     (settings, lang)
+}
+
+/// **What the store asked for and did not get, said where there is a log to say it in** (S11).
+///
+/// One system, in `Startup`, printing one `warn!` per refusal — the settings themselves are read
+/// in `main`, which is before `LogPlugin` exists and therefore before anything said can be heard
+/// ([`Settings::refused`]). A run with a store that is all right says nothing.
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use games_shell::settings::SettingsRefusalsPlugin;
+/// # let mut app = App::new();
+/// app.add_plugins(SettingsRefusalsPlugin);
+/// ```
+pub struct SettingsRefusalsPlugin;
+
+impl Plugin for SettingsRefusalsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, say_what_was_refused);
+    }
+}
+
+fn say_what_was_refused(settings: Option<Res<Settings>>) {
+    let Some(settings) = settings else { return };
+    for said in settings.refused() {
+        warn!("setting refused: {said}");
+    }
 }
 
 /// **The panels, as the player left them** (S5b-1).
@@ -250,6 +373,60 @@ mod tests {
         assert_eq!(second.get("lang"), Some("ja"));
         assert_eq!(second.number("night"), Some(1.30));
         assert!(read(&path).unwrap().starts_with("# a test\n"), "the file says what it is");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **What a store says that the game cannot do** (S11): every shape of it, and that the
+    /// default stands and the run is told. The three games used to write `.max(0.001)` into the
+    /// line that read the value, which turned a nought in a file into a number nobody chose and
+    /// said nothing about it.
+    #[test]
+    fn a_store_is_refused_rather_than_rounded_up() {
+        let path = std::env::temp_dir().join("games-shell-refusals-test.txt");
+        let _ = std::fs::remove_file(&path);
+        let mut settings = Settings::load(&path, "a test", read, write);
+        settings.set("belt_speed", "0");
+        settings.set("gap", "-2.5");
+        settings.set("speed", "fast");
+        settings.set("sides", "2");
+        settings.set("trees", "1.5");
+        settings.set("rocks", "-1");
+        settings.set("good_speed", "3.5");
+        settings.set("good_count", "7");
+
+        // more than zero, or the default
+        assert_eq!(settings.positive("belt_speed", 8.0), 8.0);
+        assert_eq!(settings.positive("gap", 8.0), 8.0);
+        assert_eq!(settings.positive("speed", 8.0), 8.0);
+        assert_eq!(settings.positive("good_speed", 8.0), 3.5);
+        assert_eq!(settings.positive("nobody_wrote_this", 8.0), 8.0);
+
+        // whole, and no fewer than the caller's `least` — which is the caller's because the
+        // reason is: a dome wants three sides and a garden may have no trees at all
+        assert_eq!(settings.counted("sides", 3, 24), 24);
+        assert_eq!(settings.counted("trees", 0, 5), 5, "a tree and a half is not a tree");
+        assert_eq!(settings.counted("rocks", 0, 5), 5, "and minus one rock is not none");
+        assert_eq!(settings.counted("good_count", 1, 5), 7);
+        assert_eq!(settings.counted("nobody_wrote_this", 1, 5), 5);
+        // a nought where a nought is allowed is not a refusal
+        settings.set("trees", "0");
+        assert_eq!(settings.counted("trees", 0, 5), 0);
+
+        // **and every one of them is remembered to be said where there is a log** — `main` has
+        // none (F3a), which is the whole reason this list exists
+        let said = settings.refused();
+        assert_eq!(said.len(), 6, "one line each, and no line for what was accepted: {said:?}");
+        assert!(said[0].starts_with("belt_speed = 0 is not more than zero; using 8"));
+        assert!(said.iter().any(|s| s == "speed = fast is not a number; the default stands"));
+        assert!(said.iter().any(|s| s == "sides = 2 is not a count of 3 or more; using 24"));
+        assert!(said.iter().any(|s| s == "rocks = -1 is not a count of 0 or more; using 5"));
+        assert!(said.iter().any(|s| s.contains("1.5 is not a whole number of things")));
+
+        // a key read twice is one refusal, not two: `CheckPace` is asked for by `main` and by a
+        // check, and a list that grew every time would say the same sentence over and over
+        settings.positive("belt_speed", 8.0);
+        assert_eq!(settings.refused().len(), 6);
 
         let _ = std::fs::remove_file(&path);
     }

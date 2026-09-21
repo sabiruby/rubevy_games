@@ -304,37 +304,43 @@ fn main() {
     // told is in `say_where_the_map_went`, which is a `Startup` system rather than a line here:
     // **there is no log yet in `main`** — `LogPlugin` is one of the plugins below — so a `warn!`
     // written here goes nowhere at all, which is how it was found.)
-    let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
+    // **Since S11 the refusals are the shared crate's** (`games_shell::Settings::positive` and
+    // `counted`): what F1 wrote here for this game, three games wanted. A refusal is kept rather
+    // than said on the spot for the reason in the paragraph above — there is no log in `main` —
+    // and `SettingsRefusalsPlugin` says all of them in `Startup`.
+    let half_height = settings.positive("camera_half_height", CAMERA_HALF_HEIGHT);
     let window = [
-        settings.number("window_width").unwrap_or(WINDOW[0]),
-        settings.number("window_height").unwrap_or(WINDOW[1]),
+        settings.counted("window_width", 1, WINDOW[0] as u64) as f32,
+        settings.counted("window_height", 1, WINDOW[1] as u64) as f32,
     ];
-    let headless = args.headless(settings.number("headless_seconds").unwrap_or(HEADLESS_SECONDS));
+    let headless = args.headless(settings.positive("headless_seconds", HEADLESS_SECONDS));
     let shot = args.shot(
         settings.get("shot_file").unwrap_or(SHOT_FILE),
-        settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
+        settings.positive("shot_seconds", SHOT_SECONDS),
     );
+    // **a stress run of no items is the ordinary game**, so nought is what these mean when
+    // nobody asks and a fraction of an item is not a thing to lay on a belt
     let stress = args
         .value("--stress")
         .and_then(|n| n.parse::<f32>().ok())
-        .or_else(|| games_shell::checks::asked_number("FACTORY_STRESS"))
-        .or_else(|| settings.number("stress_items"))
-        .unwrap_or(0.0)
-        .max(0.0) as usize;
+        .map(|n| n.max(0.0) as u64)
+        .or_else(|| games_shell::checks::asked_number("FACTORY_STRESS").map(|n| n.max(0.0) as u64))
+        .unwrap_or_else(|| settings.counted("stress_items", 0, 0)) as usize;
     let arms = args
         .value("--arms")
         .and_then(|n| n.parse::<f32>().ok())
-        .or_else(|| games_shell::checks::asked_number("FACTORY_ARMS"))
-        .or_else(|| settings.number("stress_arms"))
-        .unwrap_or(0.0)
-        .max(0.0) as usize;
+        .map(|n| n.max(0.0) as u64)
+        .or_else(|| games_shell::checks::asked_number("FACTORY_ARMS").map(|n| n.max(0.0) as u64))
+        .unwrap_or_else(|| settings.counted("stress_arms", 0, 0)) as usize;
     // **the measuring instrument's one knob that is not a size**: zero takes the spreading of
-    // the scripts' first look away, which is how the stress run shows what it is worth
+    // the scripts' first look away, which is how the stress run shows what it is worth.
+    // It keeps its `.max(0.0)` where the other settings lost theirs (S11), and the reason is that
+    // **a spread of minus a second and a spread of none are the same run**: there is nothing for
+    // the store to be told, because nothing was silently substituted for what it asked for.
     let stagger = inserters::Stagger(
         games_shell::checks::asked_number("FACTORY_STAGGER")
-            .or_else(|| settings.number("inserter_stagger"))
-            .unwrap_or(1.0)
-            .max(0.0),
+            .map(|n| n.max(0.0))
+            .unwrap_or_else(|| settings.number("inserter_stagger").unwrap_or(1.0).max(0.0)),
     );
 
     let mut app = App::new();
@@ -381,8 +387,7 @@ fn main() {
                     .set(WindowPlugin {
                         primary_window: Some(Window {
                             title: "Factory".into(),
-                            resolution: (window[0].max(1.0) as u32, window[1].max(1.0) as u32)
-                                .into(),
+                            resolution: (window[0] as u32, window[1] as u32).into(),
                             // in the browser: the page's canvas, as large as its box
                             canvas: Some("#factory".into()),
                             fit_canvas_to_parent: true,
@@ -452,6 +457,10 @@ fn main() {
         }
     }
 
+    // **What the store asked for and did not get** (S11). The settings are read at the top of
+    // `main`, where a `warn!` has no log to go to yet (F3a, which found that out by writing one
+    // there and seeing nothing), so the refusals are kept and said in `Startup`.
+    app.add_plugins(games_shell::SettingsRefusalsPlugin);
     app.insert_resource(settings)
         .insert_resource(RubyDir(ruby))
         .init_resource::<Hand>()
@@ -607,6 +616,15 @@ fn main() {
                     .run_if(resource_exists::<control::TheControl>),
             );
     }
+    // **What this run was asked for besides being a factory, and the end of the run** (S11).
+    // Both errands are known here — the checks are the `if` above and the picture is the line
+    // below — and neither of them ends the run itself any more:
+    // `games_shell::checks::end_the_run` does, when nothing is left.
+    app.add_plugins(platform::Errands::of(
+        "the factory",
+        platform::selftest_asked(),
+        shot.is_some(),
+    ));
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
@@ -620,7 +638,9 @@ fn main() {
 /// the whole of what changing it costs. A `script_frame_time_ms` of zero or less is rubevy's
 /// "no clock at all", so it is passed through rather than refused.
 fn set_the_budget(settings: Res<games_shell::Settings>, mut world: ResMut<ScriptWorld>) {
-    world.budget = settings.number("script_budget").unwrap_or(SCRIPT_BUDGET).max(0.0) as u64;
+    // **a budget of nothing is a VM that runs nothing**, which is a thing to ask for; a negative
+    // one is not (S11)
+    world.budget = settings.counted("script_budget", 0, SCRIPT_BUDGET as u64);
     let ms = settings.number("script_frame_time_ms").unwrap_or(SCRIPT_FRAME_TIME_MS);
     world.frame_time =
         (ms > 0.0).then(|| std::time::Duration::from_secs_f32(ms / 1000.0));
@@ -723,22 +743,6 @@ fn say_the_trouble(mut commands: Commands, trouble: Option<Res<DataTrouble>>) {
             TextColor(Color::srgb(1.0, 0.85, 0.6)),
         )],
     ));
-}
-
-/// **A setting that has to be more than zero**, and the reason there is no floor inside the
-/// arithmetic that uses one ([`belts::Rules`]). A speed of zero is not a slow belt, it is a
-/// division; a gap of zero is not a crowded tile, it is every item in the same place. There is no
-/// sensible number to clamp such a setting to — the smallest belt speed that still means anything
-/// is not something anybody measured — so the store is told it is wrong and the default stands.
-fn positive(settings: &games_shell::Settings, key: &str, default: f32) -> f32 {
-    match settings.number(key) {
-        Some(n) if n > 0.0 => n,
-        Some(wrong) => {
-            warn!("{key} = {wrong} is not more than zero; using {default}");
-            default
-        }
-        None => default,
-    }
 }
 
 /// Where one step of the factory happens, so that everything else can say whether it is before or
@@ -1028,6 +1032,7 @@ fn watch_the_frames(
     world: Res<ScriptWorld>,
     crew: inserters::Crew,
     mut stress: ResMut<Stress>,
+    errands: Res<platform::Errands>,
     mut exit: MessageWriter<AppExit>,
 ) {
     stress.seen.push(time.delta_secs() * 1000.0);
@@ -1084,7 +1089,11 @@ fn watch_the_frames(
     stress.woke.clear();
     stress.carried.clear();
     stress.said += 1;
-    if stress.said >= STRESS_REPORTS && platform::CHECKS_EXIT_WHEN_DONE {
+    // **A stress run is a third thing a run can be asked for, and it ends the same way**: when it
+    // has said its reports and nothing else this run was told to do is unfinished (S11). Before
+    // that it asked only whether the platform could exit, which in a run that was also asked for
+    // a picture is the same lie `--shot` and the checks told each other (`platform::Errands`).
+    if stress.said >= STRESS_REPORTS && errands.left().is_none() {
         exit.write(AppExit::Success);
     }
 }
@@ -1100,24 +1109,23 @@ fn spread(samples: &mut [f32]) -> (f32, f32) {
     (at(0.5), at(0.95))
 }
 
-/// `--shot FILE SECONDS`: the picture, and then the end of the run.
+/// `--shot FILE SECONDS`: the picture, and then — since S11 — nothing else.
 ///
 /// **A run that is also being checked does not end until the checks have finished.** F1 made the
 /// checks wait for the camera (they used to end the run before the picture's moment came); F2
 /// found the other half of the same thing — its checks take thirteen seconds of the game's own
 /// time and the camera's moment is at eight, so the picture was ending the run with four of the
-/// lines unsaid. Whichever of the two is still working keeps the run alive.
+/// lines unsaid. Whichever of the two is still working keeps the run alive, and since S11 it is
+/// `games_shell::checks::Errands` that knows which, for all three games rather than this one.
 fn take_shot(
     mut commands: Commands,
     time: Res<Time>,
-    test: Option<Res<SelfTest>>,
     mut shot: ResMut<Shot>,
-    mut exit: MessageWriter<AppExit>,
+    mut errands: ResMut<platform::Errands>,
 ) {
     if shot.taken {
-        let checks_still_going = test.is_some_and(|t| !t.done);
-        if time.elapsed_secs() > shot.after + 1.0 && !checks_still_going {
-            exit.write(AppExit::Success);
+        if time.elapsed_secs() > shot.after + 1.0 {
+            errands.the_picture_is_taken();
         }
         return;
     }
@@ -1281,9 +1289,10 @@ fn selftest(
     images: Res<Assets<Image>>,
     mut world: ResMut<ScriptWorld>,
     mut crew: inserters::Crew,
-    shot: Option<Res<Shot>>,
     mut orders: MessageWriter<build::Order>,
-    mut exit: MessageWriter<AppExit>,
+    // S11: what this run was asked for, and what is left of it — the checks are one errand of
+    // two and no longer end the run themselves (`games_shell::checks::Errands`)
+    mut errands: ResMut<platform::Errands>,
 ) {
     if test.done {
         return;
@@ -1893,15 +1902,13 @@ fn selftest(
         }
         _ => {
             test.done = true;
-            // **A run that was asked for a picture is not over when the checks are.** F0 noticed
-            // that `--shot` and the checks could not be used together — the checks end the run
-            // before the picture's moment comes — and it is the checks' little factory that is
-            // worth a picture, so the one waiting for a camera wins.
-            if platform::CHECKS_EXIT_WHEN_DONE && shot.is_none() {
-                exit.write(AppExit::Success);
-            } else {
-                info!("selftest: done — the factory keeps running (a page has nothing to exit to)");
-            }
+            // **The checks have said their last word, which is not the same as the run being
+            // over** (S11). F0 noticed that `--shot` and the checks could not be used together —
+            // the checks ended the run before the picture's moment came — and F1 mended it here,
+            // in this game, by asking whether a picture had been asked for. Both directions of
+            // that are `games_shell::checks::end_the_run`'s now, in one place for three games,
+            // and the `done` line with its reason is written there.
+            errands.the_checks_are_done();
         }
     }
 }

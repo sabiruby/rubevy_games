@@ -14,6 +14,10 @@
 //! **And the one number a check needs that is about the machine rather than about a game**
 //! ([`CheckPace`], S10): how many instructions a frame of the VM buys here, which is what turns a
 //! script budget into "how many frames this check may wait".
+//!
+//! **And how a run ends** ([`Errands`], S11). That is here because the checks are one of the two
+//! things a run is asked for on top of being a game, and because ending the run is the thing they
+//! did that no other check does.
 
 use bevy::prelude::*;
 
@@ -77,8 +81,8 @@ fn query_name(env_name: &str) -> String {
 /// Whether this **platform** ends a run when the checks are done. On a PC it does: they were
 /// asked for on a command line and the shell wants its prompt back.
 ///
-/// It says what the platform can do, not what this run should do — [`checks_end_the_run`] is the
-/// one to ask, and it is this and one thing more.
+/// It says what the platform can do, not what this run should do — [`Errands::left`] is the one
+/// to ask, and it is this and whatever else the run was told to do.
 #[cfg(not(target_arch = "wasm32"))]
 pub const CHECKS_EXIT_WHEN_DONE: bool = true;
 
@@ -92,40 +96,156 @@ pub const CHECKS_EXIT_WHEN_DONE: bool = true;
 #[cfg(target_arch = "wasm32")]
 pub const CHECKS_EXIT_WHEN_DONE: bool = false;
 
-/// **Whether the checks are the last thing this run was asked for** (S9) — which is
-/// [`CHECKS_EXIT_WHEN_DONE`] unless the same command line also asked for a picture.
+/// **What this run was asked for on top of being a game, and which of those is still unfinished**
+/// (S11) — the one place that answers "may this run end now, and if not, why not".
 ///
-/// `--shot FILE SECONDS` opens a window, waits, takes one picture and leaves. The checks end the
-/// run the moment they are done, which on a quiet PC is well before the picture's moment, so
-/// `GARDEN_SELFTEST=1 … --shot g.png 30` shut the window at about nine seconds and wrote no
-/// picture at all (`docs/worklog/2026-09-21-factory-F0.md` §10, item 4; all three games have the
-/// same shape). The way round it was to take the picture in a second run with the checks off,
-/// which is a picture of a *different* run — and the runs one wants a picture of are exactly the
-/// ones a check has something to say about.
+/// There are two such errands and they are asked for in the same breath on the same command line:
+/// the checks (`GARDEN_SELFTEST=1`) and a picture (`--shot FILE SECONDS`, which opens a window,
+/// waits, takes one picture and leaves). Each of them used to end the run by itself the moment it
+/// was finished, and **each of them was therefore able to cut the other one short**:
 ///
-/// So the question the checks ask before exiting is not "can this platform exit" but "is there
-/// anything else this run was told to do". There is one such thing, it is on the command line,
-/// and [`crate::args`] is already where the command line is read — so no game has to hold a flag
-/// for the shell, and the answer is the same for all three of them.
+/// * the checks end on a quiet PC well before a picture's moment, so
+///   `GARDEN_SELFTEST=1 … --shot g.png 30` shut the window at about nine seconds and wrote no
+///   picture at all (`docs/worklog/2026-09-21-factory-F0.md` §10, item 4);
+/// * and Factory's checks take thirteen seconds of the game's own time while its picture is at
+///   eight, so the picture ended the run with four of the check's lines unsaid
+///   (`docs/worklog/2026-09-21-factory-F2.md`).
 ///
-/// The picture's own system ends the run when it has the file (`take_shot` in each game), so
-/// nothing is left running: the two ends of the run hand over rather than race.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn checks_end_the_run() -> bool {
-    checks_end(&crate::args::Args::from_env())
+/// S9 mended the first direction for two games with a function that asked the command line
+/// whether a picture had been asked for, and F2 mended the second direction inside Factory with a
+/// `SelfTest` the picture's system could read. Two halves of one question in two places, which is
+/// how the third game got a `done` line that gave a browser's reason for a PC's run. So the
+/// question is asked here, of a resource rather than of `argv`, for three reasons:
+///
+/// 1. **half of it is not on the command line at all.** "Has the picture been taken yet" is a
+///    fact about the run, not about the words it was started with; `argv` can only ever answer
+///    the half S9 answered.
+/// 2. **a page has no command line**, so the `argv` form could never give a browser more than
+///    [`CHECKS_EXIT_WHEN_DONE`], and a page is where two of these games' faults live.
+/// 3. it is read by a system that runs every frame, and `Args::from_env` collects the whole
+///    command line into a `Vec<String>` each time it is asked.
+///
+/// It is a [`Plugin`] as well as a [`Resource`] so that a game says all of it once:
+///
+/// ```no_run
+/// # use bevy::prelude::*;
+/// # use games_shell::checks::Errands;
+/// # let mut app = App::new();
+/// # let (checks_asked, a_picture_asked) = (true, false);
+/// app.add_plugins(Errands::of("the garden", checks_asked, a_picture_asked));
+/// ```
+///
+/// and then marks its own errand finished — [`the_checks_are_done`](Errands::the_checks_are_done)
+/// where the last check has spoken, [`the_picture_is_taken`](Errands::the_picture_is_taken) where
+/// the file has been written. Neither of them writes `AppExit`: [`end_the_run`] does, once
+/// nothing is left, and it is also the one place the `done` line is worded.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Errands {
+    /// what the `done` line calls this game — "the garden", "the match", "the factory"
+    keeps_running: &'static str,
+    checks: Errand,
+    picture: Errand,
 }
 
-/// The same question of a line that is handed over rather than read out of the process, so that
-/// the rule can be tested. `Args::from_env` is the only thing the public one adds.
-#[cfg(not(target_arch = "wasm32"))]
-fn checks_end(args: &crate::args::Args) -> bool {
-    CHECKS_EXIT_WHEN_DONE && !args.has("--shot")
+/// One thing a run was told to do, and how far it has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Errand {
+    /// nobody asked for it in this run
+    #[default]
+    NotAsked,
+    Unfinished,
+    Done,
 }
 
-/// A page has no command line, so there is no picture to wait for and nothing to exit to either.
-#[cfg(target_arch = "wasm32")]
-pub fn checks_end_the_run() -> bool {
-    CHECKS_EXIT_WHEN_DONE
+impl Errands {
+    /// What this run was asked for: the name the `done` line calls the game by, whether the
+    /// checks are running, and whether a picture was asked for.
+    pub fn of(keeps_running: &'static str, checks: bool, a_picture: bool) -> Errands {
+        let asked = |yes: bool| if yes { Errand::Unfinished } else { Errand::NotAsked };
+        Errands { keeps_running, checks: asked(checks), picture: asked(a_picture) }
+    }
+
+    /// The last check has spoken.
+    pub fn the_checks_are_done(&mut self) {
+        if self.checks == Errand::Unfinished {
+            self.checks = Errand::Done;
+        }
+    }
+
+    /// The picture is on disk — which is a frame or two after the shutter, because the file is
+    /// written by an observer and not by the system that asked for it.
+    pub fn the_picture_is_taken(&mut self) {
+        if self.picture == Errand::Unfinished {
+            self.picture = Errand::Done;
+        }
+    }
+
+    /// Whether the checks have said their last word.
+    pub fn the_checks_have_finished(&self) -> bool {
+        self.checks == Errand::Done
+    }
+
+    /// **Why this run is still going, or `None` if nothing is left of it.**
+    ///
+    /// The sentence is the parenthesis of the `done` line, and the order the three are asked in
+    /// is the order of what a reader wants told: what this run is still working on first, and the
+    /// standing fact about the platform last. Until S11 a PC run with a picture to take said
+    /// *a page has nothing to exit to*, which is the browser's reason and not true of it.
+    pub fn left(&self) -> Option<&'static str> {
+        if self.checks == Errand::Unfinished {
+            return Some("the checks are not finished");
+        }
+        if self.picture == Errand::Unfinished {
+            return Some("the picture is still to be taken");
+        }
+        if !CHECKS_EXIT_WHEN_DONE {
+            return Some("a page has nothing to exit to");
+        }
+        None
+    }
+
+    /// Whether this run may end now — which needs something to have been asked for in the first
+    /// place. **An ordinary game was asked for nothing and is never over**: a run with no checks
+    /// and no picture has an empty list of errands, and an empty list must not read as "finished".
+    pub fn may_end(&self) -> bool {
+        let asked = self.checks != Errand::NotAsked || self.picture != Errand::NotAsked;
+        asked && self.left().is_none()
+    }
+}
+
+impl Plugin for Errands {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(*self).add_systems(Last, end_the_run);
+    }
+}
+
+/// **The end of the run, in one place**: it ends when nothing this run was asked for is left, and
+/// it says why it is going on when something is.
+///
+/// It runs in `Last` so that whatever marked an errand finished this frame is taken account of in
+/// the same frame the old code would have exited in.
+///
+/// The `done` line is printed **once, when the checks have finished and the run is not over** —
+/// which in a browser is every time (there is nothing to exit to) and on a PC is when a picture
+/// is still to come. A run whose picture was already taken by the time the checks finished simply
+/// ends, and says nothing, exactly as a run with no picture at all does.
+fn end_the_run(
+    errands: Res<Errands>,
+    mut exit: MessageWriter<AppExit>,
+    mut said: Local<bool>,
+    mut ended: Local<bool>,
+) {
+    match errands.left() {
+        None if errands.may_end() && !*ended => {
+            *ended = true;
+            exit.write(AppExit::Success);
+        }
+        Some(why) if errands.the_checks_have_finished() && !*said => {
+            *said = true;
+            info!("selftest: done — {} keeps running ({why})", errands.keeps_running);
+        }
+        _ => {}
+    }
 }
 
 /// **How fast this machine's VM is, as far as a check needs to know** — and the sum that turns a
@@ -176,15 +296,17 @@ impl CheckPace {
     /// |---|---|
     /// | `checks_instructions_a_frame` | [`CheckPace::instructions_a_frame`] |
     ///
-    /// A frame that buys **nothing** is not a frame, and it is worth saying why the floor is here
-    /// rather than trusting the file: this number divides a budget, so a nought in a store would
-    /// make the quotient infinite and `as u32` would saturate — a check that waits 4,294,967,295
-    /// frames is a check that never says anything at all, which is the one failure mode a bound
-    /// exists to prevent.
+    /// A frame that buys **nothing** is not a frame, and it is worth saying why: this number
+    /// divides a budget, so a nought in a store would make the quotient infinite and `as u32`
+    /// would saturate — a check that waits 4,294,967,295 frames is a check that never says
+    /// anything at all, which is the one failure mode a bound exists to prevent.
+    ///
+    /// Until S11 a nought was quietly read as a one, which is a rate nobody measured and nobody
+    /// asked for. It is refused now and the measured default stands
+    /// ([`Settings::positive`](crate::Settings::positive)).
     pub fn read_from(&mut self, settings: &crate::Settings) {
-        if let Some(value) = settings.number("checks_instructions_a_frame") {
-            self.instructions_a_frame = value.max(1.0);
-        }
+        self.instructions_a_frame =
+            settings.positive("checks_instructions_a_frame", self.instructions_a_frame);
     }
 
     /// **How many frames a check may wait for a VM it has asked something of**: the frames the
@@ -250,21 +372,68 @@ pub const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 
 #[cfg(test)]
 mod tests {
-    use super::{query_name, CheckPace, INSTRUCTIONS_A_FRAME_BUYS};
+    use super::{query_name, CheckPace, Errands, INSTRUCTIONS_A_FRAME_BUYS};
+    use bevy::prelude::*;
 
-    /// **A run that was also asked for a picture is not over when the checks are** (S9). The
-    /// three games all press this one button, and the thing it turns on is a word on the
-    /// command line rather than anything a game holds.
+    /// **Neither of the two errands may cut the other short** (S11) — both directions of it, which
+    /// until now were mended in two places and in two different ways (S9 for one, Factory's F2 for
+    /// the other).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn a_shot_keeps_the_run_alive_after_the_checks() {
-        use crate::args::Args;
-        assert!(super::checks_end(&Args::of(["garden"])));
-        assert!(super::checks_end(&Args::of(["garden", "--headless", "90"])));
-        assert!(!super::checks_end(&Args::of(["garden", "--shot"])));
-        assert!(!super::checks_end(&Args::of(["garden", "--shot", "g.png", "30"])));
-        // and the flag is the whole word, not a prefix of one
-        assert!(super::checks_end(&Args::of(["garden", "--shots"])));
+    fn neither_errand_ends_a_run_the_other_is_still_working_on() {
+        // the checks finish first: the run goes on, and the reason it gives is the picture
+        let mut both = Errands::of("the garden", true, true);
+        both.the_checks_are_done();
+        assert!(!both.may_end());
+        assert_eq!(both.left(), Some("the picture is still to be taken"));
+        both.the_picture_is_taken();
+        assert!(both.may_end());
+
+        // the picture is taken first: the run goes on, and nothing is said, because the `done`
+        // line is the checks' line and they have not finished
+        let mut both = Errands::of("the garden", true, true);
+        both.the_picture_is_taken();
+        assert!(!both.may_end());
+        assert!(!both.the_checks_have_finished());
+        assert_eq!(both.left(), Some("the checks are not finished"));
+        both.the_checks_are_done();
+        assert!(both.may_end());
+
+        // one errand on its own is the run's whole list
+        let mut checks = Errands::of("the match", true, false);
+        assert!(!checks.may_end());
+        checks.the_checks_are_done();
+        assert!(checks.may_end());
+
+        // **and a game that was asked for nothing is never over** — an empty list of errands is
+        // not a finished one, which is the one way this could have ended a player's run
+        let mut game = Errands::of("the factory", false, false);
+        assert!(!game.may_end());
+        game.the_checks_are_done();
+        game.the_picture_is_taken();
+        assert!(!game.may_end(), "nothing was asked for, so nothing can be finished");
+        assert_eq!(game.left(), None);
+    }
+
+    /// The `done` line and the exit, driven by the systems rather than by the rule — a run of an
+    /// app with nothing in it but the plugin and one check that finishes on the second frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_run_ends_on_the_frame_the_last_errand_is_finished() {
+        fn finish(mut errands: ResMut<Errands>) {
+            errands.the_checks_are_done();
+        }
+        let mut app = App::new();
+        app.add_plugins(Errands::of("the garden", true, false)).add_message::<AppExit>();
+        app.update();
+        assert!(app.should_exit().is_none(), "the checks have not finished");
+        app.add_systems(Update, finish);
+        app.update();
+        assert_eq!(
+            app.should_exit(),
+            Some(AppExit::Success),
+            "the frame the checks finished in is the frame the run ends in"
+        );
     }
 
     /// The two spellings of one knob are tied together by one rule, so the test is of the rule.
@@ -325,9 +494,16 @@ mod tests {
         assert_eq!(pace.instructions_a_frame, 22_800.0);
         assert_eq!(pace.frames_to_wait(2, 200_000), 2 + 9);
 
-        // and a frame that buys nothing would be a check that never gives up, so it cannot
+        // **and a frame that buys nothing would be a check that never gives up, so it is
+        // refused** (S11): until then a nought was quietly read as a one, which is a rate nobody
+        // measured, and the run said nothing about it
         settings.set("checks_instructions_a_frame", "0");
-        assert_eq!(CheckPace::of(&settings).instructions_a_frame, 1.0);
+        assert_eq!(CheckPace::of(&settings).instructions_a_frame, INSTRUCTIONS_A_FRAME_BUYS);
+        assert!(
+            settings.refused().iter().any(|said| said.contains("is not more than zero")),
+            "and the run is told: {:?}",
+            settings.refused()
+        );
 
         let _ = std::fs::remove_file(&path);
     }
