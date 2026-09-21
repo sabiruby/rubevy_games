@@ -18,6 +18,7 @@
 use bevy::prelude::*;
 
 use crate::belts::{self, Lanes, Rules};
+use crate::data::{Data, ItemId};
 use crate::grid::{Flow, Grid, Ore};
 use crate::Map;
 
@@ -29,6 +30,9 @@ pub struct Tally {
     pub carried: u64,
     pub taken: u64,
     pub made: u64,
+    /// How many crafts the machines have finished (F2). A miner's dig is not one: what it does is
+    /// counted by `made`, which is the same word the checks use for both.
+    pub crafted: u64,
     /// What one step of the factory took, in microseconds. Measured with
     /// `bevy::platform::time::Instant`, which is the clock that exists in a browser as well
     /// (`std::time::Instant` panics there, which is what made the published garden a black page
@@ -43,17 +47,19 @@ pub struct Tally {
 pub fn run_the_factory(
     time: Res<Time>,
     rules: Res<Rules>,
+    data: Res<Data>,
     mut grid: ResMut<Grid>,
     mut ore: ResMut<Ore>,
     mut lanes: ResMut<Lanes>,
     mut tally: ResMut<Tally>,
 ) {
     let started = bevy::platform::time::Instant::now();
-    let moves = belts::step(&mut grid, &mut ore, &mut lanes, &rules, time.delta_secs());
+    let moves = belts::step(&mut grid, &mut ore, &mut lanes, &rules, &data, time.delta_secs());
     tally.items = lanes.count();
     tally.carried += moves.carried() as u64;
     tally.taken += moves.taken() as u64;
     tally.made += moves.made() as u64;
+    tally.crafted += moves.crafted() as u64;
     let us = started.elapsed().as_secs_f32() * 1e6;
     tally.last_step_us = us;
     // an average over about a second, so that a number read off the screen is not one frame's
@@ -70,7 +76,7 @@ pub struct Pool {
 
 /// Every item's place in the world, in the order the lanes hold them. The drawing uses it; it is
 /// a function rather than a system so that a run with no window could ask too.
-pub fn places(map: &Map, grid: &Grid, flow: &Flow, lanes: &Lanes, out: &mut Vec<Vec2>) {
+pub fn places(map: &Map, grid: &Grid, flow: &Flow, lanes: &Lanes, out: &mut Vec<(Vec2, ItemId)>) {
     out.clear();
     for &t in grid.built() {
         let t = t as usize;
@@ -80,8 +86,9 @@ pub fn places(map: &Map, grid: &Grid, flow: &Flow, lanes: &Lanes, out: &mut Vec<
         }
         let Some(building) = grid.at(t) else { continue };
         let tile = grid.tile_of(t);
-        for &along in lane {
-            out.push(crate::grid::item_at(map, tile, flow.came_in[t], building.dir, along));
+        for on in lane {
+            let at = crate::grid::item_at(map, tile, flow.came_in[t], building.dir, on.along);
+            out.push((at, on.item));
         }
     }
 }

@@ -4,3 +4,5 @@ web/dist/
 garden.settings.txt
 sabibots.settings.txt
 factory.settings.txt
+# `tools/*.py` are run in place, and python leaves this beside them
+__pycache__/

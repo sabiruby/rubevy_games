@@ -35,7 +35,7 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25     # Battle, no wind
 SABIBOTS_SELFTEST=1 docker/run.sh sabibots release             # Battle, a window (WSLg, lavapipe)
 GARDEN_SELFTEST=1   cargo run -p garden   -- --headless 90     # the garden, no window
 GARDEN_SELFTEST=1   docker/run.sh garden   release             # the garden, a window
-FACTORY_SELFTEST=1  cargo run -p factory  -- --headless 10     # Factory, no window
+FACTORY_SELFTEST=1  cargo run -p factory  -- --headless 20     # Factory, no window
 FACTORY_SELFTEST=1  docker/run.sh factory  release             # Factory, a window
 web/build.sh all && web/serve.sh                               # then …/sabibots/?selftest and …/garden/?selftest
 web/build.sh factory                                           # then …/factory/?selftest
@@ -338,19 +338,25 @@ selftest: ok   typing in the rules marks them edited
 selftest: ok   typing marks the text edited
 ```
 
-## Factory, no window — 8 lines
+## Factory, no window — 13 lines
 
-`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 10`. F1's eight checks: the world, the
-arithmetic a click goes through, the picture (where there is one), and then **a factory built
-with clicks and watched until it delivers**.
+`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 20`. F1's eight and F2's five: the world,
+the arithmetic a click goes through, the picture (where there is one), **a factory built with
+clicks and watched until it delivers**, and then the data stage — what it read, what it refuses,
+and what a script can read back out of it.
 
 ```
 selftest: --   no floor was drawn (this run has no renderer)
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
 selftest: ok   a miner cannot be built where there is no ore (N, N)
+selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
+selftest: ok   a wrong data.rb is refused with the line it is wrong on (N/N)
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
+selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
+selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 ```
@@ -362,26 +368,44 @@ neither a pass nor a failure.
 
 **The clicks are forged** — the checks write a `WorldClick` rather than driving a mouse — so the
 building, the refusal to put a miner off the ore, and the taking away are all measured through
-the same system a mouse goes through, in a run that has no mouse.
+the same system a mouse goes through, in a run that has no mouse. **One tile a frame, and the
+checks are ordered before the system that answers a click**: that system reads what is in hand
+when *it* runs, so five clicks in one frame build five of the last thing, and a frame in which
+it ran first would read last frame's message with this frame's hand. The second of those was a
+real flake — a window run built a chest where it meant a belt, an hour after the same binary had
+run clean — and it is why the ordering is written down rather than left to the scheduler
+(`worklog/2026-09-21-factory-F2.md` §8.4a).
 
-**The one wait is on the game's own numbers.** "The chest holds one" is waited for as a
-condition, and the bound is `mine_seconds + 4 ÷ belt_tiles_per_second` — what the factory's own
-settings say the work takes, 3.0 s with the defaults — times two, for a frame's granularity at
-each end and for a browser whose frames are not a sixtieth of a second. The line prints both
-numbers, so a run that is slow says so rather than only passing. Measured 2.3 to 2.4 s on a PC.
-Change `belt_tiles_per_second` and the bound follows; there is no number of seconds in the check.
+**The waits are on the game's own numbers**, and there are three of them. F1's line is
+`mine_seconds + 4 ÷ belt_tiles_per_second` — 3.0 s with what `ruby/data.rb` says today, measured
+2.5 s — and each machine's is `2 ÷ belt + time ÷ speed + 1 ÷ belt`, which is 3.5 s for the
+furnace and 2.5 s for the assembler, measured 3.5 and 2.8. All three print both numbers, so a run
+that is slow says so rather than only passing. Change a line of `data.rb` and the bounds follow;
+there is no number of seconds in any of them.
 
-## Factory, a window — 8 lines
+**`a wrong data.rb is refused with the line it is wrong on`** puts six broken data files through
+the same door the real one went through, in the game's own VM, and checks that each is refused at
+the line it is broken on: an unknown field, a `time` of zero, an item nothing declares, a machine
+no tiles wide, a belt that runs backwards, and Ruby that will not parse. It runs in a page as
+well as on a PC, which is the point — a browser's compiler names every program `playground.rb`
+and the name has to be put back before a player sees it.
 
-`FACTORY_SELFTEST=1 docker/run.sh factory release`. The same seven, and the `--` line replaced by
+## Factory, a window — 13 lines
+
+`FACTORY_SELFTEST=1 docker/run.sh factory release`. The same twelve, and the `--` line replaced by
 the check it stood in for.
 
 ```
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
 selftest: ok   a miner cannot be built where there is no ore (N, N)
+selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
+selftest: ok   a wrong data.rb is refused with the line it is wrong on (N/N)
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
+selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
+selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
@@ -391,22 +415,27 @@ The tileset line checks the **number** of layers as well as their size, because 
 multiple of six is what a browser draws a black page over (`docs/factory.md`). It is not a check
 that anything was *drawn* — nothing in a log can be — and the evidence for that is a screenshot
 with its pixels counted, in `worklog/2026-09-21-factory-F0.md` for the floor and
-`worklog/2026-09-21-factory-F1.md` §5.4 for the factory built on it.
+`worklog/2026-09-21-factory-F1.md` §5.4 and `…-F2.md` for the factory built on it.
 
-## Factory, a browser — 9 lines
+## Factory, a browser — 14 lines
 
 `…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
 
 ```
-selftest: done — the factory keeps running (a page has nothing to exit to)
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
 selftest: ok   a miner cannot be built where there is no ore (N, N)
+selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
+selftest: ok   a wrong data.rb is refused with the line it is wrong on (N/N)
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
+selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
+selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
+selftest: done — the factory keeps running (a page has nothing to exit to)
 ```
 
 ---
@@ -420,7 +449,16 @@ produce when they are put through `tools/fixedlines.sh`; Battle's window and pag
 gained the `FN is Apply` line and Battle's headless list the `handler tasks …` line, which are
 the two things S4 changed.
 
-**Factory's three lists were F0's and are now F1's**, measured on 2026-09-21 on the branch
+**Factory's three lists were F0's, then F1's, and are now F2's**, measured on 2026-09-21 on the
+branch `factory`, one run each. **F2 added five lines to each of the three** and moved none of the
+others: the data stage was done before the first `Update`, six wrong data files are each refused
+at the line they are wrong on, a script reads the tables back, and the furnace and the assembler
+each turned what a recipe says into what it says in the time it says. Eight became thirteen, and
+the page's nine became fourteen. The six lists of the other two games diffed empty over the whole
+stage — twice, because F2 also moved the VM the workspace rides
+(`worklog/2026-09-21-factory-F2.md` §1 and §6).
+
+**Factory's lists were F0's and then F1's**, measured on 2026-09-21 on the branch
 `factory`, one run each, with the logs in that stage's scratchpad. F1 moved every one of them and
 the commit says why: F0's four checks were about a floor that F1 replaced, so *the floor is N by N
 tiles laid with a tile of the sheet* became *the map is N by N tiles with N of them holding N of

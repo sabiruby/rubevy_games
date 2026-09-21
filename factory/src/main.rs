@@ -28,19 +28,24 @@
 
 mod belts;
 mod build;
+mod data;
 mod draw;
 mod grid;
 mod items;
+mod machines;
 mod platform;
+
+use std::path::PathBuf;
 
 use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunk, TilemapChunkTileData};
 use games_shell::camera::{CameraControls, CameraPlugin, CameraSet, WorldClick};
-use rubevy::RubevyPlugin;
+use rubevy::{RubevyPlugin, ScriptWorld};
 
-use belts::{Lanes, Rules};
+use belts::{Lanes, OnBelt, Rules};
 use build::Hand;
+use data::Data;
 use grid::{Building, Dir, Flow, Grid, Ore, What};
 use items::Tally;
 
@@ -59,16 +64,19 @@ pub const TILE_PX: u32 = 16;
 /// `tools/factory-belts.py` draws (a straight and a corner seen from straight above, two frames
 /// each — the style the author chose), the two `tools/factory-ore.py` draws, and a blank.
 ///
-/// **The blank is not decoration.** wgpu's OpenGL backend guesses a texture's bind target from
-/// its shape, and a `D2` texture with square layers and a count that is a multiple of six is
-/// guessed to be a *cube map array* (`wgpu-hal-29.0.4/src/gles/mod.rs:458`). Kenney's 132 square
-/// tiles are 6 × 22, so a browser bound the tileset as `TEXTURE_CUBE_MAP_ARRAY`, which WebGL2
-/// does not have, and drew a black page with no page error at all — while the same code drew the
-/// floor correctly on a PC, where the backend is Vulkan. F1 added two ore tiles, which took the
-/// count to 138 and straight back onto a multiple of six, and the script put a blank on the end:
-/// **this is the trap working as designed**, and the check below reads the count back out of the
-/// loaded image so that it cannot stop working quietly.
-const TILESET_LAYERS: u32 = 139;
+/// **The count is the trap.** wgpu's OpenGL backend guesses a texture's bind target from its
+/// shape, and a `D2` texture with square layers and a count that is a multiple of six is guessed
+/// to be a *cube map array* (`wgpu-hal-29.0.4/src/gles/mod.rs:458`). Kenney's 132 square tiles are
+/// 6 × 22, so a browser bound the tileset as `TEXTURE_CUBE_MAP_ARRAY`, which WebGL2 does not have,
+/// and drew a black page with no page error at all — while the same code drew the floor correctly
+/// on a PC, where the backend is Vulkan.
+///
+/// F1 added two ore tiles, which took the count to 138 and straight back onto a multiple of six,
+/// and the script put a blank on the end: 139. **F2 added four** — the assembler's, two tiles by
+/// two — and 142 is not a multiple of six, so the blank was not needed and is not there. The
+/// script decides that; nobody edits it. The check below reads the count back out of the loaded
+/// image so that it cannot stop working quietly.
+const TILESET_LAYERS: u32 = 142;
 
 // ---------------------------------------------------------------------------------------------
 // The defaults, every one of which `factory.settings.txt` can move
@@ -107,16 +115,21 @@ const WINDOW: [f32; 2] = [1600.0, 900.0];
 /// `--headless` with no number, and `--shot` with no file or seconds.
 ///
 /// **The headless default is an upper bound and not a wait.** The checks wait for conditions and
-/// end the run the moment they are all answered; the longest of them waits for a miner to dig and
-/// a belt to carry four tiles, which is `mine_seconds + 4 ÷ belt_tiles_per_second` of the game's
-/// own time — 3.0 s with the defaults, and 2.3 to 2.4 s measured. Ten seconds is three times that
-/// and a bit.
-const HEADLESS_SECONDS: f32 = 10.0;
+/// end the run the moment they are all answered, and they build **two** little factories one
+/// after the other:
+///
+/// * F1's — a miner, three belts and a chest — `mine_seconds + 4 ÷ belt_tiles_per_second`, which
+///   is 3.0 s with what `data.rb` says today (measured: 2.3 to 2.4 s);
+/// * F2's — a belt into a furnace into a belt into a chest, and the same for an assembler —
+///   `2 ÷ belt + time ÷ speed + 1 ÷ belt`, which is 3.5 s for the furnace's.
+///
+/// Six and a half seconds of the game's own time, then, and twenty is three times it.
+const HEADLESS_SECONDS: f32 = 20.0;
 const SHOT_FILE: &str = "shot.png";
-/// `--shot` with no seconds. The picture wants the factory working, not only laid out: the checks'
-/// little line takes 3.0 s of the game's own time to put its first item in its chest (above), so
-/// this is just past it.
-const SHOT_SECONDS: f32 = 3.5;
+/// `--shot` with no seconds. The picture wants the factory working, not only laid out: the two
+/// little factories above are finished by 6.5 s of the game's own time, so this is just past the
+/// second of them.
+const SHOT_SECONDS: f32 = 8.0;
 
 /// **How long the checks wait for the tileset to arrive, in frames.** They wait for the thing
 /// itself rather than for a number of seconds (S7's rule), but a wait with no end is a check that
@@ -143,6 +156,14 @@ const CHECK_SLACK: f32 = 2.0;
 pub struct Map {
     /// How many tiles across and down. Square, for now.
     pub tiles: u32,
+    /// **How many items can be dug out of one tile of ore**, and **how wide a patch is**, in
+    /// tiles. They are the map's rather than [`Rules`]'s because they are how the world is *laid
+    /// out* before anybody plays it: nothing in one step of the factory reads them, `Ore::laid_out`
+    /// reads them once, and the smallest map a patch fits on is derived from the second of them in
+    /// `main` — **before there is a VM to have read any Ruby with**. That is the line between the
+    /// numbers that stayed in `factory.settings.txt` and the four that moved into `ruby/data.rb`.
+    pub ore_per_tile: u32,
+    pub ore_patch_radius: f32,
 }
 
 impl Map {
@@ -226,7 +247,20 @@ fn main() {
         args.value("--lang").as_deref(),
     );
 
-    let mut map = Map { tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(8.0) as u32 };
+    // **The floor under the map's size is derived and not chosen.** F1 wrote `.max(8.0)` and
+    // could not say where the 8 came from; what says it is the ore, because a map too small for
+    // the four patches to clear its border ring is a map the game cannot be played on
+    // (`Ore::smallest_map`, which is 15 tiles at the default radius). It is read before the map
+    // so that the map can be clamped by it, which is the whole reason `ore_patch_radius` stays a
+    // setting rather than moving into `data.rb` with the rest of the numbers of play: this is
+    // wanted here, before there is a VM to have read any Ruby.
+    let ore_patch_radius = positive(&settings, "ore_patch_radius", 3.0);
+    let smallest_map = Ore::smallest_map(ore_patch_radius);
+    let map = Map {
+        tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(smallest_map as f32) as u32,
+        ore_per_tile: counted(&settings, "ore_per_tile", 60.0),
+        ore_patch_radius,
+    };
     let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
     let window = [
         settings.number("window_width").unwrap_or(WINDOW[0]),
@@ -237,14 +271,6 @@ fn main() {
         settings.get("shot_file").unwrap_or(SHOT_FILE),
         settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
     );
-    let rules = Rules {
-        belt_tiles_per_second: positive(&settings, "belt_tiles_per_second", 2.0),
-        items_per_tile: positive(&settings, "items_per_tile", 2.0),
-        mine_seconds: positive(&settings, "mine_seconds", 1.0),
-        chest_capacity: counted(&settings, "chest_capacity", 60.0),
-        ore_per_tile: counted(&settings, "ore_per_tile", 60.0),
-        ore_patch_radius: positive(&settings, "ore_patch_radius", 3.0),
-    };
     let stress = args
         .value("--stress")
         .and_then(|n| n.parse::<f32>().ok())
@@ -252,15 +278,6 @@ fn main() {
         .or_else(|| settings.number("stress_items"))
         .unwrap_or(0.0)
         .max(0.0) as usize;
-    if stress > 0 {
-        // **A stress run sizes its own map.** The loop it lays holds `items_per_tile` to a tile,
-        // so the map it needs is the square root of the items asked for — worked out here rather
-        // than left to whoever runs it, because a page has no way of setting `map_tiles` and a
-        // measurement that cannot be taken in a browser is not a measurement of the browser.
-        let side = (stress as f32 / rules.items_per_tile.max(0.001)).sqrt().ceil() as u32;
-        // an even number of rows, so that the serpentine comes home (`lay_the_snake`)
-        map.tiles = map.tiles.max(side + side % 2 + 2);
-    }
 
     let mut app = App::new();
     match headless {
@@ -330,32 +347,53 @@ fn main() {
             .insert_resource(draw::SnapZoom(
                 settings.number("camera_snap_zoom").unwrap_or(1.0) != 0.0,
             ))
-            .add_systems(Startup, draw::start_drawing)
+            .add_systems(
+                Startup,
+                (draw::start_drawing.run_if(resource_exists::<Rules>), say_the_trouble)
+                    .after(lay_the_land),
+            )
             // **the keys are the window's**: a run with no window has no `ButtonInput` at all
             // (it is `InputPlugin`'s, and `MinimalPlugins` is not that), and the checks work the
             // hand directly rather than pressing anything
-            .add_systems(Update, build::choose.before(build::clicks))
+            .add_systems(Update, build::choose.before(build::clicks).run_if(the_factory_is_up))
             .add_systems(
                 Update,
-                (draw::draw_floor, draw::draw_buildings).after(FactorySet::Step),
+                (draw::draw_floor, draw::draw_buildings)
+                    .after(FactorySet::Step)
+                    .run_if(resource_exists::<draw::Chunks>),
             )
             .add_systems(Update, draw::snap_zoom.after(CameraSet::Drive));
-            app.add_systems(Update, draw::draw_items.after(FactorySet::Step));
+            app.add_systems(
+                Update,
+                draw::draw_items.after(FactorySet::Step).run_if(resource_exists::<draw::Chunks>),
+            );
         }
     }
 
     app.insert_resource(map)
         .insert_resource(settings)
-        .insert_resource(rules)
+        .insert_resource(RubyDir(ruby))
         .init_resource::<Hand>()
         .init_resource::<Flow>()
         .init_resource::<Tally>()
-        .add_systems(Startup, lay_the_land)
+        // **The data stage is the first thing that happens**, and everything else in `Startup` is
+        // after it — the world is not laid out, the chunks are not spawned and no `Update` runs
+        // at all unless it gave the game a [`Rules`] and a [`Data`]. That is the Battle's rule
+        // from S5b-2 (`Match::MODEL`: no default model in Rust, nothing starts until one arrives)
+        // applied to a factory: **there are no numbers of play in this binary**.
+        .add_systems(Startup, read_the_data_stage)
+        .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
         .add_systems(
             Update,
-            (build::clicks, build::follow_the_flow).chain().before(FactorySet::Step),
+            (build::clicks, build::follow_the_flow)
+                .chain()
+                .before(FactorySet::Step)
+                .run_if(the_factory_is_up),
         );
-    app.add_systems(Update, items::run_the_factory.in_set(FactorySet::Step));
+    app.add_systems(
+        Update,
+        items::run_the_factory.in_set(FactorySet::Step).run_if(the_factory_is_up),
+    );
     if stress > 0 {
         app.insert_resource(Stress {
             items: stress,
@@ -366,23 +404,132 @@ fn main() {
             steps: Vec::new(),
             said: 0,
         })
-        .add_systems(Startup, lay_the_snake.after(lay_the_land))
-        .add_systems(Update, watch_the_frames.after(FactorySet::Step));
+        .add_systems(
+            Startup,
+            size_the_map_for_the_stress_run
+                .after(read_the_data_stage)
+                .before(lay_the_land)
+                .run_if(resource_exists::<Rules>),
+        )
+        .add_systems(Startup, lay_the_snake.after(lay_the_land).run_if(the_factory_is_up))
+        .add_systems(
+            Update,
+            watch_the_frames.after(FactorySet::Step).run_if(the_factory_is_up),
+        );
     }
 
     if platform::selftest_asked() {
-        app.init_resource::<SelfTest>()
-            .add_systems(Update, selftest.before(FactorySet::Step));
+        // **before the clicks, and that is not decoration.** The checks forge a `WorldClick` and
+        // set what is in hand in the same frame; `build::clicks` reads the hand *when it runs*.
+        // With no ordering between the two, a frame in which the click system ran first reads
+        // last frame's message with this frame's hand — and the check built a chest where it
+        // meant a belt. It never happened under `MinimalPlugins`, where the order was stable by
+        // accident, and it happened in the window, where Bevy's multi-threaded scheduler is free
+        // to pick. Measured 2026-09-21: two runs of `docker/run.sh factory release` apart, one
+        // clean and one with two FAILs (`worklog/2026-09-21-factory-F2.md` §8.4).
+        app.init_resource::<SelfTest>().add_systems(
+            Update,
+            selftest.before(build::clicks).before(FactorySet::Step).run_if(the_factory_is_up),
+        );
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
-    // F2 onwards reads this; F1 only says where it is, so that a run in the wrong directory says
-    // so now rather than in a stage's time.
-    if !ruby.is_dir() && platform::RUBY_FILES.is_empty() {
-        warn!("no Ruby at {ruby:?}: nothing to run there yet, but F2 will want it");
-    }
     app.run();
+}
+
+/// Where `ruby/` is, for the one system that reads it.
+#[derive(Resource, Debug)]
+struct RubyDir(PathBuf);
+
+/// **The data file**, and the name its errors are reported under — in a browser the compiler calls
+/// every program `playground.rb`, and this is the name a player would recognise
+/// (`crate::data::from_compiler`).
+const DATA_FILE: &str = "data.rb";
+
+/// **What a data file that will not do left behind.** The game does not start; a window says this
+/// on the screen and every run says it in the log.
+#[derive(Resource, Debug)]
+struct DataTrouble(String);
+
+/// Whether there is a factory at all — which there is not until the data stage has given the game
+/// its tables and `lay_the_land` has made a grid out of them.
+fn the_factory_is_up(grid: Option<Res<Grid>>) -> bool {
+    grid.is_some()
+}
+
+/// **The data stage** (plan §3.2): `ruby/data.rb`, compiled and run in the VM rubevy keeps, and
+/// its declarations collected into [`Data`] and [`Rules`] — all of it inside one `Startup`
+/// system, so that **the tables are there before the first `Update`**.
+///
+/// The VM is `ScriptWorld::vm`, the one every script in this game will share (plan §2: one VM,
+/// so that a constant the data stage defines is a constant the control stage can read). Nothing
+/// here touches `Vm::set_host_state`, which is rubevy's (plan §5); `declare` keeps its tables in
+/// the VM's host store, which is a different place.
+fn read_the_data_stage(
+    mut commands: Commands,
+    ruby: Res<RubyDir>,
+    mut world: ResMut<ScriptWorld>,
+) {
+    let file = ruby.0.join(DATA_FILE);
+    let source = match platform::read(&file) {
+        Ok(text) => text,
+        Err(why) => {
+            let says = format!("{DATA_FILE}: {why}");
+            error!("the factory has no data: {says}");
+            commands.insert_resource(DataTrouble(says));
+            return;
+        }
+    };
+    // **How long the data stage takes is the page's problem**, so it is measured rather than
+    // guessed: in a browser the compiler is a wasm module called synchronously and the whole of
+    // this happens before the first frame is drawn, so whatever it costs is time the page is
+    // blank for (plan §3.2). `bevy::platform::time::Instant` is the clock that exists there.
+    let started = bevy::platform::time::Instant::now();
+    match data::read_the_declarations(&mut world.vm, DATA_FILE, &source, platform::compile) {
+        Ok((tables, rules)) => {
+            info!(
+                "{DATA_FILE}: {} items, {} recipes, {} machines; a full belt carries {} items a second ({:.1} ms to compile and run)",
+                tables.items.len(),
+                tables.recipes.len(),
+                tables.machines.len(),
+                rules.belt_items_per_second(),
+                started.elapsed().as_secs_f32() * 1e3,
+            );
+            // and the other direction, for F3's inserters and F4's control stage
+            data::expose_the_tables(&mut world.vm, &tables);
+            commands.insert_resource(rules);
+            commands.insert_resource(tables);
+        }
+        Err(trouble) => {
+            let says = trouble.say(DATA_FILE);
+            error!("the factory has no data: {says}");
+            error!("fix {DATA_FILE} and start it again (F5 adds an editor and a reload)");
+            commands.insert_resource(DataTrouble(says));
+        }
+    }
+}
+
+/// **A window with no factory in it says why.** One line of text in the middle of the screen, and
+/// the same sentence the log has. There is no egui here until F5, and `bevy_ui`'s default font is
+/// already in the build for the two games that have one.
+fn say_the_trouble(mut commands: Commands, trouble: Option<Res<DataTrouble>>) {
+    let Some(trouble) = trouble else { return };
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            padding: UiRect::all(Val::Px(24.0)),
+            ..default()
+        },
+        children![(
+            Text::new(format!("{}\n\nfix it and start the game again", trouble.0)),
+            TextFont { font_size: 20.0.into(), ..default() },
+            TextColor(Color::srgb(1.0, 0.85, 0.6)),
+        )],
+    ));
 }
 
 /// **A setting that has to be more than zero**, and the reason there is no floor inside the
@@ -421,17 +568,25 @@ pub enum FactorySet {
 }
 
 /// **The world, before anything is built on it**: the grid, the ore and the empty lanes.
-fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>) {
-    let ore = Ore::laid_out(map.tiles, rules.ore_patch_radius, rules.ore_per_tile);
+fn lay_the_land(mut commands: Commands, map: Res<Map>, data: Res<Data>) {
+    let ore = Ore::laid_out(map.tiles, map.ore_patch_radius, map.ore_per_tile);
     info!(
-        "a map of {} by {} tiles, {} of them with ore in ({} in the ground); a belt carries {} items a second",
+        "a map of {} by {} tiles, {} of them with ore in ({} in the ground)",
         map.tiles,
         map.tiles,
         ore.tiles_with_ore(),
         ore.total(),
-        rules.belt_items_per_second(),
     );
-    info!("keys: 1 belt, 2 miner, 3 chest, 0 take away, R turn; click to build");
+    let machines: Vec<String> = data
+        .machines
+        .iter()
+        .enumerate()
+        .map(|(i, m)| format!("{} {}", i + 4, m.name))
+        .collect();
+    info!(
+        "keys: 1 belt, 2 miner, 3 chest, {}, 0 take away, R turn; click to build",
+        machines.join(", ")
+    );
     commands.insert_resource(Grid::new(map.tiles));
     commands.insert_resource(Lanes::for_map(map.tiles));
     commands.insert_resource(ore);
@@ -494,7 +649,7 @@ fn lay_the_snake(
         let upto = (wanted * (i + 1)) / belts.max(1);
         let mut along = 1.0;
         while laid < upto {
-            lanes.of[t as usize].push_back(along);
+            lanes.of[t as usize].push_back(OnBelt { along, item: rules.digs });
             along -= spacing;
             laid += 1;
         }
@@ -503,6 +658,33 @@ fn lay_the_snake(
         "stress: a loop of {} belts, {} items asked for, {} laid ({} is the most they hold)",
         belts, stress.items, laid, most
     );
+}
+
+/// **A stress run sizes its own map**, once the data stage has said how many items fit on a tile.
+///
+/// The loop it lays holds `items_per_tile` to a tile, so the map it needs is the square root of
+/// the items asked for. It is worked out here rather than left to whoever runs it, because a page
+/// has no way of setting `map_tiles` and a measurement that cannot be taken in a browser is not a
+/// measurement of the browser — and it is worked out *here*, in `Startup`, rather than in `main`,
+/// because `items_per_tile` is `data.rb`'s now and `main` has no VM yet.
+fn size_the_map_for_the_stress_run(
+    stress: Res<Stress>,
+    rules: Res<Rules>,
+    mut map: ResMut<Map>,
+    controls: Option<ResMut<CameraControls>>,
+) {
+    let side = (stress.items as f32 / rules.items_per_tile).sqrt().ceil() as u32;
+    // an even number of rows, so that the serpentine comes home (`lay_the_snake`)
+    let tiles = map.tiles.max(side + side % 2 + 2);
+    if tiles == map.tiles {
+        return;
+    }
+    map.tiles = tiles;
+    // the camera was given the old map's edges in `main`; a bigger world needs bigger ones
+    if let Some(mut controls) = controls {
+        controls.bounds =
+            Some(Rect::from_center_half_size(Vec2::ZERO, Vec2::splat(map.span() / 2.0)));
+    }
 }
 
 /// The stress run's own report: the frame times and what the factory's own step took inside them.
@@ -550,14 +732,23 @@ fn spread(samples: &mut [f32]) -> (f32, f32) {
     (at(0.5), at(0.95))
 }
 
+/// `--shot FILE SECONDS`: the picture, and then the end of the run.
+///
+/// **A run that is also being checked does not end until the checks have finished.** F1 made the
+/// checks wait for the camera (they used to end the run before the picture's moment came); F2
+/// found the other half of the same thing — its checks take thirteen seconds of the game's own
+/// time and the camera's moment is at eight, so the picture was ending the run with four of the
+/// lines unsaid. Whichever of the two is still working keeps the run alive.
 fn take_shot(
     mut commands: Commands,
     time: Res<Time>,
+    test: Option<Res<SelfTest>>,
     mut shot: ResMut<Shot>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if shot.taken {
-        if time.elapsed_secs() > shot.after + 1.0 {
+        let checks_still_going = test.is_some_and(|t| !t.done);
+        if time.elapsed_secs() > shot.after + 1.0 && !checks_still_going {
             exit.write(AppExit::Success);
         }
         return;
@@ -606,7 +797,29 @@ struct SelfTest {
     started: f32,
     /// how much ore was in the ground when it started
     ore_before: u64,
+    /// F2's two little factories: where each machine is, the belt that feeds it, the chest it
+    /// fills, what it is meant to make, and what the numbers say each takes
+    machines: Vec<MachineCheck>,
+    /// **What is left to build, one tile a frame.** A click is answered by a system that reads
+    /// [`Hand`] when it runs, not when the click was written, so a frame that writes five clicks
+    /// with five different things in hand builds five of the last one. F1 never noticed because
+    /// it laid one belt a frame; this is the same thing said out loud.
+    to_build: Vec<(UVec2, Option<What>)>,
     done: bool,
+}
+
+/// One of F2's two little factories: a belt into a machine into a belt into a chest.
+#[derive(Debug, Clone)]
+struct MachineCheck {
+    what: String,
+    makes: data::ItemId,
+    made_of: String,
+    chest: usize,
+    /// what the recipe and the belt say this takes, in seconds
+    needs: f32,
+    /// when its chest first held one, on the game's clock — so that each line says **its own**
+    /// time and not the time the slowest of them took
+    done_at: Option<f32>,
 }
 
 /// One line, in the shape the other two games print and `tools/fixedlines.sh` matches: the
@@ -626,12 +839,14 @@ fn selftest(
     time: Res<Time>,
     map: Res<Map>,
     rules: Res<Rules>,
+    data: Res<Data>,
     grid: Res<Grid>,
     ore: Res<Ore>,
-    lanes: Res<Lanes>,
+    mut lanes: ResMut<Lanes>,
     tally: Res<Tally>,
     chunks: Query<(&TilemapChunk, &TilemapChunkTileData)>,
     images: Res<Assets<Image>>,
+    mut world: ResMut<ScriptWorld>,
     mut hand: ResMut<Hand>,
     shot: Option<Res<Shot>>,
     mut clicks: MessageWriter<WorldClick>,
@@ -642,10 +857,30 @@ fn selftest(
     }
     test.frames += 1;
     match test.step {
-        // ---- the world was laid out ---------------------------------------------------------
+        // ---- the data stage was done before this, the first `Update` --------------------------
         0 => {
+            // **`test.frames` is 1 here**, which is the whole of this check: this system runs in
+            // `Update`, `read_the_data_stage` runs in `Startup`, and the tables being readable on
+            // the first frame is the plan's "the tables are there before the first `Update`". A
+            // run where they were not never gets here at all — nothing in `Update` is added
+            // without them (`the_factory_is_up`) — so the count is what is worth printing.
+            let ready = test.frames == 1
+                && !data.items.is_empty()
+                && !data.recipes.is_empty()
+                && !data.machines.is_empty();
+            say(
+                if ready { "ok  " } else { "FAIL" },
+                &format!(
+                    "the data stage was done before Update {}: {} items, {} recipes, {} machines, a belt of {} a second",
+                    test.frames,
+                    data.items.len(),
+                    data.recipes.len(),
+                    data.machines.len(),
+                    rules.belt_items_per_second()
+                ),
+            );
             let patches = ore.tiles_with_ore();
-            let ok = patches > 0 && ore.total() == patches as u64 * rules.ore_per_tile as u64;
+            let ok = patches > 0 && ore.total() == patches as u64 * map.ore_per_tile as u64;
             say(
                 if ok { "ok  " } else { "FAIL" },
                 &format!(
@@ -790,7 +1025,7 @@ fn selftest(
         // ---- it works: the chest fills ---------------------------------------------------------
         11 => {
             let chest = *test.line.last().unwrap();
-            let held = grid.at(grid.index(chest)).map(|b| b.held).unwrap_or(0);
+            let held = grid.at(grid.index(chest)).map(|b| b.held.count()).unwrap_or(0);
             let waited = time.elapsed_secs() - test.started;
             if held == 0 && waited < test.needs * CHECK_SLACK {
                 return;
@@ -812,7 +1047,7 @@ fn selftest(
                 .iter()
                 .filter_map(|&t| grid.at(t as usize))
                 .filter(|b| b.what == What::Chest)
-                .map(|b| b.held as u64)
+                .map(|b| b.held.count() as u64)
                 .sum();
             let on_belts = tally.items as u64;
             say(
@@ -843,6 +1078,105 @@ fn selftest(
             );
             test.step = 15;
         }
+        // ---- F2: the data stage's tables, and what they say ---------------------------------
+        15 => {
+            // the two little factories: a belt, a machine, a belt and a chest each
+            match lay_out_the_machine_lines(&map, &data, &rules, &mut test) {
+                true => test.step = 16,
+                false => {
+                    say("FAIL", "there was nowhere to build the machines the data file declares");
+                    test.step = 18;
+                }
+            }
+        }
+        // one tile a frame, because the hand is read when the click is answered
+        16 if !test.to_build.is_empty() => {
+            let (tile, what) = test.to_build.remove(0);
+            hand.what = what;
+            hand.dir = Dir::East;
+            clicks.write(click_on(&map, tile));
+        }
+        16 => {
+            // the frame after the clicks: the buildings are there, so the feeding belts can be
+            // loaded with what each machine eats
+            seed_the_machine_lines(&map, &data, &rules, &grid, &mut lanes);
+            test.started = time.elapsed_secs();
+            test.step = 17;
+        }
+        17 => {
+            let waited = time.elapsed_secs() - test.started;
+            let longest = test.machines.iter().map(|m| m.needs).fold(0.0f32, f32::max);
+            // each one's own moment, caught on the frame it happens rather than read off at the
+            // end: two machines that finish two seconds apart are two different measurements
+            for m in test.machines.iter_mut() {
+                if m.done_at.is_none() && grid.at(m.chest).map(|b| b.held.of(m.makes)).unwrap_or(0) > 0
+                {
+                    m.done_at = Some(waited);
+                }
+            }
+            if test.machines.iter().any(|m| m.done_at.is_none()) && waited < longest * CHECK_SLACK {
+                return;
+            }
+            for m in test.machines.clone() {
+                let held = grid.at(m.chest).map(|b| b.held.of(m.makes)).unwrap_or(0);
+                say(
+                    if m.done_at.is_some() { "ok  " } else { "FAIL" },
+                    &format!(
+                        "the {} turned {} into {} {} after {:.1} s (the numbers say {:.1} s)",
+                        m.what,
+                        m.made_of,
+                        held,
+                        data.item_name(m.makes),
+                        m.done_at.unwrap_or(waited),
+                        m.needs
+                    ),
+                );
+            }
+            test.step = 18;
+        }
+        // ---- a data file that is wrong says which line it is wrong on ------------------------
+        18 => {
+            // **The same door the real file went through**, on the game's own VM, in whatever
+            // build this is — which is the whole point: a browser's compiler names every program
+            // `playground.rb` and this proves that what a player is told is still `data.rb:4`.
+            let mut right = 0;
+            for (source, line, sort) in wrong_data_files() {
+                let trouble = data::read_the_declarations(
+                    &mut world.vm,
+                    DATA_FILE,
+                    &source,
+                    platform::compile,
+                );
+                match trouble {
+                    Err(trouble) if trouble.at == Some(line) => right += 1,
+                    Err(trouble) => info!(
+                        "selftest: {sort} was refused at the wrong line: {}",
+                        trouble.say(DATA_FILE)
+                    ),
+                    Ok(_) => info!("selftest: {sort} was not refused at all"),
+                }
+            }
+            let all = wrong_data_files().len();
+            say(
+                if right == all { "ok  " } else { "FAIL" },
+                &format!(
+                    "a wrong {DATA_FILE} is refused with the line it is wrong on ({right}/{all})"
+                ),
+            );
+            test.step = 19;
+        }
+        // ---- and the tables can be read back from Ruby ----------------------------------------
+        19 => {
+            let asked = read_the_tables_back(&mut world.vm, &data);
+            say(
+                if asked.is_some() { "ok  " } else { "FAIL" },
+                &format!(
+                    "a script reads the tables back: {}",
+                    asked.unwrap_or_else(|| "it could not".into())
+                ),
+            );
+            test.step = 20;
+        }
         _ => {
             test.done = true;
             // **A run that was asked for a picture is not over when the checks are.** F0 noticed
@@ -863,6 +1197,153 @@ fn click_on(map: &Map, tile: UVec2) -> WorldClick {
     WorldClick { at: map.tile_centre(tile), button: MouseButton::Left, cursor: Vec2::ZERO }
 }
 
+/// **F2's two little factories, built with clicks**: for each machine the data file declares, a
+/// belt, the machine, a belt and a chest, in a row.
+///
+/// The rows are worked out from the map rather than written down, so that a map of another size
+/// still has somewhere to put them; `Ore::laid_out` keeps the middle of the map bare, which is
+/// where they go. The machine with the largest footprint decides how far apart the rows are.
+fn lay_out_the_machine_lines(
+    map: &Map,
+    data: &Data,
+    rules: &Rules,
+    test: &mut SelfTest,
+) -> bool {
+    test.machines.clear();
+    test.to_build.clear();
+    let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
+    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
+    // a row per machine, `tall` apart so that a machine's footprint never reaches the next row,
+    // starting in the middle of the map and going up
+    let first_row = map.tiles / 2;
+    let left = map.tiles / 2 - (wide + 4);
+    for (kind, machine) in data.machines.iter().enumerate() {
+        let row = first_row + kind as u32 * (tall + 1);
+        // the recipe it will run: the first one made in it, which is the one it will pick
+        let Some(&recipe) = machine.recipes.first() else { continue };
+        let recipe = &data.recipes[recipe as usize];
+        let Some(&(makes, _)) = recipe.outputs.first() else { continue };
+        let out = left + 2 + machine.size.x;
+        if row + tall >= map.tiles || out + 1 >= map.tiles {
+            return false;
+        }
+        for (x, what) in [
+            (left, Some(What::Belt)),
+            (left + 1, Some(What::Belt)),
+            (left + 2, Some(What::Machine(kind as data::MachineId))),
+            (out, Some(What::Belt)),
+            (out + 1, Some(What::Chest)),
+        ] {
+            test.to_build.push((UVec2::new(x, row), what));
+        }
+        let made_of: Vec<String> = recipe
+            .inputs
+            .iter()
+            .map(|&(item, n)| format!("{n} {}", data.item_name(item)))
+            .collect();
+        // **what the game's own numbers say this takes**: two tiles of belt to reach it, one
+        // craft at the machine's own speed, and one tile of belt out of it into the chest
+        let needs = 2.0 / rules.belt_tiles_per_second
+            + recipe.time / machine.speed
+            + 1.0 / rules.belt_tiles_per_second;
+        test.machines.push(MachineCheck {
+            what: machine.name.clone(),
+            makes,
+            made_of: made_of.join(" and "),
+            chest: (row * map.tiles + out + 1) as usize,
+            needs,
+            done_at: None,
+        });
+    }
+    !test.machines.is_empty()
+}
+
+/// **What each machine eats, put on the belt that feeds it** — which is what a miner up the line
+/// would have put there, and what F3's inserters will hand over.
+fn seed_the_machine_lines(
+    map: &Map,
+    data: &Data,
+    rules: &Rules,
+    grid: &Grid,
+    lanes: &mut Lanes,
+) {
+    let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
+    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
+    let first_row = map.tiles / 2;
+    let left = map.tiles / 2 - (wide + 4);
+    for (kind, machine) in data.machines.iter().enumerate() {
+        let row = first_row + kind as u32 * (tall + 1);
+        let Some(&recipe) = machine.recipes.first() else { continue };
+        let recipe = &data.recipes[recipe as usize];
+        let feed = grid.index(UVec2::new(left, row));
+        let mut along = 0.0;
+        for &(item, n) in &recipe.inputs {
+            for _ in 0..n {
+                lanes.of[feed].push_back(OnBelt { along, item });
+                along -= rules.spacing();
+            }
+        }
+    }
+}
+
+/// **The wrong data files the checks put through the door**, and the line each is wrong on.
+///
+/// They are written here rather than kept as files because a file that has to be wrong is a file
+/// somebody will fix; and because a page has no directory to put one in. Each is the same little
+/// data file with one thing changed, and every one of them covers a different road to the error:
+/// serde refusing a field, serde refusing a number, a reference between two declarations, and the
+/// compiler refusing to parse it at all.
+fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
+    // 1 item, 2 machine, 3 recipe, 4 belt, 5 miner, 6 chest
+    let good = concat!(
+        "item :rock, icon: 0\n",
+        "machine :oven, size: [1, 1], sprite: [109], speed: 1.0\n",
+        "recipe :rock, in: {}, out: { rock: 1 }, time: 1.0, made_in: :oven\n",
+        "belt :line, tiles_per_second: 1.0, items_per_tile: 1.0\n",
+        "miner :drill, seconds_per_item: 1.0, digs: :rock\n",
+        "chest :box, capacity: 1\n",
+    );
+    vec![
+        (good.replace("item :rock, icon: 0", "item :rock, icon: 0, colour: :grey"), 1, "an unknown field"),
+        (good.replace("time: 1.0, made_in: :oven", "time: 0.0, made_in: :oven"), 3, "a time of zero"),
+        (good.replace("out: { rock: 1 }", "out: { pebble: 1 }"), 3, "an item nothing declares"),
+        (good.replace("size: [1, 1]", "size: [0, 1]"), 2, "a machine no tiles wide"),
+        (good.replace("tiles_per_second: 1.0", "tiles_per_second: -1.0"), 4, "a belt that runs backwards"),
+        // **last, and on purpose**: a half-written line is reported where the parser gives up,
+        // which is the *next* token — so `icon:` on line 1 of a file with six more lines is
+        // reported at line 2. At the end of the file the next token is the end of the file, and
+        // the line is the line. That is the compiler's reading and not something to work around.
+        (format!("{good}item :half, icon:\n"), 7, "Ruby that will not parse"),
+    ]
+}
+
+/// **The other direction**: a script asking the tables what they hold, in the game's own VM, with
+/// the methods `data::expose_the_tables` put there at startup. It answers what it read, for the
+/// line to print, or `None` if anything went wrong.
+fn read_the_tables_back(vm: &mut sabiruby::Vm, data: &Data) -> Option<String> {
+    let first_recipe = data.recipes.first()?;
+    let last_item = data.items.last()?;
+    let script = format!(
+        "$r = recipe_of(:{})[:made_in]\n$i = item_of(:{})[:icon]\n",
+        first_recipe.name, last_item.name
+    );
+    let bytes = platform::compile(&script, "selftest.rb").ok()?;
+    vm.load_and_run(&bytes).ok()?;
+    let made_in = vm.global_get("$r");
+    let made_in = vm.str_bytes(made_in).map(|b| String::from_utf8_lossy(b).into_owned())?;
+    let icon = match vm.global_get("$i") {
+        sabiruby::Value::Int(n) => n,
+        _ => return None,
+    };
+    (made_in == data.machines[first_recipe.made_in as usize].name && icon == last_item.icon as i64)
+        .then(|| {
+            format!(
+                "recipe_of(:{})[:made_in] is {made_in} and item_of(:{})[:icon] is {icon}",
+                first_recipe.name, last_item.name
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -871,7 +1352,7 @@ mod tests {
     /// run because a run needs a window for one of its checks and this needs nothing.
     #[test]
     fn a_tiles_middle_is_in_that_tile() {
-        let map = Map { tiles: 32 };
+        let map = Map { tiles: 32, ore_per_tile: 60, ore_patch_radius: 3.0 };
         for tile in [UVec2::ZERO, UVec2::new(31, 0), UVec2::new(0, 31), UVec2::new(31, 31), UVec2::new(8, 11)] {
             assert_eq!(map.tile_at(map.tile_centre(tile)), Some(tile), "tile {tile}");
         }
@@ -882,12 +1363,76 @@ mod tests {
     /// something outside the world.
     #[test]
     fn the_edges_belong_to_one_tile_and_outside_is_outside() {
-        let map = Map { tiles: 32 };
+        let map = Map { tiles: 32, ore_per_tile: 60, ore_patch_radius: 3.0 };
         let half = map.span() / 2.0;
         assert_eq!(map.tile_at(Vec2::new(-half, -half)), Some(UVec2::ZERO));
         assert_eq!(map.tile_at(Vec2::new(-half - 0.01, -half)), None);
         assert_eq!(map.tile_at(Vec2::new(half - 0.01, half - 0.01)), Some(UVec2::splat(31)));
         assert_eq!(map.tile_at(Vec2::new(half, half)), None, "the far edge is the next tile, which is not there");
+    }
+
+    /// **The data stage is done before the first `Update`.**
+    ///
+    /// The run's own checks say so as well (`the data stage was done before Update 1`), but a
+    /// check inside a run only ever runs in a run that started, and what this is about is a game
+    /// that would not have. So: an `App` with nothing in it but the data stage and one `Update`
+    /// system that writes down what it could see the first time it ran.
+    #[test]
+    fn the_tables_are_there_before_the_first_update() {
+        #[derive(Resource, Default)]
+        struct Saw(Option<(bool, usize, f32)>);
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin {
+                file_path: platform::assets_dir(),
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            },
+            RubevyPlugin::default(),
+        ))
+        .init_asset::<Image>()
+        .insert_resource(RubyDir(platform::ruby_dir()))
+        .init_resource::<Saw>()
+        .add_systems(Startup, read_the_data_stage)
+        .add_systems(
+            Update,
+            |data: Option<Res<Data>>, rules: Option<Res<Rules>>, mut saw: ResMut<Saw>| {
+                if saw.0.is_none() {
+                    saw.0 = Some((
+                        rules.is_some(),
+                        data.as_ref().map(|d| d.items.len()).unwrap_or(0),
+                        rules.map(|r| r.belt_tiles_per_second).unwrap_or(0.0),
+                    ));
+                }
+            },
+        );
+        app.update();
+
+        let saw = app.world().resource::<Saw>().0.expect("the Update system ran");
+        assert!(saw.0, "the first Update had no Rules: the data stage was not done before it");
+        assert!(saw.1 >= 1, "and no items either");
+        assert!(saw.2 > 0.0, "and the belt's speed came out of the file");
+        // and the real `ruby/data.rb` is a file the game will start on, which is the other half
+        // of this: the test above would pass on a file with one item in it
+        let data = app.world().resource::<Data>();
+        assert!(!data.recipes.is_empty(), "ruby/data.rb declares recipes");
+        assert!(!data.machines.is_empty(), "and machines to make them in");
+        for machine in &data.machines {
+            assert_eq!(
+                machine.sprite.len() as u32,
+                machine.tiles(),
+                "{}: one picture per tile",
+                machine.name
+            );
+            for &tile in &machine.sprite {
+                assert!(tile < TILESET_LAYERS as u16, "{}: tile {tile} is off the sheet", machine.name);
+            }
+        }
+        for item in &data.items {
+            assert!(item.icon < draw::ITEM_ICONS, "{}: icon {} is off the strip", item.name, item.icon);
+        }
     }
 
     /// The middle and the ninety-fifth, which the stress run's numbers are.

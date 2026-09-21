@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Draws the ore in the ground and the item that comes out of it.
+"""Draws the ore in the ground.
 
-    tools/factory-ore.py           # writes factory/art/ore.png and factory/assets/items/ore.png
-    tools/factory-ore.py --check   # fails if either file on disk is not what this draws
+    tools/factory-ore.py           # writes factory/art/ore.png
+    tools/factory-ore.py --check   # fails if the file on disk is not what this draws
 
 **The ground.** Kenney's Tiny Factory has no ore in it, and the plan (§3.6) names the stand-in:
 the rocks of **Kenney's Tiny Farm 1.0** (CC0, <https://kenney.nl/assets/tiny-farm>), tiles 77 and
@@ -17,14 +17,10 @@ invents a colour.
 Two tiles come out, because **a patch that is being dug should look like it**: the three-rock tile
 89 while there is plenty left, the two-pebble tile 77 when it is nearly out.
 
-**The item.** An item on a belt is 8 px — half a tile — because two of them have to sit on one
-tile of belt without touching (`docs/numbers.md` §9, `items_per_tile`), and the rocks are 16 px
-pictures whose shape does not survive being halved. So the nugget is drawn here, pixel by pixel,
-**in the same four colours the ground ore was mapped onto**. It is the plan's "足りない部品は同じ
-パレットで自作" and it is 8 × 8, which is the size it is drawn at: pixel art that is scaled by
-anything but a whole number does not stay pixel art. It is written straight into `assets/`
-rather than into `art/` beside the sources, because unlike the tiles nothing combines it into a
-sheet afterwards: the file the script draws is the file the game loads.
+**The item that comes out of it is not here.** F1 drew the 8 px nugget in this file, because
+there was one item in the world; F2 declares as many as `ruby/data.rb` likes, so all of them are
+drawn by `tools/factory-items.py` into one strip. The nugget moved there unchanged, in the four
+colours the ramp below maps onto.
 
 Needs: python3 with Pillow (12.3 was used).
 """
@@ -40,7 +36,6 @@ ART = ROOT / "factory" / "art"
 FARM = ART / "kenney_tiny-farm_tilemap_packed.png"
 FACTORY = ART / "kenney_tiny-factory_tilemap_packed.png"
 ORE_OUT = ART / "ore.png"
-ITEMS_OUT = ROOT / "factory" / "assets" / "items" / "ore.png"
 
 TILE = 16
 COLUMNS = 12
@@ -58,26 +53,6 @@ ORE_RAMP = {
     (0x8B, 0x9B, 0xB4): (0xE3, 0x86, 0x28),  # its body
     (0x52, 0x60, 0x7C): (0xBD, 0x6C, 0x4A),  # its shadow
     # `#3f2631` is the outline in both packs and stays as it is
-}
-
-#: the nugget, in the four colours above plus the packs' outline. `.` is nothing at all.
-NUGGET = [
-    "..oooo..",
-    ".ohhllo.",
-    "ohllmmdo",
-    "ohlmmmdo",
-    "ohmmmmdo",
-    ".ommmddo",
-    "..oddoo.",
-    "...oo...",
-]
-INK = {
-    "o": (0x3F, 0x26, 0x31, 255),
-    "h": (0xFF, 0xD8, 0x96, 255),
-    "l": (0xFD, 0xBE, 0x53, 255),
-    "m": (0xE3, 0x86, 0x28, 255),
-    "d": (0xBD, 0x6C, 0x4A, 255),
-    ".": (0, 0, 0, 0),
 }
 
 
@@ -113,14 +88,6 @@ def build_ore() -> Image.Image:
     return sheet
 
 
-def build_items() -> Image.Image:
-    out = Image.new("RGBA", (len(NUGGET[0]), len(NUGGET)), (0, 0, 0, 0))
-    for y, row in enumerate(NUGGET):
-        for x, ink in enumerate(row):
-            out.putpixel((x, y), INK[ink])
-    return out
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if either file on disk differs")
@@ -128,7 +95,6 @@ def main() -> None:
 
     for path, image, what in [
         (ORE_OUT, build_ore(), f"{len(ROCKS)} ground tiles, Tiny Farm's rocks {ROCKS} in ore colours"),
-        (ITEMS_OUT, build_items(), "the item on a belt, drawn here in the same colours"),
     ]:
         if args.check:
             if not path.exists():

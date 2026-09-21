@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 
+use crate::machines::Stock;
 use crate::{Map, TILE_PX};
 
 /// **Which way a building faces**, and the only four there are. `East` is the direction tile
@@ -77,18 +78,29 @@ impl Dir {
     }
 }
 
-/// **What kinds of thing can be on a tile.** Three, which is what F1's line needs: something that
-/// digs, something that carries, something that holds.
+/// **What kinds of thing can be on a tile.** Three of them are the world's own fittings and the
+/// fourth is whatever `data.rb` declares; the fifth is not a thing at all but the rest of a
+/// machine that covers more than one tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum What {
     /// Carries items the way it faces. Takes them from any side but its own front.
     Belt,
-    /// Digs the ore under it and puts it into whatever it faces.
+    /// Digs the ore under it and puts what [`Rules::digs`] names into whatever it faces.
+    ///
+    /// [`Rules::digs`]: crate::belts::Rules::digs
     Miner,
-    /// Holds what a belt or a miner delivers into it, up to [`Rules::chest_capacity`].
+    /// Holds what is delivered into it, up to [`Rules::chest_capacity`] things altogether.
     ///
     /// [`Rules::chest_capacity`]: crate::belts::Rules::chest_capacity
     Chest,
+    /// A machine of the kind `data.rb` declared, **on its origin tile** — the bottom-left of its
+    /// footprint, which is the tile that was clicked. Everything that happens to a machine
+    /// happens here ([`crate::machines`]).
+    Machine(crate::data::MachineId),
+    /// The rest of a machine that covers more than one tile: not a building of its own, but the
+    /// index of the tile that is. A belt handing an item to one of these is handing it to the
+    /// machine, which is what lets a big machine be fed from any of its sides.
+    Covered { origin: u32 },
 }
 
 impl What {
@@ -97,27 +109,46 @@ impl What {
             What::Belt => "belt",
             What::Miner => "miner",
             What::Chest => "chest",
+            What::Machine(_) => "machine",
+            What::Covered { .. } => "part of a machine",
         }
     }
 }
 
 /// One building. The state a machine keeps while it runs is in here too, because it is the grid
 /// that a save file will be (F5) and a machine's half-finished work is part of the world.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// **It stopped being `Copy` at F2**, when a chest stopped being a number: what a chest or a
+/// machine holds is a few items of a few kinds ([`Stock`]), which is a `Vec`. A belt, which is
+/// most of the tiles of a busy map, carries two empty ones and they allocate nothing.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Building {
     pub what: What,
     /// Where it sends what it makes or carries. A chest faces nowhere in particular; it keeps the
     /// direction it was built with so that turning it is not a special case.
     pub dir: Dir,
-    /// A miner: how far through the current dig it is, in seconds. A chest: unused.
+    /// A miner: how far through the current dig it is, in seconds. A machine: how far through the
+    /// craft in [`Building::making`]. A belt and a chest: unused.
     pub work: f32,
-    /// A chest: how many items are in it. A miner: unused.
-    pub held: u32,
+    /// A chest: what is in it. A machine: the parts it has taken in and not used yet.
+    pub held: Stock,
+    /// A machine: what it has made and not got rid of yet. It is what stops it starting another
+    /// craft, which is the same rule a miner keeps with a finished dig.
+    pub made: Stock,
+    /// A machine: which recipe it is part way through, if any.
+    pub making: Option<crate::data::RecipeId>,
 }
 
 impl Building {
     pub fn new(what: What, dir: Dir) -> Building {
-        Building { what, dir, work: 0.0, held: 0 }
+        Building {
+            what,
+            dir,
+            work: 0.0,
+            held: Stock::default(),
+            made: Stock::default(),
+            making: None,
+        }
     }
 }
 
@@ -232,6 +263,35 @@ impl Ore {
         Ore { left, changed: true }
     }
 
+    /// **The smallest map the patches fit on without touching the border**, in tiles — the floor
+    /// under the `map_tiles` setting, derived from [`Ore::laid_out`] rather than chosen.
+    ///
+    /// The first patch's middle is at `tiles / 4`, and a tile is in it when **its own middle** is
+    /// within `radius` of that. The widest the circle ever reaches sideways is along the row
+    /// through its middle, so no tile of it has `x ≤ 0` as soon as
+    ///
+    /// ```text
+    /// tiles / 4 − radius − 0.5 > 0   ⇔   tiles > 4 × radius + 2
+    /// ```
+    ///
+    /// and the far patch, at `3 × tiles / 4`, gives the same condition mirrored. So the answer is
+    /// the smallest whole number **strictly above** `4 × radius + 2`. The border ring is tile 0
+    /// and tile `tiles − 1` — [`crate::draw::floor_picture`] draws them as plain ground — so a
+    /// patch reaching it is ore nobody can see.
+    ///
+    /// **This is one tile less than the `4 × (radius + 1)` the plan's note guessed** (15 rather
+    /// than 16 at the default radius of 3): `radius + 1` rounds the half-tile a tile's middle
+    /// sits at up to a whole one.
+    ///
+    /// **It is a guarantee and not always the very smallest.** The row through the circle's
+    /// middle is only a row of real tiles when `tiles / 4 − 0.5` happens to be whole; when it is
+    /// not, the circle is a little narrower where the tiles actually are and it can clear the
+    /// border a tile sooner. A floor that is sometimes one tile generous is a floor; one that is
+    /// sometimes one tile short is ore in the wall. The test below runs both halves of that.
+    pub fn smallest_map(radius: f32) -> u32 {
+        (4.0 * radius + 2.0).floor() as u32 + 1
+    }
+
     pub fn total(&self) -> u64 {
         self.left.iter().map(|&n| n as u64).sum()
     }
@@ -239,6 +299,17 @@ impl Ore {
     pub fn tiles_with_ore(&self) -> usize {
         self.left.iter().filter(|&&n| n > 0).count()
     }
+}
+
+/// **Whether a building pushes what it has into the tile it faces**, which is what makes the tile
+/// in front of it a corner rather than a straight.
+///
+/// A machine does, and a machine of more than one tile does it from a tile that is not the one
+/// its neighbour is next to ([`crate::data::Data::output_of`]), so for a big machine this answers
+/// about the origin only and the belt beside a covered tile is drawn as a straight. That is the
+/// picture it wants anyway; nothing about where the items really go is decided here.
+fn feeds(building: &Building) -> bool {
+    matches!(building.what, What::Belt | What::Miner | What::Machine(_))
 }
 
 /// **Which way an item arrives at each tile**, which is not the same as which way the tile faces:
@@ -281,7 +352,7 @@ impl Flow {
                 let Some(n) = grid.step_from(t, side) else { continue };
                 let feeding = grid
                     .at(n)
-                    .is_some_and(|b| matches!(b.what, What::Belt | What::Miner) && b.dir == side.back());
+                    .is_some_and(|b| feeds(b) && b.dir == side.back());
                 if !feeding {
                     continue;
                 }
@@ -370,5 +441,43 @@ mod tests {
         assert_eq!(ore.left[(16 * 32 + 16) as usize], 0, "the middle of the map is bare");
         assert_eq!(ore.total(), ore.tiles_with_ore() as u64 * 100);
         assert!(ore.tiles_with_ore() >= 4 * 25, "a circle of radius 3 is 25 tiles or more");
+    }
+
+    /// Whether any of the ore is on the border ring, which is what [`Ore::smallest_map`] is
+    /// about. It lives here rather than on [`Ore`] because nothing in the game asks it: the game
+    /// asks the floor, and this is what makes the floor true.
+    fn touches_the_border(ore: &Ore, tiles: u32) -> bool {
+        let last = tiles - 1;
+        (0..tiles).any(|i| {
+            [(i, 0), (i, last), (0, i), (last, i)]
+                .iter()
+                .any(|&(x, y)| ore.left[(y * tiles + x) as usize] > 0)
+        })
+    }
+
+    /// **The floor under `map_tiles` is derived, and this is the derivation run.** At the size
+    /// [`Ore::smallest_map`] gives, the four patches clear the border ring; one tile smaller and
+    /// they do not. Run over a spread of radii, because a formula that is right at one value is
+    /// not a formula.
+    #[test]
+    fn the_smallest_map_is_the_smallest_map_the_patches_clear_the_border_on() {
+        for radius in [0.5f32, 1.0, 1.5, 2.0, 3.0, 3.7, 5.0] {
+            let smallest = Ore::smallest_map(radius);
+            let fits = Ore::laid_out(smallest, radius, 1);
+            assert!(
+                !touches_the_border(&fits, smallest),
+                "radius {radius}: {smallest} tiles should clear the border"
+            );
+            assert!(fits.tiles_with_ore() > 0, "radius {radius}: and there is ore on it");
+        }
+        // **And at the radius the game is played at it is the smallest**: one tile under it, the
+        // row through the patch's middle is a row of real tiles and the ore reaches the wall.
+        assert_eq!(Ore::smallest_map(3.0), 15, "and not the 16 that 4 × (radius + 1) gives");
+        assert!(touches_the_border(&Ore::laid_out(14, 3.0, 1), 14), "14 tiles is too few");
+        // the other half of the rustdoc's last paragraph: a radius whose middle row is not a row
+        // of tiles clears sooner than the guarantee, which is why this is a floor and not an
+        // equality. At radius 0.5 the guarantee is 5 and 4 already clears.
+        assert_eq!(Ore::smallest_map(0.5), 5);
+        assert!(!touches_the_border(&Ore::laid_out(4, 0.5, 1), 4), "4 clears it too, a tile early");
     }
 }

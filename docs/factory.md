@@ -4,7 +4,7 @@ The third game. **This file says what exists, not what is planned** — the plan
 [`plans/factory-plan.md`](plans/factory-plan.md), and everything this page does not mention is
 not written yet.
 
-What exists (stages **F0** and **F1**, 2026-09-21):
+What exists (stages **F0**, **F1** and **F2**, 2026-09-21):
 
 * a crate, `factory/`, in the workspace;
 * a **floor**: one `TilemapChunk` — Bevy's own, one draw call for the whole grid — laid out of
@@ -15,16 +15,21 @@ What exists (stages **F0** and **F1**, 2026-09-21):
   **chests** that hold what arrives;
 * a **camera the player drives** (`games_shell::CameraPlugin`: drag, wheel, `WASD`, `Home`)
   whose zoom is **rounded to a whole number of screen pixels per pixel of the art**;
+* a **data stage** — `ruby/data.rb`, where the items, the recipes, the machines and every number
+  the factory is played by are written, read once before the first frame into Rust tables;
+* **furnaces and assemblers** that make what a recipe says in the time it says, including machines
+  that cover more than one tile;
 * `--headless N`, `--shot`, `--stress N`, and the checks (`FACTORY_SELFTEST`, `?selftest`).
 
-What does not exist: the data stage, the control stage, inserters, **Ruby of any kind**, an
-editor, a HUD, a guide, a save file. `factory/ruby/prelude.rb` is an empty file with a note in it.
+What does not exist: the control stage, inserters, an editor, a HUD, a guide, a save file.
+`factory/ruby/prelude.rb` is still an empty file with a note in it — the data stage needed
+nothing in it, and why is written there.
 
 ```
 cargo run -p factory                          # a window
-cargo run -p factory -- --headless 10         # no window
+cargo run -p factory -- --headless 20         # no window
 cargo run -p factory -- --stress 4000         # a loop of belt, measured (sizes its own map)
-FACTORY_SELFTEST=1 cargo run -p factory -- --headless 10
+FACTORY_SELFTEST=1 cargo run -p factory -- --headless 20
 docker/build.sh factory release && docker/run.sh factory release   # a window, in the container
 web/build.sh factory && web/serve.sh          # then http://localhost:8080/factory/
 ```
@@ -37,13 +42,18 @@ whole of it, and the game says it in the log when it starts:
 | | |
 |---|---|
 | `1` `2` `3` | a belt, a miner, a chest in hand |
+| `4` onwards | the machines `data.rb` declares, in the order it declares them (`4` the furnace, `5` the assembler) — the game prints the list when it starts |
 | `0` | nothing in hand: a click takes away what is there |
 | `R` | turn what is in hand a quarter turn anticlockwise |
 | click | build it, or take it away |
 | drag, wheel, `WASD`, `Home` | the camera |
 
 **A miner has to stand on ore**, which is what makes a patch worth finding; everything else goes
-anywhere, and building over something replaces it. A belt carries what is on it the way it faces
+anywhere, and building over something replaces it. **A machine may cover more than one tile** —
+the assembler is two by two — and it is built on the tile that was clicked, with the rest of its
+footprint going up and to the right; a click on any of its tiles takes the whole thing away. A
+belt may feed it through **any** of its tiles, and what it makes comes out one step the way it
+faces, from the tile it was built on. A belt carries what is on it the way it faces
 and takes things from any side but its own front, so two belts pointing at each other jam rather
 than passing the same item back and forth. A miner puts what it digs into whatever it faces — a
 belt or a chest — and if there is nowhere to put it, **it keeps the dig and takes nothing out of
@@ -67,7 +77,16 @@ Four passes, and their order is the model:
 3. **hand over** — an item at the end of its tile goes to the next one **if there is still room
    when its own turn comes**, which is where a merge is decided (the lower tile index gets the
    gap) and where a chest takes an item off the belt;
-4. **dig** — a miner that has finished puts an item down, or holds it.
+4. **dig** — a miner that has finished puts an item down, or holds it;
+5. **deliver** — a machine pushes what it has made into what it faces, one item at a time;
+6. **craft** — a machine with nothing waiting to go out takes a recipe it has the parts for,
+   consumes them, and works at it for `time / speed`.
+
+Deliver is before craft so that a machine that finished last frame is empty again when it is asked
+whether it can start; a machine still holding what it made does not start another, which is
+exactly the rule a blocked miner keeps with its finished dig. A machine holds **one craft's worth
+in and one out** — the smallest buffer that lets it run without a gap, which is why it is not a
+number anybody chose.
 
 **Where an item lives was measured, not chosen.** The plan would not settle on paper whether an
 item should be an entity or a number in a lane, so F1 built both, ran the same rule over both at
@@ -160,10 +179,19 @@ it was wrong is marked.
 | 132, 133 | a conveyor **straight**, seen from above, frames A and B (`tools/factory-belts.py`) |
 | 134, 135 | a conveyor **corner** — in at the left, out at the top — frames A and B |
 | 136, 137 | **ore in the ground**: plenty left, and nearly gone (`tools/factory-ore.py`) |
-| 138 | blank — the padding tile the paragraph above is about |
+| 138–141 | the **assembler**, two tiles by two, top row first (`tools/factory-machine.py`) |
 
-Of Kenney's own, F1 places **110** as the miner and **85** (a wooden crate) as the chest. The pack's conveyor tiles (24–27, 4/16/28 and the railed ones) are in the sheet and
-**not used**: they are three-quarter pictures and the belts are drawn from above.
+Of Kenney's own, F1 places **110** as the miner and **85** (a wooden crate) as the chest, and F2's
+`data.rb` places **109** as the furnace. The pack's conveyor tiles (24–27, 4/16/28 and the railed
+ones) are in the sheet and **not used**: they are three-quarter pictures and the belts are drawn
+from above.
+
+**F2 read 75/76/77 again and the table above was wrong about them.** They are not the three parts
+of one wide machine: each is a complete cabinet with its own left and right edge, and 75, 87, 99
+and 111 are the same cabinet in four colours. So the pack has **no machine bigger than one tile**,
+which is what `tools/factory-machine.py` is for. The blank padding tile is gone as well — 142 is
+not a multiple of six, so `pad_to_a_safe_count` did not add one, which is the script deciding and
+nobody editing.
 
 **What the pack does not have**, and what `tools/factory-belts.py` is for. The survey said the
 pack had no left and no down; reading the tiles pixel by pixel says otherwise:
@@ -193,13 +221,66 @@ maps them from their own grey ramp onto **Tiny Factory's orange** — `#ffd896` 
 two packs are drawn in the same palette, which is a thing reading them pixel by pixel says and
 no description of either does. **The item on a belt is not Kenney's**: two of them have to sit on
 a 16 px tile without touching, so it is 8 px, and a 16 px rock does not survive being halved —
-the script draws it in the same four colours (`factory/assets/items/ore.png`).
+the script draws it in the same four colours.
+
+**The items are one strip of 8 px icons** (`tools/factory-items.py`,
+`factory/assets/items/items.png`), cut with a `TextureAtlasLayout`, so a belt carrying ore, plates
+and gears is one draw call and `icon:` in `data.rb` is an index into it. F1's nugget is the first
+of them, pixel for pixel; the plate and the gear are F2's, drawn in **Tiny Factory's own greys** —
+the same ramp Tiny Farm's rocks came in. The gear is tile 114 read by eye and redrawn at half the
+size, because eight teeth in eight pixels is a grey square.
+
+**The assembler is Kenney's machine, stretched.** A `machine :assembler, size: [2, 2]` wants four
+pictures and the pack has one, so `tools/factory-machine.py` takes tile 99 and **nine-slices** it:
+the four pixels at each edge kept as they are, the band between them blown up by exactly three.
+Every pixel of the result is a pixel of Kenney's — eight colours, all of them tile 99's — so it
+stands beside the one-tile furnace without looking like it came from another pack. The first
+attempt repeated one middle row instead, and it turned the cabinet's screen into a flat panel and
+lost the frame and the lights; the docstring says so.
 
 ## The numbers
 
-Every number the factory is played by is a line of `factory.settings.txt`; the full table, with
-where each default came from, is in [`numbers.md`](numbers.md) §9. The file does not exist until
-the game writes it, and deleting a line puts that number back to its default.
+Since F2 there are two places, and the line between them is what the data stage is for.
+
+**The numbers of play are `ruby/data.rb`** — a file of declarations a player edits, read once
+before the first frame. **There are none of them in the binary**: the game does not start without
+the file, which is the rule S5b-2 set for SabiRuby Battle's match model and the same rule here.
+
+```ruby
+item :iron_ore,   icon: 0
+belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2.0
+miner :drill, seconds_per_item: 1.0, digs: :iron_ore
+chest :crate, capacity: 60
+machine :furnace,   size: [1, 1], sprite: [109],                speed: 1.0
+machine :assembler, size: [2, 2], sprite: [138, 139, 140, 141], speed: 1.0
+recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made_in: :furnace
+recipe :gear,       in: { iron_plate: 2 }, out: { gear: 1 },     time: 1.0, made_in: :assembler
+```
+
+**Six words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
+`miner` and `chest` are the three fittings the world has built in, which no recipe makes and no
+machine makes them in, and each has numbers of its own with names of its own. One `machine` shape
+with five optional fields would let `capacity:` on a furnace deserialize perfectly and be refused
+afterwards by hand-written code; a word each means **serde** refuses it, at the line — which is
+the whole reason the declarations are read through `sabiruby_serde::declare` at all.
+
+**Every number is set against the belt.** A full belt carries `tiles_per_second × items_per_tile`
+= 4 items a second, and:
+
+| | rate | of a full belt |
+|---|---|---|
+| a miner | 1 ore a second | a quarter |
+| a furnace | 0.5 plates a second | an eighth |
+| an assembler | 1 gear a second, eating 2 plates | a quarter |
+
+so one chain is **2 miners → 4 furnaces → 1 assembler → a gear a second**, and four chains fill a
+belt with gears. Each line of `data.rb` says what it is a number *of*; `numbers.md` §9.3 has the
+table, and the one number with no reason behind it — the belt's own speed — says so rather than
+being given a plausible one.
+
+**The numbers that move the game rather than being played by it are still
+`factory.settings.txt`**, and the file does not exist until the game writes it; deleting a line
+puts that number back to its default.
 
 ```text
 # Factory: what the game remembers. Delete a line for the default.
@@ -208,26 +289,30 @@ camera_half_height=150
 camera_snap_zoom=1
 window_width=1600
 window_height=900
-belt_tiles_per_second=2
-items_per_tile=2
-mine_seconds=1
-chest_capacity=60
 ore_per_tile=60
 ore_patch_radius=3
 ```
 
-**The six at the bottom are numbers of play, and they are only here for now**: F2's data stage is
-where they belong (`ruby/data.rb`), which is the whole reason a data stage is in the plan. Four
-of the six are set against each other rather than picked — a full belt carries
-`belt_tiles_per_second × items_per_tile` = 4 items a second, a miner is a quarter of that so that
-four of them fill one belt, a chest is a minute of one miner, a tile of ore is one chestful — and
-the one with no reason behind it, the belt's speed, says so in `numbers.md` rather than being
-given a plausible one.
+**Why the two `ore_` numbers did not go into `data.rb` with the rest.** They are how the world is
+*laid out* before anybody plays it: `Ore::laid_out` reads them once and one step of the factory
+reads neither. And the smallest map the four patches fit on is derived from
+`ore_patch_radius` — which is wanted in `main`, **before there is a VM to have read any Ruby
+with**. That is where the line got drawn.
 
-**A setting that is not more than zero is refused**, said in the log, and the default stands. A
-belt speed of zero is not a slow belt and a gap of zero is not a crowded tile; both are a
-division. That is where the check lives rather than inside the arithmetic, because a floor inside
-the arithmetic (`1 / items_per_tile.max(0.001)`) is a number with nowhere to have come from.
+**A number that is not more than zero is refused**, said where it is written, and the game does
+not start:
+
+```text
+data.rb:26: unknown field `colour`, expected `icon` (TypeError)
+data.rb:6: -1 is not more than zero (TypeError)
+```
+
+A belt speed of zero is not a slow belt and a gap of zero is not a crowded tile; both are a
+division. The check is in the declaration rather than inside the arithmetic, because a floor
+inside the arithmetic (`1 / items_per_tile.max(0.001)`) is a number with nowhere to have come
+from. Six kinds of mistake are checked, by a test and again by the checks of a running game —
+which is how the browser is covered, since a page's compiler names every program `playground.rb`
+and the name has to be put back before a player sees it.
 
 **And a gap is only as exact as `f32` is.** "A jammed tile holds one more than `items_per_tile`"
 is true of the default, and of everything whose gap divides a tile exactly — but at
@@ -235,45 +320,51 @@ is true of the default, and of everything whose gap divides a tile exactly — b
 hair longer than a tile. Nothing is lost and no two items are ever closer than a gap; the tile
 just buffers one less. The test at the bottom of `src/belts.rs` runs seven values and says which.
 
-**Two numbers are not settings**, because moving them does not draw the same picture differently
-— it draws a wrong one, or none: the pack's 16 px, and how many tiles the sheet has. Nor are the
-tile numbers and the eight turns of `src/draw.rs`.
+**Four numbers are not settings**, because moving them does not draw the same picture differently
+— it draws a wrong one, or none: the pack's 16 px, how many tiles the sheet has, how big an
+item's icon is, and how many icons there are. Nor are the tile numbers and the eight turns of
+`src/draw.rs`. **The machines' tile numbers are not among them**: they are `sprite:` in
+`data.rb`, because which picture a machine wears is a thing a data file says.
 
-**One number F1 could not settle**: `map_tiles` is still F0's provisional 32. The plan says it
-comes from how many machines have to fit, and neither of the two things that would say is known
-— what a *real* renderer can draw (both renderers on this machine are software, and the browser's
-drew 900 belts at the same 5 frames a second with two items on them as with eighteen hundred),
-and how many scripted inserters a frame holds, which is F3's measurement. `numbers.md` §9.6 says
-so rather than inventing a number.
+**One number F1 and F2 both could not settle**: `map_tiles` is still F0's provisional 32. The plan
+says it comes from how many machines have to fit, and neither of the two things that would say is
+known — what a *real* renderer can draw (both renderers on this machine are software), and how
+many scripted inserters a frame holds, which is F3's measurement. F2 added one piece of it: a
+chain is 7 machines and 4 chains fill a belt, so the question is now "how many chains".
+`numbers.md` §9.6 says so rather than inventing a number.
 
 **And one that is derived rather than set**: how fast the belts' two-frame animation runs. The
 pack draws a chevron every 8 px and the second frame is the first with the chevrons moved half of
 that, so the picture only reads as one moving belt if a frame is swapped every 4 px the belt
-travels — `4 / (belt_tiles_per_second × 16)`. Change the speed and the animation follows, which
-is what keeps the two from disagreeing.
+travels — `4 / (tiles_per_second × 16)`. Change the speed in `data.rb` and the animation follows,
+which is what keeps the two from disagreeing.
 
 ## What the tiles cost
 
 The budget, set here before F1 starts filling the sheet, the way the garden's models were
-(`CREDITS.md`, "against the plan's budget of 2 MB in ten"): **64 KB, in one sheet plus one
-licence text for each pack used.** Where it comes from: the sheet costs a **measured 67 bytes a
-tile** (9,662 bytes for 145 at F0, and 67.4 for the 139 it has now), so even a
-sheet of 512 tiles — nearly four times what is in it now, and more than Kenney's whole pack three
-times over — is about 34 KB. 64 KB is nearly twice that, and **27% of the smaller of the two games
-already here** (sabibots 234,202 B, garden 322,924 B, `web.md`), which is the ceiling the plan
-sets.
+(`CREDITS.md`, "against the plan's budget of 2 MB in ten"): **64 KB, in one sheet plus the item
+icons plus one licence text for each pack used.** Where it comes from: the sheet costs a
+**measured 67 bytes a tile** (9,662 bytes for 145 at F0, 9,369 for 139 at F1, 9,612 for the 142
+it has now — 67.7), so even a sheet of 512 tiles — nearly four times what is in it now, and more
+than Kenney's whole pack three times over — is about 35 KB. 64 KB is nearly twice that, and **27%
+of the smaller of the two games already here** (sabibots 234,202 B, garden 322,924 B, `web.md`),
+which is the ceiling the plan sets.
 
 | file | bytes |
 |---|---|
-| `factory/assets/tiles/factory-tiles.png` | 9,369 |
-| `factory/assets/items/ore.png` | 180 |
+| `factory/assets/tiles/factory-tiles.png` | 9,612 |
+| `factory/assets/items/items.png` | 317 |
 | `factory/assets/tiles/LICENSE-kenney-tiny-factory.txt` | 569 |
 | `factory/assets/tiles/LICENSE-kenney-tiny-farm.txt` | 566 |
-| **what the page carries** | **10,684 in 4 files**, 16% of the budget |
+| **what the page carries** | **11,064 in 4 files**, 17% of the budget |
+
+Three items cost 317 bytes where one cost 180, which is **46 bytes an icon** after the PNG
+header: at that rate the budget's remaining 53 KB is a thousand items, and it is not the icons
+that will run out.
 
 Not in the page: `factory/art/` — the two packs as they came (4,452 and 5,866), their
-`Tilesheet.txt` (238 each), their licences (569 and 566) and the drawn belts and ore (330 and
-376) — 12,635 bytes of source that `web/build.sh` never copies.
+`Tilesheet.txt` (238 each), their licences (569 and 566) and the drawn belts, ore and machine
+(330, 376 and 287) — 12,922 bytes of source that `web/build.sh` never copies.
 
 ## The entry page
 
@@ -286,16 +377,24 @@ runs `web/build.sh all`.
 
 ## The checks
 
-`docs/verification/selftest-lines.md` has the lists — eight lines with no window, eight with one,
-and nine in a page. The one that moves between them is about the picture: a headless run spawns
-no chunk and has no image loader, so it says `--` rather than claiming a check that never ran.
+`docs/verification/selftest-lines.md` has the lists — thirteen lines with no window, thirteen
+with one, and fourteen in a page. The one that moves between them is about the picture: a
+headless run spawns no chunk and has no image loader, so it says `--` rather than claiming a
+check that never ran.
 
 **They build a factory with clicks**, because that is the road a player takes and the only road
 there is: the checks write a `WorldClick` and the same system that answers a mouse answers them.
-A run with no window has no mouse, which is why the message is registered there too. Then they
-wait for **the game's own numbers** rather than for a number of seconds — a miner's dig plus four
-tiles of belt is 3.0 s with the defaults, the run takes 2.3 to 2.4 s of it — and they check that
-what came out of the ground is either in a chest or on a belt.
+A run with no window has no mouse, which is why the message is registered there too. **One tile a
+frame**, because the system that answers a click reads what is in hand when it runs and not when
+the click was written. Then they wait for **the game's own numbers** rather than for a number of
+seconds — a miner's dig plus four tiles of belt is 3.0 s with what `data.rb` says, measured 2.5 s;
+a furnace's belt and craft and belt is 3.5 s, measured 3.5 — and they check that what came out of
+the ground is either in a chest or on a belt.
+
+**And they put six broken data files through the door the real one went through**, in the game's
+own VM, to prove that each is refused at the line it is broken on. That check runs in a page as
+well, which is the point of it being a check and not only a test: a browser's compiler names
+every program `playground.rb`.
 
 `--shot` and the checks now work together (F0 found they could not): a run that was asked for a
 picture stays up for it rather than exiting the moment the checks are done.
