@@ -238,7 +238,7 @@ end
 
 | 日付・段階 | 気づいた点 | どこ | 属する先 | 状況（計画に足した／著者判断待ち／見送り・理由） |
 |---|---|---|---|---|
-| 09-21 F0 | **`TilemapChunk` の層数の罠は rubevy_games に限らない**: Bevy 0.19 の `TilemapChunk` を配列テクスチャで使う誰にでも起き、Bevy 本体の example は 4 層なので当たらない。例外も 404 も出ず判定も全部 ok なので、**画素を数える以外に気づく道が無い** | `wgpu-hal-29.0.4/src/gles/mod.rs:458` | 上流（wgpu か Bevy）への報告候補／本の素材 | **著者判断待ち**（上流に報告するか。再現は小さい: 16×16 × 6 の倍数の層で WebGL2）。`docs/factory.md` と `tools/factory-tileset.py` に理由を書いてある。book の findings に写す |
+| 09-21 F0 | **`TilemapChunk` の層数の罠は rubevy_games に限らない**: Bevy 0.19 の `TilemapChunk` を配列テクスチャで使う誰にでも起き、Bevy 本体の example は 4 層なので当たらない。例外も 404 も出ず判定も全部 ok なので、**画素を数える以外に気づく道が無い** | `wgpu-hal-29.0.4/src/gles/mod.rs:458` | 上流（wgpu か Bevy）への報告候補／本の素材 | **見送り**（著者、2026-09-21「報告しない」。上流には出さない）。再現は小さい: 16×16 × 6 の倍数の層で WebGL2。`docs/factory.md` と `tools/factory-tileset.py` に理由を書いてある。book の findings に写す |
 | 09-21 F0 | **Battle のハンドラの判定が、ブラウザの窓を 1600×900 にすると毎回落ちる**（Playwright の既定 1280×720 では FAIL 0）。canvas が大きいぶん SwiftShader のフレームが遅く、壁時計 0.3 秒に入るフレーム数が減る。S7 が箱庭に入れた「秒で待たず条件で待つ」が Battle のこの判定には入っていない。`fixedlines.sh` はこの 2 行を落とす（当たり依存の行）ので行の集合では見えない | `sabibots/src/main.rs:1908,1912` | バグ（Battle の判定） | 計画に足した: games の S9 に入れる |
 | 09-21 F0 | `tools/fixedlines.sh` が CR を落とさない（`docker/run.sh` は `-t` 付きなので窓の走行の各行が `\r` で終わる）。`--shot` と `<GAME>_SELFTEST` は同時に使えない（判定が済むとアプリが終わり、`--shot` の時刻の前に窓が閉じる。3 本とも同じ作り） | `tools/fixedlines.sh`、`games_shell::checks` | 道具 | 計画に足した: games の S9 で（CR は `tr -d` を足し、過去の比較と揃うことを確かめる） |
 | 09-21 F0 | 調査の「3/4 なので回転では他の向きを作れない」は横向きのタイルにだけ当てはまる（縦のタイルは初めから真上の絵）。PC とブラウザで絵が 0.06% 違う（非整数倍の丸め。計画書 5 章の「にじみ」） | 計画書 3.6、5 章 | 計画書の前提違い | 3.6 は F0a の行に書いた。ズームを整数倍に丸めるかは F1 で見る |
