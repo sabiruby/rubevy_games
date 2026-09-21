@@ -137,6 +137,15 @@ fn take(settings: &games_shell::Settings, key: &str, slot: &mut f32) {
     }
 }
 
+/// The same for a colour, which the store keeps as three keys and not as one string (S5b-1's
+/// rule: reading a colour out of a text file would need a parser, and three numbers need none).
+/// `take_rgb(settings, "light_moon_color", &mut …)` reads `…_r`, `…_g` and `…_b`.
+fn take_rgb(settings: &games_shell::Settings, prefix: &str, slot: &mut [f32; 3]) {
+    for (i, channel) in ["_r", "_g", "_b"].into_iter().enumerate() {
+        take(settings, &format!("{prefix}{channel}"), &mut slot[i]);
+    }
+}
+
 /// One turn of the sun. Night is the half of it the sun spends under the ground.
 ///
 /// **It is the default now, not the rule** (W1): the rule is `day_length` in `ruby/world.rb`, and
@@ -217,6 +226,36 @@ const SHADOW_CASCADES: u32 = 2;
 const SHADOW_NEAR: f32 = 24.0;
 const SHADOW_FAR: f32 = 70.0;
 
+/// **The colours of the day** (S9) — each a value at sunrise and what noon adds to it, so that
+/// the pair reads the way [`DAY_LUX`] and [`DAY_AMBIENT`] already did.
+///
+/// These nine were written into the bodies of `sky_colors` and `day_night` and were in no list
+/// until S5b-5's last sweep found them (`docs/numbers.md` §2.14). The odd thing about that is
+/// what was *already* listed beside them: the three numbers of the **night** sky were measured on
+/// 2026-09-18 and have carried their measurement ever since ([`NIGHT_SKY`]), while the day's
+/// same-shaped numbers had never been written down at all. S5a's net was cast over `const`
+/// declarations and names, and these had neither.
+///
+/// **Source: unknown**, all nine, beyond the sentence the code carried — "low sun is orange,
+/// high sun is white" for the sun, and for the sky that it "gets deeper towards the top". The
+/// rim's value at noon, `0.5 + 0.22`, is also the blue `ClearColor` was before G8, which is the
+/// one thing here that anything else depends on: G6b's night was measured against a sky whose
+/// rim was this, so the note on [`MOON_LUX`] is about these too.
+const DAY_SKY_RIM: [f32; 3] = [0.35, 0.5, 0.7];
+const DAY_SKY_RIM_SPAN: [f32; 3] = [0.15, 0.22, 0.22];
+const DAY_SKY_ZENITH: [f32; 3] = [0.15, 0.33, 0.64];
+const DAY_SKY_ZENITH_SPAN: [f32; 3] = [0.11, 0.21, 0.24];
+/// The sun's own colour, and the moon's. The sun's red channel does not move, which is why its
+/// span begins with a zero rather than with a number somebody chose.
+const SUN_COLOR: [f32; 3] = [1.0, 0.72, 0.45];
+const SUN_COLOR_SPAN: [f32; 3] = [0.0, 0.24, 0.5];
+/// *Reason only*: "blue, and much weaker than the sun". The three numbers are **unknown**.
+const MOON_COLOR: [f32; 3] = [0.62, 0.70, 1.0];
+/// What the fill light is coloured, by day and by night. **Unknown**, both — and the night one is
+/// part of the picture G6b measured, so the note on [`MOON_LUX`] holds here as well.
+const DAY_AMBIENT_COLOR: [f32; 3] = [0.7, 0.8, 1.0];
+const NIGHT_AMBIENT_COLOR: [f32; 3] = [0.45, 0.54, 0.85];
+
 /// **The light, as a setting** (S5b-3): the night the author was asked about, the day it turns
 /// into, and where in the turn a run begins.
 ///
@@ -252,6 +291,18 @@ pub struct Light {
     pub shadow_cascades: u32,
     pub shadow_near: f32,
     pub shadow_far: f32,
+    /// **The colours of the day** (S9): [`DAY_SKY_RIM`] and [`DAY_SKY_ZENITH`] with their spans,
+    /// [`SUN_COLOR`] with its span, [`MOON_COLOR`], and the two ambient colours. They were in the
+    /// bodies of `sky_colors` and `day_night` until S9 and in no list until S5b-5's last sweep.
+    pub day_sky_rim: [f32; 3],
+    pub day_sky_rim_span: [f32; 3],
+    pub day_sky_zenith: [f32; 3],
+    pub day_sky_zenith_span: [f32; 3],
+    pub sun_color: [f32; 3],
+    pub sun_color_span: [f32; 3],
+    pub moon_color: [f32; 3],
+    pub day_ambient_color: [f32; 3],
+    pub night_ambient_color: [f32; 3],
 }
 
 impl Default for Light {
@@ -270,6 +321,15 @@ impl Default for Light {
             shadow_cascades: SHADOW_CASCADES,
             shadow_near: SHADOW_NEAR,
             shadow_far: SHADOW_FAR,
+            day_sky_rim: DAY_SKY_RIM,
+            day_sky_rim_span: DAY_SKY_RIM_SPAN,
+            day_sky_zenith: DAY_SKY_ZENITH,
+            day_sky_zenith_span: DAY_SKY_ZENITH_SPAN,
+            sun_color: SUN_COLOR,
+            sun_color_span: SUN_COLOR_SPAN,
+            moon_color: MOON_COLOR,
+            day_ambient_color: DAY_AMBIENT_COLOR,
+            night_ambient_color: NIGHT_AMBIENT_COLOR,
         }
     }
 }
@@ -285,6 +345,11 @@ impl Light {
     /// | `light_day_ambient` / `light_day_ambient_span` | the same for the fill light |
     /// | `light_sun_lux` | what the sun is built with |
     /// | `light_shadow_cascades` / `light_shadow_near` / `light_shadow_far` | the shadow cascades |
+    /// | `light_day_sky_rim_r` / `_g` / `_b` and `light_day_sky_rim_span_*` | **the day sky along the horizon** (S9), at sunrise and what noon adds |
+    /// | `light_day_sky_zenith_*` and `light_day_sky_zenith_span_*` | the same straight overhead |
+    /// | `light_sun_color_*` and `light_sun_color_span_*` | the sun, low and at noon |
+    /// | `light_moon_color_*` | the moon |
+    /// | `light_day_ambient_color_*` / `light_night_ambient_color_*` | what the fill light is coloured |
     ///
     /// The night's colour is three keys rather than one string: S5b-1 kept colours out of the
     /// store because reading one needs a parser, and three numbers need none.
@@ -308,6 +373,16 @@ impl Light {
         }
         take(settings, "light_shadow_near", &mut self.shadow_near);
         take(settings, "light_shadow_far", &mut self.shadow_far);
+        // S9: the nine colours of the day, each `…_r` / `_g` / `_b`
+        take_rgb(settings, "light_day_sky_rim", &mut self.day_sky_rim);
+        take_rgb(settings, "light_day_sky_rim_span", &mut self.day_sky_rim_span);
+        take_rgb(settings, "light_day_sky_zenith", &mut self.day_sky_zenith);
+        take_rgb(settings, "light_day_sky_zenith_span", &mut self.day_sky_zenith_span);
+        take_rgb(settings, "light_sun_color", &mut self.sun_color);
+        take_rgb(settings, "light_sun_color_span", &mut self.sun_color_span);
+        take_rgb(settings, "light_moon_color", &mut self.moon_color);
+        take_rgb(settings, "light_day_ambient_color", &mut self.day_ambient_color);
+        take_rgb(settings, "light_night_ambient_color", &mut self.night_ambient_color);
     }
 }
 
@@ -400,6 +475,18 @@ const EDGE_JITTER: f32 = 0.4;
 const EDGE_OUT: [f32; 2] = [4.0, 15.0];
 const EDGE_SCALE: [f32; 2] = [1.7, 3.1];
 
+/// **How the dome's gradient is pushed up** (S9). `horizon_look` does not run the climb from the
+/// rim to the zenith over the whole dome: it holds the rim's colour for a little way first, so
+/// that the band the eye actually sees along the horizon is the colour the fog is and the two
+/// meet without a seam. The height a vertex is treated as being at is `t × gain − hold`, clamped.
+///
+/// *Reason only* — the sentence above is `horizon_look`'s own, and has been since G8. **The two
+/// numbers are unknown**: nothing says why the climb is a quarter faster rather than a fifth, or
+/// why the hold is a tenth of the dome. They were in the body of that function until S9 and in no
+/// list until S5b-5's last sweep (`docs/numbers.md` §2.14).
+const SKY_RIM_GAIN: f32 = 1.25;
+const SKY_RIM_HOLD: f32 = 0.1;
+
 /// What the fog is built with before `horizon_look` has had a frame — colour and the two
 /// distances. Both are overwritten on the first frame and are only ever seen if `horizon_look` is
 /// not running. **Source unknown**.
@@ -434,6 +521,9 @@ pub struct Scenery {
     pub edge_jitter: f32,
     pub edge_out: [f32; 2],
     pub edge_scale: [f32; 2],
+    /// [`SKY_RIM_GAIN`] / [`SKY_RIM_HOLD`] — **how the dome's gradient is pushed up** (S9)
+    pub rim_gain: f32,
+    pub rim_hold: f32,
 }
 
 impl Default for Scenery {
@@ -451,6 +541,8 @@ impl Default for Scenery {
             edge_jitter: EDGE_JITTER,
             edge_out: EDGE_OUT,
             edge_scale: EDGE_SCALE,
+            rim_gain: SKY_RIM_GAIN,
+            rim_hold: SKY_RIM_HOLD,
         }
     }
 }
@@ -487,6 +579,9 @@ impl Scenery {
         take(settings, "edge_out_max", &mut self.edge_out[1]);
         take(settings, "edge_scale_min", &mut self.edge_scale[0]);
         take(settings, "edge_scale_max", &mut self.edge_scale[1]);
+        // S9: `sky_rim_gain` / `sky_rim_hold`, the dome's gradient ([`SKY_RIM_GAIN`])
+        take(settings, "sky_rim_gain", &mut self.rim_gain);
+        take(settings, "sky_rim_hold", &mut self.rim_hold);
     }
 }
 
@@ -520,6 +615,15 @@ const WINDOW: [f32; 2] = [1600.0, 900.0];
 
 /// The lawn. **Source unknown.**
 const GROUND_COLOR: [f32; 3] = [0.36, 0.46, 0.25];
+
+/// **The sky dome's own colour, for the one frame before `horizon_look` writes its vertices**
+/// (S9). A mesh that has an `ATTRIBUTE_COLOR` is drawn with that instead of the material's
+/// `base_color`, so this is the first frame of a run and nothing else — and it is a mid blue
+/// because that is what the first frame of a garden should be.
+///
+/// **Source: unknown.** It sat in `make_look` and was in no list until S5b-5's last sweep
+/// (`docs/numbers.md` §2.14).
+const SKY_COLOR: [f32; 3] = [0.42, 0.62, 0.86];
 
 /// Where the hunger bar changes colour — red below the first, amber below the second, green
 /// above — and how big the bar is in the HUD. **Source unknown**, all four. 55.0 is the same
@@ -558,6 +662,8 @@ pub struct Picture {
     pub window: [f32; 2],
     /// [`GROUND_COLOR`]
     pub ground_color: [f32; 3],
+    /// [`SKY_COLOR`] — the dome before its vertices are coloured (S9)
+    pub sky_color: [f32; 3],
     /// [`HUNGER_LOW`] / [`HUNGER_WARN`] / [`HUNGER_BAR`]
     pub hunger_low: f32,
     pub hunger_warn: f32,
@@ -584,6 +690,7 @@ impl Default for Picture {
         Picture {
             window: WINDOW,
             ground_color: GROUND_COLOR,
+            sky_color: SKY_COLOR,
             hunger_low: HUNGER_LOW,
             hunger_warn: HUNGER_WARN,
             hunger_bar: HUNGER_BAR,
@@ -605,6 +712,7 @@ impl Picture {
     /// |---|---|
     /// | `window_width` / `window_height` | [`Picture::window`] — the same two keys Battle uses |
     /// | `look_ground_r` / `_g` / `_b` | the lawn |
+    /// | `look_sky_r` / `_g` / `_b` | the dome, for the frame before it is given its gradient (S9) |
     /// | `look_hunger_low` / `look_hunger_warn` | where the meter changes colour |
     /// | `look_hunger_bar_width` / `look_hunger_bar_height` | how big the meter is |
     /// | `look_tuft_scale` / `look_bush_scale` / `look_tree_scale` | the plants and the trees |
@@ -618,6 +726,7 @@ impl Picture {
         take(settings, "look_ground_r", &mut self.ground_color[0]);
         take(settings, "look_ground_g", &mut self.ground_color[1]);
         take(settings, "look_ground_b", &mut self.ground_color[2]);
+        take_rgb(settings, "look_sky", &mut self.sky_color);
         take(settings, "look_hunger_low", &mut self.hunger_low);
         take(settings, "look_hunger_warn", &mut self.hunger_warn);
         take(settings, "look_hunger_bar_width", &mut self.hunger_bar[0]);
@@ -662,6 +771,18 @@ const PLANT_MIN: f32 = 0.18;
 /// the two came to look like one number with two homes. **Source: unknown.**
 const PLANT_GROWN: f32 = 1.4;
 
+/// **The smallest blade a new garden is scattered with** (S9), the other end of the range whose
+/// top is [`PLANT_GROWN`]: `spawn_world` gives each of its first plants a size rolled between the
+/// two, so that a garden opens with grass of every age rather than with a lawn.
+///
+/// It is **not** [`PLANT_MIN`], which is what a *sprout* starts at when the rules sow one while
+/// the garden is running — a different moment, a different number, and the reason this one was
+/// missed by S5a's net and by S5b-3's (`docs/numbers.md` §2.14; S5b-3 saw it and left it, saying
+/// that moving a number the list did not hold is how a stage widens itself).
+///
+/// **Source: unknown.**
+const PLANT_START_MIN: f32 = 0.3;
+
 /// Creatures
 const BEETLES: usize = 6;
 const RABBITS: usize = 4;
@@ -696,9 +817,11 @@ const CREATURES_APART: f32 = 2.0;
 /// `plant_the_meadow` plants the checks' corner at.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct Furniture {
-    /// [`PLANTS_AT_START`] / [`PLANT_MIN`] / [`PLANT_GROWN`]
+    /// [`PLANTS_AT_START`] / [`PLANT_MIN`] / [`PLANT_GROWN`] / [`PLANT_START_MIN`]
     pub plants: usize,
     pub plant_min: f32,
+    /// the bottom of the range a new garden's first grass is rolled in (S9)
+    pub plant_start_min: f32,
     /// how big a blade this builds when it builds a full-grown one — **not** `world.rb`'s
     /// `plant_max`, which is where growth stops ([`PLANT_GROWN`])
     pub plant_grown: f32,
@@ -745,6 +868,7 @@ impl Default for Furniture {
         Furniture {
             plants: PLANTS_AT_START,
             plant_min: PLANT_MIN,
+            plant_start_min: PLANT_START_MIN,
             plant_grown: PLANT_GROWN,
             beetles: BEETLES,
             rabbits: RABBITS,
@@ -767,7 +891,7 @@ impl Default for Furniture {
 }
 
 impl Furniture {
-    /// `start_plants`, `plant_min`, `plant_grown`, `start_beetles`, `start_rabbits`, `start_trees`,
+    /// `start_plants`, `plant_min`, `start_plant_min` (S9), `plant_grown`, `start_beetles`, `start_rabbits`, `start_trees`,
     /// `start_rocks`, `start_hunger_min` / `start_hunger_max`, `start_tries`,
     /// `start_round_chance`, `start_rock_squash_min` / `_max`, `start_solid_apart`,
     /// `start_grass_off_solid`, `start_creature_off_grass`, `start_creature_off_solid`,
@@ -781,6 +905,9 @@ impl Furniture {
         };
         count("start_plants", &mut self.plants);
         take(settings, "plant_min", &mut self.plant_min);
+        // S9: `start_plant_min`, the bottom of the range the first grass is rolled in — a
+        // different number from `plant_min`, which is a sprout's size ([`PLANT_START_MIN`])
+        take(settings, "start_plant_min", &mut self.plant_start_min);
         take(settings, "plant_grown", &mut self.plant_grown);
         count("start_beetles", &mut self.beetles);
         count("start_rabbits", &mut self.rabbits);
@@ -3217,7 +3344,11 @@ fn make_look(
         // what one frame looks like before `horizon_look` writes the vertices, and what the
         // vertices then stand in for: a mesh that has an `ATTRIBUTE_COLOR` uses it *instead* of
         // this, so this is only ever the very first frame
-        base_color: Color::srgb(0.42, 0.62, 0.86),
+        base_color: {
+            // [`SKY_COLOR`]; a setting since S9 (`look_sky_r` / `_g` / `_b`)
+            let [r, g, b] = picture.sky_color;
+            Color::srgb(r, g, b)
+        },
         unlit: true,
         // seen from the inside, and not fogged: the dome is five hundred units away, and fog
         // would paint the whole of it the one colour the fog is — which is the colour of its rim
@@ -3442,11 +3573,11 @@ fn spawn_world(
         if solid.iter().any(|(p, r)| p.distance(at) < r + built.grass_off_solid) {
             continue;
         }
-        // **0.3 is not in `docs/numbers.md`** and is left alone (S5b-3): the inventory has
-        // `plant_min` 0.18 — which is what a *sprout* starts at — and missed the different
-        // number a garden's first grass is scattered between. Moving a number the list does not
-        // have is how a stage widens itself, so it is reported instead (§7 of the list).
-        let size = dice.between(0.3, built.plant_grown);
+        // S9: the bottom of this range is a setting of its own ([`PLANT_START_MIN`],
+        // `start_plant_min`). It was `0.3` written out here, and S5b-3 left it alone because the
+        // list did not hold it — `plant_min` 0.18 is what a *sprout* starts at, a different
+        // number at a different moment. S5b-5's last sweep put it in the list; this moves it.
+        let size = dice.between(built.plant_start_min, built.plant_grown);
         let round = dice.roll() < built.round_chance;
         spawn_plant(&mut commands, look, at, size, round);
         grass.push(at);
@@ -4258,9 +4389,15 @@ fn sky_colors(light: &Light, height: f32, night: bool, dial: f32) -> (Color, Col
         (lit(1.0), lit(light.night_zenith))
     } else {
         let noon = height.clamp(0.0, 1.0);
+        // S9: a colour at sunrise and what noon adds to it, which is the shape `day_lux` and
+        // `day_ambient` were already in. The nine numbers are settings now
+        // ([`DAY_SKY_RIM`]); this line is the arithmetic and holds none of them.
+        let lit = |base: [f32; 3], span: [f32; 3]| {
+            Color::srgb(base[0] + span[0] * noon, base[1] + span[1] * noon, base[2] + span[2] * noon)
+        };
         (
-            Color::srgb(0.35 + 0.15 * noon, 0.5 + 0.22 * noon, 0.7 + 0.22 * noon),
-            Color::srgb(0.15 + 0.11 * noon, 0.33 + 0.21 * noon, 0.64 + 0.24 * noon),
+            lit(light.day_sky_rim, light.day_sky_rim_span),
+            lit(light.day_sky_zenith, light.day_sky_zenith_span),
         )
     }
 }
@@ -4294,13 +4431,15 @@ fn day_night(
     // at night the light comes from where the sun is not: a moon, blue and much weaker than the
     // sun, still casting the shadows that say the world is 3D
     let from = if night { -up } else { up };
+    let rgb = |c: [f32; 3]| Color::srgb(c[0], c[1], c[2]);
     let (color, illuminance) = if night {
-        (Color::srgb(0.62, 0.70, 1.0), light.moon_lux * dial)
+        (rgb(light.moon_color), light.moon_lux * dial)
     } else {
-        // low sun is orange, high sun is white
+        // low sun is orange, high sun is white ([`SUN_COLOR`]; a setting since S9)
         let noon = height.clamp(0.0, 1.0);
+        let (base, span) = (light.sun_color, light.sun_color_span);
         (
-            Color::srgb(1.0, 0.72 + 0.24 * noon, 0.45 + 0.5 * noon),
+            Color::srgb(base[0] + span[0] * noon, base[1] + span[1] * noon, base[2] + span[2] * noon),
             light.day_lux[0] + light.day_lux[1] * noon,
         )
     };
@@ -4313,10 +4452,10 @@ fn day_night(
     // neither, and everything above it still runs
     if let Some(mut ambient) = ambient {
         if night {
-            ambient.color = Color::srgb(0.45, 0.54, 0.85);
+            ambient.color = rgb(light.night_ambient_color);
             ambient.brightness = light.night_ambient * dial;
         } else {
-            ambient.color = Color::srgb(0.7, 0.8, 1.0);
+            ambient.color = rgb(light.day_ambient_color);
             ambient.brightness = light.day_ambient[0] + light.day_ambient[1] * height.clamp(0.0, 1.0);
         }
     }
@@ -4406,7 +4545,8 @@ fn horizon_look(
         .map(|t| {
             // the rim's colour is held a little way up the dome before the climb starts, so that
             // the band the eye actually sees along the horizon is the colour the fog is
-            let t = (t * 1.25 - 0.1).clamp(0.0, 1.0);
+            // ([`SKY_RIM_GAIN`]; a setting since S9)
+            let t = (t * scenery.rim_gain - scenery.rim_hold).clamp(0.0, 1.0);
             let c = horizon.mix(&zenith, t);
             [c.red, c.green, c.blue, 1.0]
         })
@@ -7691,6 +7831,12 @@ mod tests {
         settings.set("world_script_frame_time_ms", "0");
         settings.set("start_beetle_speed", "5.5");
         settings.set("start_genome_spread", "0.0");
+        // S9: one key out of each group that used to be written into a function's body
+        settings.set("light_day_sky_rim_g", "0.25");
+        settings.set("light_moon_color_b", "0.5");
+        settings.set("sky_rim_gain", "2.0");
+        settings.set("start_plant_min", "0.9");
+        settings.set("look_sky_r", "0.1");
 
         let mut place = Place::default();
         place.read_from(&settings);
@@ -7702,6 +7848,10 @@ mod tests {
         built.read_from(&settings);
         assert_eq!(built.plants, 9);
         assert_eq!(built.trees, TREES);
+        // S9: the bottom of the range a new garden's first grass is rolled in, which is not
+        // `plant_min` (the size of a sprout) and did not use to be a key at all
+        assert_eq!(built.plant_start_min, 0.9);
+        assert_eq!(built.plant_min, PLANT_MIN, "and the sprout's size is its own key");
         // **the species' own three numbers are the garden's furniture** (S5b-5): what is written
         // moves, what is not is the species' own, and a spread of nothing rolls the base itself
         assert_eq!(built.genome(Species::Beetle).speed, 5.5);
@@ -7720,6 +7870,19 @@ mod tests {
         light.read_from(&settings);
         assert_eq!(light.moon_lux, 400.0);
         assert_eq!(light.night_sky, NIGHT_SKY);
+        // S9: the colours of the day, one channel of two of them, and the rest left alone
+        assert_eq!(light.day_sky_rim, [DAY_SKY_RIM[0], 0.25, DAY_SKY_RIM[2]]);
+        assert_eq!(light.day_sky_rim_span, DAY_SKY_RIM_SPAN);
+        assert_eq!(light.moon_color, [MOON_COLOR[0], MOON_COLOR[1], 0.5]);
+        assert_eq!(light.day_ambient_color, DAY_AMBIENT_COLOR);
+        // and the day sky is still "the value at sunrise plus what noon adds"
+        let (rim, _) = sky_colors(&light, 1.0, false, 1.0);
+        let want = Color::srgb(
+            light.day_sky_rim[0] + light.day_sky_rim_span[0],
+            0.25 + light.day_sky_rim_span[1],
+            light.day_sky_rim[2] + light.day_sky_rim_span[2],
+        );
+        assert_eq!(rim, want);
         // and the hour `--at midnight` means moves with the offset rather than with a constant
         assert!((midnight(&light) - MIDNIGHT_BY_DEFAULT).abs() < 1e-4);
         let dawnless = Light { dawn_offset: 0.0, ..Light::default() };
@@ -7729,11 +7892,14 @@ mod tests {
         scenery.read_from(&settings);
         assert_eq!(scenery.fog_depth, 120.0);
         assert_eq!(scenery.sky_sides, SKY_SIDES);
+        assert_eq!(scenery.rim_gain, 2.0, "S9: the dome's gradient");
+        assert_eq!(scenery.rim_hold, SKY_RIM_HOLD);
 
         let mut picture = Picture::default();
         picture.read_from(&settings);
         assert_eq!(picture.hunger_warn, 70.0);
         assert_eq!(picture.window, WINDOW);
+        assert_eq!(picture.sky_color, [0.1, SKY_COLOR[1], SKY_COLOR[2]], "S9: the dome's own blue");
         assert_eq!(picture.beetle_model, BEETLE_MODEL, "a name, not a number, and still a default");
 
         let mut eye = Eye::default();

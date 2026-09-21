@@ -238,6 +238,22 @@ thinking bar), `look_life_warn` / `look_life_low` (where the health bar changes 
 `look_blast_down` / `_span`, `look_blast_hit` / `_span`, `look_heat_memory`, `look_floor_tile`,
 `look_floor_pattern`, `window_width` / `window_height`.
 
+**And since 2026-09-21 (S9) the rest of the drawing**, which until then was written into the
+systems that drew it: `look_bullet_size` / `_span` (how large a shot is drawn),
+`look_turret_width` / `_height` and `look_turret_team3_r` / `_g` / `_b` /
+`look_turret_team4_*` (the barrel, and the tints the two teams Kenney did not draw a barrel for
+get), `look_downed_hull_*` / `look_downed_turret_*` (what a wreck is greyed to),
+`look_nameplate_font` / `_scale` / `_shadow_alpha` / `_nudge`, `look_plate_selected_*` /
+`look_plate_down_*` (the name over a robot the editor is showing, and over a wreck), and
+`look_bar_full_color_*` / `look_bar_warn_color_*` / `look_bar_low_color_*` /
+`look_bar_back_alpha` (the health bar). A colour is three keys and not one string, because
+reading a colour out of a text file would need a parser and three numbers need none.
+
+**What is drawn in front of what is not a setting.** The Battle is 2D, so a z coordinate is the
+stacking order and nothing else — sand, wall, tanks, barrels, shots, blasts, bars, names — and
+the order is the invariant. There is no screen and no taste for which putting the sand over the
+tanks is right.
+
 Two more say what the scripts are allowed: `script_budget` (instructions a frame for the whole VM)
 and `script_frame_time_ms`. Left out, they are rubevy's own defaults, which is what this game has
 always run on. And three are the defaults of flags: `headless_seconds`, `shot_file`,

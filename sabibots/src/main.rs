@@ -273,6 +273,76 @@ pub const FLOOR_PATTERN: i32 = 3;
 /// The window the game opens. **Source unknown**.
 pub const WINDOW: [f32; 2] = [1600.0, 900.0];
 
+// ---------------------------------------------------------------------------------------------
+// **The drawing S5b-5's last sweep found** (S9, `docs/numbers.md` §2.14). They were written into
+// the bodies of `spawn_turrets`, `gray_out_downed`, `follow_turrets`, `spawn_nameplates`,
+// `follow_nameplates`, `spawn_life_bars`, `follow_life_bars` and `answer_requests`, which is why
+// S5a's net — cast over `const` declarations and over names — did not hold them. Every one of
+// them is (c): what the Battle looks like, and nothing the match is played by. **Source: unknown**
+// for all of them, and each carries whatever sentence the code already had beside it.
+// ---------------------------------------------------------------------------------------------
+
+/// The barrel sprite, in world units: not a multiple of the tank's radius the way [`HULL_SCALE`]
+/// is, which is why a match with larger tanks gets the same barrel.
+pub const TURRET_SIZE: [f32; 2] = [1.1, 2.6];
+/// Kenney draws a red barrel and a blue one; teams three and four get the blue one under these
+/// two tints. Teams one and two are drawn with no tint at all, which is not a number.
+pub const TURRET_TEAM3: [f32; 3] = [0.6, 1.0, 0.6];
+pub const TURRET_TEAM4: [f32; 3] = [1.0, 0.95, 0.6];
+
+/// A destroyed robot: the hull is Kenney's dark one dimmed a little further, and the barrel on
+/// top of it is dimmed further still, so that a wreck reads as grey whatever team it was on.
+pub const DOWNED_HULL: [f32; 3] = [0.7, 0.7, 0.7];
+pub const DOWNED_TURRET: [f32; 3] = [0.45, 0.45, 0.45];
+
+/// The text over a robot. World units are large next to pixels, so a 44 px font is drawn at a
+/// scale of about a twenty-second to stand about two units tall; the shadow behind it is black at
+/// this alpha and offset by this much, down and to the right.
+pub const NAMEPLATE_FONT: f32 = 44.0;
+pub const NAMEPLATE_SCALE: f32 = 0.045;
+pub const NAMEPLATE_SHADOW_ALPHA: f32 = 0.75;
+pub const NAMEPLATE_NUDGE: f32 = 0.12;
+/// and what colour it is when the editor is showing that robot, and when it is down. Any other
+/// robot's plate is its team's colour ([`TEAM_COLORS`]).
+pub const PLATE_SELECTED: [f32; 3] = [1.0, 1.0, 0.55];
+pub const PLATE_DOWN: [f32; 3] = [0.62, 0.62, 0.62];
+
+/// The life bar: what it is when the robot is healthy, past [`LIFE_WARN`], and past [`LIFE_LOW`],
+/// and how dark the empty part behind it is.
+pub const BAR_FULL_COLOR: [f32; 3] = [0.35, 0.8, 0.35];
+pub const BAR_WARN_COLOR: [f32; 3] = [0.9, 0.75, 0.25];
+pub const BAR_LOW_COLOR: [f32; 3] = [0.85, 0.3, 0.25];
+pub const BAR_BACK_ALPHA: f32 = 0.6;
+
+/// How large a shot is drawn, as a base and what a full-power shot adds. It is the picture only:
+/// what a shot *does* is the match's (`damage_min` / `damage_max`, `shot_fast` / `shot_slow`).
+pub const BULLET_SIZE: [f32; 2] = [0.7, 0.6];
+
+/// **What is drawn in front of what** — and the one part of the Battle's drawing that is *not* a
+/// setting (S9, classification (a)).
+///
+/// The Battle is 2D and everything is at the same place on the ground, so z is the stacking order
+/// and nothing else: the sand, the crates of the wall, the tanks, their barrels, the shots, the
+/// blasts, the life bars over them and the names on top. **The order is the invariant, not the numbers.** A player
+/// who could edit these could put the sand over the tanks, and there is no arrangement of them
+/// that is better than this one for any screen or any taste — which is the test S5b-1 set for
+/// what may be a setting and what may not.
+///
+/// The gaps are not spacing: any value that keeps the order does the same thing, and the
+/// pairs that differ by a tenth ([`BAR_BACK_Z`] and [`BAR_FILL_Z`], [`PLATE_SHADOW_Z`] and
+/// [`PLATE_Z`]) are two sprites of one thing that have to be in that order and touch nothing
+/// else. **Source of the intervals: unknown**; of the order: the picture.
+const SAND_Z: f32 = -1.0;
+const WALL_Z: f32 = 0.0;
+const HULL_Z: f32 = 1.0;
+const TURRET_Z: f32 = 1.5;
+const BULLET_Z: f32 = 2.0;
+const BLAST_Z: f32 = 3.0;
+const BAR_BACK_Z: f32 = 5.0;
+const BAR_FILL_Z: f32 = 5.1;
+const PLATE_SHADOW_Z: f32 = 6.0;
+const PLATE_Z: f32 = 6.1;
+
 /// **How the match is drawn.** Every one of these can be changed in `sabibots.settings.txt`; what
 /// cannot be changed there is how it is *fought*, which is [`MatchModel`] and belongs to the
 /// match's own Ruby.
@@ -299,6 +369,23 @@ struct Look {
     floor_pattern: i32,
     /// [`WINDOW`]
     window: [f32; 2],
+    /// **The drawing S9 moved here** ([`TURRET_SIZE`] and the rest of that block).
+    turret_size: [f32; 2],
+    turret_team3: [f32; 3],
+    turret_team4: [f32; 3],
+    downed_hull: [f32; 3],
+    downed_turret: [f32; 3],
+    nameplate_font: f32,
+    nameplate_scale: f32,
+    nameplate_shadow_alpha: f32,
+    nameplate_nudge: f32,
+    plate_selected: [f32; 3],
+    plate_down: [f32; 3],
+    bar_full_color: [f32; 3],
+    bar_warn_color: [f32; 3],
+    bar_low_color: [f32; 3],
+    bar_back_alpha: f32,
+    bullet_size: [f32; 2],
 }
 
 impl Default for Look {
@@ -316,6 +403,22 @@ impl Default for Look {
             floor_tile: FLOOR_TILE,
             floor_pattern: FLOOR_PATTERN,
             window: WINDOW,
+            turret_size: TURRET_SIZE,
+            turret_team3: TURRET_TEAM3,
+            turret_team4: TURRET_TEAM4,
+            downed_hull: DOWNED_HULL,
+            downed_turret: DOWNED_TURRET,
+            nameplate_font: NAMEPLATE_FONT,
+            nameplate_scale: NAMEPLATE_SCALE,
+            nameplate_shadow_alpha: NAMEPLATE_SHADOW_ALPHA,
+            nameplate_nudge: NAMEPLATE_NUDGE,
+            plate_selected: PLATE_SELECTED,
+            plate_down: PLATE_DOWN,
+            bar_full_color: BAR_FULL_COLOR,
+            bar_warn_color: BAR_WARN_COLOR,
+            bar_low_color: BAR_LOW_COLOR,
+            bar_back_alpha: BAR_BACK_ALPHA,
+            bullet_size: BULLET_SIZE,
         }
     }
 }
@@ -335,6 +438,13 @@ impl Look {
     /// | `look_bar_full` | [`Look::bar_full`] |
     /// | `look_floor_tile` / `look_floor_pattern` | the sand under the arena |
     /// | `window_width` / `window_height` | [`Look::window`] — read before the window is opened |
+    /// | `look_turret_width` / `look_turret_height` | [`TURRET_SIZE`] (S9) |
+    /// | `look_turret_team3_r` / `_g` / `_b`, `look_turret_team4_*` | the two tinted barrels |
+    /// | `look_downed_hull_*` / `look_downed_turret_*` | what a wreck is greyed to |
+    /// | `look_nameplate_font` / `look_nameplate_scale` / `look_nameplate_shadow_alpha` / `look_nameplate_nudge` | the text over a robot |
+    /// | `look_plate_selected_*` / `look_plate_down_*` | and what colour it is when watched, and when down |
+    /// | `look_bar_full_color_*` / `look_bar_warn_color_*` / `look_bar_low_color_*` / `look_bar_back_alpha` | the life bar |
+    /// | `look_bullet_size` / `look_bullet_size_span` | how large a shot is drawn |
     ///
     /// A key that is not there leaves the field alone, which is what makes a store written by an
     /// older build safe to read.
@@ -363,7 +473,41 @@ impl Look {
         if let Some(value) = settings.number("look_floor_pattern") {
             self.floor_pattern = value.max(1.0) as i32;
         }
+        // S9: the drawing that was written into the systems themselves. A colour is three keys
+        // and not one string, for S5b-1's reason — reading a colour out of a text file would
+        // need a parser, and three numbers need none.
+        let rgb = |prefix: &str, slot: &mut [f32; 3]| {
+            for (i, channel) in ["_r", "_g", "_b"].into_iter().enumerate() {
+                if let Some(value) = settings.number(&format!("{prefix}{channel}")) {
+                    slot[i] = value;
+                }
+            }
+        };
+        rgb("look_turret_team3", &mut self.turret_team3);
+        rgb("look_turret_team4", &mut self.turret_team4);
+        rgb("look_downed_hull", &mut self.downed_hull);
+        rgb("look_downed_turret", &mut self.downed_turret);
+        rgb("look_plate_selected", &mut self.plate_selected);
+        rgb("look_plate_down", &mut self.plate_down);
+        rgb("look_bar_full_color", &mut self.bar_full_color);
+        rgb("look_bar_warn_color", &mut self.bar_warn_color);
+        rgb("look_bar_low_color", &mut self.bar_low_color);
+        take("look_turret_width", &mut self.turret_size[0]);
+        take("look_turret_height", &mut self.turret_size[1]);
+        take("look_nameplate_font", &mut self.nameplate_font);
+        take("look_nameplate_scale", &mut self.nameplate_scale);
+        take("look_nameplate_shadow_alpha", &mut self.nameplate_shadow_alpha);
+        take("look_nameplate_nudge", &mut self.nameplate_nudge);
+        take("look_bar_back_alpha", &mut self.bar_back_alpha);
+        take("look_bullet_size", &mut self.bullet_size[0]);
+        take("look_bullet_size_span", &mut self.bullet_size[1]);
     }
+}
+
+/// A `[r, g, b]` from [`Look`] as a Bevy colour (S9), so that a system that draws with one reads
+/// it rather than spelling it.
+fn srgb(c: [f32; 3]) -> Color {
+    Color::srgb(c[0], c[1], c[2])
 }
 
 /// The teams a match can put on the field, in the order Ruby names them.
@@ -440,6 +584,7 @@ fn gray_out_downed(
     mut commands: Commands,
     server: Res<AssetServer>,
     time: Res<Time>,
+    look: Res<Look>,
     mut robots: Query<(Entity, &mut Robot, &mut Sprite), Without<Downed>>,
 ) {
     for (entity, mut robot, mut sprite) in &mut robots {
@@ -457,7 +602,7 @@ fn gray_out_downed(
         robot.turn = 0.0;
         // Kenney's dark hull, dimmed a little more: grey whatever team it was on
         sprite.image = server.load("sprites/tankBody_dark_outline.png");
-        sprite.color = Color::srgb(0.7, 0.7, 0.7);
+        sprite.color = srgb(look.downed_hull);
         commands.entity(entity).insert(Downed);
     }
 }
@@ -468,25 +613,33 @@ struct Turret {
     robot: Entity,
 }
 
-fn spawn_turrets(mut commands: Commands, server: Res<AssetServer>, robots: Query<(Entity, &Robot), Added<Robot>>) {
+fn spawn_turrets(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    look: Res<Look>,
+    robots: Query<(Entity, &Robot), Added<Robot>>,
+) {
     for (entity, robot) in &robots {
         // Kenney draws red and blue barrels; the other teams get the blue one, tinted
+        // ([`TURRET_TEAM3`]; settings since S9)
         let (image, color) = match robot.team {
             0 => ("sprites/tankRed_barrel1_outline.png", Color::WHITE),
             1 => ("sprites/tankBlue_barrel1_outline.png", Color::WHITE),
-            2 => ("sprites/tankBlue_barrel1_outline.png", Color::srgb(0.6, 1.0, 0.6)),
-            _ => ("sprites/tankBlue_barrel1_outline.png", Color::srgb(1.0, 0.95, 0.6)),
+            2 => ("sprites/tankBlue_barrel1_outline.png", srgb(look.turret_team3)),
+            _ => ("sprites/tankBlue_barrel1_outline.png", srgb(look.turret_team4)),
         };
+        let [w, h] = look.turret_size;
         commands.spawn((
             Turret { robot: entity },
-            Sprite { image: server.load(image), color, custom_size: Some(Vec2::new(1.1, 2.6)), ..default() },
-            Transform::from_xyz(0.0, 0.0, 1.5),
+            Sprite { image: server.load(image), color, custom_size: Some(Vec2::new(w, h)), ..default() },
+            Transform::from_xyz(0.0, 0.0, TURRET_Z),
         ));
     }
 }
 
 fn follow_turrets(
     mut commands: Commands,
+    look: Res<Look>,
     robots: Query<(&Robot, &Transform), Without<Turret>>,
     mut turrets: Query<(Entity, &Turret, &mut Sprite, &mut Transform)>,
 ) {
@@ -501,7 +654,7 @@ fn follow_turrets(
         transform.translation.y = at.translation.y + dir.y * 1.0;
         transform.rotation = Quat::from_rotation_z(robot.turret - std::f32::consts::FRAC_PI_2);
         if robot.hp <= 0.0 {
-            sprite.color = Color::srgb(0.45, 0.45, 0.45);
+            sprite.color = srgb(look.downed_turret);
         }
     }
 }
@@ -873,16 +1026,22 @@ struct Nameplate {
 
 const TEAM_COLORS: [(f32, f32, f32); 4] = [(1.0, 0.42, 0.36), (0.45, 0.72, 1.0), (0.45, 0.9, 0.45), (1.0, 0.85, 0.35)];
 
-fn spawn_nameplates(mut commands: Commands, robots: Query<Entity, Added<Robot>>) {
+fn spawn_nameplates(mut commands: Commands, look: Res<Look>, robots: Query<Entity, Added<Robot>>) {
     for entity in &robots {
         for shadow in [true, false] {
             commands.spawn((
                 Nameplate { robot: entity, shadow },
                 Text2d::new(""),
-                TextFont { font_size: bevy::text::FontSize::Px(44.0), ..default() },
-                TextColor(if shadow { Color::srgba(0.0, 0.0, 0.0, 0.75) } else { Color::WHITE }),
-                // world units are large next to pixels: a 44px font scaled to about two units tall
-                Transform::from_xyz(0.0, 0.0, if shadow { 6.0 } else { 6.1 }).with_scale(Vec3::splat(0.045)),
+                TextFont { font_size: bevy::text::FontSize::Px(look.nameplate_font), ..default() },
+                TextColor(if shadow {
+                    Color::srgba(0.0, 0.0, 0.0, look.nameplate_shadow_alpha)
+                } else {
+                    Color::WHITE
+                }),
+                // world units are large next to pixels: a 44px font scaled to about two units
+                // tall ([`NAMEPLATE_FONT`]; settings since S9)
+                Transform::from_xyz(0.0, 0.0, if shadow { PLATE_SHADOW_Z } else { PLATE_Z })
+                    .with_scale(Vec3::splat(look.nameplate_scale)),
             ));
         }
     }
@@ -917,15 +1076,15 @@ fn follow_nameplates(
         if !owner.shadow {
             let (r, g, b) = TEAM_COLORS[robot.team.min(TEAM_COLORS.len() - 1)];
             *color = TextColor(if selected {
-                Color::srgb(1.0, 1.0, 0.55)
+                srgb(look.plate_selected)
             } else if down {
-                Color::srgb(0.62, 0.62, 0.62)
+                srgb(look.plate_down)
             } else {
                 Color::srgb(r, g, b)
             });
         }
         // the shadow sits a little down and right of the text it darkens
-        let nudge = if owner.shadow { 0.12 } else { 0.0 };
+        let nudge = if owner.shadow { look.nameplate_nudge } else { 0.0 };
         transform.translation.x = at.translation.x + nudge;
         transform.translation.y =
             at.translation.y + model.robot_radius * look.nameplate_lift - nudge;
@@ -1067,11 +1226,15 @@ fn spawn_life_bars(mut commands: Commands, look: Res<Look>, robots: Query<Entity
             commands.spawn((
                 LifeBar { robot: entity, fill },
                 Sprite {
-                    color: if fill { Color::srgb(0.35, 0.8, 0.35) } else { Color::srgba(0.0, 0.0, 0.0, 0.6) },
+                    color: if fill {
+                        srgb(look.bar_full_color)
+                    } else {
+                        Color::srgba(0.0, 0.0, 0.0, look.bar_back_alpha)
+                    },
                     custom_size: Some(Vec2::new(width, height)),
                     ..default()
                 },
-                Transform::from_xyz(0.0, 0.0, if fill { 5.1 } else { 5.0 }),
+                Transform::from_xyz(0.0, 0.0, if fill { BAR_FILL_Z } else { BAR_BACK_Z }),
             ));
         }
     }
@@ -1098,11 +1261,11 @@ fn follow_life_bars(
             let w = width * life;
             sprite.custom_size = Some(Vec2::new(w.max(0.001), height));
             sprite.color = if life > look.life_warn {
-                Color::srgb(0.35, 0.8, 0.35)
+                srgb(look.bar_full_color)
             } else if life > look.life_low {
-                Color::srgb(0.9, 0.75, 0.25)
+                srgb(look.bar_warn_color)
             } else {
-                Color::srgb(0.85, 0.3, 0.25)
+                srgb(look.bar_low_color)
             };
             // anchored at the bar's left end, so it empties towards the left
             transform.translation.x = at.translation.x - width / 2.0 + w / 2.0;
@@ -2143,7 +2306,7 @@ fn lay_the_floor(commands: &mut Commands, server: &AssetServer, half: f32, look:
             commands.spawn((
                 Floor,
                 Sprite { image, custom_size: Some(Vec2::splat(tile)), ..default() },
-                Transform::from_xyz(x, y, -1.0),
+                Transform::from_xyz(x, y, SAND_Z),
             ));
         }
     }
@@ -2324,7 +2487,7 @@ fn spawn_robot(
                 custom_size: Some(Vec2::splat(model.robot_radius * it.look.hull_scale)),
                 ..default()
             },
-            Transform::from_xyz(at.x, at.y, 1.0),
+            Transform::from_xyz(at.x, at.y, HULL_Z),
         ))
         .id();
     it.shots.0.push((robot, server.load(bullet)));
@@ -2513,7 +2676,7 @@ fn build_walls(commands: &mut Commands, server: &AssetServer, half: f32, crate_s
         commands.spawn((
             Wall,
             Sprite { image: image.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
-            Transform::from_xyz(x, y, 0.0),
+            Transform::from_xyz(x, y, WALL_Z),
         ));
     };
     for i in 0..=count {
@@ -2781,7 +2944,9 @@ fn answer_requests(
                             let damage =
                                 model.damage_min + (model.damage_max - model.damage_min) * power;
                             let image = spawning.shots.image_for(me);
-                            let size = 0.7 + 0.6 * power;
+                            // [`BULLET_SIZE`]; a setting since S9
+                            let size = spawning.look.bullet_size[0]
+                                + spawning.look.bullet_size[1] * power;
                             let muzzle = model.muzzle;
                             commands.spawn((
                                 Bullet {
@@ -2792,7 +2957,7 @@ fn answer_requests(
                                     life: model.bullet_life,
                                 },
                                 Sprite { image, custom_size: Some(Vec2::new(size * 0.55, size * 1.3)), ..default() },
-                                Transform::from_xyz(at.x + dir.x * muzzle, at.y + dir.y * muzzle, 2.0)
+                                Transform::from_xyz(at.x + dir.x * muzzle, at.y + dir.y * muzzle, BULLET_Z)
                                     .with_rotation(Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2)),
                             ));
                             fired = true;
@@ -2993,7 +3158,7 @@ fn move_bullets(
                         size,
                     },
                     Sprite { image: server.load(image), custom_size: Some(Vec2::splat(size * 0.4)), ..default() },
-                    Transform::from_xyz(at.x, at.y, 3.0),
+                    Transform::from_xyz(at.x, at.y, BLAST_Z),
                 ));
                 if big {
                     // kind 0: a robot is down. The match reads these and decides what they mean
