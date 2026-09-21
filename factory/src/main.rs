@@ -300,9 +300,10 @@ fn main() {
             .init_asset::<Image>()
             // **The click still exists here**, it is just that nobody writes one: `WorldClick`
             // is registered by `CameraPlugin`, which a run with no window does not add, and
-            // without the message the reader below would not even start. Registering it keeps
-            // one code path for the click in both modes — which is what lets the checks forge
-            // one and build a factory where there is no mouse.
+            // without the message `build::clicks` would not even start. It is registered so
+            // that there is one code path for the mouse in both modes — and since F3 the checks
+            // do not write one at all: they write the order a click turns into (`build::Order`),
+            // which is the message that carries what was meant.
             .add_message::<WorldClick>()
             .insert_resource(Headless { until: seconds })
             .add_systems(Update, stop_when_over);
@@ -383,9 +384,13 @@ fn main() {
         // applied to a factory: **there are no numbers of play in this binary**.
         .add_systems(Startup, read_the_data_stage)
         .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
+        // **The game's own message for "build this here"** (F3). A mouse becomes one of these and
+        // so does a check; `build::orders` is the only thing that builds, and it is ordered before
+        // the step so that a belt laid this frame carries this frame.
+        .add_message::<build::Order>()
         .add_systems(
             Update,
-            (build::clicks, build::follow_the_flow)
+            (build::clicks, build::orders, build::follow_the_flow)
                 .chain()
                 .before(FactorySet::Step)
                 .run_if(the_factory_is_up),
@@ -419,17 +424,22 @@ fn main() {
     }
 
     if platform::selftest_asked() {
-        // **before the clicks, and that is not decoration.** The checks forge a `WorldClick` and
-        // set what is in hand in the same frame; `build::clicks` reads the hand *when it runs*.
-        // With no ordering between the two, a frame in which the click system ran first reads
-        // last frame's message with this frame's hand — and the check built a chest where it
-        // meant a belt. It never happened under `MinimalPlugins`, where the order was stable by
-        // accident, and it happened in the window, where Bevy's multi-threaded scheduler is free
-        // to pick. Measured 2026-09-21: two runs of `docker/run.sh factory release` apart, one
-        // clean and one with two FAILs (`worklog/2026-09-21-factory-F2.md` §8.4).
+        // **Before the orders are carried out, and the reason changed at F3.**
+        //
+        // F2 wrote `.before(build::clicks)` because the checks set what was in hand and forged a
+        // `WorldClick` in the same frame, and the system that answered a click read the hand
+        // *when it ran*: a frame in which it ran first built this frame's hand at last frame's
+        // place, and a window run built a chest where it meant a belt (`worklog/…-F2.md` §8.4a).
+        // **That hole is gone**: a check writes a `build::Order`, which carries the tile, the
+        // thing and the way round, so nothing about it depends on when anything else runs.
+        //
+        // What is left is a property of *checking* and not of building: a check gives an order
+        // on one frame and looks at what it did on the next, so it has to be on the same side of
+        // `build::orders` every frame or it looks a frame early. Hence this line, and hence it
+        // names `orders` rather than `clicks` — what a mouse does is no longer its business.
         app.init_resource::<SelfTest>().add_systems(
             Update,
-            selftest.before(build::clicks).before(FactorySet::Step).run_if(the_factory_is_up),
+            selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
         );
     }
     if let Some((path, after)) = shot {
@@ -774,10 +784,11 @@ fn stop_when_over(time: Res<Time>, headless: Res<Headless>, mut exit: MessageWri
 /// shape the other two games print and `tools/fixedlines.sh` compares
 /// (`docs/verification/selftest-lines.md`).
 ///
-/// **It builds its factory with clicks**, because that is the road a player takes and the only
-/// road there is: the checks write a `WorldClick` and the same system that answers a mouse
-/// answers them. A run with no window has no mouse and this is the whole of why the message is
-/// registered there too.
+/// **It builds its factory the way a player does**, because that is the only road there is: the
+/// checks write a [`build::Order`] — the tile, the thing, the way round — and the same system
+/// that carries out a mouse's order carries out theirs. F2 forged the mouse itself (a
+/// `WorldClick` and a `Hand` in the same frame) and paid for it with an ordering line and a
+/// flaky window run; F3 moved the seam one system along, to where what was meant is written down.
 #[derive(Resource, Default)]
 struct SelfTest {
     step: u8,
@@ -793,10 +804,10 @@ struct SelfTest {
     /// F2's two little factories: where each machine is, the belt that feeds it, the chest it
     /// fills, what it is meant to make, and what the numbers say each takes
     machines: Vec<MachineCheck>,
-    /// **What is left to build, one tile a frame.** A click is answered by a system that reads
-    /// [`Hand`] when it runs, not when the click was written, so a frame that writes five clicks
-    /// with five different things in hand builds five of the last one. F1 never noticed because
-    /// it laid one belt a frame; this is the same thing said out loud.
+    /// **What is left to build.** One tile a frame, which since F3 is a convenience and not a
+    /// rule: an order carries what was meant, so five of them in one frame build five different
+    /// things. It stays one a frame because a check that builds a tile a frame is a check whose
+    /// log says which tile went wrong.
     to_build: Vec<(UVec2, Option<What>)>,
     done: bool,
 }
@@ -840,9 +851,8 @@ fn selftest(
     chunks: Query<(&TilemapChunk, &TilemapChunkTileData)>,
     images: Res<Assets<Image>>,
     mut world: ResMut<ScriptWorld>,
-    mut hand: ResMut<Hand>,
     shot: Option<Res<Shot>>,
-    mut clicks: MessageWriter<WorldClick>,
+    mut orders: MessageWriter<build::Order>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if test.done {
@@ -957,9 +967,7 @@ fn selftest(
         3 => {
             // the middle of the map, which `Ore::laid_out` leaves bare on purpose
             let bare = UVec2::splat(map.tiles / 2);
-            hand.what = Some(What::Miner);
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, bare));
+            orders.write(build::Order { at: bare, what: Some(What::Miner), dir: Dir::East });
             test.line = vec![bare];
             test.step = 4;
         }
@@ -977,25 +985,20 @@ fn selftest(
             // the middle of the first patch of ore, which is where `Ore::laid_out` puts one
             let pit = UVec2::splat(map.tiles / 4);
             test.line = vec![pit];
-            hand.what = Some(What::Miner);
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, pit));
+            orders.write(build::Order { at: pit, what: Some(What::Miner), dir: Dir::East });
             test.ore_before = ore.total();
             test.step = 6;
         }
         6 | 7 | 8 => {
             // three belts, one a frame, running east from the miner
             let next = UVec2::new(test.line[0].x + test.step as u32 - 5, test.line[0].y);
-            hand.what = Some(What::Belt);
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, next));
+            orders.write(build::Order { at: next, what: Some(What::Belt), dir: Dir::East });
             test.line.push(next);
             test.step += 1;
         }
         9 => {
             let chest = UVec2::new(test.line[0].x + 4, test.line[0].y);
-            hand.what = Some(What::Chest);
-            clicks.write(click_on(&map, chest));
+            orders.write(build::Order { at: chest, what: Some(What::Chest), dir: Dir::East });
             test.line.push(chest);
             // **what the game's own numbers say this takes**: one dig, then three tiles of belt
             // and the step into the chest
@@ -1055,8 +1058,7 @@ fn selftest(
         // ---- and a click takes it away again ------------------------------------------------
         13 => {
             let belt = test.line[1];
-            hand.what = None;
-            clicks.write(click_on(&map, belt));
+            orders.write(build::Order { at: belt, what: None, dir: Dir::East });
             test.step = 14;
         }
         14 => {
@@ -1085,9 +1087,7 @@ fn selftest(
         // one tile a frame, because the hand is read when the click is answered
         16 if !test.to_build.is_empty() => {
             let (tile, what) = test.to_build.remove(0);
-            hand.what = what;
-            hand.dir = Dir::East;
-            clicks.write(click_on(&map, tile));
+            orders.write(build::Order { at: tile, what, dir: Dir::East });
         }
         16 => {
             // the frame after the clicks: the buildings are there, so the feeding belts can be
@@ -1183,11 +1183,6 @@ fn selftest(
             }
         }
     }
-}
-
-/// A click in the middle of a tile, as the camera would have written it.
-fn click_on(map: &Map, tile: UVec2) -> WorldClick {
-    WorldClick { at: map.tile_centre(tile), button: MouseButton::Left, cursor: Vec2::ZERO }
 }
 
 /// **F2's two little factories, built with clicks**: for each machine the data file declares, a
