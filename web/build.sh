@@ -20,7 +20,8 @@
 # differs is chosen by the target (see each game's src/platform.rs).
 #
 # Needs: rustup target wasm32-unknown-unknown; wasm-bindgen-cli of the same version as the
-# wasm-bindgen crate in Cargo.lock; wasm-opt (binaryen) on PATH, optional.
+# wasm-bindgen crate in Cargo.lock; wasm-opt (binaryen) on PATH or unpacked under
+# ~/.local/binaryen-*/bin, optional — a module that is not shrunk is said so twice (see below).
 # Ruby is compiled in the page by the SabiRuby playground's module: its sabiruby.wasm, sabi.js and
 # browser_wasi_shim are taken from a checkout of sabiruby/sabiruby-playground (SABIRUBY_PLAYGROUND,
 # default ../sabiruby-playground) after `tools/build.sh` there.
@@ -61,6 +62,27 @@ write_page() {
   printf '%s\n' "$page" > "$out"
 }
 
+# **Where wasm-opt is** (S11). CI unpacks binaryen and puts it on PATH itself, so there it is
+# found by the first line here and nothing about its road changes. On this machine it lives
+# unpacked under ~/.local/binaryen-version_*/bin and is *not* on PATH, and the script used to walk
+# quietly past it: the module was published unshrunk and the only sign was one line of stderr in
+# the middle of a long build, above the size lines that then reported the unshrunk size as though
+# it were the size (F1's finding, `docs/plans/factory-plan.md` §7).
+#
+# **It is a warning and not a stop**, and the reason is which runs take this road: a module that
+# is not shrunk still runs, and `web/build.sh garden` before a Playwright check is exactly the run
+# that does not care how big it is. The run where the size matters is the one that publishes, and
+# that one installs binaryen and never gets here. So the build goes on and says so twice — once
+# where it happens and once at the very end, after the size lines it makes untrue.
+WASM_OPT="$(command -v wasm-opt || true)"
+if [ -z "$WASM_OPT" ]; then
+  for candidate in "$HOME"/.local/binaryen-*/bin/wasm-opt; do
+    [ -x "$candidate" ] && WASM_OPT="$candidate"
+  done
+  [ -n "$WASM_OPT" ] && echo "wasm-opt: $WASM_OPT (not on PATH)"
+fi
+NOT_SHRUNK=()
+
 [ -f "$PLAYGROUND/web/sabiruby.wasm" ] || { echo "no $PLAYGROUND/web/sabiruby.wasm: run tools/build.sh in sabiruby-playground (or set SABIRUBY_PLAYGROUND)" >&2; exit 1; }
 want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
 have=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')
@@ -78,14 +100,15 @@ build_game() {
   # at best and "no such file" at worst.
   wasm-bindgen --target web --no-typescript --out-dir "$dir/pkg" --out-name game \
     "${CARGO_TARGET_DIR:-$ROOT/target}/wasm32-unknown-unknown/web/$game.wasm"
-  if command -v wasm-opt >/dev/null; then
+  if [ -n "$WASM_OPT" ]; then
     # the features Rust enables for wasm32-unknown-unknown; --all-features would also turn on
     # encodings browsers do not read yet (compact imports)
-    wasm-opt -Os --strip-debug --strip-producers --enable-bulk-memory --enable-nontrapping-float-to-int \
+    "$WASM_OPT" -Os --strip-debug --strip-producers --enable-bulk-memory --enable-nontrapping-float-to-int \
       --enable-sign-ext --enable-mutable-globals --enable-reference-types --enable-multivalue \
       "$dir/pkg/game_bg.wasm" -o "$dir/pkg/game_bg.wasm"
   else
     echo "wasm-opt not found: $game's module is not shrunk" >&2
+    NOT_SHRUNK+=("$game")
   fi
 
   # the whole assets tree, subdirectories and all: the garden's models are
@@ -115,3 +138,10 @@ if [ "$WHAT" = all ]; then
   cp "$HERE/index.html" "$OUT/index.html"
 fi
 echo "built $OUT"
+# the last word, because the sizes above are the sizes of modules nobody shrank
+if [ ${#NOT_SHRUNK[@]} -gt 0 ]; then
+  echo "" >&2
+  echo "NOT SHRUNK: ${NOT_SHRUNK[*]} — no wasm-opt on PATH or in ~/.local/binaryen-*/bin," >&2
+  echo "so the sizes above are not the sizes this would be published at. Unpack binaryen from" >&2
+  echo "https://github.com/WebAssembly/binaryen/releases and build again before publishing." >&2
+fi
