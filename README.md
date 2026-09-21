@@ -9,7 +9,7 @@ so editing a file changes what happens on screen without a rebuild.
 |---|---|---|
 | [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's behaviour is one Ruby file | playable v0.1 |
 | [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | playable v0.1: the world, the behaviours, the genome, the save file, the window and the browser build (G0–G5) |
-| `factory` | machines on a line, each with its own script; queues are the conveyors | planned |
+| [`factory`](factory) | **Factory** — a small top-down factory: the items, recipes and machines are declared in Ruby, the control stage reacts to what happens, and each inserter runs a script the player writes | planned; the crate exists from F0 (a floor, a camera and the checks — `docs/factory.md`) |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
 **Play them in a browser:** <https://sabiruby.github.io/rubevy_games/> — both games, built for
