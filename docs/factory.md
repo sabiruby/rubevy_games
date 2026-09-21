@@ -320,7 +320,7 @@ data.rb:6: -1 is not more than zero (TypeError)
 A belt speed of zero is not a slow belt and a gap of zero is not a crowded tile; both are a
 division. The check is in the declaration rather than inside the arithmetic, because a floor
 inside the arithmetic (`1 / items_per_tile.max(0.001)`) is a number with nowhere to have come
-from. Six kinds of mistake are checked, by a test and again by the checks of a running game —
+from. Seven kinds of mistake are checked, by a test and again by the checks of a running game —
 which is how the browser is covered, since a page's compiler names every program `playground.rb`
 and the name has to be put back before a player sees it.
 
@@ -406,7 +406,7 @@ seconds — a miner's dig plus four tiles of belt is 3.0 s with what `data.rb` s
 a furnace's belt and craft and belt is 3.5 s, measured 3.5 — and they check that what came out of
 the ground is either in a chest or on a belt.
 
-**And they put six broken data files through the door the real one went through**, in the game's
+**And they put seven broken data files through the door the real one went through**, in the game's
 own VM, to prove that each is refused at the line it is broken on. That check runs in a page as
 well, which is the point of it being a check and not only a test: a browser's compiler names
 every program `playground.rb`.

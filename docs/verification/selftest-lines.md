@@ -383,10 +383,11 @@ furnace and 2.5 s for the assembler, measured 3.5 and 2.8. All three print both 
 that is slow says so rather than only passing. Change a line of `data.rb` and the bounds follow;
 there is no number of seconds in any of them.
 
-**`a wrong data.rb is refused with the line it is wrong on`** puts six broken data files through
+**`a wrong data.rb is refused with the line it is wrong on`** puts seven broken data files through
 the same door the real one went through, in the game's own VM, and checks that each is refused at
 the line it is broken on: an unknown field, a `time` of zero, an item nothing declares, a machine
-no tiles wide, a belt that runs backwards, and Ruby that will not parse. It runs in a page as
+no tiles wide, a belt that runs backwards, a gap that does not divide a tile (F2a), and Ruby that
+will not parse. It runs in a page as
 well as on a PC, which is the point — a browser's compiler names every program `playground.rb`
 and the name has to be put back before a player sees it.
 
@@ -457,7 +458,7 @@ headless lists diffing empty as well. The one thing it added is inside a line th
 there: `a wrong data.rb is refused with the line it is wrong on` now puts **seven** broken files
 through the door rather than six, the new one being a gap that does not divide a tile. The count
 is a number in the sentence, so the list does not move. **F2 added five lines to each of the three** and moved none of the
-others: the data stage was done before the first `Update`, six wrong data files are each refused
+others: the data stage was done before the first `Update`, wrong data files are each refused
 at the line they are wrong on, a script reads the tables back, and the furnace and the assembler
 each turned what a recipe says into what it says in the time it says. Eight became thirteen, and
 the page's nine became fourteen. The six lists of the other two games diffed empty over the whole
