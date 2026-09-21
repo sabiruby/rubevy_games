@@ -4390,7 +4390,7 @@ dependencies = [
 [[package]]
 name = "sabiruby"
 version = "0.5.2"
-source = "git+https://github.com/sabiruby/sabiruby#7be7b86ffdfc220531c79ec8ec4b056835c1ca67"
+source = "git+https://github.com/sabiruby/sabiruby#50cae7546c27a1872b7b5790a82c694420b1c9d1"
 dependencies = [
  "hashbrown 0.15.5",
  "libm",
@@ -4401,7 +4401,7 @@ dependencies = [
 [[package]]
 name = "sabiruby-compiler"
 version = "0.2.3"
-source = "git+https://github.com/sabiruby/sabiruby#7be7b86ffdfc220531c79ec8ec4b056835c1ca67"
+source = "git+https://github.com/sabiruby/sabiruby#50cae7546c27a1872b7b5790a82c694420b1c9d1"
 dependencies = [
  "cc",
  "sabiruby",
@@ -4410,7 +4410,7 @@ dependencies = [
 [[package]]
 name = "sabiruby-macros"
 version = "0.1.0"
-source = "git+https://github.com/sabiruby/sabiruby#7be7b86ffdfc220531c79ec8ec4b056835c1ca67"
+source = "git+https://github.com/sabiruby/sabiruby#50cae7546c27a1872b7b5790a82c694420b1c9d1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4420,7 +4420,7 @@ dependencies = [
 [[package]]
 name = "sabiruby-serde"
 version = "0.1.0"
-source = "git+https://github.com/sabiruby/sabiruby#7be7b86ffdfc220531c79ec8ec4b056835c1ca67"
+source = "git+https://github.com/sabiruby/sabiruby#50cae7546c27a1872b7b5790a82c694420b1c9d1"
 dependencies = [
  "sabiruby",
  "serde",
