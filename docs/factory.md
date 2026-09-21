@@ -66,7 +66,8 @@ log. The evidence that it was fixed is a **screenshot with its pixels counted**,
 
 **The fix is to choose the number of tiles.** `tools/factory-tileset.py` builds the one sheet the
 game loads: a vertical strip of 16 px squares, Kenney's 132 in the pack's own order and
-numbering, and **blank tiles on the end until the count is not a multiple of six** — 133 today.
+numbering, then the twelve `tools/factory-belts.py` draws, and **blank tiles on the end until
+the count is not a multiple of six** — 145 today.
 The game reads the count back out of the loaded image and its checks fail if it ever becomes a
 multiple of six again, which is the trap this would otherwise be for whatever F1 adds to the
 sheet.
@@ -103,14 +104,22 @@ it was wrong is marked.
 | 73, 85, 97 | wooden **crates**, three sizes |
 | 114 | a **gear** |
 | 6, 74, 86, 90, 91 | a bench, two tanks, and an orange head on a stand |
-| 132 | blank — the padding tile the paragraph above is about |
+| 132–139 | **(i)** F0a's four three-quarter corners, two frames each (`tools/factory-belts.py`) |
+| 140–143 | **(ii)** F0a's straight and corner seen from above, two frames each |
+| 144 | blank — the padding tile the paragraph above is about |
 
-**What the pack does not have**, and what F0a's script is for: the conveyor pointing **down** and
-**left**, and any **corner** at all. The right-pointing belt is drawn in three-quarters view with
-its front face along the bottom of the tile, so the other directions cannot be had by rotating
-it; the left one can, by mirroring. Which way to go about it — draw all four directions and the
-corners by hand, or draw the belt from straight above and let `TileData::orientation` rotate one
-tile into four — is F0a's question and the author's to answer.
+**What the pack does not have**, and what `tools/factory-belts.py` is for. The survey said the
+pack had no left and no down; reading the tiles pixel by pixel says otherwise:
+
+* tile 26 (running right) is **symmetric top to bottom** apart from its chevrons, so **left is it
+  mirrored horizontally** — `TileOrientation::MirrorH`, no new picture;
+* tile 16 (running up) is **symmetric left to right and has no front face at all** — it is
+  already drawn from straight above — so **down is it mirrored vertically**.
+
+So the only thing genuinely missing is **the corner**, and F0a draws it twice over, in the two
+styles the author is choosing between. The screenshots are in `worklog/2026-09-21-factory-F0.md`
+and `src/belt_sample.rs` is the arrangement they are of; F1 keeps one style and deletes both the
+other one and that file.
 
 ## The numbers
 
@@ -128,6 +137,25 @@ window_height=900
 
 Two numbers are **not** settings, because moving them does not draw the same picture differently
 — it draws a wrong one, or none: the pack's 16 px, and how many tiles the sheet has.
+
+## What the tiles cost
+
+The budget, set here before F1 starts filling the sheet, the way the garden's models were
+(`CREDITS.md`, "against the plan's budget of 2 MB in ten"): **64 KB, in one sheet plus one
+licence text for each pack used.** Where it comes from: the sheet costs a **measured 67 bytes a
+tile** (9,662 bytes for 145, 2026-09-21), so even a sheet of 512 tiles — four times what is in it
+now, and more than Kenney's whole pack three times over — is about 34 KB. 64 KB is nearly twice
+that, and **27% of the smaller of the two games already here** (sabibots 234,202 B, garden
+322,924 B, `web.md`), which is the ceiling the plan sets.
+
+| file | bytes |
+|---|---|
+| `factory/assets/tiles/factory-tiles.png` | 9,662 |
+| `factory/assets/tiles/LICENSE-kenney-tiny-factory.txt` | 569 |
+| **what the page carries** | **10,231 in 2 files**, 16% of the budget |
+
+Not in the page: `factory/art/` — the pack as it came (4,452), its `Tilesheet.txt` (238), its
+licence (569) and the drawn belts (877) — 6,136 bytes of source that `web/build.sh` never copies.
 
 ## The entry page
 

@@ -36,7 +36,14 @@ the licence text beside it, because that is the file that redistributes the art.
 |---|---|
 | 0, 1, 2 | the factory floor plates |
 | 3 | the plain ground, which F0 lays as a border |
-| the other 128 | in the sheet, not used yet: the conveyors, the machines, the crates, the pipes and the gear that F1 onwards will place. `docs/factory.md` has the numbered table |
+| 26 and 16, and their mirrors | the conveyors running right, left, up and down in F0a's mock-up |
+| 75–77, 87–89, 99–101, 111–113 | the four machines standing beside it |
+| the rest | in the sheet, not used yet: the crates, the pipes and the gear that F1 onwards will place. `docs/factory.md` has the numbered table |
+
+Tiles **132–143** of the same sheet are not Kenney's: they are the conveyor corners the pack has
+none of, drawn by `tools/factory-belts.py` in the pack's own palette and cross-section, **MIT,
+the same as the rest of this repository** (`LICENSE`). They exist so that the author can choose
+between two ways of drawing a belt (`docs/factory.md`); F1 keeps one of them.
 
 CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is how
 anyone who wants more of it finds the pack.

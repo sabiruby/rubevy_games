@@ -25,12 +25,14 @@
 //!
 //! [rubevy]: https://github.com/sabiruby/rubevy
 
+mod belt_sample;
 mod platform;
 
 use bevy::asset::AssetMetaCheck;
 use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
 use bevy::prelude::*;
 use bevy::sprite_render::{TileData, TilemapChunk, TilemapChunkTileData};
+use belt_sample::Belts;
 use games_shell::camera::{CameraControls, CameraPlugin, WorldClick};
 use rubevy::RubevyPlugin;
 
@@ -42,11 +44,12 @@ use rubevy::RubevyPlugin;
 /// (`factory/art/Tilesheet-tiny-factory.txt`: "Tile size • 16px × 16px"). It is not a setting:
 /// another number here does not draw the same picture differently, it cuts the sheet in the
 /// wrong places.
-const TILE_PX: u32 = 16;
+pub const TILE_PX: u32 = 16;
 
 /// **How many tiles the sheet has.** The sheet is a vertical strip of 16 px squares built by
-/// `tools/factory-tileset.py`, and this is the number of them: Kenney's 132, in the pack's own
-/// order, and one blank on the end.
+/// `tools/factory-tileset.py`, and this is the number of them: Kenney's 132 in the pack's own
+/// order, then the twelve `tools/factory-belts.py` draws (F0a's two candidate corners), then one
+/// blank on the end.
 ///
 /// **The blank is not decoration.** wgpu's OpenGL backend guesses a texture's bind target from
 /// its shape, and a `D2` texture with square layers and a count that is a multiple of six is
@@ -56,7 +59,7 @@ const TILE_PX: u32 = 16;
 /// floor correctly on a PC, where the backend is Vulkan. The script keeps the count off every
 /// multiple of six and says why; this is the number it arrived at, and the check below reads it
 /// back out of the loaded image so that a sheet rebuilt to a different length cannot go unnoticed.
-const TILESET_LAYERS: u32 = 133;
+const TILESET_LAYERS: u32 = 145;
 
 /// The tiles of that sheet this stage uses, read off the sheet itself on 2026-09-21 (the numbered
 /// blow-up is in `docs/factory.md`). Kenney numbers row-major from 0.
@@ -122,9 +125,9 @@ const TILESET_WAIT_FRAMES: u32 = 400;
 /// (`TilemapChunk::calculate_tile_transform`, and the shader flips the row for the picture), so
 /// there is one convention here and not two.
 #[derive(Resource, Debug, Clone, Copy)]
-struct Map {
+pub struct Map {
     /// How many tiles across and down. Square, for now.
-    tiles: u32,
+    pub tiles: u32,
 }
 
 impl Map {
@@ -217,8 +220,24 @@ fn main() {
         args.value("--lang").as_deref(),
     );
 
-    let map = Map { tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(3.0) as u32 };
-    let half_height = settings.number("camera_half_height").unwrap_or(CAMERA_HALF_HEIGHT);
+    // **F0a only** (`src/belt_sample.rs`, which F1 deletes): `--belts i` or `--belts ii` lays a
+    // fixed arrangement of conveyors and machines instead of a plain floor, so that the author
+    // can look at the two ways of drawing a belt side by side. It moves the map and the view to
+    // its own picture's size, which is what "large enough to see a chevron" means here.
+    let belts = args.value("--belts").and_then(|word| Belts::from_word(&word));
+    if args.value("--belts").is_some() && belts.is_none() {
+        warn!("--belts takes `i` or `ii`");
+    }
+    let map = Map {
+        tiles: match belts {
+            Some(_) => belt_sample::TILES,
+            None => settings.number("map_tiles").unwrap_or(MAP_TILES).max(3.0) as u32,
+        },
+    };
+    let half_height = match belts {
+        Some(_) => belt_sample::half_height(),
+        None => settings.number("camera_half_height").unwrap_or(CAMERA_HALF_HEIGHT),
+    };
     let window = [
         settings.number("window_width").unwrap_or(WINDOW[0]),
         settings.number("window_height").unwrap_or(WINDOW[1]),
@@ -294,6 +313,9 @@ fn main() {
             ));
         }
     }
+    if let Some(belts) = belts {
+        app.insert_resource(belts);
+    }
     app.insert_resource(map)
         .insert_resource(settings)
         .init_resource::<LastClick>()
@@ -344,9 +366,21 @@ fn lay_floor(mut commands: Commands, map: Res<Map>) {
 /// Only where there is a renderer. `TilemapChunk`'s insert hook reaches for
 /// `TilemapChunkMeshCache` and `Assets<TilemapChunkMaterial>`, which are `SpriteRenderPlugin`'s,
 /// so a headless run that spawned one would panic before its first frame.
-fn draw_floor(mut commands: Commands, assets: Res<AssetServer>, map: Res<Map>, floor: Res<Floor>) {
-    let tiles: Vec<Option<TileData>> =
+fn draw_floor(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    map: Res<Map>,
+    floor: Res<Floor>,
+    belts: Option<Res<Belts>>,
+) {
+    let mut tiles: Vec<Option<TileData>> =
         floor.tiles.iter().map(|&i| Some(TileData::from_tileset_index(i))).collect();
+    // F0a's mock-up, over the floor. F1 deletes this and the module it calls.
+    if let Some(belts) = belts {
+        for (at, data) in belt_sample::over_the_floor(&map, *belts) {
+            tiles[(at.y * map.tiles + at.x) as usize] = Some(data);
+        }
+    }
     commands.spawn((
         TilemapChunk {
             chunk_size: UVec2::splat(map.tiles),
