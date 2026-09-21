@@ -31,6 +31,7 @@
 
 mod belts;
 mod build;
+mod control;
 mod data;
 mod draw;
 mod grid;
@@ -114,11 +115,15 @@ const WINDOW: [f32; 2] = [1600.0, 900.0];
 ///   (it is a condition that is true in one tile's time and the bound is barely reached);
 /// * the two machine lines — `swing (the script's first look) + one swing per thing the recipe
 ///   eats + time ÷ speed + swing + 1 ÷ belt`, 5.5 s, so 11;
-/// * an arm whose script raises — a swing, so 2.
+/// * an arm whose script raises — a swing, so 2;
+/// * **F4's three**, each of them the miner's line putting one more thing in its chest
+///   (`mine_seconds + 4 ÷ belt`, 3.0 s, so 6 each): the goal being reached, the goal that cannot
+///   be reached not being reached, and the factory still running with a broken `control.rb` —
+///   **18**.
 ///
-/// **Twenty seconds of the game's own time**, then, and thirty is half as much again. What a run
-/// where nothing is wrong takes is 10.5 s, measured 2026-09-21.
-const HEADLESS_SECONDS: f32 = 30.0;
+/// **Forty-four seconds of the game's own time**, then, and sixty-six is half as much again. What
+/// a run where nothing is wrong takes is 15 s, measured 2026-09-22 (it was 10.5 s at F3).
+const HEADLESS_SECONDS: f32 = 66.0;
 const SHOT_FILE: &str = "shot.png";
 /// `--shot` with no seconds. The picture wants the factory **working**: the two machine lines
 /// start at about 4 s of the game's own time and their first item is in the chest at 9.5 s
@@ -419,8 +424,15 @@ fn main() {
                     draw::start_drawing.run_if(resource_exists::<Map>),
                     point_the_camera_at_the_map.run_if(resource_exists::<Map>),
                     say_the_trouble,
+                    control::put_the_line_on_the_screen,
                 )
                     .after(lay_the_land),
+            )
+            // **F4's one line of screen, and F5's egui HUD replaces it**: what the goal is, what
+            // the control stage has heard, and what was dropped
+            .add_systems(
+                Update,
+                control::show_what_it_says.run_if(resource_exists::<control::TheControl>),
             )
             // **the keys are the window's**: a run with no window has no `ButtonInput` at all
             // (it is `InputPlugin`'s, and `MinimalPlugins` is not that), and the checks work the
@@ -462,6 +474,37 @@ fn main() {
         .add_systems(
             Startup,
             (inserters::read_the_scripts, inserters::install_answers).after(read_the_data_stage),
+        )
+        // **the control stage** (F4): one script, after the data stage, because the names it is
+        // told about are `data.rb`'s
+        .init_resource::<control::Happenings>()
+        .add_message::<control::Rewrite>()
+        .add_systems(
+            Update,
+            control::follow_the_rewrites
+                .before(FactorySet::Step)
+                .run_if(resource_exists::<control::TheControl>),
+        )
+        .add_systems(
+            Startup,
+            control::read_the_control_stage
+                .after(read_the_data_stage)
+                .run_if(resource_exists::<Data>),
+        )
+        .add_systems(
+            Update,
+            (
+                // what happened is published after the step, so a script hears about a frame at
+                // the head of the frame after it; what the script says is read back in the same
+                // order, so the line on the screen is never half a frame old
+                control::tell_the_control_stage,
+                control::hear_the_control_stage,
+                control::watch_the_control_ending,
+                control::say_if_anything_was_dropped,
+            )
+                .chain()
+                .after(FactorySet::Step)
+                .run_if(resource_exists::<control::TheControl>),
         )
         .add_systems(
             Update,
@@ -547,10 +590,22 @@ fn main() {
         // on one frame and looks at what it did on the next, so it has to be on the same side of
         // `build::orders` every frame or it looks a frame early. Hence this line, and hence it
         // names `orders` rather than `clicks` — what a mouse does is no longer its business.
-        app.init_resource::<SelfTest>().add_systems(
-            Update,
-            selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
-        );
+        app.init_resource::<SelfTest>()
+            .add_systems(
+                Update,
+                selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
+            )
+            // **F4's checks are a system of their own** and on the same side of the building as
+            // the rest ([`CONTROL_CHECKS`])
+            .add_systems(
+                Update,
+                control_checks
+                    .before(build::orders)
+                    .before(control::follow_the_rewrites)
+                    .before(FactorySet::Step)
+                    .run_if(the_factory_is_up)
+                    .run_if(resource_exists::<control::TheControl>),
+            );
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
@@ -1135,8 +1190,17 @@ struct SelfTest {
     others: Vec<String>,
     /// Frames spent waiting for the panel to catch up ([`PANEL_WAIT_FRAMES`]).
     waited: u32,
+    /// **F4**: what the control stage's own subscriptions had lost while one was running, read
+    /// before the checks break it on purpose.
+    dropped_in_the_script: u64,
     done: bool,
 }
+
+/// **The steps the control stage's checks are**, which are a system of their own
+/// ([`control_checks`]): a Bevy system may take sixteen parameters and [`selftest`] takes sixteen.
+/// The first of them is where [`selftest`] hands over and the last is where it takes the run back
+/// to say it is done.
+const CONTROL_CHECKS: std::ops::Range<u8> = 31..40;
 
 /// **A script that does nothing but wait**, for the editor to apply. It compiles and runs, which
 /// is what is being measured — in a browser that means the page's own compiler was called
@@ -1222,6 +1286,12 @@ fn selftest(
     mut exit: MessageWriter<AppExit>,
 ) {
     if test.done {
+        return;
+    }
+    // **F4's are next door** ([`control_checks`]), because this system already takes the sixteen
+    // parameters a Bevy system may take. It carries the run on from where this one left it and
+    // hands it back at the end of [`CONTROL_CHECKS`], where the `_` arm below says it is done.
+    if CONTROL_CHECKS.contains(&test.step) {
         return;
     }
     test.frames += 1;
@@ -1835,6 +1905,176 @@ fn selftest(
         }
     }
 }
+
+/// **F4's checks: the control stage** — the events reaching it, a goal being reached, the same
+/// factory *not* reaching another one, a control.rb that will not run, and nothing dropped.
+///
+/// It is a system of its own because [`selftest`] takes the sixteen parameters a Bevy system may
+/// take; the two share the `SelfTest` resource and hand the run to each other by its `step`
+/// ([`CONTROL_CHECKS`]). Like [`selftest`] it runs **before the orders are carried out**, so that
+/// a check that gives an order on one frame and looks at what it did on the next is on the same
+/// side of the building in every frame.
+#[allow(clippy::too_many_arguments)]
+fn control_checks(
+    mut test: ResMut<SelfTest>,
+    time: Res<Time>,
+    rules: Res<Rules>,
+    grid: Res<Grid>,
+    ore: Res<Ore>,
+    control: Res<control::TheControl>,
+    scripts: Res<ScriptWorld>,
+    mut rewrite: MessageWriter<control::Rewrite>,
+    mut orders: MessageWriter<build::Order>,
+) {
+    if !CONTROL_CHECKS.contains(&test.step) {
+        return;
+    }
+    // **what the miner's line takes to put one more thing in its chest**, which is the bound of
+    // every wait below: a dig and the three tiles of belt and the step into the chest, which is
+    // the same sentence F1's own check is written with
+    let a_delivery = (rules.mine_seconds + 4.0 / rules.belt_tiles_per_second) * CHECK_SLACK;
+    let in_the_chest = |test: &SelfTest| {
+        test.line
+            .last()
+            .and_then(|&t| grid.at(grid.index(t)))
+            .map(|b| b.held.count())
+            .unwrap_or(0)
+    };
+    match test.step {
+        // ---- the events reached the script ----------------------------------------------------
+        31 => {
+            let seen = control.seen;
+            let (built, crafted, delivered) = (seen[0], seen[2], seen[3]);
+            say(
+                if built > 0 && crafted > 0 && delivered > 0 { "ok  " } else { "FAIL" },
+                &format!(
+                    "the control stage heard what the factory did: {built} built, {crafted} crafted, {delivered} delivered"
+                ),
+            );
+            // **and the miner's line is joined up again**: step 13 took its first belt away to
+            // prove that taking things away works, and what the goal below counts is the ore that
+            // line delivers. Everything else the checks built delivers once and stops.
+            if let Some(&belt) = test.line.get(1) {
+                orders.write(build::Order { at: belt, what: Some(What::Belt), dir: Dir::East });
+            }
+            test.step = 32;
+        }
+        // ---- a goal this factory reaches --------------------------------------------------
+        32 => {
+            rewrite.write(control::Rewrite(a_goal_of(1)));
+            test.started = time.elapsed_secs();
+            test.step = 33;
+        }
+        33 => {
+            let waited = time.elapsed_secs() - test.started;
+            // **waited for as a condition**: the belt was laid back a moment ago and a miner
+            // takes `mine_seconds` over a dig, so a win is one delivery away
+            if !control.won && waited < a_delivery {
+                return;
+            }
+            say(
+                if control.won { "ok  " } else { "FAIL" },
+                &format!(
+                    "the goal in control.rb is reached and the game is told: {} (after {waited:.1} s)",
+                    control.saying.clone().unwrap_or_else(|| "it said nothing".into())
+                ),
+            );
+            // and now **the same factory with a goal it cannot reach**: more ore than there is in
+            // the ground, which is a number the world says rather than one anybody picked
+            test.dropped_in_the_script = control.dropped;
+            rewrite.write(control::Rewrite(a_goal_of(ore.total() + 1)));
+            test.started = time.elapsed_secs();
+            test.step = 34;
+        }
+        34 => {
+            let heard = control.seen[3];
+            let waited = time.elapsed_secs() - test.started;
+            // what is waited for is the *new* script hearing a delivery: without that, "it did
+            // not win" would be true of a script that never started
+            if heard == 0 && waited < a_delivery {
+                return;
+            }
+            say(
+                if heard > 0 && !control.won { "ok  " } else { "FAIL" },
+                &format!(
+                    "the same factory does not win on a control.rb that asks for more than the ground holds: {heard} delivered, won {}",
+                    control.won
+                ),
+            );
+            // and now one that will not run at all
+            rewrite.write(control::Rewrite(A_BROKEN_CONTROL.to_string()));
+            test.waited = 0;
+            test.step = 35;
+        }
+        // ---- a control.rb that will not run -------------------------------------------------
+        35 => {
+            // the program is compiled on the frame the message is read, the new `Script` lands at
+            // the sync point after that and rubevy starts the task at the head of the frame after
+            // *that* — the three frames [`PANEL_WAIT_FRAMES`] is twice
+            test.waited += 1;
+            if control.trouble.is_none() && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.before = in_the_chest(&test) as usize;
+            test.started = time.elapsed_secs();
+            test.step = 36;
+        }
+        36 => {
+            let held = in_the_chest(&test) as usize;
+            let waited = time.elapsed_secs() - test.started;
+            if held <= test.before && waited < a_delivery {
+                return;
+            }
+            let at = control.trouble.clone().unwrap_or_else(|| "nothing went wrong".into());
+            say(
+                // **the place as well as the fact**: a control.rb is written at the top level, so
+                // the game puts it inside a method of one line to have its exceptions inside the
+                // prelude's `rescue` (`crate::control::in_a_method`)
+                if at.contains(&format!("{}:", control::SCRIPT_FILE)) && held > test.before {
+                    "ok  "
+                } else {
+                    "FAIL"
+                },
+                &format!(
+                    "a control.rb that will not run leaves the factory running: {at}, and the chest went from {} to {held}",
+                    test.before
+                ),
+            );
+            test.step = 37;
+        }
+        // ---- and nothing published to it was ever lost ---------------------------------------
+        _ => {
+            let vm = scripts.dropped();
+            say(
+                if vm == 0 && test.dropped_in_the_script == 0 { "ok  " } else { "FAIL" },
+                &format!(
+                    "nothing published to the control stage was dropped: {} in the script, {vm} in the VM",
+                    test.dropped_in_the_script
+                ),
+            );
+            test.step = CONTROL_CHECKS.end;
+        }
+    }
+}
+
+/// **A goal of so much ore**, which is the one thing the checks' own factory goes on delivering:
+/// the miner's line digs it and its chest is nowhere near full.
+fn a_goal_of(ore: u64) -> String {
+    // **and an `on(:delivered)` that does nothing**: the counter the game reads off the script is
+    // bumped where a handler runs (`ruby/control_prelude.rb`), so a script with no handler in it
+    // hears everything and says it heard nothing. What the check needs to know is that *this*
+    // script is being told about the same factory, which is what an empty handler proves.
+    format!("goal deliver: {{ iron_ore: {ore} }}\non(:delivered) {{ |item, n, x, y| }}\n")
+}
+
+/// **A control.rb that will not run**, for the check that says one of those leaves a factory with
+/// no goal rather than a game that stopped. It raises rather than failing to compile because a
+/// raise is the harder half — and because it is the half a *line number* is hard to have for: it
+/// happens at the top level of the file, where there is no block to be inside.
+const A_BROKEN_CONTROL: &str = concat!(
+    "goal deliver: { iron_ore: 1 }\n",
+    "nothing.at.all\n",
+);
 
 /// **Somewhere to build the machine lines**: a rectangle with no ore under it and nothing built
 /// on it yet, looked for **outwards from the middle of the map**.
