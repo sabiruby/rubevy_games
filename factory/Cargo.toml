@@ -1,0 +1,36 @@
+[package]
+name = "factory"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Factory — a small top-down factory whose data stage, control stage and machines are Ruby"
+
+# `build.rs`: the `ruby/` directory put into the binary for the browser build, exactly as the
+# other two games do it. R6 made those thirty-five lines one call.
+[build-dependencies]
+rubevy-build.workspace = true
+
+[dependencies]
+bevy.workspace = true
+rubevy.workspace = true
+games-shell.workspace = true
+
+# **What this game does not name yet, and why**, so that the list says what F0 is rather than
+# being a copy of sabibots' with holes in it:
+#
+# * `sabiruby` and `sabiruby-serde` — F2's data stage is the first thing here to hand a Ruby Hash
+#   to serde; F0 has no declarations to read.
+# * `rubevy-egui` and `bevy_egui` — F5's editor and VM panel. `games-shell`'s camera asks egui
+#   whether it is holding the pointer through an `Option<Res<…>>`, so a game with no egui in it
+#   simply answers no.
+# * `sabiruby-compiler`, `wasm-bindgen`, `js-sys`, `web-sys` — `games_shell::platform` is what
+#   holds all four now (S1), and this game reaches them through it rather than naming them again.
+
+# The PC build: Bevy runs on threads and opens an X11 or Wayland window.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { workspace = true, features = ["multi_threaded", "x11"] }
+
+# The browser build (`web/build.sh factory`): Bevy draws with WebGL2 into a canvas.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { workspace = true, features = ["web", "webgl2"] }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/games-shell", "crates/rubevy-egui", "garden", "sabibots"]
+members = ["crates/games-shell", "crates/rubevy-egui", "factory", "garden", "sabibots"]
 
 # One Bevy for the whole repository: a binary can only have one, and keeping the version in one
 # place is what makes bumping it a single edit for every game here.
@@ -9,6 +9,11 @@ bevy = { version = "0.19.1", default-features = false, features = [
   "bevy_asset", "bevy_log", "bevy_window", "bevy_winit", "bevy_core_pipeline",
   "bevy_render", "bevy_sprite", "bevy_text", "bevy_ui", "bevy_ui_render",
   "default_font", "png",
+  # Factory's floor (F0): `bevy::sprite_render::TilemapChunk`, a chunk of tiles in one draw
+  # call, out of an array texture. It was already on — `bevy_ui_render` above turns it on —
+  # and naming it changes no build; it is here so that the third game's floor does not depend
+  # on a feature nothing in the list mentions.
+  "bevy_sprite_render",
   # 3D, for the garden: meshes with a StandardMaterial, lights and shadows. The tonemapper a
   # Camera3d asks for by default (TonyMcMapface) reads its curve from a KTX2 lookup table, which
   # `tonemapping_luts` embeds; `zstd_rust` is the decompressor for it (the pure-Rust one, so the
