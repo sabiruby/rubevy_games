@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws the items that ride on the belts: one 8 px icon each, in one strip.
+"""Draws the 8 px pictures the game draws as sprites: the items, and F3's two marks.
 
     tools/factory-items.py          # writes factory/assets/items/items.png
     tools/factory-items.py --check  # fails if the file on disk is not what this draws
@@ -26,6 +26,13 @@ it. The gear's shape is Kenney's tile 114 read by eye and redrawn at half the si
 F1 drew the nugget in `tools/factory-ore.py`, which also draws the ground the ore is in. It moved
 here when there was more than one item, and **the pixels did not change**: the nugget below is
 that one, and the old file is `git show <F1>:factory/assets/items/ore.png`.
+
+**F3 put two things that are not items on the end of the strip**: the inserter's hand, which is
+drawn travelling across an inserter with whatever it is carrying, and the mark that sits over an
+inserter whose script has stopped. They are here rather than in a file of their own for the reason
+above — one image is one batch — and they are **after** the items so that `icon:` in `ruby/data.rb`
+still means "the nth item" and a data file cannot reach them (`ITEMS` below is the bound the game
+checks `icon:` against, `MARKS` is the rest).
 
 Needs: python3 with Pillow (12.3 was used).
 """
@@ -57,8 +64,10 @@ INK = {
     "D": (0x52, 0x60, 0x7C, 255),
 }
 
-#: **one entry per icon, and the index of an entry is what `icon:` means in `ruby/data.rb`.**
-ICONS: list[tuple[str, list[str]]] = [
+#: **one entry per item, and the index of an entry is what `icon:` means in `ruby/data.rb`.**
+#: `factory/src/draw.rs`'s `ITEM_ICONS` is how many there are, and a data file whose `icon:` is
+#: past the end of this list is refused by a test.
+ITEMS: list[tuple[str, list[str]]] = [
     # 0 — the ore out of the ground. F1's nugget, pixel for pixel.
     ("iron_ore", [
         "..oooo..",
@@ -96,6 +105,40 @@ ICONS: list[tuple[str, list[str]]] = [
     ]),
 ]
 
+#: **The pictures that are not items** (F3), after them in the strip. The game names each of these
+#: by its own `const` in `factory/src/draw.rs`; nothing in `ruby/data.rb` can reach them.
+MARKS: list[tuple[str, list[str]]] = [
+    # the inserter's hand: a two-pronged grab seen from above, in the pack's greys. It is drawn
+    # travelling from the tile behind an inserter to the tile in front of it, with whatever it is
+    # carrying under it, which is the whole of what makes a swing visible.
+    ("hand", [
+        "o......o",
+        "oM....Mo",
+        "oML..LMo",
+        ".oMLLMo.",
+        "..oMMo..",
+        "..oMMo..",
+        "...oo...",
+        "........",
+    ]),
+    # the mark over an inserter whose script has stopped — an exception, an overrun, a file that
+    # would not compile. Orange, because that is the pack's colour for a thing that wants looking
+    # at, and it is the one mark the game draws over a building.
+    ("stopped", [
+        "..oooo..",
+        ".ollllo.",
+        "olloollo",
+        "olloollo",
+        "ollllllo",
+        "olloollo",
+        ".ollllo.",
+        "..oooo..",
+    ]),
+]
+
+#: everything in the strip, in the order it is drawn in
+ICONS = ITEMS + MARKS
+
 
 def build() -> Image.Image:
     strip = Image.new("RGBA", (SIZE * len(ICONS), SIZE), (0, 0, 0, 0))
@@ -119,15 +162,15 @@ def main() -> None:
             sys.exit(f"{OUT} is not there")
         if Image.open(OUT).convert("RGBA").tobytes() != strip.tobytes():
             sys.exit(f"{OUT} is not what this script draws: run it without --check")
-        print(f"{OUT.relative_to(ROOT)} is up to date ({len(ICONS)} icons)")
+        print(f"{OUT.relative_to(ROOT)} is up to date ({len(ITEMS)} items, {len(MARKS)} marks)")
         return
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     strip.save(OUT, optimize=True)
-    print(f"{OUT.relative_to(ROOT)}: {strip.width}x{strip.height} px, {len(ICONS)} icons of "
-          f"{SIZE}px, {OUT.stat().st_size} bytes")
+    print(f"{OUT.relative_to(ROOT)}: {strip.width}x{strip.height} px, {len(ICONS)} pictures of "
+          f"{SIZE}px ({len(ITEMS)} items, {len(MARKS)} marks), {OUT.stat().st_size} bytes")
     for i, (name, _) in enumerate(ICONS):
-        print(f"  icon: {i}   {name}")
+        print(f"  {i}   {name}{'' if i < len(ITEMS) else '   (not an item: `icon:` cannot reach it)'}")
 
 
 if __name__ == "__main__":

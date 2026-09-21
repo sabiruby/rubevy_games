@@ -91,19 +91,22 @@ pub fn word_for(what: Option<What>, data: &Data) -> String {
     }
 }
 
-/// **What each digit puts in hand**, worked out from the data file: `1` `2` `3` are the belt, the
-/// miner and the chest, and the machines follow in the order they were declared.
+/// **What each digit puts in hand**, worked out from the data file: `1` `2` `3` `4` are the belt,
+/// the miner, the chest and the inserter, and the machines follow in the order they were declared.
 ///
-/// `0` is the wrecking ball, which is why the machines start at 4 and not at 3, and why there is
-/// room for six of them.
+/// `0` is the wrecking ball, which is why the machines start at 5 and not at 4, and why there is
+/// room for five of them.
 pub fn what_the_digits_hold(data: &Data) -> Vec<(KeyCode, Option<What>)> {
     let mut keys = vec![
         (KeyCode::Digit1, Some(What::Belt)),
         (KeyCode::Digit2, Some(What::Miner)),
         (KeyCode::Digit3, Some(What::Chest)),
+        // **F3's, and it is fourth rather than last** because it is the thing this game is about:
+        // the four world's fittings a player can put down, and then whatever `data.rb` declares
+        (KeyCode::Digit4, Some(What::Inserter)),
         (KeyCode::Digit0, None),
     ];
-    let digits = [KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
+    let digits = [KeyCode::Digit5, KeyCode::Digit6, KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9];
     for (i, digit) in digits.into_iter().enumerate() {
         match data.machines.get(i) {
             Some(_) => keys.push((digit, Some(What::Machine(i as crate::data::MachineId)))),

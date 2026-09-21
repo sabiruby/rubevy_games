@@ -61,7 +61,15 @@ KENNEY_ROWS = 11
 # (`tools/factory-machine.py`), which is what a `machine :assembler, size: [2, 2]` wants four
 # pictures for. It is cut **row by row from the top**, like every other entry here, and that is
 # the order a machine's `sprite:` list is written in.
-OWN: list[tuple[str, int, int]] = [("belts.png", 4, 1), ("ore.png", 2, 1), ("machine.png", 2, 2)]
+# `inserter.png` is F3's: the base the arm turns on, drawn with its output to the right, so the
+# other three directions are that tile turned (`tools/factory-inserter.py`). The arm itself is
+# **not** a tile — a tile has eight orientations and nothing in between — it is a sprite.
+OWN: list[tuple[str, int, int]] = [
+    ("belts.png", 4, 1),
+    ("ore.png", 2, 1),
+    ("machine.png", 2, 2),
+    ("inserter.png", 1, 1),
+]
 
 
 def tiles_of(path: pathlib.Path, columns: int, rows: int) -> list[Image.Image]:

@@ -11,7 +11,7 @@
 #   item   :name, icon:                      something that can be on a belt
 #   recipe :name, in:, out:, time:, made_in: what a machine turns things into
 #   machine :name, size:, sprite:, speed:    what runs a recipe
-#   belt / miner / chest / ore               the four fittings the world has built in
+#   belt / miner / chest / ore / inserter    the five fittings the world has built in
 #
 # `icon:` is which picture of `assets/items/items.png` (tools/factory-items.py prints the list),
 # and `sprite:` is which tile of `assets/tiles/factory-tiles.png` (docs/factory-tiles.png is the
@@ -26,7 +26,7 @@ item :iron_plate, icon: 1    # one ore, smelted
 item :gear,       icon: 2    # two plates, assembled. The end of the line, for now
 
 # ---------------------------------------------------------------------------------------------
-# The four fittings
+# The five fittings
 # ---------------------------------------------------------------------------------------------
 
 # **The belt is the unit everything else is measured in**: a full one carries
@@ -59,6 +59,20 @@ chest :crate, capacity: 60
 # the game has a VM to read this file with, so it cannot be here. This number is read once the
 # world is laid out, which is after.
 ore :patch, per_tile: 60
+
+# **One item a second is a quarter of a full belt** — and it is exactly one miner's output, which
+# is the whole derivation: one inserter keeps up with one miner, one keeps two furnaces fed (they
+# eat half an ore a second each), and four of them fill a belt. The chain in the comments below
+# stays whole numbers with an inserter at every joint.
+#
+# `seconds_per_item:` is the **miner's own word**, because it means the miner's own thing: how
+# long this takes over one item. How far an inserter reaches is not a number — it takes from the
+# tile behind it and puts into the tile in front, which is what a one-tile building with a
+# direction already says.
+#
+# **It is also how long an idle inserter waits between looks** (`ruby/prelude.rb`'s `idle`), and
+# that is not a second number hiding here: an arm could not have acted sooner than it can swing.
+inserter :arm, seconds_per_item: 1.0
 
 # ---------------------------------------------------------------------------------------------
 # The machines, and what is made in them

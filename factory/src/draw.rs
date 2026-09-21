@@ -50,15 +50,36 @@ const BELT_CORNER: [u16; 2] = [134, 135];
 const MINER: u16 = 110;
 /// A wooden crate, used as the chest.
 const CHEST: u16 = 85;
+/// **The inserter's base** (F3), drawn with its output to the right, so the other three
+/// directions are [`FACING`] applied to it (`tools/factory-inserter.py`). The arm itself is not a
+/// tile: it moves, and a tile has eight orientations and nothing in between.
+const INSERTER: u16 = 142;
 /// **How big an item's icon is.** 8 px, and it is not a setting for the same reason `TILE_PX` is
 /// not: it is where the sheet is cut. Two of them fit across a 16 px tile without touching, which
 /// is where the default `items_per_tile` in `data.rb` comes from — the number follows the art,
 /// and a player who wants a denser belt moves the number and lets them overlap.
 pub const ITEM_PX: u32 = 8;
-/// **How many icons `assets/items/items.png` has.** One per item the default `data.rb` declares,
-/// and `icon:` is an index into it; the checks read the count back out of the loaded image, so a
-/// sheet and a data file that disagree say so. `tools/factory-items.py` draws it.
+/// **How many of the strip's pictures are items.** `icon:` in `ruby/data.rb` is an index into
+/// them and a test refuses a data file that points past the end. `tools/factory-items.py` draws
+/// the strip.
 pub const ITEM_ICONS: u32 = 3;
+
+/// **The two pictures after the items**, which are not items and which no data file can name
+/// (F3): the inserter's hand, drawn travelling with whatever it is carrying, and the mark over an
+/// inserter whose script has stopped.
+pub const HAND: usize = ITEM_ICONS as usize;
+pub const STOPPED: usize = ITEM_ICONS as usize + 1;
+/// Everything in the strip, which is what the atlas is cut into.
+pub const ICONS: u32 = ITEM_ICONS + 2;
+
+/// **What is drawn over what**, in world units of z. The floor is 0 and the buildings are 1;
+/// these three are the sprite pool's, and they are three rather than one because a hand and the
+/// thing in it are in the same place and one of them has to be on top. Three numbers of z is
+/// three sprite batches of the one image, which is two more draw calls than F2 had and is the
+/// whole of what the arm's picture costs.
+const Z_ITEM: f32 = 2.0;
+const Z_CARRIED: f32 = 2.1;
+const Z_MARK: f32 = 2.2;
 
 /// **A quarter turn anticlockwise per direction**, for a picture drawn running east.
 /// `Rotate90` turns the pack's east-running belt into a north-running one, which is what F0a's
@@ -191,7 +212,7 @@ pub fn start_drawing(
     commands.insert_resource(Chunks { floor, buildings });
     let layout = layouts.add(TextureAtlasLayout::from_grid(
         UVec2::splat(ITEM_PX),
-        ITEM_ICONS,
+        ICONS,
         1,
         None,
         None,
@@ -267,6 +288,10 @@ pub fn draw_buildings(
             }
             What::Miner => TileData::from_tileset_index(MINER),
             What::Chest => TileData::from_tileset_index(CHEST),
+            What::Inserter => TileData {
+                orientation: FACING[building.dir.number()],
+                ..TileData::from_tileset_index(INSERTER)
+            },
             // **a machine is as many pictures as it covers tiles**, and which one a tile gets is
             // where that tile is inside the footprint — row by row from the bottom left, which is
             // the order `machine :name, sprite: […]` lists them in (`crate::data`)
@@ -313,27 +338,56 @@ fn machine_picture(data: &Data, kind: crate::data::MachineId, origin: UVec2, her
 /// than despawned, so a busy factory does not spawn and despawn thousands of entities a second.
 ///
 /// Which is also the reason the items are not entities at all (`src/items.rs`).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_items(
     map: Res<Map>,
     grid: Res<Grid>,
     flow: Res<Flow>,
     lanes: Res<Lanes>,
+    rules: Res<crate::belts::Rules>,
     data: Res<Data>,
+    arms: Res<crate::inserters::Arms>,
     icons: Res<Icons>,
     mut pool: ResMut<Pool>,
     mut commands: Commands,
     mut sprites: Query<(&mut Transform, &mut Visibility, &mut Sprite)>,
-    mut places: Local<Vec<(Vec2, crate::data::ItemId)>>,
+    mut on_belts: Local<Vec<(Vec2, crate::data::ItemId)>>,
+    mut drawn: Local<Vec<(Vec3, usize)>>,
 ) {
-    crate::items::places(&map, &grid, &flow, &lanes, &mut places);
-    for (i, &(at, item)) in places.iter().enumerate() {
+    crate::items::places(&map, &grid, &flow, &lanes, &mut on_belts);
+    drawn.clear();
+    for &(at, item) in on_belts.iter() {
         // which of the sheet's icons this item wears is `data.rb`'s `icon:`, and an item whose
         // number is off the end of the sheet wears the first rather than nothing
         let icon = data.items.get(item as usize).map(|i| i.icon).unwrap_or(0) as usize;
+        drawn.push((at.extend(Z_ITEM), icon));
+    }
+    // **the arms, and what they are carrying** (F3). The hand and the item are the same place, so
+    // the item is a hair nearer the eye; the mark over a stopped inserter is nearer still.
+    for &t in grid.built() {
+        let t = t as usize;
+        let Some(building) = grid.at(t) else { continue };
+        if building.what != What::Inserter {
+            continue;
+        }
+        let here = map.tile_centre(grid.tile_of(t));
+        if building.swinging || !building.held.is_empty() {
+            let at = hand_at(map.tile_centre(grid.tile_of(t)), building, &rules);
+            drawn.push((at.extend(Z_ITEM), HAND));
+            if let Some(item) = building.held.first() {
+                let icon = data.items.get(item as usize).map(|i| i.icon).unwrap_or(0) as usize;
+                drawn.push((at.extend(Z_CARRIED), icon));
+            }
+        }
+        if arms.has_stopped(t) {
+            drawn.push((here.extend(Z_MARK), STOPPED));
+        }
+    }
+    for (i, &(at, icon)) in drawn.iter().enumerate() {
         match pool.sprites.get(i) {
             Some(&entity) => {
                 if let Ok((mut transform, mut visible, mut sprite)) = sprites.get_mut(entity) {
-                    transform.translation = at.extend(2.0);
+                    transform.translation = at;
                     *visible = Visibility::Inherited;
                     if let Some(atlas) = sprite.texture_atlas.as_mut() {
                         atlas.index = icon;
@@ -345,14 +399,30 @@ pub fn draw_items(
             None => pool.sprites.push(commands.spawn(item_sprite(&icons, at, icon)).id()),
         }
     }
-    for &entity in pool.sprites.iter().skip(places.len()) {
+    for &entity in pool.sprites.iter().skip(drawn.len()) {
         if let Ok((_, mut visible, _)) = sprites.get_mut(entity) {
             *visible = Visibility::Hidden;
         }
     }
 }
 
-fn item_sprite(icons: &Icons, at: Vec2, icon: usize) -> impl Bundle {
+/// **Where an inserter's hand is**, in world units: straight across from the middle of the tile
+/// behind it to the middle of the tile in front, over the length of a swing.
+///
+/// An arm that is not swinging is over its own tile — which is where an arm that carried
+/// something across and was refused stands, holding it, until its script tries again. A straight
+/// sweep rather than an arc because the sweep is what says "this came from there and went there",
+/// which is the thing a player has to be able to read off the screen.
+fn hand_at(here: Vec2, arm: &crate::grid::Building, rules: &crate::belts::Rules) -> Vec2 {
+    if !arm.swinging {
+        return here;
+    }
+    let part = (arm.work / rules.swing_seconds).clamp(0.0, 1.0);
+    let reach = arm.dir.as_vec() * TILE_PX as f32;
+    (here - reach).lerp(here + reach, part)
+}
+
+fn item_sprite(icons: &Icons, at: Vec3, icon: usize) -> impl Bundle {
     (
         Sprite {
             image: icons.sheet.clone(),
@@ -362,7 +432,7 @@ fn item_sprite(icons: &Icons, at: Vec2, icon: usize) -> impl Bundle {
             custom_size: Some(Vec2::splat(ITEM_PX as f32)),
             ..default()
         },
-        Transform::from_translation(at.extend(2.0)),
+        Transform::from_translation(at),
     )
 }
 

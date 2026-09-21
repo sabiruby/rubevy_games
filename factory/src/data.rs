@@ -10,24 +10,25 @@
 //! recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made_in: :furnace
 //! ```
 //!
-//! **The port is `sabiruby_serde::declare`**, and the whole of the reading is seven of them:
+//! **The port is `sabiruby_serde::declare`**, and the whole of the reading is eight of them:
 //! `Declarations::<T>::install(vm).define(vm, "item")` puts a method on `Object`, the script calls
 //! it, and each call's keyword arguments are deserialized into a `T` **inside the native** — which
 //! is what puts the error on the declaration's own line.
 //!
-//! # Why seven words and not three
+//! # Why eight words and not three
 //!
 //! The plan names `item`, `recipe` and `machine`, which are about *what is made*. The fittings the
-//! world has built in — the belt, the miner, the chest and the ore in the ground — are made by no
-//! recipe and in no machine, and each has numbers of its own with names of its own. Giving them
-//! one `machine` shape with five optional fields would mean `capacity:` on a furnace deserializing
-//! perfectly and being refused afterwards by hand-written code; giving each its own word means
-//! **serde** refuses it, at the line, which is the whole reason the declarations are read through
-//! serde at all.
+//! world has built in — the belt, the miner, the chest, the ore in the ground and the inserter —
+//! are made by no recipe and in no machine, and each has numbers of its own with names of its own.
+//! Giving them one `machine` shape with five optional fields would mean `capacity:` on a furnace
+//! deserializing perfectly and being refused afterwards by hand-written code; giving each its own
+//! word means **serde** refuses it, at the line, which is the whole reason the declarations are
+//! read through serde at all.
 //!
-//! **`ore` is F2a's**, and it is a word rather than a field on `miner` for exactly that reason:
-//! how much a tile of ground holds is not one of the drill's numbers, and putting it there would
-//! be the `capacity:`-on-a-furnace shape again ([`OreDecl`]).
+//! **`ore` is F2a's and `inserter` is F3's**, and each is a word rather than a field on `miner`
+//! for exactly that reason: how much a tile of ground holds is not one of the drill's numbers and
+//! neither is how long an arm's swing takes, and putting either there would be the
+//! `capacity:`-on-a-furnace shape again ([`OreDecl`], [`InserterDecl`]).
 //!
 //! # Where an error says it is
 //!
@@ -145,6 +146,21 @@ struct MinerDecl {
 struct ChestDecl {
     #[serde(deserialize_with = "at_least_one")]
     capacity: u32,
+}
+
+/// **The arm the player writes Ruby for** (F3), and a fitting of the world like the four above
+/// it: no recipe makes it and no machine makes it in.
+///
+/// It has **one** number — how long a swing takes — and the word for it is the miner's, because
+/// it means the same thing: how long this thing takes over one item. How far an inserter can
+/// reach is not a number here and is not meant to become one: it takes from the tile behind it
+/// and puts into the tile in front, which is what "one tile, with a direction" already says
+/// (`crate::grid::What::Inserter`). A number for it would be a number with nothing behind it.
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+struct InserterDecl {
+    #[serde(deserialize_with = "more_than_zero")]
+    seconds_per_item: f32,
 }
 
 /// **What is in the ground**, which is a fitting of the world like the three above it: no recipe
@@ -314,9 +330,13 @@ impl Data {
     /// **Which tiles a machine built at `origin` covers.** The footprint is in the map's own axes
     /// and does not turn with the machine's direction: the pack's machines are drawn one tile
     /// each and a machine of several tiles is drawn out of several pictures, so turning the
-    /// footprint would need a second set of pictures for the turned shape. What the direction
-    /// says is where the machine *puts what it makes* ([`Data::output_of`]), which is the half a
-    /// player is actually aiming.
+    /// footprint would need a second set of pictures for the turned shape.
+    ///
+    /// **Since F3 a machine's direction says nothing at all.** It used to say where the machine
+    /// pushed what it made; nothing comes out of a machine now but through an inserter's hand,
+    /// and an inserter reaches into whichever tile of the footprint it is standing behind. That
+    /// is Factorio's shape as well — an assembler there has no direction either — and it is why
+    /// `Data::output_of` is gone.
     pub fn footprint(&self, machine: MachineId, origin: UVec2) -> Vec<UVec2> {
         let Some(m) = self.machines.get(machine as usize) else { return Vec::new() };
         let mut tiles = Vec::with_capacity(m.tiles() as usize);
@@ -328,19 +348,6 @@ impl Data {
         tiles
     }
 
-    /// **Where a machine puts what it made**: the tile just outside its footprint, one step
-    /// `dir` from the origin corner. For a machine one tile big that is the neighbour, which is
-    /// what a miner and a belt already mean by the word.
-    pub fn output_of(&self, machine: MachineId, origin: UVec2, dir: crate::grid::Dir) -> IVec2 {
-        let size = self.machines.get(machine as usize).map(|m| m.size).unwrap_or(UVec2::ONE);
-        let o = origin.as_ivec2();
-        match dir {
-            crate::grid::Dir::East => IVec2::new(o.x + size.x as i32, o.y),
-            crate::grid::Dir::North => IVec2::new(o.x, o.y + size.y as i32),
-            crate::grid::Dir::West => IVec2::new(o.x - 1, o.y),
-            crate::grid::Dir::South => IVec2::new(o.x, o.y - 1),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -491,6 +498,7 @@ pub fn read_the_declarations(
     let miners = Declarations::<MinerDecl>::install(vm).define(vm, "miner");
     let chests = Declarations::<ChestDecl>::install(vm).define(vm, "chest");
     let ores = Declarations::<OreDecl>::install(vm).define(vm, "ore");
+    let arms = Declarations::<InserterDecl>::install(vm).define(vm, "inserter");
 
     let ran = vm.load_and_run(&bytes);
 
@@ -504,12 +512,13 @@ pub fn read_the_declarations(
     let miners = miners.take_with_lines(vm);
     let chests = chests.take_with_lines(vm);
     let ores = ores.take_with_lines(vm);
+    let arms = arms.take_with_lines(vm);
 
     if let Err(e) = ran {
         return Err(Trouble::from_raise(vm, &e));
     }
 
-    let tables = tables_of(items, recipes, machines, belts, miners, chests, ores)?;
+    let tables = tables_of(items, recipes, machines, belts, miners, chests, ores, arms)?;
     Ok(tables)
 }
 
@@ -548,6 +557,7 @@ fn tables_of(
     miners: Vec<Declared<MinerDecl>>,
     chests: Vec<Declared<ChestDecl>>,
     ores: Vec<Declared<OreDecl>>,
+    arms: Vec<Declared<InserterDecl>>,
 ) -> Result<(Data, Rules), Trouble> {
     if items.is_empty() {
         return Err(Trouble { at: None, what: "nothing declares an item".into() });
@@ -623,6 +633,7 @@ fn tables_of(
     let Declared { value: miner, line: miner_line, .. } = exactly_one("miner", miners)?;
     let chest = exactly_one("chest", chests)?.value;
     let ore = exactly_one("ore", ores)?.value;
+    let arm = exactly_one("inserter", arms)?.value;
     let Some(&digs) = by_item.get(&miner.digs) else {
         return Err(Trouble {
             at: miner_line,
@@ -636,6 +647,7 @@ fn tables_of(
         mine_seconds: miner.seconds_per_item,
         chest_capacity: chest.capacity,
         digs,
+        swing_seconds: arm.seconds_per_item,
         ore_per_tile: ore.per_tile,
     };
     let data = Data {
@@ -782,6 +794,7 @@ mod tests {
         "miner :drill, seconds_per_item: 1.0, digs: :iron_ore\n",                     // 7
         "chest :crate, capacity: 60\n",                                               // 8
         "ore :patch, per_tile: 60\n",                                                 // 9
+        "inserter :arm, seconds_per_item: 1.0\n",                                     // 10
     );
 
     #[test]
@@ -801,6 +814,7 @@ mod tests {
         assert_eq!(rules.mine_seconds, 1.0);
         assert_eq!(rules.chest_capacity, 60);
         assert_eq!(rules.digs, 0, "the miner brings up the ore");
+        assert_eq!(rules.swing_seconds, 1.0, "and an inserter takes a second over one item");
     }
 
     /// **Each kind of mistake, and the line it is on.** The four the plan names, and the two
@@ -909,7 +923,7 @@ mod tests {
     fn a_name_declared_twice_is_refused_at_the_second_one() {
         let source = format!("{GOOD}item :iron_ore, icon: 7\n");
         let trouble = read(&source).expect_err("declared twice");
-        assert_eq!(trouble.at, Some(10), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
         assert!(trouble.what.contains("already declared"), "{}", trouble.what);
     }
 
@@ -921,18 +935,21 @@ mod tests {
         assert!(trouble.say("data.rb").starts_with("data.rb:1: "), "{}", trouble.say("data.rb"));
     }
 
-    /// **The four fittings are declared exactly once each**, which is the shape the world has room
-    /// for. `ore` is F2a's, and it is one of them for the same reason the other three are: the
-    /// ground is a thing of the world with a number of its own, and the game has one ground.
+    /// **The five fittings are declared exactly once each**, which is the shape the world has
+    /// room for. `ore` is F2a's and `inserter` is F3's, and each is one of them for the same
+    /// reason the first three are: a thing of the world with a number of its own, and the game
+    /// has one of it.
     #[test]
-    fn the_world_has_one_belt_one_miner_one_chest_and_one_ore() {
+    fn the_world_has_one_belt_one_miner_one_chest_one_ore_and_one_inserter() {
         let none = GOOD.replace("chest :crate, capacity: 60\n", "");
         assert_eq!(read(&none).expect_err("no chest").what, "nothing declares a chest");
         let none = GOOD.replace("ore :patch, per_tile: 60\n", "");
         assert_eq!(read(&none).expect_err("no ore").what, "nothing declares an ore");
+        let none = GOOD.replace("inserter :arm, seconds_per_item: 1.0\n", "");
+        assert_eq!(read(&none).expect_err("no arm").what, "nothing declares an inserter");
         let two = format!("{GOOD}belt :fast, tiles_per_second: 8.0, items_per_tile: 2\n");
         let trouble = read(&two).expect_err("two belts");
-        assert_eq!(trouble.at, Some(10), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
     }
 
     /// **The same VM reads a second file.** This is what F5's reload will be and what the checks
@@ -983,11 +1000,11 @@ mod tests {
         assert_eq!(says(size, &mut vm), "[1, 1]");
     }
 
-    /// The footprint and the output tile of a machine bigger than one tile — the two things the
-    /// grid needs to know about one, and the whole of what `size` means.
+    /// The footprint of a machine bigger than one tile, which is the whole of what `size` means
+    /// — and, since F3, the whole of what the grid needs to know about one: a machine has no
+    /// output tile any more, because nothing comes out of it but through an inserter's hand.
     #[test]
-    fn a_machine_of_four_tiles_covers_four_and_puts_things_outside_them() {
-        use crate::grid::Dir;
+    fn a_machine_of_four_tiles_covers_four_tiles() {
         let source = GOOD
             .replace(
                 "machine :furnace, size: [1, 1], sprite: [109], speed: 1.0\n",
@@ -1001,14 +1018,8 @@ mod tests {
             vec![UVec2::new(10, 4), UVec2::new(11, 4), UVec2::new(10, 5), UVec2::new(11, 5)],
             "row by row from the bottom left"
         );
-        // out of the footprint, from the origin corner, one step the way it faces
-        assert_eq!(data.output_of(big, at, Dir::East), IVec2::new(12, 4));
-        assert_eq!(data.output_of(big, at, Dir::North), IVec2::new(10, 6));
-        assert_eq!(data.output_of(big, at, Dir::West), IVec2::new(9, 4));
-        assert_eq!(data.output_of(big, at, Dir::South), IVec2::new(10, 3));
-        // and a machine of one tile means by it what a miner already meant
+        // and a machine of one tile covers the tile it was built on and no other
         let furnace = data.machine("furnace").expect("declared");
         assert_eq!(data.footprint(furnace, at), vec![at]);
-        assert_eq!(data.output_of(furnace, at, Dir::East), IVec2::new(11, 4));
     }
 }

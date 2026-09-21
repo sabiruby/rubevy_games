@@ -52,9 +52,13 @@ pub fn run_the_factory(
     mut ore: ResMut<Ore>,
     mut lanes: ResMut<Lanes>,
     mut tally: ResMut<Tally>,
+    mut arms: ResMut<crate::inserters::Arms>,
 ) {
     let started = bevy::platform::time::Instant::now();
     let moves = belts::step(&mut grid, &mut ore, &mut lanes, &rules, &data, time.delta_secs());
+    // **the arms that arrived are what a script is waiting on** — the step is the only thing that
+    // knows, and `crate::inserters::finish_swings` is the only thing that can answer
+    arms.finished.extend(moves.swung());
     tally.items = lanes.count();
     tally.carried += moves.carried() as u64;
     tally.taken += moves.taken() as u64;

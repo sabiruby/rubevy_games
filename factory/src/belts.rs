@@ -86,6 +86,14 @@ pub struct Rules {
     pub chest_capacity: u32,
     /// What a miner brings up out of the ground.
     pub digs: ItemId,
+    /// **How long one swing of an inserter's arm takes, in seconds** — `inserter :arm,
+    /// seconds_per_item:` in `ruby/data.rb`, and the same word the miner uses for the same
+    /// meaning: how long this thing takes over one item.
+    ///
+    /// It is also what an idle inserter's script waits between looks ([`crate::inserters`]), and
+    /// that is not a second number: an arm that is already busy could not have acted sooner, so
+    /// looking more often than it can swing is looking for nothing.
+    pub swing_seconds: f32,
     /// **How many items can be dug out of one tile of ore.** It is here rather than in
     /// [`crate::Map`] because it is a number of *play* — how long a patch lasts is how long a line
     /// of miners is worth building — and because `Ore::laid_out` runs in `Startup`, after the data
@@ -240,6 +248,11 @@ pub enum Move {
     Made { at: usize },
     /// A machine at `at` finished a craft of `recipe` and is holding what it made.
     Crafted { at: usize, recipe: RecipeId },
+    /// **An inserter's arm arrived**, and either put down what it was carrying or found the tile
+    /// in front would not take it. It is the one [`Move`] a *script* is waiting on: the system
+    /// that stepped the factory turns it into the answer to that inserter's `move`
+    /// ([`crate::inserters`]).
+    Swung { at: usize, placed: bool },
 }
 
 impl Moves {
@@ -254,6 +267,13 @@ impl Moves {
     }
     pub fn crafted(&self) -> usize {
         self.0.iter().filter(|m| matches!(m, Move::Crafted { .. })).count()
+    }
+    /// Every arm that arrived this step, and whether it put down what it was carrying.
+    pub fn swung(&self) -> impl Iterator<Item = (usize, bool)> + '_ {
+        self.0.iter().filter_map(|m| match m {
+            &Move::Swung { at, placed } => Some((at, placed)),
+            _ => None,
+        })
     }
 }
 
@@ -270,7 +290,8 @@ impl Moves {
 ///    is still room when its turn comes — this is where a merge is decided, the tile with the
 ///    lower index gets the gap, and where a chest or a machine takes something off a belt;
 /// 4. **dig**: a miner that has finished puts an item into what it faces, or holds it and waits;
-/// 5. **deliver**: a machine pushes what it has made into what it faces;
+/// 5. **swing**: an inserter whose arm is crossing moves it on, and puts down what it is carrying
+///    when it arrives — the half of an inserter that is not Ruby;
 /// 6. **craft**: a machine with nothing waiting to go out works at a recipe it has the parts for.
 ///
 /// The last three are [`crate::machines`], because what they are about is a machine and not a
@@ -348,10 +369,13 @@ pub fn step(
                         false
                     }
                 }
-                // into a chest that has room, or into a machine that wants it. Both are what
-                // `machines::hand_to` answers, and it is the only place that knows.
+                // into a chest that has room. A machine is in the list because it is what the
+                // belt runs into, and `machines::hand_to` is what refuses it: nothing goes into
+                // a machine but through an inserter's hand, so a belt running into one jams
+                // (F3, and the table at the head of `crate::machines`).
                 Some((n, What::Chest | What::Machine(_) | What::Covered { .. })) => {
-                    let took = machines::hand_to(grid, lanes, rules, data, n, front.item);
+                    let took =
+                        machines::hand_to(grid, lanes, rules, data, n, front.item, machines::Offer::Direct);
                     if took {
                         lanes.of[t].pop_front();
                         moves.0.push(Move::Taken { from: t });
@@ -369,10 +393,10 @@ pub fn step(
         }
     }
 
-    // ---- 4, 5, 6: the machines ---------------------------------------------------------------
+    // ---- 4, 5, 6: the miners, the arms and the machines ---------------------------------------
     let order = core::mem::take(&mut lanes.order);
     machines::dig(grid, ore, lanes, rules, data, &order, seconds, &mut moves);
-    machines::deliver(grid, lanes, rules, data, &order, &mut moves);
+    machines::swing(grid, lanes, rules, data, &order, seconds, &mut moves);
     machines::craft(grid, data, &order, seconds, &mut moves);
     lanes.order = order;
 
@@ -444,6 +468,7 @@ mod tests {
         "miner :drill, seconds_per_item: 1.0, digs: :ore\n",
         "chest :crate, capacity: 4\n",
         "ore :patch, per_tile: 10\n",
+        "inserter :arm, seconds_per_item: 1.0\n",
     );
 
     /// The three item numbers the file above declares, in the order it declares them.
@@ -478,6 +503,28 @@ mod tests {
     /// One sixtieth of a second, which is the frame the game steps by.
     const FRAME: f32 = 1.0 / 60.0;
 
+    /// **A mind that never misses**, in Rust: every arm that is not already swinging is told to
+    /// move. It is `ruby/inserter.rb`'s loop with the reading and the deciding taken out.
+    ///
+    /// It is here because the two halves of an inserter are tested in two places. What is tested
+    /// here is the **arm** — how long a swing takes, what it picks up, what happens when the tile
+    /// in front will not take it — and that is a fact about the factory, which is what this file
+    /// is. What the *script* does is tested by the run's own checks, where there is a VM.
+    fn drive_the_arms(grid: &mut Grid, lanes: &mut Lanes) {
+        let arms: Vec<u32> = grid
+            .built()
+            .iter()
+            .copied()
+            .filter(|&t| grid.at(t as usize).map(|b| b.what) == Some(What::Inserter))
+            .collect();
+        for t in arms {
+            let t = t as usize;
+            if grid.at(t).is_some_and(|b| !b.swinging) {
+                crate::machines::start_swing(grid, lanes, t);
+            }
+        }
+    }
+
     fn run(
         grid: &mut Grid,
         ore: &mut Ore,
@@ -488,6 +535,7 @@ mod tests {
     ) -> Moves {
         let mut all = Moves::default();
         for _ in 0..frames {
+            drive_the_arms(grid, lanes);
             all.0.extend(step(grid, ore, lanes, rules, data, FRAME).0);
         }
         all
@@ -814,13 +862,64 @@ mod tests {
     // F2: the machines
     // ------------------------------------------------------------------------------------------
 
-    /// **A furnace turns ore into a plate, in the time the recipe says.**
+    /// **A furnace turns ore into a plate, in the time the recipe and the two arms say.**
     ///
-    /// The belt feeds it, the furnace takes the ore in, works for `time / speed` and puts a plate
-    /// on the belt in front of it, which carries it to the chest. The time is checked as a number
-    /// of frames rather than as a wall clock: the whole factory is a function of `seconds`.
+    /// The belt carries the ore up to an inserter, which lifts it into the furnace; the furnace
+    /// works for `time / speed`; a second inserter lifts the plate out onto the belt, which
+    /// carries it to the chest. **Both arms are new at F3** — before it, the belt fed the machine
+    /// and the machine pushed its plate out, and the line needed no script at all.
+    ///
+    /// The time is checked as a number of frames rather than as a wall clock: the whole factory
+    /// is a function of `seconds`.
     #[test]
     fn a_furnace_makes_what_the_recipe_says_in_the_time_it_says() {
+        let (rules, data) = world();
+        let tiles = 10;
+        let mut grid = Grid::new(tiles);
+        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut lanes = Lanes::for_map(tiles);
+        let feed = grid.index(UVec2::new(1, 1));
+        let arm_in = grid.index(UVec2::new(2, 1));
+        let furnace = grid.index(UVec2::new(3, 1));
+        let arm_out = grid.index(UVec2::new(4, 1));
+        let away = grid.index(UVec2::new(5, 1));
+        let chest = grid.index(UVec2::new(6, 1));
+        grid.place(feed, Building::new(What::Belt, Dir::East));
+        grid.place(arm_in, Building::new(What::Inserter, Dir::East));
+        let kind = data.machine("furnace").expect("declared");
+        grid.place(furnace, Building::new(What::Machine(kind), Dir::East));
+        grid.place(arm_out, Building::new(What::Inserter, Dir::East));
+        grid.place(away, Building::new(What::Belt, Dir::East));
+        grid.place(chest, Building::new(What::Chest, Dir::East));
+        lanes.of[feed].push_back(a_rock(0));
+
+        // a swing in, a craft, a swing out, and one tile of belt into the chest
+        let recipe = &data.recipes[0];
+        let seconds = rules.swing_seconds
+            + recipe.time / data.machines[kind as usize].speed
+            + rules.swing_seconds
+            + 1.0 / rules.belt_tiles_per_second;
+        let moves = run(
+            &mut grid,
+            &mut o,
+            &mut lanes,
+            &rules,
+            &data,
+            (seconds / FRAME).ceil() as u32 + 8,
+        );
+        assert_eq!(moves.crafted(), 1, "one craft, and not two: {:?}", moves.0);
+        assert_eq!(inside(&grid, chest).of(PLATE), 1, "a plate came out of it");
+        assert_eq!(inside(&grid, chest).of(ORE), 0, "and the ore went in, not through");
+        assert_eq!(lanes.count(), 0, "nothing is left on the belts");
+    }
+
+    /// **Without an inserter the line does not join up**, which is the whole of what F3 changed:
+    /// a belt running into a machine jams, and the machine never sees the ore.
+    ///
+    /// It is the same little factory as above with the two arms left out, run for long enough
+    /// that a factory which was going to work would have.
+    #[test]
+    fn a_belt_running_into_a_machine_jams_because_nothing_goes_in_but_through_an_arm() {
         let (rules, data) = world();
         let tiles = 8;
         let mut grid = Grid::new(tiles);
@@ -837,23 +936,89 @@ mod tests {
         grid.place(chest, Building::new(What::Chest, Dir::East));
         lanes.of[feed].push_back(a_rock(0));
 
-        // one tile of belt at two tiles a second, then a craft of one second, then two tiles
-        let recipe = &data.recipes[0];
-        let seconds = 1.0 / rules.belt_tiles_per_second
-            + recipe.time / data.machines[kind as usize].speed
-            + 2.0 / rules.belt_tiles_per_second;
-        let moves = run(
-            &mut grid,
-            &mut o,
-            &mut lanes,
-            &rules,
-            &data,
-            (seconds / FRAME).ceil() as u32 + 4,
-        );
-        assert_eq!(moves.crafted(), 1, "one craft, and not two: {:?}", moves.0);
-        assert_eq!(inside(&grid, chest).of(PLATE), 1, "a plate came out of it");
-        assert_eq!(inside(&grid, chest).of(ORE), 0, "and the ore went in, not through");
-        assert_eq!(lanes.count(), 0, "nothing is left on the belts");
+        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
+        assert_eq!(moves.crafted(), 0, "nothing was made: {:?}", moves.0);
+        assert!(grid.at(furnace).unwrap().held.is_empty(), "and nothing went in");
+        assert_eq!(lanes.of[feed].len(), 1, "the ore is still on the belt");
+        assert_eq!(lanes.of[feed][0].along, TILE, "waiting at the end of its tile");
+        assert_eq!(inside(&grid, chest).count(), 0);
+    }
+
+    /// **One arm, one item a swing**, and the item is in the hand for the whole of it.
+    ///
+    /// This is the arm on its own: a belt behind, a chest in front, and nothing to decide. What
+    /// is measured is the three things a swing is — it takes a swing's worth of seconds, the item
+    /// is out of the belt and in the hand while it crosses, and it is in the chest at the end.
+    #[test]
+    fn an_arm_carries_one_thing_a_swing_and_holds_it_on_the_way() {
+        let (rules, data) = world();
+        let tiles = 6;
+        let mut grid = Grid::new(tiles);
+        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut lanes = Lanes::for_map(tiles);
+        let feed = grid.index(UVec2::new(1, 1));
+        let arm = grid.index(UVec2::new(2, 1));
+        let chest = grid.index(UVec2::new(3, 1));
+        grid.place(feed, Building::new(What::Belt, Dir::East));
+        grid.place(arm, Building::new(What::Inserter, Dir::East));
+        grid.place(chest, Building::new(What::Chest, Dir::East));
+        for i in 0..2 {
+            lanes.of[feed].push_back(a_rock(-i * rules.spacing()));
+        }
+
+        // one frame is enough to start the swing and not to finish it
+        drive_the_arms(&mut grid, &mut lanes);
+        step(&mut grid, &mut o, &mut lanes, &rules, &data, FRAME);
+        assert_eq!(grid.at(arm).unwrap().held.of(ORE), 1, "the ore is in the hand");
+        assert!(grid.at(arm).unwrap().swinging, "and the arm is on its way");
+        assert_eq!(lanes.of[feed].len(), 1, "and it is off the belt: it is not in two places");
+        assert_eq!(inside(&grid, chest).count(), 0, "and not in the chest yet");
+
+        // the rest of the swing, and a frame's grace either side of it
+        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, (rules.swing_seconds / FRAME).ceil() as u32);
+        assert_eq!(inside(&grid, chest).of(ORE), 1, "one thing arrived, in one swing");
+        assert_eq!(moves.swung().filter(|&(_, placed)| placed).count(), 1, "{:?}", moves.0);
+        // and the second one follows a swing behind it
+        run(&mut grid, &mut o, &mut lanes, &rules, &data, (rules.swing_seconds / FRAME).ceil() as u32 + 2);
+        assert_eq!(inside(&grid, chest).of(ORE), 2);
+        assert_eq!(lanes.count(), 0, "the belt is empty");
+    }
+
+    /// **An arm that carried something over and found nowhere to put it keeps it**, and puts it
+    /// down the moment there is room — the miner's "blocked is not lost", kept by the hand.
+    #[test]
+    fn an_arm_refused_keeps_what_it_picked_up() {
+        let (base, data) = world();
+        // a chest that is full before the arm ever reaches it
+        let rules = Rules { chest_capacity: 1, ..base };
+        let tiles = 6;
+        let mut grid = Grid::new(tiles);
+        let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
+        let mut lanes = Lanes::for_map(tiles);
+        let feed = grid.index(UVec2::new(1, 1));
+        let arm = grid.index(UVec2::new(2, 1));
+        let chest = grid.index(UVec2::new(3, 1));
+        grid.place(feed, Building::new(What::Belt, Dir::East));
+        grid.place(arm, Building::new(What::Inserter, Dir::East));
+        grid.place(chest, Building::new(What::Chest, Dir::East));
+        if let Some(full) = grid.at_mut(chest) {
+            full.held.add(PLATE, 1);
+        }
+        lanes.of[feed].push_back(a_rock(0));
+
+        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 300);
+        assert!(moves.swung().any(|(at, placed)| at == arm && !placed), "a swing was refused");
+        assert_eq!(grid.at(arm).unwrap().held.of(ORE), 1, "and the hand still has it");
+        assert_eq!(lanes.count(), 0, "it is not on the belt either: nothing was made or lost");
+        assert_eq!(inside(&grid, chest).of(ORE), 0);
+
+        // room, and it goes
+        if let Some(emptied) = grid.at_mut(chest) {
+            emptied.held.take(PLATE, 1);
+        }
+        run(&mut grid, &mut o, &mut lanes, &rules, &data, (rules.swing_seconds / FRAME).ceil() as u32 + 2);
+        assert_eq!(inside(&grid, chest).of(ORE), 1, "the wait was not lost");
+        assert!(grid.at(arm).unwrap().held.is_empty());
     }
 
     /// **A furnace refuses what no recipe of its kind wants**, and the belt jams rather than the
@@ -878,11 +1043,12 @@ mod tests {
         assert!(grid.at(furnace).unwrap().held.is_empty(), "and the furnace took nothing");
     }
 
-    /// **A machine of four tiles is fed through any of them, and puts what it makes outside.**
+    /// **A machine of four tiles is reached through any of them, either way round.**
     ///
-    /// This is the whole of what covering several tiles means: a belt running into the far corner
-    /// of a 2 by 2 machine is running into the machine, and what it makes comes out one step the
-    /// way it faces from the corner it was built on.
+    /// This is the whole of what covering several tiles means: an arm reaching into the far
+    /// corner of a 2 by 2 machine is reaching into the machine, and so is one reaching *out* of
+    /// another corner. Nothing about which way the machine faces comes into it — since F3 a
+    /// machine's direction says nothing at all (`crate::data::Data::footprint`).
     #[test]
     fn a_machine_of_four_tiles_is_fed_through_any_of_them() {
         let (rules, data) = world();
@@ -898,19 +1064,23 @@ mod tests {
             let covered = grid.index(tile);
             grid.place(covered, Building::new(What::Covered { origin: at as u32 }, Dir::East));
         }
-        // a belt running east into the machine's *upper* row, which is not the origin's row
-        let feed = grid.index(UVec2::new(2, 4));
+        // a belt running east into an arm that reaches into the machine's *upper* row, which is
+        // not the origin's row — and an arm on the other side reaching out of a covered tile
+        let feed = grid.index(UVec2::new(1, 4));
+        let arm_in = grid.index(UVec2::new(2, 4));
         grid.place(feed, Building::new(What::Belt, Dir::East));
-        // and the tile the output goes to: one east of the footprint, in the origin's row
-        let out = grid.index(UVec2::new(5, 3));
+        grid.place(arm_in, Building::new(What::Inserter, Dir::East));
+        let arm_out = grid.index(UVec2::new(5, 4));
+        let out = grid.index(UVec2::new(6, 4));
+        grid.place(arm_out, Building::new(What::Inserter, Dir::East));
         grid.place(out, Building::new(What::Chest, Dir::East));
         for i in 0..2 {
             lanes.of[feed].push_back(OnBelt { along: -i * rules.spacing(), item: PLATE });
         }
 
-        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 300);
+        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
         assert_eq!(moves.crafted(), 1, "two plates make one gear: {:?}", moves.0);
-        assert_eq!(inside(&grid, out).of(GEAR), 1, "and it came out at the tile it faces");
+        assert_eq!(inside(&grid, out).of(GEAR), 1, "and an arm took it out of a covered tile");
         assert_eq!(lanes.count(), 0, "both plates went in through the covered tile");
     }
 
@@ -924,8 +1094,10 @@ mod tests {
         let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
         let mut lanes = Lanes::for_map(tiles);
         let feed = grid.index(UVec2::new(1, 1));
-        let furnace = grid.index(UVec2::new(2, 1));
+        let arm_in = grid.index(UVec2::new(2, 1));
+        let furnace = grid.index(UVec2::new(3, 1));
         grid.place(feed, Building::new(What::Belt, Dir::East));
+        grid.place(arm_in, Building::new(What::Inserter, Dir::East));
         let kind = data.machine("furnace").expect("declared");
         grid.place(furnace, Building::new(What::Machine(kind), Dir::East));
         for i in 0..3 {
@@ -937,16 +1109,26 @@ mod tests {
         let held = grid.at(furnace).unwrap();
         assert_eq!(held.made.of(PLATE), 1, "what it made is waiting");
         assert_eq!(held.held.of(ORE), 1, "and one craft's worth of ore is waiting behind it");
-        assert_eq!(lanes.of[feed].len(), 1, "the third is jammed on the belt");
+        // the third ore is either still on the belt or in the arm's hand, which has nowhere to
+        // put it: the furnace is holding one craft's worth already
+        assert_eq!(
+            lanes.of[feed].len() + grid.at(arm_in).unwrap().held.count() as usize,
+            1,
+            "the third is waiting: {:?}",
+            lanes.of[feed]
+        );
 
-        // somewhere to put it, and it goes — and then the next craft runs
-        let out = grid.index(UVec2::new(3, 1));
+        // an arm out of it and somewhere to put what it carries, and it goes — and then the next
+        // craft runs
+        let arm_out = grid.index(UVec2::new(4, 1));
+        let out = grid.index(UVec2::new(5, 1));
+        grid.place(arm_out, Building::new(What::Inserter, Dir::East));
         grid.place(out, Building::new(What::Chest, Dir::East));
-        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 300);
+        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 900);
         assert_eq!(
             inside(&grid, out).of(PLATE),
             3,
-            "the one it was holding, the one it had the ore for, and the one that was jammed"
+            "the one it was holding, the one it had the ore for, and the one that was waiting"
         );
         assert_eq!(moves.crafted(), 2, "two more crafts, not three: {:?}", moves.0);
         assert_eq!(lanes.count(), 0, "and the belt emptied");
@@ -995,11 +1177,12 @@ mod tests {
 
     /// **Minutes of a whole factory, and not one item made or lost in any of them.**
     ///
-    /// Two miners on two patches, two belts merging into one, a furnace that can only take half
-    /// of what they bring up — so the belts behind it are jammed for the whole run — a belt out of
-    /// it into an assembler two tiles by two, and a chest. Every kind of thing one step of the
-    /// factory does is in it at once: carrying, merging, jamming, digging into a jam, taking in,
-    /// crafting, delivering.
+    /// Two miners on two patches, two belts merging into one, **four inserters**, a furnace that
+    /// can only take half of what they bring up — so the belts behind it are jammed for the whole
+    /// run — an assembler two tiles by two, and a chest. Every kind of thing one step of the
+    /// factory does is in it at once: carrying, merging, jamming, digging into a jam, lifting in,
+    /// crafting, lifting out, and **an arm holding something it has nowhere to put**, which is
+    /// the state F3 added and the one an equality is the only honest test of.
     ///
     /// **What is asserted is an equality and not a tolerance.** Before F2a the positions were
     /// floats and the count of items was still whole, so this was already exact; what is new is
@@ -1013,7 +1196,7 @@ mod tests {
         // a chest nothing fills, so that the line keeps flowing for the whole run rather than
         // backing up into a stopped factory after the first few seconds
         let rules = Rules { chest_capacity: 10_000, ..base };
-        let tiles = 14;
+        let tiles = 16;
         let mut grid = Grid::new(tiles);
         let mut lanes = Lanes::for_map(tiles);
         let mut o = Ore { left: vec![0; (tiles * tiles) as usize], changed: false };
@@ -1034,20 +1217,26 @@ mod tests {
         put(&mut grid, 4, 4, What::Belt, Dir::South);
         put(&mut grid, 4, 3, What::Belt, Dir::East);
         put(&mut grid, 5, 3, What::Belt, Dir::East);
+        // **four arms, because a machine has no other door** (F3)
+        put(&mut grid, 6, 3, What::Inserter, Dir::East);
         let furnace = data.machine("furnace").expect("declared");
-        put(&mut grid, 6, 3, What::Machine(furnace), Dir::East);
-        put(&mut grid, 7, 3, What::Belt, Dir::East);
-        // the assembler covers four tiles and puts its gears out at (10, 3)
+        put(&mut grid, 7, 3, What::Machine(furnace), Dir::East);
+        put(&mut grid, 8, 3, What::Inserter, Dir::East);
+        put(&mut grid, 9, 3, What::Belt, Dir::East);
+        put(&mut grid, 10, 3, What::Inserter, Dir::East);
+        // the assembler covers four tiles, and the arm at (13, 3) reaches into a covered one
         let works = data.machine("works").expect("declared");
-        put(&mut grid, 8, 3, What::Machine(works), Dir::East);
-        for (x, y) in [(9, 3), (8, 4), (9, 4)] {
-            put(&mut grid, x, y, What::Covered { origin: at(8, 3) as u32 }, Dir::East);
+        put(&mut grid, 11, 3, What::Machine(works), Dir::East);
+        for (x, y) in [(12, 3), (11, 4), (12, 4)] {
+            put(&mut grid, x, y, What::Covered { origin: at(11, 3) as u32 }, Dir::East);
         }
-        put(&mut grid, 10, 3, What::Chest, Dir::East);
+        put(&mut grid, 13, 3, What::Inserter, Dir::East);
+        put(&mut grid, 14, 3, What::Chest, Dir::East);
 
         let ore_at_the_start = o.total();
         // five minutes of the game's own time
         for frame in 0..(60 * 5 * 60) {
+            drive_the_arms(&mut grid, &mut lanes);
             step(&mut grid, &mut o, &mut lanes, &rules, &data, FRAME);
             // asked every second of it, so that a step that lost something says which one
             if frame % 60 == 0 {
@@ -1061,13 +1250,13 @@ mod tests {
         }
 
         // and the run was a factory and not a stalled one
-        let chest = inside(&grid, at(10, 3));
-        assert!(chest.of(GEAR) > 100, "the chest filled with gears: {chest:?}");
+        let chest = inside(&grid, at(14, 3));
+        assert!(chest.of(GEAR) > 50, "the chest filled with gears: {chest:?}");
         assert_eq!(chest.of(ORE), 0, "and nothing went through unsmelted");
         assert!(lanes.count() > 0, "the belts behind the furnace are jammed, as they should be");
         let dug = (ore_at_the_start - o.total()) as u32;
         assert_eq!(dug, everywhere_else(&grid, &lanes, &data), "and at the end of it too");
-        assert!(dug > 300, "five minutes of two miners past a furnace that takes one a second");
+        assert!(dug > 200, "five minutes of two miners past an arm that lifts one a second");
     }
 
     /// A machine's speed divides the recipe's time, and the `works` in the test data runs at 2.

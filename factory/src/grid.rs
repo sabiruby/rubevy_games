@@ -93,6 +93,14 @@ pub enum What {
     ///
     /// [`Rules::chest_capacity`]: crate::belts::Rules::chest_capacity
     Chest,
+    /// **Takes one thing from the tile behind it and puts it in the tile in front** — and does it
+    /// when a line of Ruby says so, which is what this whole game is for ([`crate::inserters`]).
+    ///
+    /// It is the only building here with a mind. The arm is Rust: how long a swing takes is
+    /// `inserter :arm, seconds_per_item:` in `ruby/data.rb`, what it is carrying is
+    /// [`Building::held`] and how far through the swing it is is [`Building::work`], exactly as a
+    /// miner's dig is.
+    Inserter,
     /// A machine of the kind `data.rb` declared, **on its origin tile** — the bottom-left of its
     /// footprint, which is the tile that was clicked. Everything that happens to a machine
     /// happens here ([`crate::machines`]).
@@ -109,6 +117,7 @@ impl What {
             What::Belt => "belt",
             What::Miner => "miner",
             What::Chest => "chest",
+            What::Inserter => "inserter",
             What::Machine(_) => "machine",
             What::Covered { .. } => "part of a machine",
         }
@@ -128,15 +137,23 @@ pub struct Building {
     /// direction it was built with so that turning it is not a special case.
     pub dir: Dir,
     /// A miner: how far through the current dig it is, in seconds. A machine: how far through the
-    /// craft in [`Building::making`]. A belt and a chest: unused.
+    /// craft in [`Building::making`]. An inserter: how far through the swing in
+    /// [`Building::swinging`]. A belt and a chest: unused.
     pub work: f32,
-    /// A chest: what is in it. A machine: the parts it has taken in and not used yet.
+    /// A chest: what is in it. A machine: the parts it has taken in and not used yet. An
+    /// inserter: **what is in its hand**, which is one thing or nothing.
     pub held: Stock,
     /// A machine: what it has made and not got rid of yet. It is what stops it starting another
     /// craft, which is the same rule a miner keeps with a finished dig.
     pub made: Stock,
     /// A machine: which recipe it is part way through, if any.
     pub making: Option<crate::data::RecipeId>,
+    /// **An inserter: whether its arm is on its way across.**
+    ///
+    /// It is a field of its own and not "is the hand full", because those are different states: a
+    /// hand that is full with no swing under way is an arm that carried something over and was
+    /// refused, and is holding it until it is told to try again. Nothing else uses it.
+    pub swinging: bool,
 }
 
 impl Building {
@@ -148,6 +165,7 @@ impl Building {
             held: Stock::default(),
             made: Stock::default(),
             making: None,
+            swinging: false,
         }
     }
 }
@@ -304,12 +322,13 @@ impl Ore {
 /// **Whether a building pushes what it has into the tile it faces**, which is what makes the tile
 /// in front of it a corner rather than a straight.
 ///
-/// A machine does, and a machine of more than one tile does it from a tile that is not the one
-/// its neighbour is next to ([`crate::data::Data::output_of`]), so for a big machine this answers
-/// about the origin only and the belt beside a covered tile is drawn as a straight. That is the
-/// picture it wants anyway; nothing about where the items really go is decided here.
+/// Two of the five do: a belt, and a miner, which are the two things in the game that hand
+/// something on by themselves. **A machine did until F3** and does not now — nothing comes out of
+/// a machine but through an inserter's hand ([`crate::inserters`]) — and an inserter never did:
+/// it *drops* something onto the belt in front of it rather than joining it, so a belt with an
+/// inserter beside it is the straight it was, and what is put on it appears at its entry edge.
 fn feeds(building: &Building) -> bool {
-    matches!(building.what, What::Belt | What::Miner | What::Machine(_))
+    matches!(building.what, What::Belt | What::Miner)
 }
 
 /// **Which way an item arrives at each tile**, which is not the same as which way the tile faces:
