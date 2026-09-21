@@ -27,9 +27,10 @@ how anyone who wants more of it finds the pack.
 The pack as it came is in `factory/art/`, with its own licence text beside it as
 `LICENSE-kenney-tiny-factory.txt` and its `Tilesheet.txt` as `Tilesheet-tiny-factory.txt`.
 **What the game loads is one file built from it** by `tools/factory-tileset.py` — a vertical
-strip of the same 132 tiles, in the pack's own order and numbering, with blank tiles on the end
-(the script's own comment says why: a browser will not bind an array texture whose square layers
-number a multiple of six). The strip is `factory/assets/tiles/factory-tiles.png`, with a copy of
+strip of the same 132 tiles, in the pack's own order and numbering, and the drawn ones after
+them, with blank tiles on the end **when the count needs them** (the script's own comment says
+why: a browser will not bind an array texture whose square layers number a multiple of six; at
+142 layers it needs none). The strip is `factory/assets/tiles/factory-tiles.png`, with a copy of
 the licence text beside it, because that is the file that redistributes the art.
 
 | tile of the pack | used as |
@@ -38,7 +39,9 @@ the licence text beside it, because that is the file that redistributes the art.
 | 3 | the plain ground, which F0 lays as a border |
 | 110 | a machine front of orange blocks between grey posts, which F1 places as **the miner** (the pack names none of its tiles) |
 | 85 | a wooden crate, which F1 places as **the chest** |
-| the rest | in the sheet, not used yet: the machines, the pipes and the gear that later stages will place. `docs/factory.md` has the numbered table |
+| 109 | a copper arch, which F2's `ruby/data.rb` names as **the furnace**'s picture |
+| 99 | the green cabinet, **stretched** to two tiles by two for the assembler (below) |
+| the rest | in the sheet, not used yet: the other machine fronts, the pipes and the gear that later stages will place. `docs/factory.md` has the numbered table |
 
 Tiles **132–135** of the same sheet are not Kenney's: they are the conveyor straight and corner,
 seen from straight above, drawn by `tools/factory-belts.py` in the pack's own palette and
@@ -57,10 +60,19 @@ grey ramp onto Tiny Factory's orange and sets them on its ground tile. They are 
 `Tilesheet-tiny-farm.txt` beside it, and the licence text is beside the sheet in
 `factory/assets/tiles/` as well, because that is the file that redistributes the art.
 
-**The item on a belt** (`factory/assets/items/ore.png`, 8 × 8) is not Kenney's either: two items
-have to sit on a 16 px tile without touching, and a 16 px rock does not survive being halved, so
-`tools/factory-ore.py` draws it pixel by pixel in the same four colours the ground ore was
-recoloured into. **MIT, the same as the rest of this repository.**
+Tiles **138–141** are the **assembler**, two tiles by two. The pack has no machine bigger than one
+tile — 75, 87, 99 and 111 are the same cabinet in four colours, each complete with its own edges —
+so `tools/factory-machine.py` **nine-slices** tile 99: the four pixels at each edge kept as they
+are and the band between them blown up by exactly three. **Every pixel of it is a pixel of
+Kenney's** and it uses no colour the tile did not, which is a stronger promise than "the same
+palette"; the arrangement is this repository's, **MIT** (`LICENSE`).
+
+**The items on the belts** (`factory/assets/items/items.png`, three 8 × 8 icons in a strip) are
+not Kenney's: two items have to sit on a 16 px tile without touching, and a 16 px rock does not
+survive being halved. `tools/factory-items.py` draws all three pixel by pixel — the ore nugget in
+the four oranges the ground ore was recoloured into (F1 drew it and it has not changed), the
+plate and the gear in Tiny Factory's own greys. The gear is the pack's tile 114 read by eye and
+redrawn at half the size. **MIT, the same as the rest of this repository.**
 
 CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is how
 anyone who wants more of it finds the pack.

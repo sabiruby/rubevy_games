@@ -471,14 +471,20 @@ fn read_the_data_stage(
             return;
         }
     };
+    // **How long the data stage takes is the page's problem**, so it is measured rather than
+    // guessed: in a browser the compiler is a wasm module called synchronously and the whole of
+    // this happens before the first frame is drawn, so whatever it costs is time the page is
+    // blank for (plan §3.2). `bevy::platform::time::Instant` is the clock that exists there.
+    let started = bevy::platform::time::Instant::now();
     match data::read_the_declarations(&mut world.vm, DATA_FILE, &source, platform::compile) {
         Ok((tables, rules)) => {
             info!(
-                "{DATA_FILE}: {} items, {} recipes, {} machines; a full belt carries {} items a second",
+                "{DATA_FILE}: {} items, {} recipes, {} machines; a full belt carries {} items a second ({:.1} ms to compile and run)",
                 tables.items.len(),
                 tables.recipes.len(),
                 tables.machines.len(),
                 rules.belt_items_per_second(),
+                started.elapsed().as_secs_f32() * 1e3,
             );
             // and the other direction, for F3's inserters and F4's control stage
             data::expose_the_tables(&mut world.vm, &tables);
@@ -716,14 +722,23 @@ fn spread(samples: &mut [f32]) -> (f32, f32) {
     (at(0.5), at(0.95))
 }
 
+/// `--shot FILE SECONDS`: the picture, and then the end of the run.
+///
+/// **A run that is also being checked does not end until the checks have finished.** F1 made the
+/// checks wait for the camera (they used to end the run before the picture's moment came); F2
+/// found the other half of the same thing — its checks take thirteen seconds of the game's own
+/// time and the camera's moment is at eight, so the picture was ending the run with four of the
+/// lines unsaid. Whichever of the two is still working keeps the run alive.
 fn take_shot(
     mut commands: Commands,
     time: Res<Time>,
+    test: Option<Res<SelfTest>>,
     mut shot: ResMut<Shot>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if shot.taken {
-        if time.elapsed_secs() > shot.after + 1.0 {
+        let checks_still_going = test.is_some_and(|t| !t.done);
+        if time.elapsed_secs() > shot.after + 1.0 && !checks_still_going {
             exit.write(AppExit::Success);
         }
         return;
