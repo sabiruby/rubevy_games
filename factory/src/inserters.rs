@@ -375,10 +375,22 @@ fn compile(
     // and `Program::new` counting it off the text is the end of it.
     let front = format!("{}{prelude}", names_and_numbers(data, rules, stagger));
     let program = Program::new(&front, SCRIPT_FILE, body, "run_inserter");
-    match platform::compile(&program.source, SCRIPT_FILE) {
-        Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines)),
-        Err(why) => Err(in_the_authors_lines(&why, program.prelude_lines, PRELUDE_FILE)),
-    }
+    // **What this costs is the page's business**, as it is for the other two compiles a run does
+    // (`main::read_the_data_stage`, `control::compile`): in a browser the compiler is a second
+    // wasm module called synchronously from inside the frame. This is the dearest of the three —
+    // the prelude is the longest of the three front matters — and it is the only one that does
+    // not happen at start-up, because an arm's program is compiled when the first arm is built.
+    // It is said once per *distinct text* (`program_of` keeps what it made), so a factory of
+    // three thousand arms on one script compiles once.
+    let started = bevy::platform::time::Instant::now();
+    let bytes = platform::compile(&program.source, SCRIPT_FILE)
+        .map_err(|why| in_the_authors_lines(&why, program.prelude_lines, PRELUDE_FILE))?;
+    info!(
+        "{SCRIPT_FILE}: {} lines compiled in {:.1} ms",
+        program.source.lines().count(),
+        started.elapsed().as_secs_f32() * 1e3,
+    );
+    Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines))
 }
 
 /// **Whether a text would compile**, which is what the editor asks before it writes anything
