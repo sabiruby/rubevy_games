@@ -45,8 +45,10 @@ web/build.sh factory                                           # then …/factor
 is built by name. Its run is a `docker/run.sh` like the other two, with no edit to that script:
 the environment it hands over is found by the game's own name in capitals.
 
-A run of a `docker/run.sh` is on a TTY, so **its lines end in CR** and `tools/fixedlines.sh` does
-not strip it. Put the log through `tr -d '\r'` before comparing, or every line looks changed.
+A run of a `docker/run.sh` is on a TTY, so **its lines end in CR**. Until S9 the reader was told
+here to put such a log through `tr -d '\r'` before comparing, or every line looked changed —
+a note standing in for a mend, in the one comparison this file exists to make. `tools/fixedlines.sh`
+drops the CR itself now, and a log that never had one comes out of it exactly as it did before.
 
 A window needs a GPU, which this machine does not have outside the container
 (`docs/wsl-gpu.md`). A browser run is driven with playwright-core out of the neighbouring

@@ -47,9 +47,10 @@ const HIGHLIGHT_BRIDGE: &str = "gardenHighlight";
 
 /// What the Save button says, since what it does differs; and a clock for the dice.
 pub use games_shell::platform::{clock_seed, SAVE_LABEL};
-/// Whether the window's checks end the run when they are done — `true` on a PC, `false` in a
-/// page, which has nothing to exit to (`docs/web.md`, and the note on the constant).
-pub use games_shell::checks::CHECKS_EXIT_WHEN_DONE;
+/// Whether the window's checks end the run when they are done — `false` in a page, which has
+/// nothing to exit to (`docs/web.md`), and on a PC `false` as well when the same command line
+/// asked for a `--shot` the picture of which has not been taken yet (S9).
+pub use games_shell::checks::checks_end_the_run;
 
 /// Where a saved garden goes (G3): a file in the directory the game was started from, which is
 /// the workspace root when it is `cargo run`; `--save PATH` overrides it. In a browser there are

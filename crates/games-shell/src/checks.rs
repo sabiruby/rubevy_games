@@ -68,8 +68,11 @@ fn query_name(env_name: &str) -> String {
     env_name.split_once('_').map(|(_, rest)| rest).unwrap_or(env_name).to_ascii_lowercase()
 }
 
-/// Whether the checks end the run when they are done. On a PC they do: they were asked for on a
-/// command line and the shell wants its prompt back.
+/// Whether this **platform** ends a run when the checks are done. On a PC it does: they were
+/// asked for on a command line and the shell wants its prompt back.
+///
+/// It says what the platform can do, not what this run should do — [`checks_end_the_run`] is the
+/// one to ask, and it is this and one thing more.
 #[cfg(not(target_arch = "wasm32"))]
 pub const CHECKS_EXIT_WHEN_DONE: bool = true;
 
@@ -83,9 +86,60 @@ pub const CHECKS_EXIT_WHEN_DONE: bool = true;
 #[cfg(target_arch = "wasm32")]
 pub const CHECKS_EXIT_WHEN_DONE: bool = false;
 
+/// **Whether the checks are the last thing this run was asked for** (S9) — which is
+/// [`CHECKS_EXIT_WHEN_DONE`] unless the same command line also asked for a picture.
+///
+/// `--shot FILE SECONDS` opens a window, waits, takes one picture and leaves. The checks end the
+/// run the moment they are done, which on a quiet PC is well before the picture's moment, so
+/// `GARDEN_SELFTEST=1 … --shot g.png 30` shut the window at about nine seconds and wrote no
+/// picture at all (`docs/worklog/2026-09-21-factory-F0.md` §10, item 4; all three games have the
+/// same shape). The way round it was to take the picture in a second run with the checks off,
+/// which is a picture of a *different* run — and the runs one wants a picture of are exactly the
+/// ones a check has something to say about.
+///
+/// So the question the checks ask before exiting is not "can this platform exit" but "is there
+/// anything else this run was told to do". There is one such thing, it is on the command line,
+/// and [`crate::args`] is already where the command line is read — so no game has to hold a flag
+/// for the shell, and the answer is the same for all three of them.
+///
+/// The picture's own system ends the run when it has the file (`take_shot` in each game), so
+/// nothing is left running: the two ends of the run hand over rather than race.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn checks_end_the_run() -> bool {
+    checks_end(&crate::args::Args::from_env())
+}
+
+/// The same question of a line that is handed over rather than read out of the process, so that
+/// the rule can be tested. `Args::from_env` is the only thing the public one adds.
+#[cfg(not(target_arch = "wasm32"))]
+fn checks_end(args: &crate::args::Args) -> bool {
+    CHECKS_EXIT_WHEN_DONE && !args.has("--shot")
+}
+
+/// A page has no command line, so there is no picture to wait for and nothing to exit to either.
+#[cfg(target_arch = "wasm32")]
+pub fn checks_end_the_run() -> bool {
+    CHECKS_EXIT_WHEN_DONE
+}
+
 #[cfg(test)]
 mod tests {
     use super::query_name;
+
+    /// **A run that was also asked for a picture is not over when the checks are** (S9). The
+    /// three games all press this one button, and the thing it turns on is a word on the
+    /// command line rather than anything a game holds.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_shot_keeps_the_run_alive_after_the_checks() {
+        use crate::args::Args;
+        assert!(super::checks_end(&Args::of(["garden"])));
+        assert!(super::checks_end(&Args::of(["garden", "--headless", "90"])));
+        assert!(!super::checks_end(&Args::of(["garden", "--shot"])));
+        assert!(!super::checks_end(&Args::of(["garden", "--shot", "g.png", "30"])));
+        // and the flag is the whole word, not a prefix of one
+        assert!(super::checks_end(&Args::of(["garden", "--shots"])));
+    }
 
     /// The two spellings of one knob are tied together by one rule, so the test is of the rule.
     #[test]

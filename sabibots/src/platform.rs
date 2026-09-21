@@ -45,9 +45,10 @@ const HIGHLIGHT_BRIDGE: &str = "sabibotsHighlight";
 
 /// What the Save button says, since what it does differs; and a clock for the dice.
 pub use games_shell::platform::{clock_seed, SAVE_LABEL};
-/// Whether the checks end the run when they are done — `true` on a PC, `false` in a page, which
-/// has nothing to exit to (`docs/web.md`, and the note on the constant).
-pub use games_shell::checks::CHECKS_EXIT_WHEN_DONE;
+/// Whether the checks end the run when they are done — `false` in a page, which has nothing to
+/// exit to (`docs/web.md`), and on a PC `false` as well when the same command line asked for a
+/// `--shot` the picture of which has not been taken yet (S9).
+pub use games_shell::checks::checks_end_the_run;
 
 /// **Where the panel's choices are kept (G6b)**: a small text file in the directory the game was
 /// started from, holding the one thing the Battle remembers — which language the guide opens in.

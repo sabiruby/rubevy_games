@@ -1645,9 +1645,10 @@ fn selftest(
             keys.release(KeyCode::KeyP);
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
-            // arena — and `AppExit` there does not end a run, it stops the canvas for good
-            // (`platform::CHECKS_EXIT_WHEN_DONE`).
-            if platform::CHECKS_EXIT_WHEN_DONE {
+            // arena — and `AppExit` there does not end a run, it stops the canvas for good. And a
+            // run that was asked for a picture as well is not over until the picture is taken
+            // (`platform::checks_end_the_run`, S9).
+            if platform::checks_end_the_run() {
                 exit.write(AppExit::Success);
             } else {
                 info!("selftest: done — the match keeps running (a page has nothing to exit to)");
