@@ -362,9 +362,13 @@ neither a pass nor a failure.
 
 **The clicks are forged** — the checks write a `WorldClick` rather than driving a mouse — so the
 building, the refusal to put a miner off the ore, and the taking away are all measured through
-the same system a mouse goes through, in a run that has no mouse. **One tile a frame**, because
-the system that answers a click reads what is in hand when it runs and not when the click was
-written; five clicks in one frame build five of the last thing.
+the same system a mouse goes through, in a run that has no mouse. **One tile a frame, and the
+checks are ordered before the system that answers a click**: that system reads what is in hand
+when *it* runs, so five clicks in one frame build five of the last thing, and a frame in which
+it ran first would read last frame's message with this frame's hand. The second of those was a
+real flake — a window run built a chest where it meant a belt, an hour after the same binary had
+run clean — and it is why the ordering is written down rather than left to the scheduler
+(`worklog/2026-09-21-factory-F2.md` §8.4a).
 
 **The waits are on the game's own numbers**, and there are three of them. F1's line is
 `mine_seconds + 4 ÷ belt_tiles_per_second` — 3.0 s with what `ruby/data.rb` says today, measured

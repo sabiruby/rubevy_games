@@ -419,8 +419,18 @@ fn main() {
     }
 
     if platform::selftest_asked() {
-        app.init_resource::<SelfTest>()
-            .add_systems(Update, selftest.before(FactorySet::Step).run_if(the_factory_is_up));
+        // **before the clicks, and that is not decoration.** The checks forge a `WorldClick` and
+        // set what is in hand in the same frame; `build::clicks` reads the hand *when it runs*.
+        // With no ordering between the two, a frame in which the click system ran first reads
+        // last frame's message with this frame's hand — and the check built a chest where it
+        // meant a belt. It never happened under `MinimalPlugins`, where the order was stable by
+        // accident, and it happened in the window, where Bevy's multi-threaded scheduler is free
+        // to pick. Measured 2026-09-21: two runs of `docker/run.sh factory release` apart, one
+        // clean and one with two FAILs (`worklog/2026-09-21-factory-F2.md` §8.4).
+        app.init_resource::<SelfTest>().add_systems(
+            Update,
+            selftest.before(build::clicks).before(FactorySet::Step).run_if(the_factory_is_up),
+        );
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
