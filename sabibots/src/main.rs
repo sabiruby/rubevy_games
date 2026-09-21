@@ -926,6 +926,7 @@ fn main() {
             turned: 0,
             widest: 0.0,
             frames: platform::handler_frames_asked().map(|n| n.max(0.0) as u32),
+            bound: None,
         })
         .init_resource::<EditChecks>()
         .add_systems(Update, handler_selftest);
@@ -1972,6 +1973,15 @@ struct HandlerTest {
     /// out from the VM's budget (`SABIBOTS_HANDLER_FRAMES=N`, `?selftest&handler_frames=N`), and
     /// `None` where it was not — which is every run but a measurement.
     frames: Option<u32>,
+    /// **[`handler_frames`] of the budget this run really gives, worked out once** and not every
+    /// frame (S9, second pass).
+    ///
+    /// `P` takes the budget off the VM (`inspect_keys`), and a bound read out of a *paused* VM
+    /// is `2 + ceil(0 / …)` = two — the structural minimum, with nothing left for a scheduler
+    /// that is busy. The first throttled page to press `P` while a hit was being watched judged
+    /// it after two frames and called it a FAIL. So the budget is read the first frame it is
+    /// anything at all, and the pause cannot shrink the wait it caused.
+    bound: Option<u32>,
 }
 
 /// A hit being watched: the robot, when it was hit, which way it faced then, the number of
@@ -1994,6 +2004,13 @@ struct WatchedHit {
     /// It is read every frame rather than once at the end, so that it is a latency and not a
     /// yes-or-no: the failing runs are the ones worth a number.
     ran_after: Option<u32>,
+    /// **whether the scripts were stopped at any moment of this hit's window** (S9, second pass)
+    /// — `P`, or the editor's checks pressing it. A VM with no budget runs no instruction, so a
+    /// handler cannot have had its turn, and this is not a robot that failed to answer; it is a
+    /// hit nothing can be measured about. It joins the three reasons a hit is already not
+    /// counted, and it is read every frame because a pause that begins *inside* the window is
+    /// the case that bites.
+    paused: bool,
     /// the task its brain was running then. A different one (or none) when the window is up
     /// means the game took its brain away and started it over inside the window, which is not a
     /// robot that failed to swerve.
@@ -2127,6 +2144,12 @@ fn handler_selftest(
     let Some(turn_rate) = the_match.0.as_ref().map(|m| m.turn_rate) else { return };
     let now = time.elapsed_secs();
     let frame = frames.0;
+    // **`P` is not a robot failing to answer** (S9, second pass): a VM with no budget runs
+    // nothing at all, so a window that holds a pause holds no handler either.
+    let paused = world.budget == 0;
+    if !paused && test.bound.is_none() {
+        test.bound = Some(handler_frames(world.budget));
+    }
     for watch in test.watching.iter_mut() {
         if let Ok(robot) = robots.get(watch.robot) {
             watch.peak = watch.peak.max(angle_between(watch.heading, robot.heading).abs());
@@ -2136,8 +2159,9 @@ fn handler_selftest(
                 watch.ran_after = Some(frame.wrapping_sub(watch.frame));
             }
         }
+        watch.paused |= paused;
     }
-    let bound = test.frames.unwrap_or_else(|| handler_frames(world.budget));
+    let bound = test.frames.or(test.bound).unwrap_or(HANDLER_STRUCTURAL_FRAMES);
     let mut due: Vec<WatchedHit> = Vec::new();
     test.watching.retain(|w| {
         if now - w.at < HIT_WINDOW {
@@ -2195,6 +2219,16 @@ fn handler_selftest(
             // window asked about is this check's own, and unchanged.
             else if let Some(what) = edits.over(watch.at, watch.at + window) {
                 Some(format!("the editor's checks were handing out behaviours ({what}) inside the {window:.2} s"))
+            }
+            // **Nor a hit whose window held a pause** (S9, second pass). `P` sets the VM's
+            // budget to zero, so not one instruction runs and no handler can have its turn —
+            // which is the game being stopped and not a brain being slow. Found by a throttled
+            // page: the editor's checks press `P` for two seconds, and a hit taken just before
+            // that had its whole window swallowed. Nothing new is recorded *during* a pause
+            // (`move_bullets` is in the chain `world_moves` guards), so it is only a window that
+            // begins before one.
+            else if watch.paused {
+                Some(format!("the scripts were stopped (P) inside the {window:.2} s"))
             } else {
                 None
             };
@@ -3191,6 +3225,7 @@ fn move_bullets(
                             runs: robot.handler_runs,
                             peak: 0.0,
                             ran_after: None,
+                            paused: false,
                             task: tasks.get(target).ok().map(|t| t.task()),
                         });
                     }
