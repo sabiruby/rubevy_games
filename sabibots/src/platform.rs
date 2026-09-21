@@ -45,9 +45,10 @@ const HIGHLIGHT_BRIDGE: &str = "sabibotsHighlight";
 
 /// What the Save button says, since what it does differs; and a clock for the dice.
 pub use games_shell::platform::{clock_seed, SAVE_LABEL};
-/// Whether the checks end the run when they are done — `true` on a PC, `false` in a page, which
-/// has nothing to exit to (`docs/web.md`, and the note on the constant).
-pub use games_shell::checks::CHECKS_EXIT_WHEN_DONE;
+/// Whether the checks end the run when they are done — `false` in a page, which has nothing to
+/// exit to (`docs/web.md`), and on a PC `false` as well when the same command line asked for a
+/// `--shot` the picture of which has not been taken yet (S9).
+pub use games_shell::checks::checks_end_the_run;
 
 /// **Where the panel's choices are kept (G6b)**: a small text file in the directory the game was
 /// started from, holding the one thing the Battle remembers — which language the guide opens in.
@@ -96,4 +97,15 @@ pub fn highlight(src: &str) -> Vec<u8> {
 /// them there. The query string is the environment a page has.
 pub fn selftest_asked() -> bool {
     games_shell::checks::selftest_asked("SABIBOTS_SELFTEST")
+}
+
+/// `SABIBOTS_HANDLER_FRAMES=N`, and `?selftest&handler_frames=N` in a page (S9): how many frames
+/// past its 0.3 s a hit may be given while its handler has still not run (`HANDLER_FRAMES`).
+///
+/// It is here rather than left at the derived default because the fault it is about — a page
+/// slow enough that 0.3 s holds one frame — **only shows in a browser**, and S5b-5's whole point
+/// in giving a page the knobs a shell has was that a measurement which cannot be taken where the
+/// thing happens is not a measurement. It is read only when the checks were asked for.
+pub fn handler_frames_asked() -> Option<f32> {
+    games_shell::checks::asked_number("SABIBOTS_HANDLER_FRAMES")
 }

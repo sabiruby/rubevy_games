@@ -16,6 +16,8 @@
 //! * **`F5` is taken.** It saves the garden (G3), so the editor's apply key here is
 //!   `Ctrl+Enter` and the button (`Editor::apply_key`).
 
+use std::path::Path;
+
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use rubevy::{replace_script, MrbAsset, Script, ScriptTask, ScriptWorld};
@@ -757,7 +759,8 @@ pub fn inspect_keys(
 /// Everything the panel says about a creature it can say about the rules, because none of it was
 /// ever about creatures: **what it is waiting for** is worked out from the frames alone
 /// (`rubevy_egui::inspect::why`), and the world's task waits for exactly two things — one pass
-/// of `each_frame` ends on `Rubevy.ask("frame")`, which is a `Rubevy::Proxy` ask like any other,
+/// of `each_frame` ends on `Rubevy.next_frame` (S9; the garden's own `Rubevy.ask("frame")` until
+/// then),
 /// and a timer task made by `every` is asleep. **Where it is waiting** is the innermost frame of
 /// `world.rb` itself, once the world's prelude has been taken off it (`crate::WorldPrelude`, the
 /// world's half of what a creature keeps in its `Mind`). The two numbers are `WorldMeter`'s — the
@@ -929,7 +932,7 @@ pub fn draw_hud(
             // **W3: what the rules cost, beside what the creatures cost.**
             //
             // The world's script runs exactly one pass of `each_frame` per frame (it waits on
-            // `Rubevy.ask("frame")`, and nothing else it asks costs a frame — `world_prelude.rb`),
+            // `Rubevy.next_frame`, and nothing else it asks costs a frame — `world_prelude.rb`),
             // so the instructions it ran between two frames *are* one pass of the rules. That is
             // what makes this a plainer number than the creatures' `insn/decision` column, and it
             // is the number the world VM's budget was chosen from (`crate::WorldMeter`,
@@ -1166,10 +1169,20 @@ pub struct WindowTest {
     turn: Turn,
     /// and how many frames it has been waiting for it
     waited: u32,
-    /// and how many it may wait — [`scheduler_frames`], worked out from the budget the run is
-    /// actually giving the creatures' VM (S5b-3). It is kept here rather than read in
+    /// and how many it may wait **for the VM** — [`scheduler_frames`], worked out from the budget
+    /// the run is actually giving the creatures' VM (S5b-3). It is kept here rather than read in
     /// `window_selftest`, which is at Bevy's sixteen parameters.
     frames: u32,
+    /// **and how many it may wait for egui, which is a different number for a different reason**
+    /// (S9. [`EGUI_FRAMES`]).
+    ///
+    /// S7 gave all three waits one bound, saying that the largest of the three would do and that
+    /// one number is better than three. S5b-5 showed what that costs: the author's new
+    /// `script_budget` took [`scheduler_frames`] from seven frames to three, and the egui wait —
+    /// which has nothing to do with the VM — ran out of patience in three runs of eighty-eight
+    /// (`docs/worklog/2026-09-21-checks-and-leftovers.md` §14-1). **Two reasons sharing one
+    /// number means that when one of them moves, the other breaks quietly.**
+    egui_frames: u32,
     /// **and the frames that come before the VM's, where there are any** (S5b-5).
     ///
     /// [`scheduler_frames`] counts from the moment something was asked of the VM. A step that
@@ -1215,6 +1228,13 @@ pub struct WindowTest {
     /// same place zooms` fail in four runs of eighty-eight with eight of them at once, both
     /// before S7's changes and after them (`docs/worklog/2026-09-20-window-check-fixes.md`).
     held: bool,
+    /// **where the check pointed the garden's Save, and where it really goes** (S9)
+    ///
+    /// The second is put back the moment the check has read what it wrote, so that a run that
+    /// ends between the two — or a player who presses F5 himself in that half second — cannot
+    /// find his garden in the wrong place. Empty until the step that moves it.
+    save_path: String,
+    save_was: String,
     /// **and whether the editor was in fact drawn in that frame** (S5b-5).
     ///
     /// The control step of the wheel checks shuts the editor and then turns the wheel where the
@@ -1353,6 +1373,26 @@ impl FakePointer<'_, '_> {
     }
 }
 
+/// **The save, as one system parameter** (S9) — and the fourth time this stage has had to do
+/// this, which is what a system at Bevy's limit costs.
+///
+/// `window_selftest` was at fifteen of sixteen and pressing Save wants three resources: where the
+/// save goes ([`crate::SaveFile`], which the check moves for the length of one press), the flag a
+/// key or a button leaves ([`crate::Asked`]), and what the game said about it afterwards
+/// ([`crate::SaveNote`]). The three travel as one, as [`FakePointer`], [`BothVms`] and `HudLook`
+/// already do.
+///
+/// **It presses the garden's Save and not the editor's.** The editor's Save writes
+/// `garden/ruby/*.rb`, whose destination cannot be moved; the garden's writes `SaveFile::path`,
+/// which can (`crate::platform::check_save_file`). That is the whole reason a check about F5 is
+/// possible at all.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct TheSave<'w> {
+    file: ResMut<'w, crate::SaveFile>,
+    asked: ResMut<'w, crate::Asked>,
+    note: Res<'w, crate::SaveNote>,
+}
+
 /// **The two VMs, as one system parameter** (S5b-5).
 ///
 /// `window_selftest` was at fifteen of Bevy's sixteen and the pause is about **both** VMs — `P`
@@ -1436,7 +1476,26 @@ impl WindowTest {
     /// Starts once the garden has been running for `at` seconds — long enough for every creature
     /// to have a task and for the editor to be showing one.
     pub fn after(at: f32, budgets: &crate::Budgets) -> WindowTest {
-        WindowTest { at, frames: scheduler_frames(budgets), ..WindowTest::default() }
+        WindowTest {
+            at,
+            frames: scheduler_frames(budgets),
+            egui_frames: crate::platform::egui_frames_asked()
+                .map_or(EGUI_FRAMES, |n| n.max(0.0) as u32),
+            ..WindowTest::default()
+        }
+    }
+
+    /// **How many frames this wait may take, which depends on what is being waited for** (S9).
+    ///
+    /// Three of the four [`Turn`]s are the VM's scheduler and share [`scheduler_frames`], which
+    /// is the sum their common reason gives. The fourth is bevy_egui learning where a pointer is
+    /// and has its own ([`EGUI_FRAMES`]).
+    fn bound(&self) -> u32 {
+        match self.turn {
+            Turn::EguiHasThePointer(_) => self.egui_frames,
+            Turn::TheSaveIsWritten => SAVE_FRAMES,
+            _ => self.frames,
+        }
     }
 
     /// **The frame the editor pressed Apply** — the one frame a forced birth has to land in
@@ -1509,6 +1568,30 @@ enum Turn {
     /// panel was closed. **Not the VM**; the thing being waited for is bevy_egui learning where
     /// the pointer is, which takes a frame of its own (see the two wheel checks, steps 13-17)
     EguiHasThePointer(bool),
+    /// **the garden the check asked for has been written** (S9): `Asked::save` is a flag, and
+    /// two systems read it before there is a file — `crate::save_load_keys` turns it into
+    /// `SaveNow` and `crate::save_world` writes. Neither is ordered against `window_selftest`
+    /// ([`SAVE_FRAMES`]).
+    TheSaveIsWritten,
+}
+
+impl Turn {
+    /// **What a stage direction calls this wait** (S9), so that a log of many runs can be read
+    /// for how long each *kind* of wait took. The three bounds are derived from three different
+    /// things and cannot be measured apart otherwise — which is how S5b-5's "three runs in
+    /// eighty-eight gave up" came to be a sentence about the waits in general rather than about
+    /// the one wait it was really about.
+    fn what(self) -> &'static str {
+        match self {
+            Turn::NotWaiting => "nothing",
+            Turn::RestartedBeetles => "every beetle's task to run an instruction",
+            Turn::AMeterMoved => "a meter to move",
+            Turn::TheDayIs(_) => "the applied rules to be running",
+            Turn::EguiHasThePointer(true) => "egui to take the pointer",
+            Turn::EguiHasThePointer(false) => "egui to let the pointer go",
+            Turn::TheSaveIsWritten => "the garden to be written",
+        }
+    }
 }
 
 /// **How many frames a check waits for the thing it is about before it judges anyway** (S7).
@@ -1545,12 +1628,16 @@ enum Turn {
 /// budget is 45,000 (`crate::install_world_answers`), so one frame's worth is one frame. It also
 /// covers [`Turn::TheDayIs`] (S5b-5), where the world's script **is** made rather than resumed —
 /// Apply on `world.rb` replaces it — so that one wants the same two structural frames the
-/// creatures' restarts want, and `2 + ceil(45,000 / 45,600)` is three as well. And it covers
-/// [`Turn::EguiHasThePointer`], which is not the VM at all and wants **one** frame:
-/// bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
-/// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
-/// in is the frame egui knows. This is the largest of the three, and one number is better than
-/// three.
+/// creatures' restarts want, and `2 + ceil(45,000 / 45,600)` is three as well.
+///
+/// **It does not cover [`Turn::EguiHasThePointer`] any more** (S9). S7 wrote that it did, on the
+/// ground that egui wants one frame, that this was the largest of the three, and that one number
+/// is better than three. The first two are still true and the third was wrong: when the author's
+/// `script_budget` took this sum from seven frames to three, the egui wait — which has nothing
+/// to do with the VM's budget — was the one that ran out, in three runs of eighty-eight
+/// (`docs/worklog/2026-09-21-checks-and-leftovers.md` §14-1). A bound is an argument about *what
+/// is being waited for*, so two things waited on for two reasons need two of them, and moving
+/// one must not be able to move the other. egui's is [`EGUI_FRAMES`].
 ///
 /// **S5b-3: it is worked out from the budget the run is really giving, not from a literal.** S7
 /// wrote rubevy's then-default 200,000 into the sum as a number, which was right on the day and
@@ -1600,6 +1687,52 @@ const STRUCTURAL_FRAMES: u32 = 2;
 /// `ceil(41,000 / 54,800)` are both 1, so [`scheduler_frames`] is 3 either way. The choice only
 /// shows above 45,600 of budget, which is `script_budget` in somebody's `garden.settings.txt`.
 const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
+
+/// **How many frames [`Turn::EguiHasThePointer`] may wait** (S9) — egui's own bound, from egui's
+/// own reason, which until now was the VM's ([`scheduler_frames`]).
+///
+/// What is waited for is bevy_egui learning where the pointer is. The check writes the
+/// `CursorMoved` winit would have written ([`FakePointer::point_at`]); bevy_egui reads that
+/// message in `PreUpdate` and the pass that answers `EguiWantsInput` is `EguiPrimaryContextPass`,
+/// so **the frame after the one the check wrote it in is the frame egui knows** — one frame, and
+/// it cannot be less, because the message is not read in the frame it is written.
+///
+/// **It is two, and the two are the two directions this wait has.**
+///
+/// * *Letting go* takes **one**. `wants_pointer_input` is false as soon as egui has been told
+///   the pointer is somewhere it does not want, which is the pass of the frame after the
+///   message.
+/// * *Taking* takes **two**, because the second half of the answer is a **layout**:
+///   `is_pointer_over_area` asks which layer is under a point, and the rectangles it asks are the
+///   ones the previous pass left. So the pass of frame N+1 is where egui first has the position,
+///   and frame N+2 is the first frame in which a system can read an answer that used it.
+///
+/// **Measured, in the browser, where the frames are longest** (S9): with the bound handed up to
+/// thirty (`?selftest&egui_frames=30`), two runs of the garden's page gave
+/// `waited 2 of 30 frame(s) for egui to take the pointer` and
+/// `waited 1 of 30 frame(s) for egui to let the pointer go`, both times — the derivation exactly,
+/// with nothing above it. The stage direction naming which wait it was is what makes that
+/// readable (`Turn::what`); before S9 the log said how many frames a wait took and not which
+/// wait, which is why S5b-5 could say "three runs in eighty-eight gave up" and not say of what.
+///
+/// **What it is not**: a number that moves when the VM's budget moves. That was the whole of
+/// S5b-5's finding — the egui wait had been riding on `scheduler_frames`, and when the author
+/// chose a smaller `script_budget` the egui wait quietly got shorter and three runs in
+/// eighty-eight gave up. A run may still hand another number in for a measurement
+/// (`GARDEN_EGUI_FRAMES=N`, `?selftest&egui_frames=N`).
+const EGUI_FRAMES: u32 = 2;
+
+/// **How many frames [`Turn::TheSaveIsWritten`] may wait** (S9), and it is structural: the check
+/// sets `Asked::save`, `crate::save_load_keys` turns that into `SaveNow`, and `crate::save_world`
+/// — ordered after it — writes the file. Neither is ordered against `window_selftest`, so the
+/// flag is read in this frame or the next, and the file is written in the same frame as the
+/// reading (`save_load_keys.before(save_world)`, and `save_world` is in the chain after
+/// `RubevySet::Answer`). **Two**, and it cannot be one, because the frame the flag is set in may
+/// already be past `save_load_keys`.
+///
+/// Writing is not a scheduler, so nothing here divides a budget. It is the third bound in this
+/// file and the third reason (S9's rule: a bound is an argument about what is waited for).
+const SAVE_FRAMES: u32 = 2;
 
 /// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
 /// cannot otherwise arrange, made to happen on purpose so that a check can watch it.
@@ -1657,6 +1790,8 @@ pub fn window_selftest(
     tasks: Query<&ScriptTask>,
     // 2026-09-18: the pointer and the wheel, for the last two checks
     mut pointing: FakePointer,
+    // S9: and the garden's own Save, pressed at a path of the check's own
+    mut save: TheSave,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -1690,15 +1825,26 @@ pub fn window_selftest(
                 .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now)),
             Turn::TheDayIs(want) => sky.day_length == want,
             Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
+            // **not `is_ok`** (S9): a page's `platform::forget` empties the key rather than
+            // removing it, and an empty string reads back perfectly well — so `is_ok` was
+            // answered by the check's own tidying in the very frame it pressed Save, and the
+            // check read a garden of nought bytes. What is waited for is a garden.
+            Turn::TheSaveIsWritten => {
+                platform::read(Path::new(&test.save_path)).is_ok_and(|text| !text.is_empty())
+            }
         };
         test.waited += 1;
-        if !came_round && test.waited < test.frames + test.spare {
+        if !came_round && test.waited < test.bound() + test.spare {
             return;
         }
-        // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict
+        // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict.
+        // **It names what was waited for** (S9) — without that, a log says how many frames a
+        // wait took but not which wait, and the two bounds cannot be measured apart.
         info!(
-            "selftest: waited {} frame(s) for the thing the next check is about, and it {}",
+            "selftest: waited {} of {} frame(s) for {}, and it {}",
             test.waited,
+            test.bound() + test.spare,
+            test.turn.what(),
             if came_round { "happened" } else { "did not — judging it as it stands" },
         );
         test.turn = Turn::NotWaiting;
@@ -2142,16 +2288,56 @@ pub fn window_selftest(
                 ok(!held && moved, &what);
             }
             editor.open = true;
+            // --- and F5, at a path of the check's own (S9) --------------------
+            //
+            // Last of all, and pointed somewhere else first. `save_file` was the one setting in
+            // the whole inventory that no run had ever exercised, because the window's checks
+            // deliberately left Save out: the garden's save goes to the directory the game was
+            // started from, which under `cargo run` is this repository
+            // (`docs/worklog/2026-09-21-checks-and-leftovers.md` §13). Moving the target for the
+            // length of one press is what makes the check possible, and putting it back in the
+            // very next step is what makes it safe.
+            test.save_was = save.file.path.clone();
+            test.save_path = platform::check_save_file();
+            save.file.path = test.save_path.clone();
+            // nothing of an earlier run may be mistaken for what this one wrote
+            platform::forget(Path::new(&test.save_path));
+            // the flag a key or the HUD's button leaves — the same road, not a second one
+            save.asked.save = true;
+            test.step = 18;
+            test.at = now;
+            test.turn = Turn::TheSaveIsWritten;
+        }
+        18 => {
+            // put the player's path back **before** anything is judged: a check that failed
+            // here would otherwise leave the garden's Save pointing at a temporary file
+            save.file.path = std::mem::take(&mut test.save_was);
+            let written = platform::read(Path::new(&test.save_path)).unwrap_or_default();
+            ok(
+                written.contains("\"version\""),
+                &format!(
+                    "F5 writes a garden where `save_file` says ({} bytes, version {})",
+                    written.len(),
+                    crate::SAVE_VERSION,
+                ),
+            );
+            ok(
+                !save.note.bad,
+                &format!("and the game says so rather than reporting trouble ({})", save.note.text),
+            );
+            // nothing of the check is left behind: the file goes, the page's key is emptied
+            platform::forget(Path::new(&test.save_path));
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
-            // garden — and `AppExit` there does not end a run, it stops the canvas for good
-            // (`platform::CHECKS_EXIT_WHEN_DONE`).
-            if platform::CHECKS_EXIT_WHEN_DONE {
+            // garden — and `AppExit` there does not end a run, it stops the canvas for good. And
+            // a run that was asked for a picture as well is not over until the picture is taken
+            // (`platform::checks_end_the_run`, S9).
+            if platform::checks_end_the_run() {
                 exit.write(AppExit::Success);
             } else {
                 info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
             }
-            test.step = 18;
+            test.step = 19;
         }
         _ => {}
     }

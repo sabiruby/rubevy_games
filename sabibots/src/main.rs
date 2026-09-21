@@ -273,6 +273,76 @@ pub const FLOOR_PATTERN: i32 = 3;
 /// The window the game opens. **Source unknown**.
 pub const WINDOW: [f32; 2] = [1600.0, 900.0];
 
+// ---------------------------------------------------------------------------------------------
+// **The drawing S5b-5's last sweep found** (S9, `docs/numbers.md` §2.14). They were written into
+// the bodies of `spawn_turrets`, `gray_out_downed`, `follow_turrets`, `spawn_nameplates`,
+// `follow_nameplates`, `spawn_life_bars`, `follow_life_bars` and `answer_requests`, which is why
+// S5a's net — cast over `const` declarations and over names — did not hold them. Every one of
+// them is (c): what the Battle looks like, and nothing the match is played by. **Source: unknown**
+// for all of them, and each carries whatever sentence the code already had beside it.
+// ---------------------------------------------------------------------------------------------
+
+/// The barrel sprite, in world units: not a multiple of the tank's radius the way [`HULL_SCALE`]
+/// is, which is why a match with larger tanks gets the same barrel.
+pub const TURRET_SIZE: [f32; 2] = [1.1, 2.6];
+/// Kenney draws a red barrel and a blue one; teams three and four get the blue one under these
+/// two tints. Teams one and two are drawn with no tint at all, which is not a number.
+pub const TURRET_TEAM3: [f32; 3] = [0.6, 1.0, 0.6];
+pub const TURRET_TEAM4: [f32; 3] = [1.0, 0.95, 0.6];
+
+/// A destroyed robot: the hull is Kenney's dark one dimmed a little further, and the barrel on
+/// top of it is dimmed further still, so that a wreck reads as grey whatever team it was on.
+pub const DOWNED_HULL: [f32; 3] = [0.7, 0.7, 0.7];
+pub const DOWNED_TURRET: [f32; 3] = [0.45, 0.45, 0.45];
+
+/// The text over a robot. World units are large next to pixels, so a 44 px font is drawn at a
+/// scale of about a twenty-second to stand about two units tall; the shadow behind it is black at
+/// this alpha and offset by this much, down and to the right.
+pub const NAMEPLATE_FONT: f32 = 44.0;
+pub const NAMEPLATE_SCALE: f32 = 0.045;
+pub const NAMEPLATE_SHADOW_ALPHA: f32 = 0.75;
+pub const NAMEPLATE_NUDGE: f32 = 0.12;
+/// and what colour it is when the editor is showing that robot, and when it is down. Any other
+/// robot's plate is its team's colour ([`TEAM_COLORS`]).
+pub const PLATE_SELECTED: [f32; 3] = [1.0, 1.0, 0.55];
+pub const PLATE_DOWN: [f32; 3] = [0.62, 0.62, 0.62];
+
+/// The life bar: what it is when the robot is healthy, past [`LIFE_WARN`], and past [`LIFE_LOW`],
+/// and how dark the empty part behind it is.
+pub const BAR_FULL_COLOR: [f32; 3] = [0.35, 0.8, 0.35];
+pub const BAR_WARN_COLOR: [f32; 3] = [0.9, 0.75, 0.25];
+pub const BAR_LOW_COLOR: [f32; 3] = [0.85, 0.3, 0.25];
+pub const BAR_BACK_ALPHA: f32 = 0.6;
+
+/// How large a shot is drawn, as a base and what a full-power shot adds. It is the picture only:
+/// what a shot *does* is the match's (`damage_min` / `damage_max`, `shot_fast` / `shot_slow`).
+pub const BULLET_SIZE: [f32; 2] = [0.7, 0.6];
+
+/// **What is drawn in front of what** — and the one part of the Battle's drawing that is *not* a
+/// setting (S9, classification (a)).
+///
+/// The Battle is 2D and everything is at the same place on the ground, so z is the stacking order
+/// and nothing else: the sand, the crates of the wall, the tanks, their barrels, the shots, the
+/// blasts, the life bars over them and the names on top. **The order is the invariant, not the numbers.** A player
+/// who could edit these could put the sand over the tanks, and there is no arrangement of them
+/// that is better than this one for any screen or any taste — which is the test S5b-1 set for
+/// what may be a setting and what may not.
+///
+/// The gaps are not spacing: any value that keeps the order does the same thing, and the
+/// pairs that differ by a tenth ([`BAR_BACK_Z`] and [`BAR_FILL_Z`], [`PLATE_SHADOW_Z`] and
+/// [`PLATE_Z`]) are two sprites of one thing that have to be in that order and touch nothing
+/// else. **Source of the intervals: unknown**; of the order: the picture.
+const SAND_Z: f32 = -1.0;
+const WALL_Z: f32 = 0.0;
+const HULL_Z: f32 = 1.0;
+const TURRET_Z: f32 = 1.5;
+const BULLET_Z: f32 = 2.0;
+const BLAST_Z: f32 = 3.0;
+const BAR_BACK_Z: f32 = 5.0;
+const BAR_FILL_Z: f32 = 5.1;
+const PLATE_SHADOW_Z: f32 = 6.0;
+const PLATE_Z: f32 = 6.1;
+
 /// **How the match is drawn.** Every one of these can be changed in `sabibots.settings.txt`; what
 /// cannot be changed there is how it is *fought*, which is [`MatchModel`] and belongs to the
 /// match's own Ruby.
@@ -299,6 +369,23 @@ struct Look {
     floor_pattern: i32,
     /// [`WINDOW`]
     window: [f32; 2],
+    /// **The drawing S9 moved here** ([`TURRET_SIZE`] and the rest of that block).
+    turret_size: [f32; 2],
+    turret_team3: [f32; 3],
+    turret_team4: [f32; 3],
+    downed_hull: [f32; 3],
+    downed_turret: [f32; 3],
+    nameplate_font: f32,
+    nameplate_scale: f32,
+    nameplate_shadow_alpha: f32,
+    nameplate_nudge: f32,
+    plate_selected: [f32; 3],
+    plate_down: [f32; 3],
+    bar_full_color: [f32; 3],
+    bar_warn_color: [f32; 3],
+    bar_low_color: [f32; 3],
+    bar_back_alpha: f32,
+    bullet_size: [f32; 2],
 }
 
 impl Default for Look {
@@ -316,6 +403,22 @@ impl Default for Look {
             floor_tile: FLOOR_TILE,
             floor_pattern: FLOOR_PATTERN,
             window: WINDOW,
+            turret_size: TURRET_SIZE,
+            turret_team3: TURRET_TEAM3,
+            turret_team4: TURRET_TEAM4,
+            downed_hull: DOWNED_HULL,
+            downed_turret: DOWNED_TURRET,
+            nameplate_font: NAMEPLATE_FONT,
+            nameplate_scale: NAMEPLATE_SCALE,
+            nameplate_shadow_alpha: NAMEPLATE_SHADOW_ALPHA,
+            nameplate_nudge: NAMEPLATE_NUDGE,
+            plate_selected: PLATE_SELECTED,
+            plate_down: PLATE_DOWN,
+            bar_full_color: BAR_FULL_COLOR,
+            bar_warn_color: BAR_WARN_COLOR,
+            bar_low_color: BAR_LOW_COLOR,
+            bar_back_alpha: BAR_BACK_ALPHA,
+            bullet_size: BULLET_SIZE,
         }
     }
 }
@@ -335,6 +438,13 @@ impl Look {
     /// | `look_bar_full` | [`Look::bar_full`] |
     /// | `look_floor_tile` / `look_floor_pattern` | the sand under the arena |
     /// | `window_width` / `window_height` | [`Look::window`] — read before the window is opened |
+    /// | `look_turret_width` / `look_turret_height` | [`TURRET_SIZE`] (S9) |
+    /// | `look_turret_team3_r` / `_g` / `_b`, `look_turret_team4_*` | the two tinted barrels |
+    /// | `look_downed_hull_*` / `look_downed_turret_*` | what a wreck is greyed to |
+    /// | `look_nameplate_font` / `look_nameplate_scale` / `look_nameplate_shadow_alpha` / `look_nameplate_nudge` | the text over a robot |
+    /// | `look_plate_selected_*` / `look_plate_down_*` | and what colour it is when watched, and when down |
+    /// | `look_bar_full_color_*` / `look_bar_warn_color_*` / `look_bar_low_color_*` / `look_bar_back_alpha` | the life bar |
+    /// | `look_bullet_size` / `look_bullet_size_span` | how large a shot is drawn |
     ///
     /// A key that is not there leaves the field alone, which is what makes a store written by an
     /// older build safe to read.
@@ -363,7 +473,41 @@ impl Look {
         if let Some(value) = settings.number("look_floor_pattern") {
             self.floor_pattern = value.max(1.0) as i32;
         }
+        // S9: the drawing that was written into the systems themselves. A colour is three keys
+        // and not one string, for S5b-1's reason — reading a colour out of a text file would
+        // need a parser, and three numbers need none.
+        let rgb = |prefix: &str, slot: &mut [f32; 3]| {
+            for (i, channel) in ["_r", "_g", "_b"].into_iter().enumerate() {
+                if let Some(value) = settings.number(&format!("{prefix}{channel}")) {
+                    slot[i] = value;
+                }
+            }
+        };
+        rgb("look_turret_team3", &mut self.turret_team3);
+        rgb("look_turret_team4", &mut self.turret_team4);
+        rgb("look_downed_hull", &mut self.downed_hull);
+        rgb("look_downed_turret", &mut self.downed_turret);
+        rgb("look_plate_selected", &mut self.plate_selected);
+        rgb("look_plate_down", &mut self.plate_down);
+        rgb("look_bar_full_color", &mut self.bar_full_color);
+        rgb("look_bar_warn_color", &mut self.bar_warn_color);
+        rgb("look_bar_low_color", &mut self.bar_low_color);
+        take("look_turret_width", &mut self.turret_size[0]);
+        take("look_turret_height", &mut self.turret_size[1]);
+        take("look_nameplate_font", &mut self.nameplate_font);
+        take("look_nameplate_scale", &mut self.nameplate_scale);
+        take("look_nameplate_shadow_alpha", &mut self.nameplate_shadow_alpha);
+        take("look_nameplate_nudge", &mut self.nameplate_nudge);
+        take("look_bar_back_alpha", &mut self.bar_back_alpha);
+        take("look_bullet_size", &mut self.bullet_size[0]);
+        take("look_bullet_size_span", &mut self.bullet_size[1]);
     }
+}
+
+/// A `[r, g, b]` from [`Look`] as a Bevy colour (S9), so that a system that draws with one reads
+/// it rather than spelling it.
+fn srgb(c: [f32; 3]) -> Color {
+    Color::srgb(c[0], c[1], c[2])
 }
 
 /// The teams a match can put on the field, in the order Ruby names them.
@@ -440,6 +584,7 @@ fn gray_out_downed(
     mut commands: Commands,
     server: Res<AssetServer>,
     time: Res<Time>,
+    look: Res<Look>,
     mut robots: Query<(Entity, &mut Robot, &mut Sprite), Without<Downed>>,
 ) {
     for (entity, mut robot, mut sprite) in &mut robots {
@@ -457,7 +602,7 @@ fn gray_out_downed(
         robot.turn = 0.0;
         // Kenney's dark hull, dimmed a little more: grey whatever team it was on
         sprite.image = server.load("sprites/tankBody_dark_outline.png");
-        sprite.color = Color::srgb(0.7, 0.7, 0.7);
+        sprite.color = srgb(look.downed_hull);
         commands.entity(entity).insert(Downed);
     }
 }
@@ -468,25 +613,33 @@ struct Turret {
     robot: Entity,
 }
 
-fn spawn_turrets(mut commands: Commands, server: Res<AssetServer>, robots: Query<(Entity, &Robot), Added<Robot>>) {
+fn spawn_turrets(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    look: Res<Look>,
+    robots: Query<(Entity, &Robot), Added<Robot>>,
+) {
     for (entity, robot) in &robots {
         // Kenney draws red and blue barrels; the other teams get the blue one, tinted
+        // ([`TURRET_TEAM3`]; settings since S9)
         let (image, color) = match robot.team {
             0 => ("sprites/tankRed_barrel1_outline.png", Color::WHITE),
             1 => ("sprites/tankBlue_barrel1_outline.png", Color::WHITE),
-            2 => ("sprites/tankBlue_barrel1_outline.png", Color::srgb(0.6, 1.0, 0.6)),
-            _ => ("sprites/tankBlue_barrel1_outline.png", Color::srgb(1.0, 0.95, 0.6)),
+            2 => ("sprites/tankBlue_barrel1_outline.png", srgb(look.turret_team3)),
+            _ => ("sprites/tankBlue_barrel1_outline.png", srgb(look.turret_team4)),
         };
+        let [w, h] = look.turret_size;
         commands.spawn((
             Turret { robot: entity },
-            Sprite { image: server.load(image), color, custom_size: Some(Vec2::new(1.1, 2.6)), ..default() },
-            Transform::from_xyz(0.0, 0.0, 1.5),
+            Sprite { image: server.load(image), color, custom_size: Some(Vec2::new(w, h)), ..default() },
+            Transform::from_xyz(0.0, 0.0, TURRET_Z),
         ));
     }
 }
 
 fn follow_turrets(
     mut commands: Commands,
+    look: Res<Look>,
     robots: Query<(&Robot, &Transform), Without<Turret>>,
     mut turrets: Query<(Entity, &Turret, &mut Sprite, &mut Transform)>,
 ) {
@@ -501,7 +654,7 @@ fn follow_turrets(
         transform.translation.y = at.translation.y + dir.y * 1.0;
         transform.rotation = Quat::from_rotation_z(robot.turret - std::f32::consts::FRAC_PI_2);
         if robot.hp <= 0.0 {
-            sprite.color = Color::srgb(0.45, 0.45, 0.45);
+            sprite.color = srgb(look.downed_turret);
         }
     }
 }
@@ -762,9 +915,21 @@ fn main() {
         // `EditChecks` is read by the handler check and written by the editor's checks below.
         // It is initialised for both modes, because headless has no editor's checks and an empty
         // one excludes nothing.
-        app.init_resource::<HandlerTest>()
-            .init_resource::<EditChecks>()
-            .add_systems(Update, handler_selftest);
+        // S9: the one number of the handler check a run may be handed, for the same reason the
+        // garden's knobs exist — this check's fault shows in a browser and nowhere else, and a
+        // knob that could only be turned in a shell could not be in the same run as the fault
+        // (`games_shell::checks::asked_number`).
+        app.insert_resource(HandlerTest {
+            watching: Vec::new(),
+            checked: 0,
+            ran: 0,
+            turned: 0,
+            widest: 0.0,
+            frames: platform::handler_frames_asked().map(|n| n.max(0.0) as u32),
+            bound: None,
+        })
+        .init_resource::<EditChecks>()
+        .add_systems(Update, handler_selftest);
     }
     if checks_asked && headless.is_none() {
         // before `inspect_keys`, so a key it presses is still `just_pressed` when that reads it
@@ -862,16 +1027,22 @@ struct Nameplate {
 
 const TEAM_COLORS: [(f32, f32, f32); 4] = [(1.0, 0.42, 0.36), (0.45, 0.72, 1.0), (0.45, 0.9, 0.45), (1.0, 0.85, 0.35)];
 
-fn spawn_nameplates(mut commands: Commands, robots: Query<Entity, Added<Robot>>) {
+fn spawn_nameplates(mut commands: Commands, look: Res<Look>, robots: Query<Entity, Added<Robot>>) {
     for entity in &robots {
         for shadow in [true, false] {
             commands.spawn((
                 Nameplate { robot: entity, shadow },
                 Text2d::new(""),
-                TextFont { font_size: bevy::text::FontSize::Px(44.0), ..default() },
-                TextColor(if shadow { Color::srgba(0.0, 0.0, 0.0, 0.75) } else { Color::WHITE }),
-                // world units are large next to pixels: a 44px font scaled to about two units tall
-                Transform::from_xyz(0.0, 0.0, if shadow { 6.0 } else { 6.1 }).with_scale(Vec3::splat(0.045)),
+                TextFont { font_size: bevy::text::FontSize::Px(look.nameplate_font), ..default() },
+                TextColor(if shadow {
+                    Color::srgba(0.0, 0.0, 0.0, look.nameplate_shadow_alpha)
+                } else {
+                    Color::WHITE
+                }),
+                // world units are large next to pixels: a 44px font scaled to about two units
+                // tall ([`NAMEPLATE_FONT`]; settings since S9)
+                Transform::from_xyz(0.0, 0.0, if shadow { PLATE_SHADOW_Z } else { PLATE_Z })
+                    .with_scale(Vec3::splat(look.nameplate_scale)),
             ));
         }
     }
@@ -906,15 +1077,15 @@ fn follow_nameplates(
         if !owner.shadow {
             let (r, g, b) = TEAM_COLORS[robot.team.min(TEAM_COLORS.len() - 1)];
             *color = TextColor(if selected {
-                Color::srgb(1.0, 1.0, 0.55)
+                srgb(look.plate_selected)
             } else if down {
-                Color::srgb(0.62, 0.62, 0.62)
+                srgb(look.plate_down)
             } else {
                 Color::srgb(r, g, b)
             });
         }
         // the shadow sits a little down and right of the text it darkens
-        let nudge = if owner.shadow { 0.12 } else { 0.0 };
+        let nudge = if owner.shadow { look.nameplate_nudge } else { 0.0 };
         transform.translation.x = at.translation.x + nudge;
         transform.translation.y =
             at.translation.y + model.robot_radius * look.nameplate_lift - nudge;
@@ -1056,11 +1227,15 @@ fn spawn_life_bars(mut commands: Commands, look: Res<Look>, robots: Query<Entity
             commands.spawn((
                 LifeBar { robot: entity, fill },
                 Sprite {
-                    color: if fill { Color::srgb(0.35, 0.8, 0.35) } else { Color::srgba(0.0, 0.0, 0.0, 0.6) },
+                    color: if fill {
+                        srgb(look.bar_full_color)
+                    } else {
+                        Color::srgba(0.0, 0.0, 0.0, look.bar_back_alpha)
+                    },
                     custom_size: Some(Vec2::new(width, height)),
                     ..default()
                 },
-                Transform::from_xyz(0.0, 0.0, if fill { 5.1 } else { 5.0 }),
+                Transform::from_xyz(0.0, 0.0, if fill { BAR_FILL_Z } else { BAR_BACK_Z }),
             ));
         }
     }
@@ -1087,11 +1262,11 @@ fn follow_life_bars(
             let w = width * life;
             sprite.custom_size = Some(Vec2::new(w.max(0.001), height));
             sprite.color = if life > look.life_warn {
-                Color::srgb(0.35, 0.8, 0.35)
+                srgb(look.bar_full_color)
             } else if life > look.life_low {
-                Color::srgb(0.9, 0.75, 0.25)
+                srgb(look.bar_warn_color)
             } else {
-                Color::srgb(0.85, 0.3, 0.25)
+                srgb(look.bar_low_color)
             };
             // anchored at the bar's left end, so it empties towards the left
             transform.translation.x = at.translation.x - width / 2.0 + w / 2.0;
@@ -1645,9 +1820,10 @@ fn selftest(
             keys.release(KeyCode::KeyP);
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
-            // arena — and `AppExit` there does not end a run, it stops the canvas for good
-            // (`platform::CHECKS_EXIT_WHEN_DONE`).
-            if platform::CHECKS_EXIT_WHEN_DONE {
+            // arena — and `AppExit` there does not end a run, it stops the canvas for good. And a
+            // run that was asked for a picture as well is not over until the picture is taken
+            // (`platform::checks_end_the_run`, S9).
+            if platform::checks_end_the_run() {
                 exit.write(AppExit::Success);
             } else {
                 info!("selftest: done — the match keeps running (a page has nothing to exit to)");
@@ -1747,13 +1923,18 @@ fn stop_when_over(
             },
         );
         ok(test.checked > 0, format!("{} hits on a robot with a handler were checked", test.checked));
+        // **the window these two say they measured is the widest one a hit was given** (S9), not
+        // `HIT_WINDOW` written out again: a page drawing four frames a second judges a hit after
+        // the frames the delivery costs, and a sentence that still said 0.3 would be describing
+        // a run that did not happen (`HandlerTest::widest`, `handler_frames`)
+        let window = test.widest;
         ok(
             test.checked > 0 && test.ran == test.checked,
-            format!("a handler ran within 0.3 s of the hit ({}/{})", test.ran, test.checked),
+            format!("a handler ran within {window:.2} s of the hit ({}/{})", test.ran, test.checked),
         );
         ok(
             test.checked > 0 && test.turned == test.checked,
-            format!("the heading changed within 0.3 s of the hit ({}/{})", test.turned, test.checked),
+            format!("the heading changed within {window:.2} s of the hit ({}/{})", test.turned, test.checked),
         );
     }
     // the VM inspector's own numbers, where there is no window to draw them in (D2): the frames
@@ -1775,13 +1956,32 @@ fn stop_when_over(
 /// window, since a handler needs a fight rather than a mouse:
 ///
 ///     SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct HandlerTest {
     /// one per hit taken by a robot with a handler
     watching: Vec<WatchedHit>,
     checked: u32,
     ran: u32,
     turned: u32,
+    /// **the widest window any counted hit was given** (S9), which is what the two summing lines
+    /// say they measured. On a machine that draws faster than it takes hits it is
+    /// [`HIT_WINDOW`] and a hundredth over; on a page drawing four frames a second it is what
+    /// those frames came to. A sentence saying `0.3 s` while the run judged at 0.9 would be a
+    /// copy of a constant standing where a measurement belongs (S5b-2, S5b-5).
+    widest: f32,
+    /// **A number of frames this run was handed** instead of the one [`handler_frames`] works
+    /// out from the VM's budget (`SABIBOTS_HANDLER_FRAMES=N`, `?selftest&handler_frames=N`), and
+    /// `None` where it was not — which is every run but a measurement.
+    frames: Option<u32>,
+    /// **[`handler_frames`] of the budget this run really gives, worked out once** and not every
+    /// frame (S9, second pass).
+    ///
+    /// `P` takes the budget off the VM (`inspect_keys`), and a bound read out of a *paused* VM
+    /// is `2 + ceil(0 / …)` = two — the structural minimum, with nothing left for a scheduler
+    /// that is busy. The first throttled page to press `P` while a hit was being watched judged
+    /// it after two frames and called it a FAIL. So the budget is read the first frame it is
+    /// anything at all, and the pause cannot shrink the wait it caused.
+    bound: Option<u32>,
 }
 
 /// A hit being watched: the robot, when it was hit, which way it faced then, the number of
@@ -1794,9 +1994,23 @@ struct HandlerTest {
 struct WatchedHit {
     robot: Entity,
     at: f32,
+    /// **the frame it was taken in** (S9), because the window is counted in frames as well as in
+    /// the match's seconds — see [`handler_frames`]
+    frame: u32,
     heading: f32,
     runs: u32,
     peak: f32,
+    /// **how many frames after the hit the handler first ran** (S9), or `None` while it has not.
+    /// It is read every frame rather than once at the end, so that it is a latency and not a
+    /// yes-or-no: the failing runs are the ones worth a number.
+    ran_after: Option<u32>,
+    /// **whether the scripts were stopped at any moment of this hit's window** (S9, second pass)
+    /// — `P`, or the editor's checks pressing it. A VM with no budget runs no instruction, so a
+    /// handler cannot have had its turn, and this is not a robot that failed to answer; it is a
+    /// hit nothing can be measured about. It joins the three reasons a hit is already not
+    /// counted, and it is read every frame because a pause that begins *inside* the window is
+    /// the case that bites.
+    paused: bool,
     /// the task its brain was running then. A different one (or none) when the window is up
     /// means the game took its brain away and started it over inside the window, which is not a
     /// robot that failed to swerve.
@@ -1811,7 +2025,7 @@ fn angle_between(a: f32, b: f32) -> f32 {
 }
 
 /// **How far a hit has to have thrown the tank** for the check to call it a swerve: a quarter of
-/// the full turning rate over the window above.
+/// the full turning rate over the window the hit was actually given.
 ///
 /// The threshold was written out as `0.2` until S5b-2, with that sentence beside it — which was
 /// this arithmetic on the `TURN_RATE` of 2.6, rounded up from 0.195. Now that the turning rate is
@@ -1819,10 +2033,19 @@ fn angle_between(a: f32, b: f32) -> f32 {
 /// that gave its tanks a slower hull would be checked against a swerve they cannot make, and one
 /// that gave them a quicker hull would be checked against nothing at all.
 ///
+/// **And the window is the second half of the same argument** (S9). It was [`HIT_WINDOW`] here,
+/// which was right while every hit was judged after exactly that; a run whose frames are a fifth
+/// of a second long gives the hit a wider window ([`handler_frames`]), and a threshold that
+/// stayed at the narrow one would be a tank asked for a quarter of 0.3 s of turning after
+/// three times that long — which is not a quarter of anything, and is passed by a tank that was
+/// merely driving. A share of the window is the statement; the window is whichever one this hit
+/// was given.
+///
 /// So the check does the arithmetic its own comment stated, and the threshold moves with the
-/// match. On the default model it is 0.195 rather than 0.200, which is the rounding coming off.
-fn enough_of_a_swerve(turn_rate: f32) -> f32 {
-    turn_rate * HIT_WINDOW / 4.0
+/// match. On the default model and an ordinary window it is 0.195 rather than 0.200, which is
+/// the rounding coming off.
+fn enough_of_a_swerve(turn_rate: f32, window: f32) -> f32 {
+    turn_rate * window / 4.0
 }
 
 /// **The window a handler has to answer a hit in** (`docs/sabiruby-battle.md`: the scout's
@@ -1830,8 +2053,87 @@ fn enough_of_a_swerve(turn_rate: f32) -> f32 {
 /// being measured, not a number the game plays by.
 const HIT_WINDOW: f32 = 0.3;
 
+/// **And how many frames of this run that window has to hold** (S9), where [`HIT_WINDOW`]
+/// seconds did not hold them.
+///
+/// A hit is published by `move_bullets`, which is in `RubevySet::Answer` — *after* this frame's
+/// tick of the VM. So the earliest tick that can give the woken handler task its turn is the
+/// **next** frame's, and in that same frame `answer_requests` answers its `act` and
+/// `move_robots`, next in the chain, turns the tank. `handler_selftest` has no order against
+/// that chain, so the frame it is *certain* to see the swerve in is the one after that: two
+/// frames, and neither of them can be taken away by anything this game could be written
+/// differently.
+///
+/// Until S9 the window was 0.3 s of the match's clock and nothing else, which is five frames
+/// when the game draws sixty of them a second and **one** when a page draws four — and one frame
+/// is less than the delivery costs, so the check said FAIL about a run that had not yet had the
+/// chance to pass. That is F0's finding: `?selftest` in a Chromium window of 1600×900 failed
+/// both of these lines every run, while 1280×720 passed (`docs/worklog/2026-09-21-factory-F0.md`
+/// §10, item 1), and S9 reproduced it with the same page throttled twenty times
+/// (`docs/worklog/2026-09-21-s9.md` §2). It is the shape S7 took out of the garden's checks —
+/// **wait for the thing, count the wait in the unit the thing happens in, bound it with a number
+/// that is derived** (`garden::window::scheduler_frames`) — arriving at the Battle's.
+///
+/// The wait ends the moment the handler has run, so the bound is reached only when it has not,
+/// and a run that went past it is a scheduler that was handed a whole frame's allowance of turns
+/// and reached a task that was ready in none of them. **The seconds are still the floor**: a
+/// quick machine's hit is judged after 0.3 s exactly as before, because by then the frames are
+/// long gone.
+///
+/// A run may be handed another number — `SABIBOTS_HANDLER_FRAMES=N`, or
+/// `?selftest&handler_frames=N` in a page, which is how the measurement below was taken in the
+/// browser where the fault only shows (S5b-5's knobs).
+///
+/// **What it is made of**, which is the garden's sum for the garden's reason
+/// ([`garden::window::scheduler_frames`], S7 — this file cannot cite it across the two binaries,
+/// so it says the same thing again):
+///
+/// * [`HANDLER_STRUCTURAL_FRAMES`], **two**, and they are measured as well as derived: four quiet
+///   headless runs of twenty-five seconds gave 105 counted hits and the handler's turn came
+///   **2 frames after the hit in every one of them**.
+/// * plus **one whole frame's allowance of the VM's turns**, `ceil(budget ÷
+///   [`INSTRUCTIONS_A_FRAME_BUYS`])`, which is five at the budget the Battle ships with — because
+///   a frame of wall clock (`script_frame_time_ms`) runs out long before 200,000 instructions do.
+///   Past that the VM has been handed a whole allowance without reaching a task that was ready,
+///   which is the scheduler having stopped handing turns out rather than a machine that is busy.
+///
+/// **Seven, and the measurement says it is not too many.** In five browser runs at 1600×900 with
+/// Chromium's CPU throttled twenty times — the nearest this machine could come to F0's failing
+/// page, which would not fail here unthrottled — the eleven counted hits had their handler's turn
+/// after **2, 3 and 4** frames. Two would have judged three of those eleven before there was
+/// anything to see. It is **worked out from the budget** rather than written down, because the
+/// budget is `script_budget` in somebody's `sabibots.settings.txt` (S5b-3's lesson: a run given
+/// ten times the budget would otherwise be judged after the same seven frames).
+fn handler_frames(budget: u64) -> u32 {
+    HANDLER_STRUCTURAL_FRAMES + (budget as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
+}
+
+/// The two frames a published hit costs whatever the VM is allowed: the publish is made after
+/// this frame's tick, so the next frame's is the earliest that can give the handler its turn, and
+/// `handler_selftest` is not ordered against the chain that answers its `act`, so the frame it is
+/// *certain* to see the swerve in is the one after that. **Measured** as well (S9: 105 hits of
+/// four quiet headless runs, every one of them 2) and structural.
+const HANDLER_STRUCTURAL_FRAMES: u32 = 2;
+
+/// What one frame of this machine's VM buys, in instructions — **S6's measurement**, which is
+/// written down in `garden/src/window.rs` under this same name and cannot be shared with it
+/// across two binaries: `frame_time` cut to 300 µs, the VM's slowest frame 1,708 instructions,
+/// 5.7 instructions per microsecond, so a full 8 ms frame buys about 45,600. It is a fact about
+/// the machine and the VM, and both are the same here.
+///
+/// It is the **slower** of the two measurements there (S5b-3 measured 6.85 insn/µs in an ordinary
+/// frame, which would buy 54,800) and for the same reason: this number divides a budget to say
+/// how many frames a check may wait, so one that is too big makes the wait too short and produces
+/// a FAIL for a VM that was only being slow. **The two copies should be one**, in a crate both
+/// games can reach — see the worklog's notes.
+const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
+
 fn handler_selftest(
     time: Res<Time>,
+    frames: Res<bevy::diagnostic::FrameCount>,
+    // the budget this run is really giving, which is what the bound below is worked out from
+    // (S5b-3's lesson, arriving here as S9's)
+    world: Res<ScriptWorld>,
     mut test: ResMut<HandlerTest>,
     edits: Res<EditChecks>,
     the_match: Res<TheMatch>,
@@ -1841,14 +2143,34 @@ fn handler_selftest(
     // a hit is taken by a robot a match put on the field, so the match's numbers are here
     let Some(turn_rate) = the_match.0.as_ref().map(|m| m.turn_rate) else { return };
     let now = time.elapsed_secs();
+    let frame = frames.0;
+    // **`P` is not a robot failing to answer** (S9, second pass): a VM with no budget runs
+    // nothing at all, so a window that holds a pause holds no handler either.
+    let paused = world.budget == 0;
+    if !paused && test.bound.is_none() {
+        test.bound = Some(handler_frames(world.budget));
+    }
     for watch in test.watching.iter_mut() {
         if let Ok(robot) = robots.get(watch.robot) {
             watch.peak = watch.peak.max(angle_between(watch.heading, robot.heading).abs());
+            // the frame it first ran in, not whether it had by the end: a latency is what a
+            // failing run has to say for itself (S9)
+            if watch.ran_after.is_none() && robot.handler_runs > watch.runs {
+                watch.ran_after = Some(frame.wrapping_sub(watch.frame));
+            }
         }
+        watch.paused |= paused;
     }
+    let bound = test.frames.or(test.bound).unwrap_or(HANDLER_STRUCTURAL_FRAMES);
     let mut due: Vec<WatchedHit> = Vec::new();
     test.watching.retain(|w| {
-        if now - w.at < 0.3 {
+        if now - w.at < HIT_WINDOW {
+            return true;
+        }
+        // **S9**: and, where the handler has still not had its turn, for as many frames as the
+        // delivery costs ([`handler_frames`]). The moment it has run there is something to
+        // judge, so this holds nobody up on a machine that is keeping up.
+        if w.ran_after.is_none() && frame.wrapping_sub(w.frame) < bound {
             return true;
         }
         due.push(WatchedHit { ..*w });
@@ -1856,6 +2178,10 @@ fn handler_selftest(
     });
     for watch in due {
         let Ok(robot) = robots.get(watch.robot) else { continue };
+        // the window this hit was really given, which is [`HIT_WINDOW`] and a little on any run
+        // that draws faster than it takes hits, and the frames' own length where it is not
+        let window = now - watch.at;
+        let waited = frame.wrapping_sub(watch.frame);
         // **Why this hit could not be measured, if it could not be** — and nothing else changes
         // with it (S4). Each of the three used to print a sentence of its own instead of the two
         // below, so a hit that was excluded left one line where a hit that was counted left two,
@@ -1868,8 +2194,12 @@ fn handler_selftest(
             // takes its task away and sets its controls to zero. The hit is not counted either way.
             // (Found here: one run in four ended with `turned (13/14)`, the miss being a scout hit at
             // 19.37 s that went down before the 0.3 s were up — 0.04 rad.)
-            if robot.downed_at.is_some_and(|down| down < watch.at + 0.3) {
-                Some("it went down inside the 0.3 s".to_string())
+            //
+            // The three windows named here are this hit's own since S9: they were `0.3` written
+            // out three times, which is a copy of [`HIT_WINDOW`] where the whole point is that
+            // the window is the one the hit was given.
+            if robot.downed_at.is_some_and(|down| down < watch.at + window) {
+                Some(format!("it went down inside the {window:.2} s"))
             }
             // Nor is a robot whose brain was taken away and started again inside the window (the
             // editor's Apply, or a saved file). The old task is terminated and the new one subscribes
@@ -1878,7 +2208,7 @@ fn handler_selftest(
             // is a different brain. It is not rare in the editor's selftest, which applies a brain
             // three times while the match is being fought.
             else if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
-                Some("its behaviour was replaced inside the 0.3 s".to_string())
+                Some(format!("its behaviour was replaced inside the {window:.2} s"))
             }
             // **Nor any robot at all, while the editor's checks are handing behaviours out**
             // (2026-09-18). The test above catches the robot the editor was showing; `Apply to all`
@@ -1887,30 +2217,51 @@ fn handler_selftest(
             // terminated and its replacement had not subscribed yet. The moments come from
             // [`EditChecks`], which is where the steps that press the buttons write them down; the
             // window asked about is this check's own, and unchanged.
-            else if let Some(what) = edits.over(watch.at, watch.at + 0.3) {
-                Some(format!("the editor's checks were handing out behaviours ({what}) inside the 0.3 s"))
+            else if let Some(what) = edits.over(watch.at, watch.at + window) {
+                Some(format!("the editor's checks were handing out behaviours ({what}) inside the {window:.2} s"))
+            }
+            // **Nor a hit whose window held a pause** (S9, second pass). `P` sets the VM's
+            // budget to zero, so not one instruction runs and no handler can have its turn —
+            // which is the game being stopped and not a brain being slow. Found by a throttled
+            // page: the editor's checks press `P` for two seconds, and a hit taken just before
+            // that had its whole window swallowed. Nothing new is recorded *during* a pause
+            // (`move_bullets` is in the chain `world_moves` guards), so it is only a window that
+            // begins before one.
+            else if watch.paused {
+                Some(format!("the scripts were stopped (P) inside the {window:.2} s"))
             } else {
                 None
             };
         if let Some(why) = unmeasured {
             let (at, name) = (watch.at, &robot.name);
-            info!("selftest: --   {name} ran a handler within 0.3 s of the hit at {at:.2} s: not counted, {why}");
-            info!("selftest: --   {name} turned within 0.3 s of the hit at {at:.2} s: not counted, {why}");
+            info!("selftest: --   {name} ran a handler within {window:.2} s of the hit at {at:.2} s: not counted, {why}");
+            info!("selftest: --   {name} turned within {window:.2} s of the hit at {at:.2} s: not counted, {why}");
             continue;
         }
-        let ran = robot.handler_runs > watch.runs;
-        // a quarter of the full turning rate over the 0.3 s: the swerve, not the brain's steering
-        let turned = watch.peak > enough_of_a_swerve(turn_rate);
+        let ran = watch.ran_after.is_some();
+        // a quarter of the full turning rate over the window this hit was given: the swerve, not
+        // the brain's steering
+        let need = enough_of_a_swerve(turn_rate, window);
+        let turned = watch.peak > need;
         test.checked += 1;
         test.ran += u32::from(ran);
         test.turned += u32::from(turned);
+        test.widest = test.widest.max(window);
         let (at, name, peak) = (watch.at, &robot.name, watch.peak);
+        // the latency, beside the verdict, in both units: a run that failed says how long it
+        // waited and how many of its frames that was, and a run that passed says how close it
+        // came (S9). `tools/fixedlines.sh` drops these two lines — `of the hit at` — so what
+        // they carry costs the comparison nothing.
+        let after = match watch.ran_after {
+            Some(n) => format!("{n} frame(s) after the hit"),
+            None => format!("never, in {waited} frame(s)"),
+        };
         info!(
-            "selftest: {} {name} ran a handler within 0.3 s of the hit at {at:.2} s",
+            "selftest: {} {name} ran a handler within {window:.2} s of the hit at {at:.2} s ({after})",
             if ran { "ok  " } else { "FAIL" }
         );
         info!(
-            "selftest: {} {name} turned within 0.3 s of the hit at {at:.2} s ({peak:.2} rad)",
+            "selftest: {} {name} turned within {window:.2} s of the hit at {at:.2} s ({peak:.2} of {need:.2} rad)",
             if turned { "ok  " } else { "FAIL" }
         );
     }
@@ -1989,7 +2340,7 @@ fn lay_the_floor(commands: &mut Commands, server: &AssetServer, half: f32, look:
             commands.spawn((
                 Floor,
                 Sprite { image, custom_size: Some(Vec2::splat(tile)), ..default() },
-                Transform::from_xyz(x, y, -1.0),
+                Transform::from_xyz(x, y, SAND_Z),
             ));
         }
     }
@@ -2170,7 +2521,7 @@ fn spawn_robot(
                 custom_size: Some(Vec2::splat(model.robot_radius * it.look.hull_scale)),
                 ..default()
             },
-            Transform::from_xyz(at.x, at.y, 1.0),
+            Transform::from_xyz(at.x, at.y, HULL_Z),
         ))
         .id();
     it.shots.0.push((robot, server.load(bullet)));
@@ -2359,7 +2710,7 @@ fn build_walls(commands: &mut Commands, server: &AssetServer, half: f32, crate_s
         commands.spawn((
             Wall,
             Sprite { image: image.clone(), custom_size: Some(Vec2::splat(step)), ..default() },
-            Transform::from_xyz(x, y, 0.0),
+            Transform::from_xyz(x, y, WALL_Z),
         ));
     };
     for i in 0..=count {
@@ -2627,7 +2978,9 @@ fn answer_requests(
                             let damage =
                                 model.damage_min + (model.damage_max - model.damage_min) * power;
                             let image = spawning.shots.image_for(me);
-                            let size = 0.7 + 0.6 * power;
+                            // [`BULLET_SIZE`]; a setting since S9
+                            let size = spawning.look.bullet_size[0]
+                                + spawning.look.bullet_size[1] * power;
                             let muzzle = model.muzzle;
                             commands.spawn((
                                 Bullet {
@@ -2638,7 +2991,7 @@ fn answer_requests(
                                     life: model.bullet_life,
                                 },
                                 Sprite { image, custom_size: Some(Vec2::new(size * 0.55, size * 1.3)), ..default() },
-                                Transform::from_xyz(at.x + dir.x * muzzle, at.y + dir.y * muzzle, 2.0)
+                                Transform::from_xyz(at.x + dir.x * muzzle, at.y + dir.y * muzzle, BULLET_Z)
                                     .with_rotation(Quat::from_rotation_z(angle - std::f32::consts::FRAC_PI_2)),
                             ));
                             fired = true;
@@ -2783,6 +3136,9 @@ fn separate_robots(
 
 fn move_bullets(
     time: Res<Time>,
+    // S9: the frame a hit was taken in, so the handler check's window can be counted in frames
+    // as well as in seconds (`handler_frames`)
+    frames: Res<bevy::diagnostic::FrameCount>,
     mut commands: Commands,
     mut events: ResMut<Events>,
     mut scripts: ResMut<ScriptWorld>,
@@ -2836,7 +3192,7 @@ fn move_bullets(
                         size,
                     },
                     Sprite { image: server.load(image), custom_size: Some(Vec2::splat(size * 0.4)), ..default() },
-                    Transform::from_xyz(at.x, at.y, 3.0),
+                    Transform::from_xyz(at.x, at.y, BLAST_Z),
                 ));
                 if big {
                     // kind 0: a robot is down. The match reads these and decides what they mean
@@ -2864,9 +3220,12 @@ fn move_bullets(
                         test.watching.push(WatchedHit {
                             robot: target,
                             at: now,
+                            frame: frames.0,
                             heading: robot.heading,
                             runs: robot.handler_runs,
                             peak: 0.0,
+                            ran_after: None,
+                            paused: false,
                             task: tasks.get(target).ok().map(|t| t.task()),
                         });
                     }
@@ -3131,16 +3490,24 @@ mod tests {
         assert_eq!(wall_layout(32.0, 2.6).0, 25);
     }
 
-    /// **The swerve a hit has to produce follows the match's turning rate** (S5b-2). It was
-    /// `0.2` written into the check, which is this arithmetic on 2.6 rounded up — and once the
-    /// turning rate is the match's, a number here would be a copy of it.
+    /// **The swerve a hit has to produce follows the match's turning rate** (S5b-2) **and the
+    /// window the hit was given** (S9). It was `0.2` written into the check, which is this
+    /// arithmetic on 2.6 and 0.3 rounded up — and once the turning rate is the match's and the
+    /// window is whatever this run's frames came to, a number here would be a copy of both.
     #[test]
-    fn what_counts_as_a_swerve_follows_the_hull() {
-        // the default model: 2.6 × 0.3 ÷ 4, which the source used to round to 0.2
-        assert!((enough_of_a_swerve(2.6) - 0.195).abs() < 1e-6);
+    fn what_counts_as_a_swerve_follows_the_hull_and_the_window() {
+        // the default model on an ordinary window: 2.6 × 0.3 ÷ 4, which the source rounded to 0.2
+        assert!((enough_of_a_swerve(2.6, HIT_WINDOW) - 0.195).abs() < 1e-6);
         // a match with quicker hulls asks for more of a swerve, and a slower one for less
-        assert!(enough_of_a_swerve(5.2) > enough_of_a_swerve(2.6));
-        assert!(enough_of_a_swerve(1.3) < enough_of_a_swerve(2.6));
+        assert!(enough_of_a_swerve(5.2, HIT_WINDOW) > enough_of_a_swerve(2.6, HIT_WINDOW));
+        assert!(enough_of_a_swerve(1.3, HIT_WINDOW) < enough_of_a_swerve(2.6, HIT_WINDOW));
+        // and a page slow enough to be given three times the window is asked for three times the
+        // swerve: the statement is a *share* of the window, not a number of radians
+        assert!(
+            (enough_of_a_swerve(2.6, 3.0 * HIT_WINDOW) - 3.0 * enough_of_a_swerve(2.6, HIT_WINDOW))
+                .abs()
+                < 1e-6
+        );
     }
 
     /// **What a player left in `sabibots.settings.txt` reaches the drawing** (S5b-2), and a key

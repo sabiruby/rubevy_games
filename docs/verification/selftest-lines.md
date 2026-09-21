@@ -45,8 +45,10 @@ web/build.sh factory                                           # then …/factor
 is built by name. Its run is a `docker/run.sh` like the other two, with no edit to that script:
 the environment it hands over is found by the game's own name in capitals.
 
-A run of a `docker/run.sh` is on a TTY, so **its lines end in CR** and `tools/fixedlines.sh` does
-not strip it. Put the log through `tr -d '\r'` before comparing, or every line looks changed.
+A run of a `docker/run.sh` is on a TTY, so **its lines end in CR**. Until S9 the reader was told
+here to put such a log through `tr -d '\r'` before comparing, or every line looked changed —
+a note standing in for a mend, in the one comparison this file exists to make. `tools/fixedlines.sh`
+drops the CR itself now, and a log that never had one comes out of it exactly as it did before.
 
 A window needs a GPU, which this machine does not have outside the container
 (`docs/wsl-gpu.md`). A browser run is driven with playwright-core out of the neighbouring
@@ -212,7 +214,7 @@ selftest: ok   the starved creature's entity is gone (NvN starved at N s)
 selftest: ok   what the world declares reaches a creature's memory (Beetle NvN had "wet" in its @memory at N s)
 ```
 
-## Garden, a window — 45 lines
+## Garden, a window — 47 lines
 
 `GARDEN_SELFTEST=1 docker/run.sh garden release`. The editor, the VM panel, the wheel, `P`, and
 `F3`'s third file — the rules of the world.
@@ -226,6 +228,7 @@ selftest: ok   FN hides the VM panel
 selftest: ok   FN opens it
 selftest: ok   FN opens the rules of the world
 selftest: ok   FN shows it again
+selftest: ok   FN writes a garden where `save_file` says (N bytes, version N)
 selftest: ok   N s paused: every creature is where it was
 selftest: ok   N s paused: nobody got hungrier
 selftest: ok   N s paused: the day did not turn
@@ -242,6 +245,7 @@ selftest: ok   a beetle born in the very frame of Apply is restarted too
 selftest: ok   after Apply the text is what the beetles run
 selftest: ok   after Apply the text is what the world runs
 selftest: ok   and nothing is running a text of its own
+selftest: ok   and the game says so rather than reporting trouble (saved N creatures, N plants (N bytes))
 selftest: ok   and the garden moves again: somebody has walked
 selftest: ok   and with the panel closed the same wheel in the same place zooms (egui holds the pointer: false; camera N -> N)
 selftest: ok   every restarted beetle's new task has run
@@ -279,7 +283,7 @@ either game that arranges the world rather than watching it: the birth it is abo
 garden would otherwise win about once in a hundred runs, so the run forces one into that frame
 (`window::birth_in_the_apply_frame`, registered only by the checks).
 
-## Garden, a browser — 46 lines
+## Garden, a browser — 48 lines
 
 `…/garden/?selftest`. The window's list plus the `done` line.
 
@@ -293,6 +297,7 @@ selftest: ok   FN hides the VM panel
 selftest: ok   FN opens it
 selftest: ok   FN opens the rules of the world
 selftest: ok   FN shows it again
+selftest: ok   FN writes a garden where `save_file` says (N bytes, version N)
 selftest: ok   N s paused: every creature is where it was
 selftest: ok   N s paused: nobody got hungrier
 selftest: ok   N s paused: the day did not turn
@@ -309,6 +314,7 @@ selftest: ok   a beetle born in the very frame of Apply is restarted too
 selftest: ok   after Apply the text is what the beetles run
 selftest: ok   after Apply the text is what the world runs
 selftest: ok   and nothing is running a text of its own
+selftest: ok   and the game says so rather than reporting trouble (saved N creatures, N plants (N bytes))
 selftest: ok   and the garden moves again: somebody has walked
 selftest: ok   and with the panel closed the same wheel in the same place zooms (egui holds the pointer: false; camera N -> N)
 selftest: ok   every restarted beetle's new task has run
@@ -422,6 +428,21 @@ ore*, *a click in the middle of a tile is read as that tile* became the four lin
 factory with clicks and watch it deliver, and the two that did not move (the corners, the tileset)
 are word for word what they were. Four lines became eight. They are a change to nobody else's: the
 six above were re-run at the end of the stage and all six diffed empty.
+
+**S9 moved two**, on 2026-09-21 on the branch `s9`: the garden's window and page lists gained
+`FN writes a garden where \`save_file\` says` and `and the game says so rather than reporting
+trouble`, which are the garden's Save pressed at a path of the checks' own — the one setting in
+`docs/numbers.md` that no run had ever exercised, because a check that saved where the game really
+saves would write into this repository (`worklog/2026-09-21-s9.md` §7). The garden's window went
+from 45 lines to 47 and its page from 46 to 48; the other four lists diffed empty.
+
+**The garden's window list was an inference when S9 wrote it, and it has been measured since.**
+`docker info` segfaulted on this machine during S9 and Docker Desktop is the author's to start, so
+the two lines were added to the list from the page's run. Docker came back the same afternoon, and
+on the merge of S9 into main the three windows were run: the garden's 47 lines, the Battle's 32 and
+Factory's 8, FAIL 0, each `diff` empty against the list here. `GARDEN_SELFTEST=1 docker/run.sh
+garden release --shot FILE 30` — the run S9's `checks_end_the_run()` is for — printed the same 47,
+kept running after `done`, and wrote its picture at 30 s (`worklog/2026-09-21-s9.md` §10).
 
 **S7 moved one line**, on 2026-09-20 on the same branch: the garden's window and page lists gained
 `a beetle born in the very frame of Apply is restarted too`, and nothing else in any of the six
