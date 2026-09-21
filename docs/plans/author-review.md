@@ -46,4 +46,5 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 
 | 日付 | 何を | 版 | 記録 |
 |---|---|---|---|
-| 09-22 | sabiruby 0.6.0 の準備を開始（worktree `sabiruby-wt-release-0.6`。`Vm::current_line` を消した = 破壊的、`sabiruby-serde` は `#[non_exhaustive]` で 0.2.0）。publish とタグは dry-run が通ってから本体が打つ | 準備中 | sabiruby `docs/worklog/2026-09-22-release-0.6.md` |
+| 09-22 | **sabiruby 0.6.0 を crates.io に公開、タグ `v0.6.0`（`9780874`）**。CI 緑を確かめてから、crate ごとに dry-run → publish。1 度目は保存されていた token が 403 で通らず（何も上がっていない）、著者が `cargo login` し直して通った | `sabiruby` 0.6.0（`Vm::current_line` を消した）、`sabiruby-serde` 0.2.0（`Options` に `#[non_exhaustive]`、`declare`）、`sabiruby-compiler` 0.3.0（中身は同じ。`sabiruby` が公開依存なので 0.2.4 にしなかった）、`sabiruby-cli` 0.6.0。`sabiruby-macros` は出していない（無変更、VM に依らない） | sabiruby `docs/worklog/2026-09-22-release-0.6.md`（11 節が打ったコマンド）、`CHANGELOG.md` の「Coming from 0.5.2」 |
+| 09-22 | 使う側の版の要求（rubevy 5 行 → games 3 行 + rubevy の rev → playground の `SABIRUBY_REF`）は**まだ**。rubevy と games で担当が作業中なので、その仕事が main に入るときに一緒に上げる | — | 同上 §9・§11 |
