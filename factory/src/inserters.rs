@@ -728,7 +728,8 @@ mod tests {
             "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",
             "miner :drill, seconds_per_item: 1.0\n",
             "chest :crate, capacity: 4\n",
-            "ore :iron_ore, per_tile: 10\n",
+            "ore :iron_ore, per_tile: 10, patch_radius: 1.0, patches: [1, 1]\n",
+            "map :world, size: [16, 16]\n",
             "inserter :arm, seconds_per_item: 0.25\n",
         ));
         let written = names_and_numbers(&data, &rules, 1.0, 123);

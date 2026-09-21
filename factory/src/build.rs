@@ -181,7 +181,7 @@ pub fn orders(
     mut lanes: ResMut<Lanes>,
 ) {
     for &Order { at: tile, what, dir } in asked.read() {
-        if tile.x >= grid.tiles || tile.y >= grid.tiles {
+        if !grid.holds(tile) {
             info!("nowhere to build at {}, {}: that is off the map", tile.x, tile.y);
             continue;
         }
@@ -271,7 +271,7 @@ pub fn build_a_machine(
     dir: Dir,
 ) -> bool {
     let footprint = data.footprint(kind, origin);
-    if footprint.iter().any(|t| t.x >= grid.tiles || t.y >= grid.tiles) {
+    if footprint.iter().any(|t| !grid.holds(*t)) {
         return false;
     }
     let at = grid.index(origin);
@@ -293,7 +293,7 @@ pub fn build_a_machine(
 /// It runs after the clicks and before the factory steps, because a belt laid this frame is a
 /// corner for its neighbour this frame.
 pub fn follow_the_flow(grid: Res<Grid>, mut flow: ResMut<Flow>) {
-    if flow.seen != grid.changes || flow.came_in.len() != (grid.tiles * grid.tiles) as usize {
+    if flow.seen != grid.changes || flow.came_in.len() != crate::grid::how_many(grid.tiles) {
         flow.refresh(&grid);
     }
 }

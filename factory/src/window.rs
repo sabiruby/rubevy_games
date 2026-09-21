@@ -60,7 +60,7 @@ pub fn follow_the_orders(
         if order.what != Some(What::Inserter) {
             continue;
         }
-        if order.at.x >= grid.tiles || order.at.y >= grid.tiles {
+        if !grid.holds(order.at) {
             continue;
         }
         watched.0 = Some(grid.index(order.at));

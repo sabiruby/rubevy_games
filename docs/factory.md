@@ -276,11 +276,12 @@ before the first frame. **There are none of them in the binary**: the game does 
 the file, which is the rule S5b-2 set for SabiRuby Battle's match model and the same rule here.
 
 ```ruby
+map :world, size: [32, 32]
 item :iron_ore,   icon: 0
 belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2
 miner :drill, seconds_per_item: 1.0
 chest :crate, capacity: 60
-ore :iron_ore, per_tile: 60
+ore :iron_ore, per_tile: 60, patch_radius: 3.0, patches: [2, 2]
 inserter :arm, seconds_per_item: 1.0
 machine :furnace,   size: [1, 1], sprite: [109],                speed: 1.0
 machine :assembler, size: [2, 2], sprite: [138, 139, 140, 141], speed: 1.0
@@ -288,13 +289,51 @@ recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made
 recipe :gear,       in: { iron_plate: 2 }, out: { gear: 1 },     time: 1.0, made_in: :assembler
 ```
 
-**Eight words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
+**Nine words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
 `miner`, `chest`, `ore` and `inserter` are the fittings the world has built in, which no recipe
-makes and no machine makes them in, and each has numbers of its own with names of its own. One
-`machine` shape with five optional fields would let `capacity:` on a furnace deserialize perfectly
-and be refused afterwards by hand-written code; a word each means **serde** refuses it, at the
-line — which is the whole reason the declarations are read through `sabiruby_serde::declare` at
-all.
+makes and no machine makes them in, and each has numbers of its own with names of its own; `map`
+is the world itself. One `machine` shape with five optional fields would let `capacity:` on a
+furnace deserialize perfectly and be refused afterwards by hand-written code; a word each means
+**serde** refuses it, at the line — which is the whole reason the declarations are read through
+`sabiruby_serde::declare` at all.
+
+**`map :world, size: [w, h]` is F3a's**, and the author's sentence behind it is "I want to be able
+to change the size freely" — an answer to being asked what the default should be, and the reason
+the size became free before any default was settled. It is `size:` rather than a new word because
+`machine … size: [2, 2]` already means exactly this — how many tiles this covers, across and up —
+and one meaning gets one spelling (the same rule that gave `inserter` the miner's
+`seconds_per_item:`). **The two sides need not agree**: 96 by 16 is a valley. The ore's own two
+numbers came with it, because the floor under the map is worked out from them: how wide a patch is
+(`patch_radius:`) and **how many there are, across and up** (`patches: [2, 2]`, which is the four
+corners the game always had, said as the grid they were). `factory.settings.txt` has neither
+`map_tiles` nor `ore_patch_radius` any more, and a store written by an older build is told so in
+the log rather than having them ignored in silence.
+
+**Two sizes are refused at the line they are written on**, and neither is a size anybody preferred:
+
+```text
+data.rb:45: a map 14 tiles across has no room for 2 patches of ore of radius 3 without them
+            touching the wall: make it 15 tiles across, or ask for fewer patches, or a smaller patch_radius
+data.rb:45: a map 2049 tiles across cannot be drawn: the floor is one texture of one texel a tile
+            and 2048 is as wide as one goes
+```
+
+The floor is the ore's — a patch on the border ring is ore nobody can see or stand a miner on — and
+it is asked of each side separately, `tiles > 2 × n × (radius + 0.5)`, which at two patches is F2's
+own `4 × radius + 2` with the 2 that was hidden in it turned into the count. The ceiling is the
+picture's: a `TilemapChunk` keeps its tiles in a texture of **one texel per tile**, so a side longer
+than the device's `max_texture_dimension_2d` cannot be handed to the GPU at all. That limit differs
+from machine to machine — lavapipe here says 16384 and SwiftShader 8192 — so what is refused by is
+the one number every WebGL2 machine guarantees, **2048**, which is a map that draws wherever the
+page goes. Memory is *not* refused by, because how much there is is a fact about the machine: the
+log says what a map costs instead (113 bytes a tile on a PC, 69 in a browser, so 512 by 512 is
+17 MB there and 28 here).
+
+**The camera is given the world in `Startup`**, since nothing knows how big it is before the data
+stage: the map is where the panning stops, the view at rest is `camera_half_height` **or the map's
+height, whichever is less** (a sixteen-tile map showed a strip of nothing above and below it
+otherwise), and the wheel's outer limit is raised — never lowered — until the whole map fits, so a
+512-tile map can be zoomed out to all of it. The default map's three numbers are what they were.
 
 **The ground is named after what comes out of it** (the author, 2026-09-21). `ore :iron_ore` says
 the ground is made of iron ore and a miner standing on it brings up iron ore; the miner has no
@@ -325,12 +364,10 @@ puts that number back to its default.
 
 ```text
 # Factory: what the game remembers. Delete a line for the default.
-map_tiles=32
 camera_half_height=150
 camera_snap_zoom=1
 window_width=1600
 window_height=900
-ore_patch_radius=3
 script_budget=39000
 script_frame_time_ms=8
 ```
@@ -350,13 +387,14 @@ Two more keys are the measuring instrument's rather than the game's: `stress_ite
 `?arms=`), and `inserter_stagger`, which is 1 in play and is set to 0 only to show what the
 spreading is worth.
 
-**Why `ore_patch_radius` did not go into `data.rb` with the rest.** The smallest map the four
-patches fit on without touching the border is derived from it, and that floor is wanted in
-`main`, **before there is a VM to have read any Ruby with**. That is where the line is drawn, and
-F2a is where it got drawn in the right place: F2 kept `ore_per_tile` on this side of it too, for
-a reason that only fitted the radius ("the world's layout, read once"), and the cost was that
-"a tile of ore is a chest's worth" spanned two files, so moving the chest moved nothing. It is
-`ore :iron_ore, per_tile: 60` in `data.rb` now, next to the chest it is a chest's worth of.
+**There is nothing of the world's layout left here**, and the line that used to be drawn through
+it is gone. F2 kept two of the ore's numbers on this side for a reason that only fitted one of
+them ("the world's layout, read once"); F2a moved the other (`ore_per_tile`, so that "a tile of
+ore is a chest's worth" stopped spanning two files); and what was left was one reason — the
+smallest map the patches fit on is derived from the radius, and that floor was wanted in `main`,
+**before there is a VM to have read any Ruby with**. **F3a removed the wanting**: the map is a
+declaration too now, so `main` has no map in it at all and the world is made in `Startup`, after
+the data stage, by one function (`lay_the_land`) that F5's reload can call again.
 
 **A number that is not more than zero is refused**, said where it is written, and the game does
 not start:
@@ -390,12 +428,20 @@ item's icon is, and how many icons there are. Nor are the tile numbers and the e
 `src/draw.rs`. **The machines' tile numbers are not among them**: they are `sprite:` in
 `data.rb`, because which picture a machine wears is a thing a data file says.
 
-**One number F1 and F2 both could not settle**: `map_tiles` is still F0's provisional 32. The plan
-says it comes from how many machines have to fit, and neither of the two things that would say is
-known — what a *real* renderer can draw (both renderers on this machine are software), and how
-many scripted inserters a frame holds, which is F3's measurement. F2 added one piece of it: a
-chain is 7 machines and 4 chains fill a belt, so the question is now "how many chains".
-`numbers.md` §9.6 says so rather than inventing a number.
+**One number F1 and F2 both could not settle is now the player's to settle**: the map is still
+F0's provisional 32 by 32 and still nobody's measurement — what a *real* renderer can draw is not
+known, because both renderers on this machine are software — but it is a line of `data.rb` rather
+than a number in a file a page cannot write. That is F3a, and it is the author's rule in
+`CLAUDE.md`: a measured number is a *default*, and a number nobody has measured is a default with
+the reason written down. `numbers.md` §9.6 says what would settle it (one `?stress` run on a real
+GPU) rather than inventing it.
+
+**What a big map costs, measured** (`worklog/2026-09-21-factory-F3a.md` §7): one step of the
+factory on an *empty* map is 4 µs at 32 by 32, 0.6 ms at 512 by 512 and 5.9 ms at the 2048 the
+drawing allows — two walks a frame are the length of the map rather than the length of the factory
+(the belts' tails, and counting what is on them for the HUD). At 512 that is 4% of a frame; at the
+ceiling it is a third of one, which is why the ceiling is the picture's limit and not a promise
+that a map that big is a good idea.
 
 **And one that is derived rather than set**: how fast the belts' two-frame animation runs. The
 pack draws a chevron every 8 px and the second frame is the first with the chevrons moved half of
