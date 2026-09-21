@@ -39,10 +39,13 @@
 //!   backtrace is `data.rb:4` ([`Trouble::from_raise`]).
 //! * **between declarations** — a recipe naming an item nothing declares, a `made_in:` naming no
 //!   machine, a machine whose `size` and `sprite` disagree. These can only be asked once every
-//!   declaration has been read, and **[`sabiruby_serde::declare::Declarations::take`] hands over a
-//!   `Vec<(String, T)>` with no line numbers in it**, so the line is found by looking the
-//!   declaration up in the source text ([`line_of`]). That is a workaround and it is written down
-//!   as one in `docs/worklog/2026-09-21-factory-F2.md`.
+//!   declaration has been read, and the line comes back with the declaration:
+//!   [`sabiruby_serde::declare::Declarations::take_with_lines`] hands over a `Vec<Declared<T>>`
+//!   whose `line` is **the line serde's own refusal would land on**, so the two kinds of error
+//!   point at the same place. F2 had no such thing — `take` gave names and values and nothing else
+//!   — and looked the declaration up in the source text instead, which found the line a
+//!   declaration *starts* on where serde says the line it *ends* on. That workaround was reported
+//!   (`docs/worklog/2026-09-21-factory-F2.md` §9) and is what F3 took out.
 //!
 //! # It can be read again
 //!
@@ -57,7 +60,7 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use sabiruby::error::VmError;
 use sabiruby::{Value, Vm};
-use sabiruby_serde::declare::{expose, Declarations};
+use sabiruby_serde::declare::{expose, Declarations, Declared};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -457,35 +460,6 @@ fn from_compiler(message: &str) -> Trouble {
     Trouble { at, what }
 }
 
-/// **The line a declaration is on, found in the source text.**
-///
-/// The table a host takes out of the VM is names and values with no line numbers in it, so a
-/// check that needs *two* declarations to be wrong — a recipe naming an item nothing declared —
-/// has nothing to say where it is. This looks the declaration up instead: the first line whose
-/// first word is `word` and whose next word is the name, written as `:name`, `"name"` or
-/// `'name'`. It is a workaround for a gap in `sabiruby_serde::declare` and is reported as one.
-fn line_of(source: &str, word: &str, name: &str) -> Option<u32> {
-    for (i, line) in source.lines().enumerate() {
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix(word) else { continue };
-        let rest = rest.trim_start();
-        let named = rest
-            .strip_prefix(':')
-            .or_else(|| rest.strip_prefix('"'))
-            .or_else(|| rest.strip_prefix('\''));
-        let Some(named) = named else { continue };
-        if !named.starts_with(name) {
-            continue;
-        }
-        // the name has to end there and not be the start of a longer one
-        let after = named[name.len()..].chars().next();
-        if after.is_none_or(|c| !c.is_alphanumeric() && c != '_') {
-            return Some(i as u32 + 1);
-        }
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------------------------
 // Reading one data file
 // ---------------------------------------------------------------------------------------------
@@ -508,6 +482,8 @@ pub fn read_the_declarations(
 ) -> Result<(Data, Rules), Trouble> {
     let bytes = compile(source, name).map_err(|e| from_compiler(&e))?;
 
+    // `source` is not read past this line any more. F2 kept it to the end so that a check between
+    // two declarations could find the line one was written on; `take_with_lines` carries it now.
     let items = Declarations::<ItemDecl>::install(vm).define(vm, "item");
     let recipes = Declarations::<RecipeDecl>::install(vm).define(vm, "recipe");
     let machines = Declarations::<MachineDecl>::install(vm).define(vm, "machine");
@@ -521,19 +497,19 @@ pub fn read_the_declarations(
     // **Taken whether the run went well or not.** A file that raised half way through has already
     // put its first declarations in the tables, and leaving them in the VM would mean the next
     // call to this function shares a table with a file that failed.
-    let items = items.take(vm);
-    let recipes = recipes.take(vm);
-    let machines = machines.take(vm);
-    let belts = belts.take(vm);
-    let miners = miners.take(vm);
-    let chests = chests.take(vm);
-    let ores = ores.take(vm);
+    let items = items.take_with_lines(vm);
+    let recipes = recipes.take_with_lines(vm);
+    let machines = machines.take_with_lines(vm);
+    let belts = belts.take_with_lines(vm);
+    let miners = miners.take_with_lines(vm);
+    let chests = chests.take_with_lines(vm);
+    let ores = ores.take_with_lines(vm);
 
     if let Err(e) = ran {
         return Err(Trouble::from_raise(vm, &e));
     }
 
-    let tables = tables_of(source, items, recipes, machines, belts, miners, chests, ores)?;
+    let tables = tables_of(items, recipes, machines, belts, miners, chests, ores)?;
     Ok(tables)
 }
 
@@ -546,16 +522,16 @@ fn article(word: &str) -> &'static str {
     }
 }
 
-/// One of a word that has to be declared exactly once.
-fn exactly_one<T>(source: &str, word: &str, mut all: Vec<(String, T)>) -> Result<(String, T), Trouble> {
+/// One of a word that has to be declared exactly once — and its name and line, for whatever has
+/// to be said about it afterwards.
+fn exactly_one<T>(word: &str, mut all: Vec<Declared<T>>) -> Result<Declared<T>, Trouble> {
     match all.len() {
         1 => Ok(all.remove(0)),
         0 => Err(Trouble { at: None, what: format!("nothing declares {} {word}", article(word)) }),
         n => {
             // the second one is the one that is too many, and it is the one to point at
-            let (name, _) = &all[1];
             Err(Trouble {
-                at: line_of(source, word, name),
+                at: all[1].line,
                 what: format!("{n} {word}s are declared and the game has room for one"),
             })
         }
@@ -565,34 +541,35 @@ fn exactly_one<T>(source: &str, word: &str, mut all: Vec<(String, T)>) -> Result
 /// The names turned into numbers, and every reference checked.
 #[allow(clippy::too_many_arguments)]
 fn tables_of(
-    source: &str,
-    items: Vec<(String, ItemDecl)>,
-    recipes: Vec<(String, RecipeDecl)>,
-    machines: Vec<(String, MachineDecl)>,
-    belts: Vec<(String, BeltDecl)>,
-    miners: Vec<(String, MinerDecl)>,
-    chests: Vec<(String, ChestDecl)>,
-    ores: Vec<(String, OreDecl)>,
+    items: Vec<Declared<ItemDecl>>,
+    recipes: Vec<Declared<RecipeDecl>>,
+    machines: Vec<Declared<MachineDecl>>,
+    belts: Vec<Declared<BeltDecl>>,
+    miners: Vec<Declared<MinerDecl>>,
+    chests: Vec<Declared<ChestDecl>>,
+    ores: Vec<Declared<OreDecl>>,
 ) -> Result<(Data, Rules), Trouble> {
     if items.is_empty() {
         return Err(Trouble { at: None, what: "nothing declares an item".into() });
     }
     let mut by_item = BTreeMap::new();
     let mut made_items = Vec::new();
-    for (i, (name, decl)) in items.into_iter().enumerate() {
+    // `Declared` is `#[non_exhaustive]`, so a pattern that takes it apart says `..`: a field the
+    // VM's crate adds later is not a change here.
+    for (i, Declared { name, value: decl, .. }) in items.into_iter().enumerate() {
         by_item.insert(name.clone(), i as ItemId);
         made_items.push(Item { name, icon: decl.icon });
     }
 
     let mut by_machine = BTreeMap::new();
     let mut made_machines = Vec::new();
-    for (i, (name, decl)) in machines.into_iter().enumerate() {
+    for (i, Declared { name, value: decl, line, .. }) in machines.into_iter().enumerate() {
         // the one thing about a machine that two of its fields have to agree on, which is why it
         // is here and not in a `deserialize_with`
         let wanted = decl.size[0] * decl.size[1];
         if decl.sprite.len() as u32 != wanted {
             return Err(Trouble {
-                at: line_of(source, "machine", &name),
+                at: line,
                 what: format!(
                     "{name} covers {} by {} tiles, which is {wanted} pictures, and it gives {}",
                     decl.size[0],
@@ -612,13 +589,13 @@ fn tables_of(
     }
 
     let mut made_recipes: Vec<Recipe> = Vec::new();
-    for (name, decl) in recipes {
+    for Declared { name, value: decl, line, .. } in recipes {
         let amounts = |what: &str, from: BTreeMap<String, u32>| -> Result<Vec<(ItemId, u32)>, Trouble> {
             from.into_iter()
                 .map(|(item, n)| match by_item.get(&item) {
                     Some(&id) => Ok((id, n)),
                     None => Err(Trouble {
-                        at: line_of(source, "recipe", &name),
+                        at: line,
                         what: format!("{name} has {item} {what} and nothing declares an item called that"),
                     }),
                 })
@@ -627,14 +604,11 @@ fn tables_of(
         let inputs = amounts("in it", decl.inputs)?;
         let outputs = amounts("out of it", decl.out)?;
         if outputs.is_empty() {
-            return Err(Trouble {
-                at: line_of(source, "recipe", &name),
-                what: format!("{name} makes nothing"),
-            });
+            return Err(Trouble { at: line, what: format!("{name} makes nothing") });
         }
         let Some(&made_in) = by_machine.get(&decl.made_in) else {
             return Err(Trouble {
-                at: line_of(source, "recipe", &name),
+                at: line,
                 what: format!(
                     "{name} is made in {} and nothing declares a machine called that",
                     decl.made_in
@@ -645,13 +619,13 @@ fn tables_of(
         made_recipes.push(Recipe { name, inputs, outputs, time: decl.time, made_in });
     }
 
-    let (_, belt) = exactly_one(source, "belt", belts)?;
-    let (miner_name, miner) = exactly_one(source, "miner", miners)?;
-    let (_, chest) = exactly_one(source, "chest", chests)?;
-    let (_, ore) = exactly_one(source, "ore", ores)?;
+    let belt = exactly_one("belt", belts)?.value;
+    let Declared { value: miner, line: miner_line, .. } = exactly_one("miner", miners)?;
+    let chest = exactly_one("chest", chests)?.value;
+    let ore = exactly_one("ore", ores)?.value;
     let Some(&digs) = by_item.get(&miner.digs) else {
         return Err(Trouble {
-            at: line_of(source, "miner", &miner_name),
+            at: miner_line,
             what: format!("the miner digs {} and nothing declares an item called that", miner.digs),
         });
     };
@@ -708,13 +682,15 @@ struct MachineSeen {
 /// The plan writes them `recipes[:iron_plate]` and `items[:gear]`; what `expose` defines is a
 /// **method**, so they are `recipe_of(:iron_plate)` and `item_of(:gear)` here, and a prelude that
 /// wants the bracket shape can wrap them in three lines when a stage has a use for it (F3's
-/// inserters and F4's control stage are the callers; F2 only proves they answer).
+/// inserters read them through [`crate::inserters`]'s prelude).
 ///
-/// **The names inside an answer come back as Strings, not Symbols.** The fields of the Hash are
-/// Symbols (`Options::symbol_keys`, which is what `expose` uses), but a *map's* keys are written
-/// as they serialize and a `String` serializes as a Ruby String — so `recipe_of(:iron_plate)[:in]`
-/// is `{"iron_ore" => 1}`. That is `sabiruby-serde`'s shape and not something this game can ask
-/// for differently; it is in the report as a thing the VM's crate could offer.
+/// **The names inside an answer are Symbols, all the way down** —
+/// `recipe_of(:iron_plate)[:in][:iron_ore]`. F2 met the other answer: a map's keys came back as
+/// Strings while a struct's fields were Symbols, so a name a data file had written as `:iron_ore`
+/// read back as `"iron_ore"`. That was reported as a gap in the VM's crate and is what
+/// `Options::symbols` — which `expose` now uses — fixed (sabiruby
+/// `docs/worklog/2026-09-21-serde-lines.md`). It matters here because the prelude an inserter is
+/// written in reads these tables, and the spelling a player types is the spelling they wrote.
 pub fn expose_the_tables(vm: &mut Vm, data: &Data) {
     let items = data
         .items
@@ -829,14 +805,20 @@ mod tests {
 
     /// **Each kind of mistake, and the line it is on.** The four the plan names, and the two
     /// `Rules` asked F2 for in its rustdoc (a number that is not more than zero).
+    ///
+    /// **Since F3, the two kinds of mistake give the same number for the same declaration.** The
+    /// recipe in [`GOOD`] is written over lines 4 and 5 on purpose, and both roads — serde
+    /// refusing a field inside it, and this game refusing a name between declarations — say 5,
+    /// the line it ends on. F2's look-up in the source text said 4 for the second road.
     #[test]
     fn a_mistake_in_a_declaration_says_which_line_it_is_on() {
         let wrong = |line: &str, replacing: &str| GOOD.replace(replacing, line);
         let cases: Vec<(String, u32, &str)> = vec![
             // an unknown field: serde's own message, at the declaration
             (wrong("item :iron_ore, icon: 0, colour: \"red\"\n", "item :iron_ore, icon: 0\n"), 1, "unknown field"),
-            // a recipe that names an item nothing declares — the one that needs two declarations
-            (wrong("recipe :iron_plate, in: { coal: 1 }, out: { iron_plate: 1 },\n", "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n"), 4, "coal"),
+            // a recipe that names an item nothing declares — the one that needs two declarations,
+            // and so the one whose line used to come from a look-up rather than from the VM
+            (wrong("recipe :iron_plate, in: { coal: 1 }, out: { iron_plate: 1 },\n", "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n"), 5, "coal"),
             // a time that is not more than zero
             (wrong("       time: 0.0, made_in: :furnace\n", "       time: 2.0, made_in: :furnace\n"), 5, "not more than zero"),
             // a machine no tiles wide
@@ -911,12 +893,14 @@ mod tests {
 
         let source = GOOD.replace("made_in: :furnace", "made_in: :smelter");
         let trouble = read(&source).expect_err("no such machine");
-        // **the line a look-up in the source finds is the line the declaration *starts* on**,
-        // where serde's own refusals land on the line it *ends* on (the `SEND` instruction's).
-        // The recipe in `GOOD` runs over lines 4 and 5, and `made_in:` is on 5; this says 4.
-        // Both are the declaration and neither is wrong, but they are not the same number, which
-        // is the price of the look-up standing in for a line the table does not carry.
-        assert_eq!(trouble.at, Some(4), "{}", trouble.say("data.rb"));
+        // **The line a declaration carries and the line serde raises at are the same number**,
+        // which is what F3's bump of the VM bought: both are the line the declaration *ends* on,
+        // the one the `SEND` instruction holds. The recipe in `GOOD` runs over lines 4 and 5, so
+        // this says 5 — and so does
+        // [`a_declaration_over_two_lines_is_reported_at_the_second`], which is the same recipe
+        // refused by serde instead. F2 said 4 here, because it looked the declaration up in the
+        // source text and found the line it *starts* on.
+        assert_eq!(trouble.at, Some(5), "{}", trouble.say("data.rb"));
         assert!(trouble.what.contains("smelter"), "{}", trouble.what);
     }
 
@@ -977,7 +961,10 @@ mod tests {
             "$icon  = item_of(:iron_plate)[:icon]\n",
             "$time  = recipe_of(:iron_plate)[:time]\n",
             "$where = recipe_of(:iron_plate)[:made_in]\n",
-            "$ore   = recipe_of(:iron_plate)[:in][\"iron_ore\"]\n",
+            // **a Symbol, as the data file wrote it**: the keys of a map inside an answer are
+            // Symbols since `expose` took `Options::symbols` (sabiruby, 2026-09-21). F2 had to
+            // write `["iron_ore"]` here, which is the spelling a player would not have guessed.
+            "$ore   = recipe_of(:iron_plate)[:in][:iron_ore]\n",
             "$size  = machine_of(:furnace)[:size].inspect\n",
             "$none  = item_of(:gear)\n",
         );
