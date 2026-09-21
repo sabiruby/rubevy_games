@@ -332,50 +332,73 @@ selftest: ok   typing in the rules marks them edited
 selftest: ok   typing marks the text edited
 ```
 
-## Factory, no window — 4 lines
+## Factory, no window — 8 lines
 
-`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 10`. F0's four checks: the grid, the
-arithmetic a click goes through, and — where there is something to draw with — the tileset.
+`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 10`. F1's eight checks: the world, the
+arithmetic a click goes through, the picture (where there is one), and then **a factory built
+with clicks and watched until it delivers**.
 
 ```
 selftest: --   no floor was drawn (this run has no renderer)
-selftest: ok   a click in the middle of a tile is read as that tile (asked Some((N, N)), read Some((N, N)))
+selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
+selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
+selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
-selftest: ok   the floor is N by N tiles, all N of them laid with a tile of the sheet
+selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   the map is N by N tiles with N of them holding N of ore
+selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 ```
 
 **`no floor was drawn` is this game's `--` line, and it does not move**: a headless run has no
 renderer at all, so it spawns no `TilemapChunk` and there is no image loader to fetch the tileset
 with. The verdict says the run did not put the check in a position to measure anything, which is
-neither a pass nor a failure. The click is *forged* — the checks write a `WorldClick` rather than
-driving a mouse — so the arithmetic is measured where there is no camera to click with.
+neither a pass nor a failure.
 
-## Factory, a window — 4 lines
+**The clicks are forged** — the checks write a `WorldClick` rather than driving a mouse — so the
+building, the refusal to put a miner off the ore, and the taking away are all measured through
+the same system a mouse goes through, in a run that has no mouse.
 
-`FACTORY_SELFTEST=1 docker/run.sh factory release`. The same three, and the `--` line replaced by
+**The one wait is on the game's own numbers.** "The chest holds one" is waited for as a
+condition, and the bound is `mine_seconds + 4 ÷ belt_tiles_per_second` — what the factory's own
+settings say the work takes, 3.0 s with the defaults — times two, for a frame's granularity at
+each end and for a browser whose frames are not a sixtieth of a second. The line prints both
+numbers, so a run that is slow says so rather than only passing. Measured 2.3 to 2.4 s on a PC.
+Change `belt_tiles_per_second` and the bound follows; there is no number of seconds in the check.
+
+## Factory, a window — 8 lines
+
+`FACTORY_SELFTEST=1 docker/run.sh factory release`. The same seven, and the `--` line replaced by
 the check it stood in for.
 
 ```
-selftest: ok   a click in the middle of a tile is read as that tile (asked Some((N, N)), read Some((N, N)))
+selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
+selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
+selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
-selftest: ok   the floor is N by N tiles, all N of them laid with a tile of the sheet
+selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   the map is N by N tiles with N of them holding N of ore
+selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
 ```
 
 The tileset line checks the **number** of layers as well as their size, because a count that is a
 multiple of six is what a browser draws a black page over (`docs/factory.md`). It is not a check
 that anything was *drawn* — nothing in a log can be — and the evidence for that is a screenshot
-with its pixels counted, in `worklog/2026-09-21-factory-F0.md`.
+with its pixels counted, in `worklog/2026-09-21-factory-F1.md`.
 
-## Factory, a browser — 5 lines
+## Factory, a browser — 9 lines
 
 `…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
 
 ```
 selftest: done — the factory keeps running (a page has nothing to exit to)
-selftest: ok   a click in the middle of a tile is read as that tile (asked Some((N, N)), read Some((N, N)))
+selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
+selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
+selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
-selftest: ok   the floor is N by N tiles, all N of them laid with a tile of the sheet
+selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   the map is N by N tiles with N of them holding N of ore
+selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
 ```
 
@@ -390,10 +413,14 @@ produce when they are put through `tools/fixedlines.sh`; Battle's window and pag
 gained the `FN is Apply` line and Battle's headless list the `handler tasks …` line, which are
 the two things S4 changed.
 
-**Factory's three lists are F0's**, measured on 2026-09-21 on the branch `factory`, one run each,
-with the logs in that stage's scratchpad. They are new lists and not a change to anybody else's:
-the six above were re-run on the same day, after the rubevy bump that opened the stage and again
-at the end of it, and all six diffed empty.
+**Factory's three lists were F0's and are now F1's**, measured on 2026-09-21 on the branch
+`factory`, one run each, with the logs in that stage's scratchpad. F1 moved every one of them and
+the commit says why: F0's four checks were about a floor that F1 replaced, so *the floor is N by N
+tiles laid with a tile of the sheet* became *the map is N by N tiles with N of them holding N of
+ore*, *a click in the middle of a tile is read as that tile* became the four lines that build a
+factory with clicks and watch it deliver, and the two that did not move (the corners, the tileset)
+are word for word what they were. Four lines became eight. They are a change to nobody else's: the
+six above were re-run at the end of the stage and all six diffed empty.
 
 **S7 moved one line**, on 2026-09-20 on the same branch: the garden's window and page lists gained
 `a beetle born in the very frame of Apply is restarted too`, and nothing else in any of the six

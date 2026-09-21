@@ -44,7 +44,8 @@ const ORE_POOR: u16 = 137;
 const BELT_STRAIGHT: [u16; 2] = [132, 133];
 /// A conveyor turning: in at the left, out at the top, its two frames.
 const BELT_CORNER: [u16; 2] = [134, 135];
-/// The drilling rig Kenney's pack has, used as the miner.
+/// Kenney's tile 110 — orange blocks between grey posts. The pack names nothing, so what it
+/// was drawn as is a guess; it is the one that reads as apparatus, so it is the miner.
 const MINER: u16 = 110;
 /// A wooden crate, used as the chest.
 const CHEST: u16 = 85;
@@ -325,8 +326,15 @@ pub fn snap_zoom(snap: Res<SnapZoom>, windows: Query<&Window>, mut view: ResMut<
 /// The nearest half-view to `half_height` that shows a whole number of screen pixels per pixel of
 /// the art — or, once one pixel of the art is smaller than one screen pixel, a whole number of
 /// art pixels per screen pixel, so that zooming out past 1:1 keeps working.
+///
+/// `half_height` is more than zero: the setting it starts from is refused if it is not, and the
+/// wheel keeps it inside a range either side of that (`games_shell::camera::zoom_by`). There is
+/// no floor here for the same reason there is none in [`Rules::spacing`] — a floor would be a
+/// number with nowhere to come from.
+///
+/// [`Rules::spacing`]: crate::belts::Rules::spacing
 pub fn snapped(window_height: f32, half_height: f32) -> f32 {
-    let scale = window_height / (2.0 * half_height.max(0.001));
+    let scale = window_height / (2.0 * half_height);
     let whole = if scale >= 1.0 { scale.round().max(1.0) } else { 1.0 / (1.0 / scale).round() };
     window_height / (2.0 * whole)
 }

@@ -36,9 +36,9 @@ the licence text beside it, because that is the file that redistributes the art.
 |---|---|
 | 0, 1, 2 | the factory floor plates |
 | 3 | the plain ground, which F0 lays as a border |
-| 75–77, 87–89, 99–101, 111–113 | the four machines; F1 places one tile of one of them as a miner |
-| 73, 85, 97 | the wooden crates; F1 places one as a chest |
-| the rest | in the sheet, not used yet: the pipes and the gear that later stages will place. `docs/factory.md` has the numbered table |
+| 110 | the drilling rig, which F1 places as **the miner** |
+| 85 | a wooden crate, which F1 places as **the chest** |
+| the rest | in the sheet, not used yet: the machines, the pipes and the gear that later stages will place. `docs/factory.md` has the numbered table |
 
 Tiles **132–135** of the same sheet are not Kenney's: they are the conveyor straight and corner,
 seen from straight above, drawn by `tools/factory-belts.py` in the pack's own palette and
@@ -46,6 +46,21 @@ cross-section, **MIT, the same as the rest of this repository** (`LICENSE`). The
 corner at all, and the author chose on 2026-09-21 to have the belts drawn from above rather than
 in the pack's three-quarter view, which is what makes four pictures enough for every direction
 and every turn (`docs/factory.md`).
+
+**Tiny Farm 1.0** by Kenney (<https://kenney.nl/assets/tiny-farm>), **CC0 1.0 Universal (public
+domain)**, downloaded 2026-09-21 from the pack's own zip, for one thing: **the ore**. Tiny Factory
+has none, and this pack's rocks — tiles **77 and 89** of its `Tilemap/tilemap_packed.png` — are
+drawn in the same palette as Tiny Factory, so `tools/factory-ore.py` recolours them from their
+grey ramp onto Tiny Factory's orange and sets them on its ground tile. They are tiles **136 and
+137** of the sheet the game loads: plenty of ore left, and nearly gone. The pack as it came is in
+`factory/art/kenney_tiny-farm_tilemap_packed.png` with `LICENSE-kenney-tiny-farm.txt` and
+`Tilesheet-tiny-farm.txt` beside it, and the licence text is beside the sheet in
+`factory/assets/tiles/` as well, because that is the file that redistributes the art.
+
+**The item on a belt** (`factory/assets/items/ore.png`, 8 × 8) is not Kenney's either: two items
+have to sit on a 16 px tile without touching, and a 16 px rock does not survive being halved, so
+`tools/factory-ore.py` draws it pixel by pixel in the same four colours the ground ore was
+recoloured into. **MIT, the same as the rest of this repository.**
 
 CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is how
 anyone who wants more of it finds the pack.

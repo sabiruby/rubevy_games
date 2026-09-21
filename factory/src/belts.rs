@@ -30,6 +30,12 @@ use crate::grid::{Building, Dir, Grid, Ore, What};
 /// (`factory_*` is not needed: the file is this game's), and `docs/numbers.md` §9 says where each
 /// default came from. The ones that are numbers *of play* — how fast a belt runs, how long a dig
 /// takes, how much a chest holds — are the ones F2 moves into Ruby.
+///
+/// **Every one of them is more than zero**, and whoever fills this in is what makes that true:
+/// `main` refuses a setting that is not and says so in the log, and F2's data stage will have to
+/// do the same with what it reads out of Ruby. There is no floor inside the arithmetic below,
+/// because a floor is a number, and a number that is only there to stop a division would have
+/// nowhere it came from.
 #[derive(Resource, Debug, Clone)]
 pub struct Rules {
     /// How many tiles an item is carried in a second.
@@ -49,7 +55,7 @@ pub struct Rules {
 impl Rules {
     /// The gap between two items on a belt, as a fraction of a tile.
     pub fn spacing(&self) -> f32 {
-        1.0 / self.items_per_tile.max(0.001)
+        1.0 / self.items_per_tile
     }
 
     /// **How long one frame of the belt's two-frame animation lasts**, derived rather than
@@ -57,7 +63,7 @@ impl Rules {
     /// chevrons moved half of that (`tools/factory-belts.py`), so the picture only reads as one
     /// moving belt if a swap happens every 4 px the belt travels. One tile is 16 px.
     pub fn belt_frame_seconds(&self) -> f32 {
-        4.0 / (self.belt_tiles_per_second.max(0.001) * crate::TILE_PX as f32)
+        4.0 / (self.belt_tiles_per_second * crate::TILE_PX as f32)
     }
 
     /// How many items a belt delivers a second when it is full — the number a miner's rate and a
@@ -116,8 +122,14 @@ pub enum Move {
     /// The front item of `from` became the last item of `to`.
     Carried { from: usize, to: usize },
     /// The front item of `from` went into a chest and is gone.
+    ///
+    /// **Only items that were on a belt are `Taken`.** A miner standing next to a chest puts its
+    /// dig straight in, and that is one [`Move::Made`] and nothing else: it was never carried, so
+    /// counting it here as well would make `carried + taken` stop meaning "what the belts did".
     Taken { from: usize },
-    /// A miner put a new item at the back of `at`.
+    /// A miner put a new item into `at` — the back of its lane if `at` is a belt, or the chest
+    /// itself if it is a chest. **Both, because what this counts is digs delivered**, and a miner
+    /// that happens to stand next to a chest is digging just as much as one feeding a belt.
     Made { at: usize },
 }
 
@@ -178,6 +190,13 @@ pub fn step(
         // How far the front item may get. Past the end of the tile only if the next tile is a
         // belt with room in it; up to the end of the tile otherwise, which is what a chest, a
         // machine, the edge of the map and a belt facing back at this one all look like.
+        //
+        // **`2.0` is the far end of the next tile**, and it is a cap rather than a number: an
+        // empty neighbour's tail is `INFINITY` (nothing is in the way), so without it the front
+        // would run off to infinity in one step. The hand-over below moves an item one tile at a
+        // time, so at the speeds this is played at (a thirtieth of a tile a frame) nothing ever
+        // reaches it. At a tile a frame it would, and then *whether* the second join is crossed
+        // in the same frame depends on the neighbour's index — see the F1 worklog's notes.
         let room = match room_ahead(grid, t, dir) {
             Some(next) => (1.0 + lanes.tails[next] - spacing).min(2.0),
             None => 1.0,
@@ -256,6 +275,7 @@ pub fn step(
                 if let Some(chest) = grid.at_mut(n) {
                     chest.held += 1;
                 }
+                moves.0.push(Move::Made { at: n });
                 true
             }
             _ => false,
@@ -377,7 +397,12 @@ mod tests {
     /// **A jammed tile holds one more item than `items_per_tile`**, and that is not an off-by-one:
     /// the item at `0.0` is at the tile's entry edge, which is the same point in the world as
     /// `1.0` on the tile before it. `items_per_tile` is how many *gaps* fit in a tile's length,
-    /// and a queue of N gaps has N + 1 things in it.
+    /// and a queue of N gaps has N + 1 things in it. (With the gap this game is played at. When
+    /// the gap is not a number `f32` holds exactly it can be one fewer, which is what
+    /// [`a_jam_keeps_the_gap_even_when_the_gap_is_not_an_exact_number`] is about.)
+    ///
+    /// [`a_jam_keeps_the_gap_even_when_the_gap_is_not_an_exact_number`]:
+    ///     self::a_jam_keeps_the_gap_even_when_the_gap_is_not_an_exact_number
     #[test]
     fn items_pile_up_behind_a_belt_that_runs_into_nothing() {
         let rules = rules();
@@ -525,9 +550,76 @@ mod tests {
         // and the moment there is somewhere to put it, it goes: the wait was not lost
         let chest = grid.index(UVec2::new(3, 2));
         grid.place(chest, Building::new(What::Chest, Dir::East));
-        step(&mut grid, &mut ore, &mut lanes, &rules, FRAME);
+        let moves = step(&mut grid, &mut ore, &mut lanes, &rules, FRAME);
         assert_eq!(grid.at(chest).unwrap().held, 1);
         assert_eq!(ore.left[pit], 4);
+        // **a dig straight into a chest is still a dig**: it is counted, and it is not counted
+        // twice by also being something a belt took
+        assert_eq!(moves.made(), 1, "{:?}", moves.0);
+        assert_eq!(moves.taken(), 0, "it was never on a belt: {:?}", moves.0);
+    }
+
+    /// **What a jam does when the gap is not a number `f32` can hold exactly.**
+    ///
+    /// The test above says a jammed tile holds `items_per_tile + 1`, and that is a statement about
+    /// arithmetic with no rounding in it: it wants `items_per_tile` gaps to add up to exactly one
+    /// tile. They only do when `1 / items_per_tile` is exact, which is when it is a power of two.
+    /// `1 / 3` rounds **up**, so three of them are a hair longer than a tile and the fourth item
+    /// does not fit; and the position of a jammed item is not `1 - k × gap` but a chain of
+    /// subtractions, each rounded again, so which way the last one falls is not something to work
+    /// out on paper. This runs it.
+    ///
+    /// **What is being asserted is the invariant and not the count**: no item is ever lost, and no
+    /// two are ever closer than a gap. How many end up on the tile is a *consequence* of the gap,
+    /// and it is either `items_per_tile` or one more — a tile holding one item's worth less of
+    /// buffer than the whole number suggests is not a wrong factory, it is the number 1/3.
+    ///
+    /// Measured 2026-09-21: 1, 2, 4, 5, 7 and 8 all hold one more than their number, and **3
+    /// holds three**. It is not "the exact ones behave and the rest do not": three gaps of
+    /// `f32(1/3)` come to a hair *over* a tile so the fourth item is turned away at the join,
+    /// while five gaps of `f32(1/5)` come to a hair over as well and the chain of subtractions
+    /// rounds back far enough to let the sixth in. Nothing is lost either way.
+    #[test]
+    fn a_jam_keeps_the_gap_even_when_the_gap_is_not_an_exact_number() {
+        for items_per_tile in [1.0f32, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0] {
+            let rules = Rules { items_per_tile, ..rules() };
+            let (mut grid, mut ore, mut lanes) = line(2);
+            let first = grid.index(UVec2::new(1, 1));
+            let last = grid.index(UVec2::new(2, 1));
+            // three tiles' worth, so that the far tile fills, the near one fills behind it, and
+            // there are still some waiting off the back of the line
+            let all = (items_per_tile as usize + 1) * 3;
+            for i in 0..all {
+                lanes.of[first].push_back(-(i as f32) * rules.spacing());
+            }
+            run(&mut grid, &mut ore, &mut lanes, &rules, 1200);
+
+            let held = lanes.of[last].len();
+            println!("items_per_tile {items_per_tile}: a jammed tile holds {held}");
+            assert_eq!(lanes.count(), all, "nothing was lost ({items_per_tile})");
+            assert!(
+                (lanes.of[last][0] - 1.0).abs() < 1e-5,
+                "the front is at the end of the tile ({items_per_tile}): {:?}",
+                lanes.of[last]
+            );
+            for lane in [&lanes.of[first], &lanes.of[last]] {
+                for pair in lane.iter().collect::<Vec<_>>().windows(2) {
+                    assert!(
+                        pair[0] - pair[1] >= rules.spacing() - 1e-5,
+                        "{items_per_tile}: {lane:?}"
+                    );
+                }
+            }
+            assert!(
+                1.0 + lanes.of[last][held - 1] - lanes.of[first][0] >= rules.spacing() - 1e-5,
+                "the gap is kept across the join too ({items_per_tile})"
+            );
+            let whole = items_per_tile as usize;
+            assert!(
+                held == whole || held == whole + 1,
+                "{items_per_tile}: a tile holds its own number of gaps' worth, or one more — {held}"
+            );
+        }
     }
 
     /// The gap is a number a player can move, and moving it moves how much a tile holds.

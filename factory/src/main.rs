@@ -108,13 +108,14 @@ const WINDOW: [f32; 2] = [1600.0, 900.0];
 ///
 /// **The headless default is an upper bound and not a wait.** The checks wait for conditions and
 /// end the run the moment they are all answered; the longest of them waits for a miner to dig and
-/// a belt to carry, which is `mine_seconds + tiles ÷ belt speed` of the game's own time — 2.5 s
-/// with the defaults. Ten seconds is four times that.
+/// a belt to carry four tiles, which is `mine_seconds + 4 ÷ belt_tiles_per_second` of the game's
+/// own time — 3.0 s with the defaults, and 2.3 to 2.4 s measured. Ten seconds is three times that
+/// and a bit.
 const HEADLESS_SECONDS: f32 = 10.0;
 const SHOT_FILE: &str = "shot.png";
 /// `--shot` with no seconds. The picture wants the factory working, not only laid out: the checks'
-/// little line takes 2.5 s to put its first item in its chest (above), so this is that and a
-/// second over.
+/// little line takes 3.0 s of the game's own time to put its first item in its chest (above), so
+/// this is just past it.
 const SHOT_SECONDS: f32 = 3.5;
 
 /// **How long the checks wait for the tileset to arrive, in frames.** They wait for the thing
@@ -226,7 +227,7 @@ fn main() {
     );
 
     let mut map = Map { tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(8.0) as u32 };
-    let half_height = settings.number("camera_half_height").unwrap_or(CAMERA_HALF_HEIGHT);
+    let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
     let window = [
         settings.number("window_width").unwrap_or(WINDOW[0]),
         settings.number("window_height").unwrap_or(WINDOW[1]),
@@ -237,12 +238,12 @@ fn main() {
         settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
     );
     let rules = Rules {
-        belt_tiles_per_second: settings.number("belt_tiles_per_second").unwrap_or(2.0),
-        items_per_tile: settings.number("items_per_tile").unwrap_or(2.0),
-        mine_seconds: settings.number("mine_seconds").unwrap_or(1.0),
-        chest_capacity: settings.number("chest_capacity").unwrap_or(60.0).max(1.0) as u32,
-        ore_per_tile: settings.number("ore_per_tile").unwrap_or(60.0).max(1.0) as u32,
-        ore_patch_radius: settings.number("ore_patch_radius").unwrap_or(3.0),
+        belt_tiles_per_second: positive(&settings, "belt_tiles_per_second", 2.0),
+        items_per_tile: positive(&settings, "items_per_tile", 2.0),
+        mine_seconds: positive(&settings, "mine_seconds", 1.0),
+        chest_capacity: counted(&settings, "chest_capacity", 60.0),
+        ore_per_tile: counted(&settings, "ore_per_tile", 60.0),
+        ore_patch_radius: positive(&settings, "ore_patch_radius", 3.0),
     };
     let stress = args
         .value("--stress")
@@ -382,6 +383,33 @@ fn main() {
         warn!("no Ruby at {ruby:?}: nothing to run there yet, but F2 will want it");
     }
     app.run();
+}
+
+/// **A setting that has to be more than zero**, and the reason there is no floor inside the
+/// arithmetic that uses one ([`belts::Rules`]). A speed of zero is not a slow belt, it is a
+/// division; a gap of zero is not a crowded tile, it is every item in the same place. There is no
+/// sensible number to clamp such a setting to — the smallest belt speed that still means anything
+/// is not something anybody measured — so the store is told it is wrong and the default stands.
+fn positive(settings: &games_shell::Settings, key: &str, default: f32) -> f32 {
+    match settings.number(key) {
+        Some(n) if n > 0.0 => n,
+        Some(wrong) => {
+            warn!("{key} = {wrong} is not more than zero; using {default}");
+            default
+        }
+        None => default,
+    }
+}
+
+/// The same, for a setting that counts **things**. Items are whole and there is at least one of
+/// them, which is not a threshold anybody chose: half an item in a chest is not a smaller chest.
+fn counted(settings: &games_shell::Settings, key: &str, default: f32) -> u32 {
+    let asked = positive(settings, key, default).round();
+    if asked < 1.0 {
+        warn!("{key} counts items, so it cannot round to less than one; using {default}");
+        return default as u32;
+    }
+    asked as u32
 }
 
 /// Where one step of the factory happens, so that everything else can say whether it is before or
