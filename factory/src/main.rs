@@ -295,8 +295,10 @@ fn main() {
     // `Startup` after the data stage (`lay_the_land`), and everything that wanted the map's size
     // in `main` went with it: the grid, the lanes, the chunk and the camera's edges. What F1 had
     // here was a `.max` that raised a too-small map without saying so; what says no now is the
-    // data stage, at the line the size is written on.
-    say_where_the_map_went(&settings);
+    // data stage, at the line the size is written on. (What a store written by an older build is
+    // told is in `say_where_the_map_went`, which is a `Startup` system rather than a line here:
+    // **there is no log yet in `main`** — `LogPlugin` is one of the plugins below — so a `warn!`
+    // written here goes nowhere at all, which is how it was found.)
     let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
     let window = [
         settings.number("window_width").unwrap_or(WINDOW[0]),
@@ -451,6 +453,7 @@ fn main() {
         .init_resource::<inserters::Arms>()
         .insert_resource(stagger)
         .add_systems(Startup, set_the_budget)
+        .add_systems(Startup, say_where_the_map_went)
         .add_systems(Startup, read_the_data_stage)
         .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
         // **the inserters' half**, and every line of it is after the data stage: what an arm is
@@ -810,8 +813,8 @@ fn moved_settings(settings: &games_shell::Settings) -> Vec<String> {
         .collect()
 }
 
-fn say_where_the_map_went(settings: &games_shell::Settings) {
-    for says in moved_settings(settings) {
+fn say_where_the_map_went(settings: Res<games_shell::Settings>) {
+    for says in moved_settings(&settings) {
         warn!("{says}");
     }
 }
