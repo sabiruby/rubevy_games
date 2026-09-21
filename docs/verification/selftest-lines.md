@@ -35,7 +35,7 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25     # Battle, no wind
 SABIBOTS_SELFTEST=1 docker/run.sh sabibots release             # Battle, a window (WSLg, lavapipe)
 GARDEN_SELFTEST=1   cargo run -p garden   -- --headless 90     # the garden, no window
 GARDEN_SELFTEST=1   docker/run.sh garden   release             # the garden, a window
-FACTORY_SELFTEST=1  cargo run -p factory  -- --headless 30     # Factory, no window
+FACTORY_SELFTEST=1  cargo run -p factory  -- --headless         # Factory, no window (the default is 66 s)
 FACTORY_SELFTEST=1  docker/run.sh factory  release             # Factory, a window
 web/build.sh all && web/serve.sh                               # then …/sabibots/?selftest and …/garden/?selftest
 web/build.sh factory                                           # then …/factory/?selftest
@@ -338,19 +338,21 @@ selftest: ok   typing in the rules marks them edited
 selftest: ok   typing marks the text edited
 ```
 
-## Factory, no window — 19 lines
+## Factory, no window — 24 lines
 
-`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 30`. F1's eight, F2's five and F3's six:
-the world, the arithmetic a click goes through, the picture (where there is one), **a factory
-built with orders and watched until it delivers**, the data stage — what it read, what it
-refuses, and what a script can read back out of it — and **the inserters**, which are the machines
-with a mind. The last of F3's six is a `--` here: driving the panel needs a window.
+`FACTORY_SELFTEST=1 cargo run -p factory -- --headless`. F1's eight, F2's five, F3's six and
+**F4's five**: the world, the arithmetic a click goes through, the picture (where there is one),
+**a factory built with orders and watched until it delivers**, the data stage — what it read, what
+it refuses, and what a script can read back out of it — **the inserters**, which are the machines
+with a mind, and **the control stage**, which is the one script that says what the factory is for.
+The last of F3's six is a `--` here: driving the panel needs a window.
 
 ```
 selftest: --   no floor was drawn (this run has no renderer)
 selftest: --   the editor was not driven (this run has no window)
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
+selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: RuntimeError, and the chest went from N to N
 selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
@@ -359,12 +361,16 @@ selftest: ok   an inserter taken away leaves no script behind: N scripts where t
 selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:N (after N s)
 selftest: ok   every inserter on the map has a script of its own: N arms, N scripts
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   nothing published to the control stage was dropped: N in the script, N in the VM
 selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
+selftest: ok   the control stage heard what the factory did: N built, N crafted, N delivered
 selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
 selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
+selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore N / N (after N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the rest of the factory is untouched: N of N inserters stopped, and the assembler line has N in its chest
+selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: N delivered, won false
 selftest: ok   with no inserter in the gap nothing reaches the machine: N/N lines are jammed on the belt with the machine empty
 ```
 
@@ -404,7 +410,28 @@ has a script; one arm given a script that raises stops **and the game knows whic
 file**, while the other line goes on filling its chest; and an arm taken away leaves no script and
 nothing parked on a `move` that will never be answered. The panel's four are in a window only.
 
-## Factory, a window — 22 lines
+**The F4 lines are the control stage, and three of them are one factory told three things.** The
+first says the events reach the script at all — the counters the game reads off the control object
+say how much of each it has heard. Then the checks put their own `control.rb` over the one that
+ships, twice: a goal of **one ore**, which the miner's line delivers within a dig and three tiles
+of belt, and a goal of **more ore than there is in the whole ground**, which the same factory goes
+on delivering into without ever winning. (The second number is asked of the world rather than
+written down, which is what keeps it from being a number somebody preferred.) Then a `control.rb`
+that raises, to show that what is left is a factory with no goal rather than a game that stopped —
+and that the game can still say `control.rb:2`, which it can only do because the game puts the
+player's file inside a method of one line (`factory/src/control.rs`, `in_a_method`): an inserter's
+file is a block and a control file is top-level code, so without that its exceptions would happen
+while the program was being loaded, where nothing can ask where they were. Last, **nothing
+published to it was ever dropped**, from both ends — the VM's own count and the script's own
+`Subscription#dropped`. That last line is the one to watch if the events are ever made finer: the
+granularity was chosen by dividing the sixty-four a subscription holds by what a frame can
+publish, and a number other than zero there says the division came out wrong.
+
+**F4's checks are a system of their own** (`control_checks`), because a Bevy system may take
+sixteen parameters and the other checks take sixteen. The two share the run and hand it to each
+other by the step they are on, so the order of the lines is what it was.
+
+## Factory, a window — 27 lines
 
 `FACTORY_SELFTEST=1 docker/run.sh factory release`. The headless seventeen that are not `--`, the
 tileset the first of those stood in for, and **the four the panel is driven for**.
@@ -422,6 +449,7 @@ selftest: ok   Apply to every inserter reached all N of them and loaded no new p
 selftest: ok   Revert put all N of them back on inserter.rb
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
+selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: RuntimeError, and the chest went from N to N
 selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
@@ -431,13 +459,17 @@ selftest: ok   an inserter whose script raises stops, and the game knows where: 
 selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
 selftest: ok   every inserter on the map has a script of its own: N arms, N scripts
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   nothing published to the control stage was dropped: N in the script, N in the VM
 selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
+selftest: ok   the control stage heard what the factory did: N built, N crafted, N delivered
 selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
 selftest: ok   the editor applied a script to one inserter and left the other N alone (N programs in the VM, was N)
 selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
+selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore N / N (after N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the rest of the factory is untouched: N of N inserters stopped, and the assembler line has N in its chest
+selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: N delivered, won false
 selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
 selftest: ok   with no inserter in the gap nothing reaches the machine: N/N lines are jammed on the belt with the machine empty
 ```
@@ -448,7 +480,7 @@ that anything was *drawn* — nothing in a log can be — and the evidence for t
 with its pixels counted, in `worklog/2026-09-21-factory-F0.md` for the floor and
 `worklog/2026-09-21-factory-F1.md` §5.4, `…-F2.md` and `…-F3.md` for the factory built on it.
 
-## Factory, a browser — 23 lines
+## Factory, a browser — 28 lines
 
 `…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
 
@@ -464,6 +496,7 @@ selftest: ok   Apply to every inserter reached all N of them and loaded no new p
 selftest: ok   Revert put all N of them back on inserter.rb
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
+selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: RuntimeError, and the chest went from N to N
 selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
@@ -473,13 +506,17 @@ selftest: ok   an inserter whose script raises stops, and the game knows where: 
 selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
 selftest: ok   every inserter on the map has a script of its own: N arms, N scripts
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
+selftest: ok   nothing published to the control stage was dropped: N in the script, N in the VM
 selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
+selftest: ok   the control stage heard what the factory did: N built, N crafted, N delivered
 selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
 selftest: ok   the editor applied a script to one inserter and left the other N alone (N programs in the VM, was N)
 selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
+selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore N / N (after N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
 selftest: ok   the rest of the factory is untouched: N of N inserters stopped, and the assembler line has N in its chest
+selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: N delivered, won false
 selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
 selftest: ok   with no inserter in the gap nothing reaches the machine: N/N lines are jammed on the belt with the machine empty
 ```
@@ -495,7 +532,18 @@ produce when they are put through `tools/fixedlines.sh`; Battle's window and pag
 gained the `FN is Apply` line and Battle's headless list the `handler tasks …` line, which are
 the two things S4 changed.
 
-**Factory's three lists are F3's**, measured on 2026-09-21 on the branch `factory` (headless once,
+**Factory's three lists are F4's**, measured on 2026-09-22 on the branch `factory` (headless
+twice — the two runs diffed empty against each other — the window once and the page once). **F4
+added five to each of the three** and moved none of the others: the headless nineteen became
+twenty-four, the window's twenty-two became twenty-seven and the page's twenty-three became
+twenty-eight. The five are the control stage: the events reaching it, a goal reached, the same
+factory not winning on another goal, a broken `control.rb` leaving the factory running, and
+nothing dropped. The other two games' six lists were run again at the end of the stage; the
+garden's headless list diffed empty, and Battle's headless run said `--` for the line about
+handler tasks (`none was down long enough to check`) where the list here has an `ok` — a line that
+depends on how a match goes, on a machine that had another agent's runs on it. No `FAIL` anywhere.
+
+**Before that they were F3's**, measured on 2026-09-21 on the branch `factory` (headless once,
 the window three times, the page once). **F3 added six to the headless list and nine to the
 other two** and moved two of the others. The five
 are the stage: with no inserter in the gap nothing reaches the machine, every inserter has a

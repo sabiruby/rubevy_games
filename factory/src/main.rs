@@ -31,6 +31,7 @@
 
 mod belts;
 mod build;
+mod control;
 mod data;
 mod draw;
 mod grid;
@@ -114,11 +115,15 @@ const WINDOW: [f32; 2] = [1600.0, 900.0];
 ///   (it is a condition that is true in one tile's time and the bound is barely reached);
 /// * the two machine lines — `swing (the script's first look) + one swing per thing the recipe
 ///   eats + time ÷ speed + swing + 1 ÷ belt`, 5.5 s, so 11;
-/// * an arm whose script raises — a swing, so 2.
+/// * an arm whose script raises — a swing, so 2;
+/// * **F4's three**, each of them the miner's line putting one more thing in its chest
+///   (`mine_seconds + 4 ÷ belt`, 3.0 s, so 6 each): the goal being reached, the goal that cannot
+///   be reached not being reached, and the factory still running with a broken `control.rb` —
+///   **18**.
 ///
-/// **Twenty seconds of the game's own time**, then, and thirty is half as much again. What a run
-/// where nothing is wrong takes is 10.5 s, measured 2026-09-21.
-const HEADLESS_SECONDS: f32 = 30.0;
+/// **Forty-four seconds of the game's own time**, then, and sixty-six is half as much again. What
+/// a run where nothing is wrong takes is 15 s, measured 2026-09-22 (it was 10.5 s at F3).
+const HEADLESS_SECONDS: f32 = 66.0;
 const SHOT_FILE: &str = "shot.png";
 /// `--shot` with no seconds. The picture wants the factory **working**: the two machine lines
 /// start at about 4 s of the game's own time and their first item is in the chest at 9.5 s
@@ -419,8 +424,15 @@ fn main() {
                     draw::start_drawing.run_if(resource_exists::<Map>),
                     point_the_camera_at_the_map.run_if(resource_exists::<Map>),
                     say_the_trouble,
+                    control::put_the_line_on_the_screen,
                 )
                     .after(lay_the_land),
+            )
+            // **F4's one line of screen, and F5's egui HUD replaces it**: what the goal is, what
+            // the control stage has heard, and what was dropped
+            .add_systems(
+                Update,
+                control::show_what_it_says.run_if(resource_exists::<control::TheControl>),
             )
             // **the keys are the window's**: a run with no window has no `ButtonInput` at all
             // (it is `InputPlugin`'s, and `MinimalPlugins` is not that), and the checks work the
@@ -462,6 +474,37 @@ fn main() {
         .add_systems(
             Startup,
             (inserters::read_the_scripts, inserters::install_answers).after(read_the_data_stage),
+        )
+        // **the control stage** (F4): one script, after the data stage, because the names it is
+        // told about are `data.rb`'s
+        .init_resource::<control::Happenings>()
+        .add_message::<control::Rewrite>()
+        .add_systems(
+            Update,
+            control::follow_the_rewrites
+                .before(FactorySet::Step)
+                .run_if(resource_exists::<control::TheControl>),
+        )
+        .add_systems(
+            Startup,
+            control::read_the_control_stage
+                .after(read_the_data_stage)
+                .run_if(resource_exists::<Data>),
+        )
+        .add_systems(
+            Update,
+            (
+                // what happened is published after the step, so a script hears about a frame at
+                // the head of the frame after it; what the script says is read back in the same
+                // order, so the line on the screen is never half a frame old
+                control::tell_the_control_stage,
+                control::hear_the_control_stage,
+                control::watch_the_control_ending,
+                control::say_if_anything_was_dropped,
+            )
+                .chain()
+                .after(FactorySet::Step)
+                .run_if(resource_exists::<control::TheControl>),
         )
         .add_systems(
             Update,
@@ -547,10 +590,22 @@ fn main() {
         // on one frame and looks at what it did on the next, so it has to be on the same side of
         // `build::orders` every frame or it looks a frame early. Hence this line, and hence it
         // names `orders` rather than `clicks` — what a mouse does is no longer its business.
-        app.init_resource::<SelfTest>().add_systems(
-            Update,
-            selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
-        );
+        app.init_resource::<SelfTest>()
+            .add_systems(
+                Update,
+                selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
+            )
+            // **F4's checks are a system of their own** and on the same side of the building as
+            // the rest ([`CONTROL_CHECKS`])
+            .add_systems(
+                Update,
+                control_checks
+                    .before(build::orders)
+                    .before(control::follow_the_rewrites)
+                    .before(FactorySet::Step)
+                    .run_if(the_factory_is_up)
+                    .run_if(resource_exists::<control::TheControl>),
+            );
     }
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
@@ -882,7 +937,7 @@ fn lay_the_snake(
         let upto = (wanted * (i + 1)) / belts.max(1);
         let mut along = rules.tile();
         while laid < upto {
-            lanes.of[t as usize].push_back(OnBelt { along, item: rules.digs });
+            lanes.put_on(t as usize, OnBelt { along, item: rules.digs });
             along -= spacing;
             laid += 1;
         }
@@ -1135,8 +1190,17 @@ struct SelfTest {
     others: Vec<String>,
     /// Frames spent waiting for the panel to catch up ([`PANEL_WAIT_FRAMES`]).
     waited: u32,
+    /// **F4**: what the control stage's own subscriptions had lost while one was running, read
+    /// before the checks break it on purpose.
+    dropped_in_the_script: u64,
     done: bool,
 }
+
+/// **The steps the control stage's checks are**, which are a system of their own
+/// ([`control_checks`]): a Bevy system may take sixteen parameters and [`selftest`] takes sixteen.
+/// The first of them is where [`selftest`] hands over and the last is where it takes the run back
+/// to say it is done.
+const CONTROL_CHECKS: std::ops::Range<u8> = 31..40;
 
 /// **A script that does nothing but wait**, for the editor to apply. It compiles and runs, which
 /// is what is being measured — in a browser that means the page's own compiler was called
@@ -1172,6 +1236,9 @@ const A_BROKEN_SCRIPT: &str = concat!(
 struct MachineCheck {
     what: String,
     makes: data::ItemId,
+    /// which recipe it will run, so that the belt that feeds it can be given what it eats
+    /// without working out where the line is a second time (`seed_the_machine_lines`)
+    recipe: data::RecipeId,
     made_of: String,
     /// the machine's own tile
     at: usize,
@@ -1219,6 +1286,12 @@ fn selftest(
     mut exit: MessageWriter<AppExit>,
 ) {
     if test.done {
+        return;
+    }
+    // **F4's are next door** ([`control_checks`]), because this system already takes the sixteen
+    // parameters a Bevy system may take. It carries the run on from where this one left it and
+    // hands it back at the end of [`CONTROL_CHECKS`], where the `_` arm below says it is done.
+    if CONTROL_CHECKS.contains(&test.step) {
         return;
     }
     test.frames += 1;
@@ -1328,9 +1401,14 @@ fn selftest(
         }
         // ---- a miner cannot stand anywhere but on ore -----------------------------------------
         3 => {
-            // the middle of the map, which `Ore::laid_out` leaves bare on purpose — for any even
-            // number of patches, because their middles are at the middles of the cells
-            let bare = map.tiles / 2;
+            // **a tile with no ore in it, asked for rather than worked out** (F4). It was the
+            // middle of the map, which is bare for an even number of patches and is the middle of
+            // one for an odd number — and how many there are is a line of `ruby/data.rb`.
+            let Some(bare) = somewhere_clear(&map, &grid, &ore, UVec2::ONE) else {
+                say("FAIL", "there is nowhere on this map without ore in it");
+                test.step = 5;
+                return;
+            };
             orders.write(build::Order { at: bare, what: Some(What::Miner), dir: Dir::East });
             test.line = vec![bare];
             test.step = 4;
@@ -1445,7 +1523,7 @@ fn selftest(
         15 => {
             // the two little factories: two belts, a machine, a belt and a chest each — and the
             // two arms each needs, which are built later, on purpose (step 17)
-            match lay_out_the_machine_lines(&map, &data, &rules, &mut test) {
+            match lay_out_the_machine_lines(&map, &data, &rules, &grid, &ore, &mut test) {
                 true => test.step = 16,
                 false => {
                     say("FAIL", "there was nowhere to build the machines the data file declares");
@@ -1462,7 +1540,8 @@ fn selftest(
         16 => {
             // the frame after the orders: the buildings are there, so the feeding belts can be
             // loaded with what each machine eats
-            seed_the_machine_lines(&map, &data, &rules, &grid, &mut lanes);
+            let lines = test.machines.clone();
+            seed_the_machine_lines(&data, &rules, &mut lanes, &lines);
             test.started = time.elapsed_secs();
             test.step = 17;
         }
@@ -1827,42 +1906,272 @@ fn selftest(
     }
 }
 
+/// **F4's checks: the control stage** — the events reaching it, a goal being reached, the same
+/// factory *not* reaching another one, a control.rb that will not run, and nothing dropped.
+///
+/// It is a system of its own because [`selftest`] takes the sixteen parameters a Bevy system may
+/// take; the two share the `SelfTest` resource and hand the run to each other by its `step`
+/// ([`CONTROL_CHECKS`]). Like [`selftest`] it runs **before the orders are carried out**, so that
+/// a check that gives an order on one frame and looks at what it did on the next is on the same
+/// side of the building in every frame.
+#[allow(clippy::too_many_arguments)]
+fn control_checks(
+    mut test: ResMut<SelfTest>,
+    time: Res<Time>,
+    rules: Res<Rules>,
+    grid: Res<Grid>,
+    ore: Res<Ore>,
+    control: Res<control::TheControl>,
+    scripts: Res<ScriptWorld>,
+    mut rewrite: MessageWriter<control::Rewrite>,
+    mut orders: MessageWriter<build::Order>,
+) {
+    if !CONTROL_CHECKS.contains(&test.step) {
+        return;
+    }
+    // **what the miner's line takes to put one more thing in its chest**, which is the bound of
+    // every wait below: a dig and the three tiles of belt and the step into the chest, which is
+    // the same sentence F1's own check is written with
+    let a_delivery = (rules.mine_seconds + 4.0 / rules.belt_tiles_per_second) * CHECK_SLACK;
+    let in_the_chest = |test: &SelfTest| {
+        test.line
+            .last()
+            .and_then(|&t| grid.at(grid.index(t)))
+            .map(|b| b.held.count())
+            .unwrap_or(0)
+    };
+    match test.step {
+        // ---- the events reached the script ----------------------------------------------------
+        31 => {
+            let seen = control.seen;
+            let (built, crafted, delivered) = (seen[0], seen[2], seen[3]);
+            say(
+                if built > 0 && crafted > 0 && delivered > 0 { "ok  " } else { "FAIL" },
+                &format!(
+                    "the control stage heard what the factory did: {built} built, {crafted} crafted, {delivered} delivered"
+                ),
+            );
+            // **and the miner's line is joined up again**: step 13 took its first belt away to
+            // prove that taking things away works, and what the goal below counts is the ore that
+            // line delivers. Everything else the checks built delivers once and stops.
+            if let Some(&belt) = test.line.get(1) {
+                orders.write(build::Order { at: belt, what: Some(What::Belt), dir: Dir::East });
+            }
+            test.step = 32;
+        }
+        // ---- a goal this factory reaches --------------------------------------------------
+        32 => {
+            rewrite.write(control::Rewrite(a_goal_of(1)));
+            test.started = time.elapsed_secs();
+            test.step = 33;
+        }
+        33 => {
+            let waited = time.elapsed_secs() - test.started;
+            // **waited for as a condition**: the belt was laid back a moment ago and a miner
+            // takes `mine_seconds` over a dig, so a win is one delivery away
+            if !control.won && waited < a_delivery {
+                return;
+            }
+            say(
+                if control.won { "ok  " } else { "FAIL" },
+                &format!(
+                    "the goal in control.rb is reached and the game is told: {} (after {waited:.1} s)",
+                    control.saying.clone().unwrap_or_else(|| "it said nothing".into())
+                ),
+            );
+            // and now **the same factory with a goal it cannot reach**: more ore than there is in
+            // the ground, which is a number the world says rather than one anybody picked
+            test.dropped_in_the_script = control.dropped;
+            rewrite.write(control::Rewrite(a_goal_of(ore.total() + 1)));
+            test.started = time.elapsed_secs();
+            test.step = 34;
+        }
+        34 => {
+            let heard = control.seen[3];
+            let waited = time.elapsed_secs() - test.started;
+            // what is waited for is the *new* script hearing a delivery: without that, "it did
+            // not win" would be true of a script that never started
+            if heard == 0 && waited < a_delivery {
+                return;
+            }
+            say(
+                if heard > 0 && !control.won { "ok  " } else { "FAIL" },
+                &format!(
+                    "the same factory does not win on a control.rb that asks for more than the ground holds: {heard} delivered, won {}",
+                    control.won
+                ),
+            );
+            // and now one that will not run at all
+            rewrite.write(control::Rewrite(A_BROKEN_CONTROL.to_string()));
+            test.waited = 0;
+            test.step = 35;
+        }
+        // ---- a control.rb that will not run -------------------------------------------------
+        35 => {
+            // the program is compiled on the frame the message is read, the new `Script` lands at
+            // the sync point after that and rubevy starts the task at the head of the frame after
+            // *that* — the three frames [`PANEL_WAIT_FRAMES`] is twice
+            test.waited += 1;
+            if control.trouble.is_none() && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.before = in_the_chest(&test) as usize;
+            test.started = time.elapsed_secs();
+            test.step = 36;
+        }
+        36 => {
+            let held = in_the_chest(&test) as usize;
+            let waited = time.elapsed_secs() - test.started;
+            if held <= test.before && waited < a_delivery {
+                return;
+            }
+            let at = control.trouble.clone().unwrap_or_else(|| "nothing went wrong".into());
+            say(
+                // **the place as well as the fact**: a control.rb is written at the top level, so
+                // the game puts it inside a method of one line to have its exceptions inside the
+                // prelude's `rescue` (`crate::control::in_a_method`)
+                if at.contains(&format!("{}:", control::SCRIPT_FILE)) && held > test.before {
+                    "ok  "
+                } else {
+                    "FAIL"
+                },
+                &format!(
+                    "a control.rb that will not run leaves the factory running: {at}, and the chest went from {} to {held}",
+                    test.before
+                ),
+            );
+            test.step = 37;
+        }
+        // ---- and nothing published to it was ever lost ---------------------------------------
+        _ => {
+            let vm = scripts.dropped();
+            say(
+                if vm == 0 && test.dropped_in_the_script == 0 { "ok  " } else { "FAIL" },
+                &format!(
+                    "nothing published to the control stage was dropped: {} in the script, {vm} in the VM",
+                    test.dropped_in_the_script
+                ),
+            );
+            test.step = CONTROL_CHECKS.end;
+        }
+    }
+}
+
+/// **A goal of so much ore**, which is the one thing the checks' own factory goes on delivering:
+/// the miner's line digs it and its chest is nowhere near full.
+fn a_goal_of(ore: u64) -> String {
+    // **and an `on(:delivered)` that does nothing**: the counter the game reads off the script is
+    // bumped where a handler runs (`ruby/control_prelude.rb`), so a script with no handler in it
+    // hears everything and says it heard nothing. What the check needs to know is that *this*
+    // script is being told about the same factory, which is what an empty handler proves.
+    format!("goal deliver: {{ iron_ore: {ore} }}\non(:delivered) {{ |item, n, x, y| }}\n")
+}
+
+/// **A control.rb that will not run**, for the check that says one of those leaves a factory with
+/// no goal rather than a game that stopped. It raises rather than failing to compile because a
+/// raise is the harder half — and because it is the half a *line number* is hard to have for: it
+/// happens at the top level of the file, where there is no block to be inside.
+const A_BROKEN_CONTROL: &str = concat!(
+    "goal deliver: { iron_ore: 1 }\n",
+    "nothing.at.all\n",
+);
+
+/// **Somewhere to build the machine lines**: a rectangle with no ore under it and nothing built
+/// on it yet, looked for **outwards from the middle of the map**.
+///
+/// It was `the middle of the map` until F4, with a comment saying `Ore::laid_out` keeps the middle
+/// bare — which is true of an even number of patches and not of an odd one, because their middles
+/// are at the middles of the cells (`worklog/2026-09-21-factory-F3a.md`, the third thing it
+/// noticed). A check that knows where the ore is *because it has done the same arithmetic* stops
+/// being true the moment the arithmetic changes, and `patches: [3, 3]` in `ruby/data.rb` is a line
+/// anybody may write. So this asks the ore and the grid instead.
+///
+/// The middle is still where it starts, so nothing moves on the default map — and the picture
+/// `--shot` takes is still the one it was, because the camera opens looking at the middle.
+fn room_for_the_machine_lines(map: &Map, data: &Data, grid: &Grid, ore: &Ore) -> Option<UVec2> {
+    let how_many = data.machines.len() as u32;
+    let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
+    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
+    // one row per machine, `tall + 1` apart so that a footprint never reaches the next row; and
+    // `wide + 6` across, which is belt, belt, arm, machine, arm, belt, chest at its widest
+    let block = UVec2::new(
+        wide + 6,
+        how_many.saturating_sub(1) * (tall + 1) + tall,
+    );
+    somewhere_clear(map, grid, ore, block)
+}
+
+/// **The bottom-left corner of a rectangle of this size with no ore in it and nothing built on
+/// it**, looked for outwards from the middle of the map — or `None` where the map has no such
+/// room anywhere.
+///
+/// It is what the checks ask instead of knowing where the ore is: how many patches there are and
+/// how wide they are are `ruby/data.rb`'s, so **a check that works the bare ground out for itself
+/// is a check that a line of Ruby can break** (F3a's third note). Both of the places that wanted
+/// bare ground go through here — the tile a miner may not be built on, and the machine lines.
+fn somewhere_clear(map: &Map, grid: &Grid, ore: &Ore, block: UVec2) -> Option<UVec2> {
+    if block.x > map.tiles.x || block.y > map.tiles.y {
+        return None;
+    }
+    let clear = |left: u32, bottom: u32| {
+        (bottom..bottom + block.y).all(|y| {
+            (left..left + block.x).all(|x| {
+                let t = grid.index(UVec2::new(x, y));
+                ore.left[t] == 0 && grid.at(t).is_none()
+            })
+        })
+    };
+    // **the middle first, and then outwards**: the block is centred on the middle of the map,
+    // and the search walks away from there a row and a column at a time
+    let middle = (map.tiles - block) / 2;
+    for bottom in outwards(middle.y, map.tiles.y - block.y + 1) {
+        for left in outwards(middle.x, map.tiles.x - block.x + 1) {
+            if clear(left, bottom) {
+                return Some(UVec2::new(left, bottom));
+            }
+        }
+    }
+    None
+}
+
+/// The whole numbers below `upto`, **nearest to `from` first** — the order a search for somewhere
+/// to build walks. Ties go to the lower number, so a run is the same run twice.
+fn outwards(from: u32, upto: u32) -> Vec<u32> {
+    let mut all: Vec<u32> = (0..upto).collect();
+    all.sort_by_key(|&i| (i as i64 - from as i64).abs());
+    all
+}
+
 /// **F2's two little factories, built with clicks**: for each machine the data file declares, a
 /// belt, the machine, a belt and a chest, in a row.
 ///
-/// The rows are worked out from the map rather than written down, so that a map of another size
-/// still has somewhere to put them; `Ore::laid_out` keeps the middle of the map bare, which is
-/// where they go. The machine with the largest footprint decides how far apart the rows are.
+/// Where they go is [`room_for_the_machine_lines`]'s: somewhere with no ore in it and nothing on
+/// it, so that a map whose patches land in the middle is a map the checks still work on. The
+/// machine with the largest footprint decides how far apart the rows are.
 fn lay_out_the_machine_lines(
     map: &Map,
     data: &Data,
     rules: &Rules,
+    grid: &Grid,
+    ore: &Ore,
     test: &mut SelfTest,
 ) -> bool {
     test.machines.clear();
     test.to_build.clear();
     test.arms_to_build.clear();
     let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
-    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
-    // a row per machine, `tall` apart so that a machine's footprint never reaches the next row,
-    // starting in the middle of the map and going up. **Saturating since F3a**: a map may be as
-    // small as its ore allows now (five tiles across, at a small enough patch), and a check that
-    // has nowhere to build says so below rather than overflowing here.
-    let first_row = map.tiles.y / 2;
-    let left = (map.tiles.x / 2).saturating_sub(wide + 4);
+    let Some(corner) = room_for_the_machine_lines(map, data, grid, ore) else { return false };
+    let (left, first_row) = (corner.x, corner.y);
     for (kind, machine) in data.machines.iter().enumerate() {
         let row = first_row + kind as u32 * (tall + 1);
         // the recipe it will run: the first one made in it, which is the one it will pick
-        let Some(&recipe) = machine.recipes.first() else { continue };
-        let recipe = &data.recipes[recipe as usize];
+        let Some(&recipe_id) = machine.recipes.first() else { continue };
+        let recipe = &data.recipes[recipe_id as usize];
         let Some(&(makes, _)) = recipe.outputs.first() else { continue };
         // belt, belt, [arm], machine, [arm], belt, chest — with the two arms' tiles left empty
         // to begin with, which is where a player leaves them too
         let at = left + 3;
         let out = at + machine.size.x;
-        if row + tall >= map.tiles.y || out + 2 >= map.tiles.x {
-            return false;
-        }
         for (x, what) in [
             (left, Some(What::Belt)),
             (left + 1, Some(What::Belt)),
@@ -1899,6 +2208,7 @@ fn lay_out_the_machine_lines(
         test.machines.push(MachineCheck {
             what: machine.name.clone(),
             makes,
+            recipe: recipe_id,
             made_of: made_of.join(" and "),
             at: (row * map.tiles.x + at) as usize,
             feed: (row * map.tiles.x + left + 1) as usize,
@@ -1913,26 +2223,19 @@ fn lay_out_the_machine_lines(
 
 /// **What each machine eats, put on the belt that feeds it** — which is what a miner up the line
 /// would have put there, and what F3's inserters will hand over.
-fn seed_the_machine_lines(
-    map: &Map,
-    data: &Data,
-    rules: &Rules,
-    grid: &Grid,
-    lanes: &mut Lanes,
-) {
-    let tall = data.machines.iter().map(|m| m.size.y).max().unwrap_or(1);
-    let wide = data.machines.iter().map(|m| m.size.x).max().unwrap_or(1);
-    let first_row = map.tiles.y / 2;
-    let left = (map.tiles.x / 2).saturating_sub(wide + 4);
-    for (kind, machine) in data.machines.iter().enumerate() {
-        let row = first_row + kind as u32 * (tall + 1);
-        let Some(&recipe) = machine.recipes.first() else { continue };
-        let recipe = &data.recipes[recipe as usize];
-        let feed = grid.index(UVec2::new(left, row));
+///
+/// **It is told where the lines are rather than working it out again** (F4). It did the same
+/// arithmetic as [`lay_out_the_machine_lines`] until then, which was two copies of one thing and
+/// stopped being possible the moment where they go became a search.
+fn seed_the_machine_lines(data: &Data, rules: &Rules, lanes: &mut Lanes, lines: &[MachineCheck]) {
+    for line in lines {
+        let Some(recipe) = data.recipes.get(line.recipe as usize) else { continue };
+        // the belt behind the one that runs up to the machine, which is where the line starts
+        let start = line.feed - 1;
         let mut along = 0;
         for &(item, n) in &recipe.inputs {
             for _ in 0..n {
-                lanes.of[feed].push_back(OnBelt { along, item });
+                lanes.put_on(start, OnBelt { along, item });
                 along -= rules.spacing();
             }
         }

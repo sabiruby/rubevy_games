@@ -173,12 +173,31 @@ pub struct OnBelt {
 /// is never walked (the stepping walks [`Grid::built`], not the map).
 #[derive(Resource, Debug, Default)]
 pub struct Lanes {
-    pub of: Vec<VecDeque<OnBelt>>,
+    /// One lane per tile of the map. **Private since F4**, because two of the things here have to
+    /// be true of every road in and out of a lane and a public `Vec` has no roads: the count
+    /// below, and the tail of a tile that has been taken away ([`Lanes::forget`]). What is left
+    /// is four doors — [`Lanes::put_on`], [`Lanes::take_off`], [`Lanes::forget`] and
+    /// [`Lanes::moving`] — and the reading ones, which may do as they like.
+    of: Vec<VecDeque<OnBelt>>,
+    /// **How many items are on the belts altogether**, kept as they go on and come off.
+    ///
+    /// It was added up every frame until F4 (`lanes.of.iter().map(len).sum()`), which is a walk
+    /// of the whole map for a number the HUD shows: 4 µs on a map of 32 by 32 and **5.9 ms on one
+    /// of 2048 by 2048**, where nothing is built at all (`worklog/2026-09-21-factory-F3a.md` §5).
+    /// A map's size is the player's since F3a, so a cost that goes with it is a cost the player
+    /// pays for asking for a big world.
+    n: usize,
     /// Scratch: where each lane's last item was at the *start* of the frame, or [`Steps::MAX`] for
     /// a lane with nothing on it — which is "as far ahead as you like: nothing is in the way", and
     /// is what F1 wrote as `f32::INFINITY` before the positions were whole numbers. Every belt
     /// asks its neighbour how much room there is, and asking one snapshot makes the answer the
     /// same whatever order the tiles happen to be walked in.
+    ///
+    /// **Only the tiles something is built on are written each frame** (F4, the same measurement
+    /// as [`Lanes::n`]): the rest are [`Steps::MAX`] from the moment the map is laid out, and
+    /// [`Lanes::forget`] puts a tile back to it when what was on it is taken away. Nothing reads
+    /// the tail of a tile that is not a belt — [`room_ahead`] asks the grid first — so the
+    /// sentinel is the answer for everything else.
     ///
     /// **A sentinel rather than an `Option`**, which is what F1's `f32::INFINITY` was: this is
     /// written once per tile of the map and read once per belt every frame, and `Option<i32>` is
@@ -212,10 +231,45 @@ impl Lanes {
         let n = crate::grid::how_many(tiles);
         Lanes {
             of: vec![VecDeque::new(); n],
+            n: 0,
             tails: vec![Steps::MAX; n],
             order: Vec::new(),
             part_of_a_step: 0.0,
         }
+    }
+
+    /// **An item joins the back of a tile's lane** — a miner's dig, an arm's hand, the belt
+    /// behind handing one over, and the stress run laying its loop. One of the two doors the
+    /// count in [`Lanes::n`] is kept by.
+    pub fn put_on(&mut self, tile: usize, on: OnBelt) {
+        self.of[tile].push_back(on);
+        self.n += 1;
+    }
+
+    /// **The front item of a tile's lane, taken off it** — handed to the next tile, into a chest,
+    /// or into an arm's hand. The other door.
+    pub fn take_off(&mut self, tile: usize) -> Option<OnBelt> {
+        let gone = self.of[tile].pop_front();
+        if gone.is_some() {
+            self.n -= 1;
+        }
+        gone
+    }
+
+    /// **Everything on a tile goes with the tile.** A lane belongs to the belt it is on, so a
+    /// belt that is taken away takes what was on it; and the tail this tile had is put back to
+    /// the sentinel, because [`step`] only writes the tails of tiles something is built on.
+    pub fn forget(&mut self, tile: usize) {
+        self.n -= self.of[tile].len();
+        self.of[tile].clear();
+        self.tails[tile] = Steps::MAX;
+    }
+
+    /// **A lane to move the items of, and not to add to or take from**: [`carry`] and [`hold`]
+    /// change where things are and never how many there are, which is what lets them have the
+    /// lane itself while the count above stays true.
+    fn moving(&mut self, tile: usize) -> &mut VecDeque<OnBelt> {
+        &mut self.of[tile]
     }
 
     /// **How many whole steps the belts take this frame**, with the fraction that is left over
@@ -232,8 +286,22 @@ impl Lanes {
         whole.max(0)
     }
 
+    /// **How many items are on the belts**, which is now a field and not a walk ([`Lanes::n`]).
     pub fn count(&self) -> usize {
+        self.n
+    }
+
+    /// The same number added up the long way. It is what the tests compare the kept one against,
+    /// at every door items go in and out of.
+    #[cfg(test)]
+    pub fn counted_the_long_way(&self) -> usize {
         self.of.iter().map(|lane| lane.len()).sum()
+    }
+
+    /// Everything on every belt, for the sum that says nothing is made or lost.
+    #[cfg(test)]
+    pub fn everything(&self) -> impl Iterator<Item = &OnBelt> + '_ {
+        self.of.iter().flat_map(|lane| lane.iter())
     }
 
     /// Everything on the tile, front first.
@@ -256,17 +324,21 @@ pub struct Moves(pub Vec<Move>);
 pub enum Move {
     /// The front item of `from` became the last item of `to`.
     Carried { from: usize, to: usize },
-    /// The front item of `from` went into a chest and is gone.
+    /// The front item of `from` went into the chest at `into` and is off the belts.
     ///
     /// **Only items that were on a belt are `Taken`.** A miner standing next to a chest puts its
     /// dig straight in, and that is one [`Move::Made`] and nothing else: it was never carried, so
     /// counting it here as well would make `carried + taken` stop meaning "what the belts did".
-    Taken { from: usize },
-    /// A miner or a machine put a new item into `at` — the back of its lane if `at` is a belt, or
+    ///
+    /// **Which item, and what it went into, are F4's**: the control stage hears about a delivery
+    /// — something arriving in a chest — and neither the kind nor the place can be worked out
+    /// afterwards from the tile it left.
+    Taken { from: usize, into: usize, item: ItemId },
+    /// A miner or an arm put a new item into `at` — the back of its lane if `at` is a belt, or
     /// the chest or machine itself otherwise. **Whatever it went into, because what this counts
     /// is things delivered**, and a miner that happens to stand next to a chest is digging just
     /// as much as one feeding a belt.
-    Made { at: usize },
+    Made { at: usize, item: ItemId },
     /// A machine at `at` finished a craft of `recipe` and is holding what it made.
     Crafted { at: usize, recipe: RecipeId },
     /// **An inserter's arm arrived**, and either put down what it was carrying or found the tile
@@ -274,6 +346,15 @@ pub enum Move {
     /// that stepped the factory turns it into the answer to that inserter's `move`
     /// ([`crate::inserters`]).
     Swung { at: usize, placed: bool },
+    /// **A machine that is holding what it made and could start another craft if it were not**
+    /// — the one thing this game calls a jam (F4, `crate::control`).
+    ///
+    /// It is said again every frame it is true; what the control stage hears is the frame it
+    /// *became* true, which is [`crate::control::Happenings`]'s to work out. A belt that has
+    /// backed up is not one of these: a working factory has jammed belts in it all the time —
+    /// that is what a belt in front of a machine that is slower than it looks like — where a
+    /// machine that cannot get rid of what it made is a chain that has stopped.
+    Jammed { at: usize },
 }
 
 impl Moves {
@@ -333,14 +414,22 @@ pub fn step(
     lanes.order.extend_from_slice(grid.built());
 
     // ---- 1. the tails as they were ---------------------------------------------------------
-    for tail in &mut lanes.tails {
-        *tail = Steps::MAX;
-    }
+    //
+    // **Only the tiles something is built on** (F4). It wrote the whole map before that — a
+    // sentinel into every tile and then the real tails over the built ones — which is a frame's
+    // work that grows with the map rather than with the factory, and a map is the player's to
+    // make as big as they like (`Lanes::tails`). A tile that has been built on and taken away
+    // again is put back to the sentinel there and then (`Lanes::forget`), so what is not written
+    // here is already what it should be.
     for i in 0..lanes.order.len() {
         let t = lanes.order[i] as usize;
-        if grid.at(t).is_some_and(|b| b.what == What::Belt) {
-            lanes.tails[t] = lanes.of[t].back().map_or(Steps::MAX, |i| i.along);
-        }
+        lanes.tails[t] = match grid.at(t).map(|b| b.what) {
+            Some(What::Belt) => lanes.on(t).back().map_or(Steps::MAX, |i| i.along),
+            // anything else on the tile is not a belt to push into, and `room_ahead` asks the
+            // grid before it reads a tail — but a tile that *was* a belt keeps its old number
+            // otherwise, and this is where a belt built over becomes what it is now
+            _ => Steps::MAX,
+        };
     }
 
     // ---- 2. carry ---------------------------------------------------------------------------
@@ -364,7 +453,7 @@ pub fn step(
                 .min(2 * tile as i64)) as Steps,
             None => tile,
         };
-        carry(&mut lanes.of[t], forward, spacing, room.max(0));
+        carry(lanes.moving(t), forward, spacing, room.max(0));
     }
 
     // ---- 3. hand over -----------------------------------------------------------------------
@@ -372,18 +461,18 @@ pub fn step(
         let t = lanes.order[i] as usize;
         let Some(&Building { what: What::Belt, dir, .. }) = grid.at(t) else { continue };
         let next = grid.step_from(t, dir);
-        while lanes.of[t].front().is_some_and(|f| f.along >= tile) {
-            let front = lanes.of[t][0];
+        while lanes.on(t).front().is_some_and(|f| f.along >= tile) {
+            let front = lanes.on(t)[0];
             let handed = match next.and_then(|n| grid.at(n).map(|b| (n, b.what))) {
                 // onto the next belt, if it is not the one this belt is being fed by and the gap
                 // is still there now that it is this tile's turn
                 Some((n, What::Belt)) if grid.at(n).is_some_and(|b| b.dir != dir.back()) => {
                     let arriving = OnBelt { along: front.along - tile, item: front.item };
                     let room =
-                        lanes.of[n].back().is_none_or(|tail| tail.along - arriving.along >= spacing);
+                        lanes.on(n).back().is_none_or(|tail| tail.along - arriving.along >= spacing);
                     if room {
-                        lanes.of[t].pop_front();
-                        lanes.of[n].push_back(arriving);
+                        lanes.take_off(t);
+                        lanes.put_on(n, arriving);
                         moves.0.push(Move::Carried { from: t, to: n });
                         true
                     } else {
@@ -398,8 +487,8 @@ pub fn step(
                     let took =
                         machines::hand_to(grid, lanes, rules, data, n, front.item, machines::Offer::Direct);
                     if took {
-                        lanes.of[t].pop_front();
-                        moves.0.push(Move::Taken { from: t });
+                        lanes.take_off(t);
+                        moves.0.push(Move::Taken { from: t, into: n, item: front.item });
                     }
                     took
                 }
@@ -408,7 +497,7 @@ pub fn step(
             if !handed {
                 // nowhere to go: the item waits at the very end of the tile and everything
                 // behind it closes up to a gap's distance
-                hold(&mut lanes.of[t], spacing, tile);
+                hold(lanes.moving(t), spacing, tile);
                 break;
             }
         }
@@ -580,18 +669,18 @@ mod tests {
         let (mut grid, mut ore, mut lanes) = line(4);
         let first = grid.index(UVec2::new(1, 1));
         let last = grid.index(UVec2::new(4, 1));
-        lanes.of[first].push_back(a_rock(0));
+        lanes.put_on(first, a_rock(0));
 
         // four tiles at two tiles a second is two seconds, less the tile it starts on
         let frames = (3.0 / rules.belt_tiles_per_second / FRAME).ceil() as u32;
         let moves = run(&mut grid, &mut ore, &mut lanes, &rules, &data, frames);
         assert_eq!(lanes.count(), 1, "the item is still on the belt and there is only one");
-        assert_eq!(lanes.of[last].len(), 1, "and it is on the last tile: {:?}", lanes.of);
-        assert_eq!(lanes.of[last][0].item, ORE, "and it is still the same item");
+        assert_eq!(lanes.on(last).len(), 1, "and it is on the last tile: {:?}", lanes.on(last));
+        assert_eq!(lanes.on(last)[0].item, ORE, "and it is still the same item");
         assert_eq!(moves.carried(), 3, "it crossed three joins to get there");
         // and it is at the far end of it, where it stops: nothing to hand it to
         run(&mut grid, &mut ore, &mut lanes, &rules, &data, 60);
-        assert_eq!(lanes.of[last][0].along, TILE, "{:?}", lanes.of[last]);
+        assert_eq!(lanes.on(last)[0].along, TILE, "{:?}", lanes.on(last));
     }
 
     /// **The same seconds carry an item the same distance, whatever the frames are.**
@@ -613,7 +702,7 @@ mod tests {
         for frames_a_second in [60.0f32, 5.0] {
             let (mut grid, mut ore, mut lanes) = line(8);
             let first = grid.index(UVec2::new(1, 1));
-            lanes.of[first].push_back(a_rock(0));
+            lanes.put_on(first, a_rock(0));
             let frame = 1.0 / frames_a_second;
             for _ in 0..(seconds * frames_a_second) as u32 {
                 step(&mut grid, &mut ore, &mut lanes, &rules, &data, frame);
@@ -664,27 +753,27 @@ mod tests {
         // six items, which is more than the two tiles hold: the ones at negative positions are
         // where something feeding this belt would be pushing them in from
         for i in 0..6 {
-            lanes.of[first].push_back(a_rock(-i * rules.spacing()));
+            lanes.put_on(first, a_rock(-i * rules.spacing()));
         }
         run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
 
         assert_eq!(lanes.count(), 6, "nothing was lost");
-        assert_eq!(lanes.of[last].len(), 3, "the far tile: 16, 8, 0 — {:?}", lanes.of[last]);
-        assert_eq!(lanes.of[first].len(), 3, "and the rest are waiting behind: {:?}", lanes.of);
+        assert_eq!(lanes.on(last).len(), 3, "the far tile: 16, 8, 0 — {:?}", lanes.on(last));
+        assert_eq!(lanes.on(first).len(), 3, "and the rest are waiting behind: {:?}", lanes.on(first));
         // the front one is at the end of the tile and the gap is kept everywhere
-        assert_eq!(lanes.of[last][0].along, TILE);
-        for lane in [&lanes.of[first], &lanes.of[last]] {
+        assert_eq!(lanes.on(last)[0].along, TILE);
+        for lane in [lanes.on(first), lanes.on(last)] {
             for pair in lane.iter().collect::<Vec<_>>().windows(2) {
                 assert!(pair[0].along - pair[1].along >= rules.spacing(), "{lane:?}");
             }
         }
         // and the two tiles' items keep the gap across the join as well
-        assert!(TILE + lanes.of[last][2].along - lanes.of[first][0].along >= rules.spacing());
+        assert!(TILE + lanes.on(last)[2].along - lanes.on(first)[0].along >= rules.spacing());
         // nothing has moved for a while: this is a jam and not a slow queue
-        let before: Vec<Steps> = lanes.of[first].iter().map(|i| i.along).collect();
+        let before: Vec<Steps> = lanes.on(first).iter().map(|i| i.along).collect();
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 60);
         assert_eq!(moves.carried(), 0, "a jam does not hand anything on");
-        assert_eq!(lanes.of[first].iter().map(|i| i.along).collect::<Vec<Steps>>(), before);
+        assert_eq!(lanes.on(first).iter().map(|i| i.along).collect::<Vec<Steps>>(), before);
     }
 
     /// **Two belts merging into one both get through**, and neither starves the other: the
@@ -708,12 +797,12 @@ mod tests {
         grid.place(away, Building::new(What::Belt, Dir::East));
         // three items waiting on each feeder, nose to tail
         for i in 0..3 {
-            lanes.of[from_west].push_back(a_rock(-i * rules.spacing()));
-            lanes.of[from_south].push_back(a_rock(-i * rules.spacing()));
+            lanes.put_on(from_west, a_rock(-i * rules.spacing()));
+            lanes.put_on(from_south, a_rock(-i * rules.spacing()));
         }
 
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
-        assert_eq!(lanes.count(), 6, "all six are still there: {:?}", lanes.of);
+        assert_eq!(lanes.count(), 6, "all six are still there: {:?}", lanes.on(join));
         // **which side got through** is the whole question, and the moves say it where the
         // positions cannot: an item carries no note of where it came from
         let through = |source: usize| {
@@ -721,14 +810,14 @@ mod tests {
         };
         assert!(through(from_west) >= 2, "the belt from the west got {} through", through(from_west));
         assert!(through(from_south) >= 2, "the belt from the south got {} through", through(from_south));
-        for lane in [&lanes.of[join], &lanes.of[away]] {
+        for lane in [lanes.on(join), lanes.on(away)] {
             for pair in lane.iter().collect::<Vec<_>>().windows(2) {
                 assert!(pair[0].along - pair[1].along >= rules.spacing(), "{lane:?}");
             }
         }
         // and the gap is kept across the join the two of them merge into
-        let tail = lanes.of[away][lanes.of[away].len() - 1].along;
-        assert!(TILE + tail - lanes.of[join][0].along >= rules.spacing());
+        let tail = lanes.on(away)[lanes.on(away).len() - 1].along;
+        assert!(TILE + tail - lanes.on(join)[0].along >= rules.spacing());
     }
 
     /// Two belts pointing at each other are a jam and not a game of catch.
@@ -743,12 +832,12 @@ mod tests {
         let right = grid.index(UVec2::new(3, 2));
         grid.place(left, Building::new(What::Belt, Dir::East));
         grid.place(right, Building::new(What::Belt, Dir::West));
-        lanes.of[left].push_back(a_rock(0));
+        lanes.put_on(left, a_rock(0));
 
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 120);
         assert_eq!(moves.carried(), 0, "it never crossed");
-        assert_eq!(lanes.of[left].len(), 1);
-        assert_eq!(lanes.of[left][0].along, TILE, "it waits at the end of its own tile");
+        assert_eq!(lanes.on(left).len(), 1);
+        assert_eq!(lanes.on(left)[0].along, TILE, "it waits at the end of its own tile");
     }
 
     /// **The line end to end**: ore in the ground, a miner on it, a belt, a chest. The chest
@@ -841,27 +930,27 @@ mod tests {
             // there are still some waiting off the back of the line
             let all = (items_per_tile as usize + 1) * 3;
             for i in 0..all as Steps {
-                lanes.of[first].push_back(a_rock(-i * gap));
+                lanes.put_on(first, a_rock(-i * gap));
             }
             run(&mut grid, &mut o, &mut lanes, &rules, &data, 1200);
 
-            let held = lanes.of[last].len();
+            let held = lanes.on(last).len();
             assert_eq!(lanes.count(), all, "nothing was lost ({items_per_tile})");
             assert_eq!(
                 held,
                 items_per_tile as usize + 1,
                 "{items_per_tile}: a queue of {items_per_tile} gaps holds one more — {:?}",
-                lanes.of[last]
+                lanes.on(last)
             );
             // and every one of them is where the arithmetic says, to the step
-            let places: Vec<Steps> = lanes.of[last].iter().map(|i| i.along).collect();
+            let places: Vec<Steps> = lanes.on(last).iter().map(|i| i.along).collect();
             let wanted: Vec<Steps> = (0..held as Steps).map(|k| TILE - k * gap).collect();
             assert_eq!(places, wanted, "{items_per_tile}: the front at the end, a gap apart");
-            for pair in lanes.of[first].iter().collect::<Vec<_>>().windows(2) {
-                assert!(pair[0].along - pair[1].along >= gap, "{items_per_tile}: {:?}", lanes.of[first]);
+            for pair in lanes.on(first).iter().collect::<Vec<_>>().windows(2) {
+                assert!(pair[0].along - pair[1].along >= gap, "{items_per_tile}: {:?}", lanes.on(first));
             }
             assert!(
-                TILE + lanes.of[last][held - 1].along - lanes.of[first][0].along >= gap,
+                TILE + lanes.on(last)[held - 1].along - lanes.on(first)[0].along >= gap,
                 "the gap is kept across the join too ({items_per_tile})"
             );
         }
@@ -876,11 +965,11 @@ mod tests {
             let (mut grid, mut o, mut lanes) = line(1);
             let only = grid.index(UVec2::new(1, 1));
             for i in 0..16 as Steps {
-                lanes.of[only].push_back(a_rock(-i * rules.spacing()));
+                lanes.put_on(only, a_rock(-i * rules.spacing()));
             }
             run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
-            let on_the_tile = lanes.of[only].iter().filter(|i| i.along > 0).count();
-            assert_eq!(on_the_tile, items_per_tile as usize, "{items_per_tile}: {:?}", lanes.of[only]);
+            let on_the_tile = lanes.on(only).iter().filter(|i| i.along > 0).count();
+            assert_eq!(on_the_tile, items_per_tile as usize, "{items_per_tile}: {:?}", lanes.on(only));
         }
     }
 
@@ -917,7 +1006,7 @@ mod tests {
         grid.place(arm_out, Building::new(What::Inserter, Dir::East));
         grid.place(away, Building::new(What::Belt, Dir::East));
         grid.place(chest, Building::new(What::Chest, Dir::East));
-        lanes.of[feed].push_back(a_rock(0));
+        lanes.put_on(feed, a_rock(0));
 
         // a swing in, a craft, a swing out, and one tile of belt into the chest
         let recipe = &data.recipes[0];
@@ -960,13 +1049,13 @@ mod tests {
         grid.place(furnace, Building::new(What::Machine(kind), Dir::East));
         grid.place(away, Building::new(What::Belt, Dir::East));
         grid.place(chest, Building::new(What::Chest, Dir::East));
-        lanes.of[feed].push_back(a_rock(0));
+        lanes.put_on(feed, a_rock(0));
 
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
         assert_eq!(moves.crafted(), 0, "nothing was made: {:?}", moves.0);
         assert!(grid.at(furnace).unwrap().held.is_empty(), "and nothing went in");
-        assert_eq!(lanes.of[feed].len(), 1, "the ore is still on the belt");
-        assert_eq!(lanes.of[feed][0].along, TILE, "waiting at the end of its tile");
+        assert_eq!(lanes.on(feed).len(), 1, "the ore is still on the belt");
+        assert_eq!(lanes.on(feed)[0].along, TILE, "waiting at the end of its tile");
         assert_eq!(inside(&grid, chest).count(), 0);
     }
 
@@ -989,7 +1078,7 @@ mod tests {
         grid.place(arm, Building::new(What::Inserter, Dir::East));
         grid.place(chest, Building::new(What::Chest, Dir::East));
         for i in 0..2 {
-            lanes.of[feed].push_back(a_rock(-i * rules.spacing()));
+            lanes.put_on(feed, a_rock(-i * rules.spacing()));
         }
 
         // one frame is enough to start the swing and not to finish it
@@ -997,7 +1086,7 @@ mod tests {
         step(&mut grid, &mut o, &mut lanes, &rules, &data, FRAME);
         assert_eq!(grid.at(arm).unwrap().held.of(ORE), 1, "the ore is in the hand");
         assert!(grid.at(arm).unwrap().swinging, "and the arm is on its way");
-        assert_eq!(lanes.of[feed].len(), 1, "and it is off the belt: it is not in two places");
+        assert_eq!(lanes.on(feed).len(), 1, "and it is off the belt: it is not in two places");
         assert_eq!(inside(&grid, chest).count(), 0, "and not in the chest yet");
 
         // the rest of the swing, and a frame's grace either side of it
@@ -1030,7 +1119,7 @@ mod tests {
         if let Some(full) = grid.at_mut(chest) {
             full.held.add(PLATE, 1);
         }
-        lanes.of[feed].push_back(a_rock(0));
+        lanes.put_on(feed, a_rock(0));
 
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 300);
         assert!(moves.swung().any(|(at, placed)| at == arm && !placed), "a swing was refused");
@@ -1061,11 +1150,11 @@ mod tests {
         grid.place(feed, Building::new(What::Belt, Dir::East));
         let kind = data.machine("furnace").expect("declared");
         grid.place(furnace, Building::new(What::Machine(kind), Dir::East));
-        lanes.of[feed].push_back(OnBelt { along: 0, item: GEAR });
+        lanes.put_on(feed, OnBelt { along: 0, item: GEAR });
 
         run(&mut grid, &mut o, &mut lanes, &rules, &data, 300);
-        assert_eq!(lanes.of[feed].len(), 1, "the gear is still on the belt");
-        assert_eq!(lanes.of[feed][0].along, TILE, "waiting at the end of its tile");
+        assert_eq!(lanes.on(feed).len(), 1, "the gear is still on the belt");
+        assert_eq!(lanes.on(feed)[0].along, TILE, "waiting at the end of its tile");
         assert!(grid.at(furnace).unwrap().held.is_empty(), "and the furnace took nothing");
     }
 
@@ -1101,7 +1190,7 @@ mod tests {
         grid.place(arm_out, Building::new(What::Inserter, Dir::East));
         grid.place(out, Building::new(What::Chest, Dir::East));
         for i in 0..2 {
-            lanes.of[feed].push_back(OnBelt { along: -i * rules.spacing(), item: PLATE });
+            lanes.put_on(feed, OnBelt { along: -i * rules.spacing(), item: PLATE });
         }
 
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
@@ -1127,7 +1216,7 @@ mod tests {
         let kind = data.machine("furnace").expect("declared");
         grid.place(furnace, Building::new(What::Machine(kind), Dir::East));
         for i in 0..3 {
-            lanes.of[feed].push_back(a_rock(-i * rules.spacing()));
+            lanes.put_on(feed, a_rock(-i * rules.spacing()));
         }
 
         let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 600);
@@ -1138,10 +1227,10 @@ mod tests {
         // the third ore is either still on the belt or in the arm's hand, which has nowhere to
         // put it: the furnace is holding one craft's worth already
         assert_eq!(
-            lanes.of[feed].len() + grid.at(arm_in).unwrap().held.count() as usize,
+            lanes.on(feed).len() + grid.at(arm_in).unwrap().held.count() as usize,
             1,
             "the third is waiting: {:?}",
-            lanes.of[feed]
+            lanes.on(feed)
         );
 
         // an arm out of it and somewhere to put what it carries, and it goes — and then the next
@@ -1184,9 +1273,7 @@ mod tests {
     /// of its own store when it started and has not made into anything yet.
     fn everywhere_else(grid: &Grid, lanes: &Lanes, data: &Data) -> u32 {
         let mut total = 0;
-        for lane in lanes.of.iter() {
-            total += lane.iter().map(|i| in_ore(data, i.item)).sum::<u32>();
-        }
+        total += lanes.everything().map(|i| in_ore(data, i.item)).sum::<u32>();
         for &t in grid.built() {
             let Some(building) = grid.at(t as usize) else { continue };
             for stock in [&building.held, &building.made] {
@@ -1272,6 +1359,12 @@ mod tests {
                     everywhere_else(&grid, &lanes, &data),
                     "frame {frame}: what came out of the ground is not what the factory holds"
                 );
+                // and the kept count is the walk (F4): five minutes of every door in the game
+                assert_eq!(
+                    lanes.count(),
+                    lanes.counted_the_long_way(),
+                    "frame {frame}: the kept count of what is on the belts"
+                );
             }
         }
 
@@ -1283,6 +1376,67 @@ mod tests {
         let dug = (ore_at_the_start - o.total()) as u32;
         assert_eq!(dug, everywhere_else(&grid, &lanes, &data), "and at the end of it too");
         assert!(dug > 200, "five minutes of two miners past an arm that lifts one a second");
+    }
+
+    /// **The count is kept at every door items go in and out by** (F4), and a tile that is taken
+    /// away takes both its items and its tail with it.
+    ///
+    /// [`Lanes::count`] was a walk of the whole map until F4 and is a number kept by
+    /// [`Lanes::put_on`], [`Lanes::take_off`] and [`Lanes::forget`] now, so what has to be true is
+    /// that those three are the only doors. This drives all of them — a belt handing to a belt, a
+    /// belt handing to a chest, an arm taking one off a belt and putting it in a chest, a miner
+    /// putting one on, and a belt taken away with three items on it — and compares the kept
+    /// number with the walk at every frame.
+    ///
+    /// **And then it builds a belt back where the one it took away was**, because a tail left
+    /// behind would be a belt that says it is full when it is empty: the tile behind it would
+    /// stop handing anything over for ever.
+    #[test]
+    fn the_number_of_items_is_the_number_of_items_at_every_door() {
+        let (rules, data) = world();
+        let tiles = UVec2::splat(10);
+        let mut grid = Grid::new(tiles);
+        let mut o = Ore { left: vec![0; crate::grid::how_many(tiles)], changed: false };
+        let mut lanes = Lanes::for_map(tiles);
+        // a miner on ore, two belts, an arm, a chest — one of every door in a row
+        let pit = grid.index(UVec2::new(1, 1));
+        let first = grid.index(UVec2::new(2, 1));
+        let second = grid.index(UVec2::new(3, 1));
+        let arm = grid.index(UVec2::new(4, 1));
+        let chest = grid.index(UVec2::new(5, 1));
+        o.left[pit] = 100;
+        grid.place(pit, Building::new(What::Miner, Dir::East));
+        grid.place(first, Building::new(What::Belt, Dir::East));
+        grid.place(second, Building::new(What::Belt, Dir::East));
+        grid.place(arm, Building::new(What::Inserter, Dir::East));
+        grid.place(chest, Building::new(What::Chest, Dir::East));
+
+        for frame in 0..600 {
+            drive_the_arms(&mut grid, &mut lanes);
+            step(&mut grid, &mut o, &mut lanes, &rules, &data, FRAME);
+            assert_eq!(
+                lanes.count(),
+                lanes.counted_the_long_way(),
+                "frame {frame}: the kept count and the walk disagree"
+            );
+        }
+        assert!(inside(&grid, chest).count() > 0, "the line ran");
+
+        // **the belt taken away**, with whatever was on it
+        let carrying = lanes.on(second).len();
+        assert!(carrying > 0, "there is something on it to lose");
+        crate::build::take_away(&mut grid, &mut lanes, second);
+        assert_eq!(lanes.on(second).len(), 0);
+        assert_eq!(lanes.count(), lanes.counted_the_long_way(), "after a belt was taken away");
+
+        // and a belt built back in its place carries again: nothing of the old one is left
+        grid.place(second, Building::new(What::Belt, Dir::East));
+        let moves = run(&mut grid, &mut o, &mut lanes, &rules, &data, 300);
+        assert!(
+            moves.0.iter().any(|m| matches!(m, Move::Carried { to, .. } if *to == second)),
+            "the belt behind it hands things over again"
+        );
+        assert_eq!(lanes.count(), lanes.counted_the_long_way());
     }
 
     /// A machine's speed divides the recipe's time, and the `works` in the test data runs at 2.

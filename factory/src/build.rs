@@ -135,9 +135,20 @@ pub fn choose(
             said = true;
         }
     }
+    // **A machine has nothing to turn** (F4). A direction used to say where a machine pushed what
+    // it made; nothing comes out of one but through an inserter's hand since F3, so turning one
+    // changes nothing at all — and an operation that changes nothing is one to refuse rather than
+    // to accept quietly. Factorio's assembler has no direction either.
     if keys.just_pressed(KeyCode::KeyR) {
-        hand.dir = hand.dir.left();
-        said = true;
+        match hand.what {
+            Some(What::Machine(_)) => {
+                info!("a {} has no direction: nothing goes in or out of one but through an arm", hand.word(&data));
+            }
+            _ => {
+                hand.dir = hand.dir.left();
+                said = true;
+            }
+        }
     }
     if said {
         info!("in hand: {} facing {}", hand.word(&data), hand.dir.word());
@@ -179,6 +190,7 @@ pub fn orders(
     data: Res<Data>,
     mut grid: ResMut<Grid>,
     mut lanes: ResMut<Lanes>,
+    mut happenings: ResMut<crate::control::Happenings>,
 ) {
     for &Order { at: tile, what, dir } in asked.read() {
         if !grid.holds(tile) {
@@ -188,7 +200,10 @@ pub fn orders(
         let at = grid.index(tile);
         match what {
             None => match take_away(&mut grid, &mut lanes, at) {
-                Some(gone) => info!("took away the {} at {}, {}", gone, tile.x, tile.y),
+                Some((gone, what)) => {
+                    happenings.was_removed(what, at);
+                    info!("took away the {} at {}, {}", gone, tile.x, tile.y);
+                }
                 None => info!("nothing at {}, {} to take away", tile.x, tile.y),
             },
             // **a miner has to stand on ore**, which is the whole reason a patch is somewhere in
@@ -206,13 +221,16 @@ pub fn orders(
             }
             Some(What::Machine(kind)) => {
                 match build_a_machine(&mut grid, &mut lanes, &data, kind, tile, dir) {
-                    true => info!(
-                        "built a {} at {}, {} facing {}",
-                        word_for(what, &data),
-                        tile.x,
-                        tile.y,
-                        dir.word()
-                    ),
+                    true => {
+                        happenings.was_built(What::Machine(kind), at);
+                        info!(
+                            "built a {} at {}, {} facing {}",
+                            word_for(what, &data),
+                            tile.x,
+                            tile.y,
+                            dir.word()
+                        );
+                    }
                     false => info!(
                         "a {} does not fit at {}, {}: it would go off the map",
                         word_for(what, &data),
@@ -225,8 +243,9 @@ pub fn orders(
             Some(What::Covered { .. }) => {}
             Some(one) => {
                 take_away(&mut grid, &mut lanes, at);
-                lanes.of[at].clear();
+                lanes.forget(at);
                 grid.place(at, Building::new(one, dir));
+                happenings.was_built(one, at);
                 info!("built a {} at {}, {} facing {}", one.word(), tile.x, tile.y, dir.word());
             }
         }
@@ -236,13 +255,17 @@ pub fn orders(
 /// **Takes away whatever is on a tile, all of it.** Clicking any tile of a machine takes the
 /// whole machine, which is the only thing a player could mean by it — and what it was holding
 /// goes with it, the way a belt's items do.
-pub fn take_away(grid: &mut Grid, lanes: &mut Lanes, at: usize) -> Option<String> {
+///
+/// It answers the word for what was there and the thing itself, which is what the control stage
+/// is told about ([`crate::control::Happenings`]) — and **only where the wrecking ball was
+/// used**: building a belt over a belt is one act and one `built`, not a `removed` as well.
+pub fn take_away(grid: &mut Grid, lanes: &mut Lanes, at: usize) -> Option<(String, What)> {
     let origin = match grid.at(at).map(|b| b.what) {
         Some(What::Covered { origin }) => origin as usize,
         Some(_) => at,
         None => return None,
     };
-    let word = grid.at(origin).map(|b| b.what.word().to_string())?;
+    let (word, what) = grid.at(origin).map(|b| (b.what.word().to_string(), b.what))?;
     // the covered tiles first, so that none of them is left pointing at a tile with nothing on it
     let covered: Vec<u32> = grid
         .built()
@@ -252,11 +275,11 @@ pub fn take_away(grid: &mut Grid, lanes: &mut Lanes, at: usize) -> Option<String
         .collect();
     for t in covered {
         grid.remove(t as usize);
-        lanes.of[t as usize].clear();
+        lanes.forget(t as usize);
     }
     grid.remove(origin);
-    lanes.of[origin].clear();
-    Some(word)
+    lanes.forget(origin);
+    Some((word, what))
 }
 
 /// **Puts a machine down**, which is one building on its origin tile and a marker on the rest of
@@ -281,7 +304,7 @@ pub fn build_a_machine(
     }
     for (i, tile) in footprint.iter().enumerate() {
         let t = grid.index(*tile);
-        lanes.of[t].clear();
+        lanes.forget(t);
         let what = if i == 0 { What::Machine(kind) } else { What::Covered { origin: at as u32 } };
         grid.place(t, Building::new(what, dir));
     }

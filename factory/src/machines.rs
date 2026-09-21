@@ -195,7 +195,7 @@ pub fn dig(
             miner.work = if placed.is_some() { work - rules.mine_seconds } else { rules.mine_seconds };
         }
         if let Some(at) = placed {
-            moves.0.push(Move::Made { at });
+            moves.0.push(Move::Made { at, item: rules.digs });
             ore.left[t] -= 1;
             if ore.left[t] == 0 {
                 ore.changed = true;
@@ -287,8 +287,11 @@ pub fn swing(
                 arm.held.take(item, 1);
             }
         }
-        if placed && let Some(into) = grid.step_from(t, dir) {
-            moves.0.push(Move::Made { at: into });
+        if placed
+            && let Some(into) = grid.step_from(t, dir)
+            && let Some(item) = carrying
+        {
+            moves.0.push(Move::Made { at: into, item });
         }
         moves.0.push(Move::Swung { at: t, placed });
     }
@@ -309,6 +312,14 @@ pub fn craft(
         let What::Machine(kind) = building.what else { continue };
         // **holding what it made is what stops it** — the same rule F1's miner keeps
         if !building.made.is_empty() {
+            // **and if it has the parts for another craft, that is what this game calls a jam**
+            // (F4): the machine is not waiting for anything a player has to bring it, it is
+            // waiting for somebody to take what it has already made. It is said every frame it
+            // is true; the control stage is told the frame it *became* true
+            // (`crate::control::Happenings`).
+            if could_start(grid, data, t, kind) {
+                moves.0.push(Move::Jammed { at: t });
+            }
             continue;
         }
         let (making, work) = (building.making, building.work);
@@ -333,6 +344,19 @@ pub fn craft(
         }
         moves.0.push(Move::Crafted { at: t, recipe: id });
     }
+}
+
+/// **Whether a machine has the parts for a craft**, without starting one — [`start`]'s first half,
+/// which is what tells a machine that is waiting for parts from one that is waiting for somebody
+/// to take what it made ([`Move::Jammed`]).
+pub fn could_start(grid: &Grid, data: &Data, tile: usize, kind: u16) -> bool {
+    let Some(machine) = data.machines.get(kind as usize) else { return false };
+    let Some(held) = grid.at(tile).map(|b| &b.held) else { return false };
+    machine.recipes.iter().any(|&r| {
+        data.recipes
+            .get(r as usize)
+            .is_some_and(|recipe| recipe.inputs.iter().all(|&(i, n)| held.of(i) >= n))
+    })
 }
 
 /// Which recipe a machine can begin: the first of its kind whose inputs it is holding. The parts
@@ -393,9 +417,9 @@ pub fn hand_to(
             let spacing = rules.spacing();
             // it goes on at the tile's entry edge, which is step 0, and it only goes on if what
             // is already there has moved a gap's worth away from it
-            let room = lanes.of[into].back().is_none_or(|last| last.along >= spacing);
+            let room = lanes.on(into).back().is_none_or(|last| last.along >= spacing);
             if room {
-                lanes.of[into].push_back(OnBelt { along: 0, item });
+                lanes.put_on(into, OnBelt { along: 0, item });
             }
             room
         }
@@ -446,7 +470,7 @@ pub fn take_from(grid: &mut Grid, lanes: &mut Lanes, from: usize) -> Option<Item
     let item = would_give(grid, lanes, from)?;
     match grid.at(from).map(|b| b.what) {
         Some(What::Belt) => {
-            lanes.of[from].pop_front();
+            lanes.take_off(from);
         }
         Some(What::Chest) => {
             if let Some(chest) = grid.at_mut(from) {

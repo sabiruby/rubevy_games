@@ -44,6 +44,7 @@ pub struct Tally {
 }
 
 /// One step of the factory. The lanes are where every item is, so this is the whole of it.
+#[allow(clippy::too_many_arguments)]
 pub fn run_the_factory(
     time: Res<Time>,
     rules: Res<Rules>,
@@ -53,12 +54,16 @@ pub fn run_the_factory(
     mut lanes: ResMut<Lanes>,
     mut tally: ResMut<Tally>,
     mut arms: ResMut<crate::inserters::Arms>,
+    mut happenings: ResMut<crate::control::Happenings>,
 ) {
     let started = bevy::platform::time::Instant::now();
     let moves = belts::step(&mut grid, &mut ore, &mut lanes, &rules, &data, time.delta_secs());
     // **the arms that arrived are what a script is waiting on** — the step is the only thing that
     // knows, and `crate::inserters::finish_swings` is the only thing that can answer
     arms.finished.extend(moves.swung());
+    // **and what the control stage is told about** (F4), added up by kind in one walk of the same
+    // list the counters below are walked out of (`crate::control::Happenings`)
+    happenings.watch(&moves, &grid, &data);
     tally.items = lanes.count();
     tally.carried += moves.carried() as u64;
     tally.taken += moves.taken() as u64;

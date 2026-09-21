@@ -4,7 +4,7 @@ The third game. **This file says what exists, not what is planned** — the plan
 [`plans/factory-plan.md`](plans/factory-plan.md), and everything this page does not mention is
 not written yet.
 
-What exists (stages **F0** to **F3**, 2026-09-21):
+What exists (stages **F0** to **F4**, 2026-09-22):
 
 * a crate, `factory/`, in the workspace;
 * a **floor**: one `TilemapChunk` — Bevy's own, one draw call for the whole grid — laid out of
@@ -25,18 +25,22 @@ What exists (stages **F0** to **F3**, 2026-09-21):
   other way, so a line that ends at a furnace ends there until an arm is put beside it;
 * a **panel to write that Ruby in**, in a window: click an arm and its script is there, Apply runs
   it in that one or in all of them, Revert puts them back on the file;
+* a **control stage** — `ruby/control.rb` on top of `ruby/control_prelude.rb`, one script for the
+  whole factory that hears five things at the grain of a *machine* (`built`, `removed`, `crafted`,
+  `delivered`, `jammed`), says what the factory is for (`goal deliver: { gear: 60 }`) and says when
+  it has been won, with a line of text on the screen for the goal and for **what was dropped**;
 * `--headless N`, `--shot`, `--stress N`, `--arms N`, and the checks (`FACTORY_SELFTEST`,
   `?selftest`).
 
-What does not exist: the control stage, a HUD, a VM panel, a guide, a save file, and Save in the
-panel (it says so rather than doing half of it).
+What does not exist: a HUD (F4's goal is one line of `bevy_ui` text, and F5 makes it egui), a VM
+panel, a guide, a save file, and Save in the panel (it says so rather than doing half of it).
 
 ```
 cargo run -p factory                          # a window
-cargo run -p factory -- --headless 30         # no window
+cargo run -p factory -- --headless 66         # no window (66 is the default; see numbers.md)
 cargo run -p factory -- --stress 4000         # a loop of belt, measured (sizes its own map)
 cargo run -p factory -- --arms 1000           # a thousand inserters, measured (the same)
-FACTORY_SELFTEST=1 cargo run -p factory -- --headless 30
+FACTORY_SELFTEST=1 cargo run -p factory -- --headless
 docker/build.sh factory release && docker/run.sh factory release   # a window, in the container
 web/build.sh factory && web/serve.sh          # then http://localhost:8080/factory/
 ```
@@ -51,7 +55,7 @@ whole of it, and the game says it in the log when it starts:
 | `1` `2` `3` `4` | a belt, a miner, a chest, an **inserter** in hand |
 | `5` onwards | the machines `data.rb` declares, in the order it declares them (`5` the furnace, `6` the assembler) — the game prints the list when it starts |
 | `0` | nothing in hand: a click takes away what is there |
-| `R` | turn what is in hand a quarter turn anticlockwise |
+| `R` | turn what is in hand a quarter turn anticlockwise — **a machine has no direction**, so with one in hand it does nothing and says why (nothing goes in or out of a machine but through an arm) |
 | click | build it, or take it away |
 | click an inserter with an inserter in hand | **open its script in the panel** |
 | drag, wheel, `WASD`, `Home` | the camera |
@@ -97,7 +101,7 @@ so the same seconds carry an item the same distance at five frames a second and 
 that an item's place on the screen is a pixel of the art rather than a multiply and a rounding
 away from one.
 
-Four passes, and their order is the model:
+**Six passes**, and their order is the model:
 
 1. **the tails as they were** — what a belt may push into its neighbour is read from a snapshot
    taken before anything moved, so two belts merging into a third both see the same picture and
@@ -107,15 +111,27 @@ Four passes, and their order is the model:
    when its own turn comes**, which is where a merge is decided (the lower tile index gets the
    gap) and where a chest takes an item off the belt;
 4. **dig** — a miner that has finished puts an item down, or holds it;
-5. **deliver** — a machine pushes what it has made into what it faces, one item at a time;
+5. **swing** — an inserter whose arm is crossing moves it on and puts down what it is carrying
+   when it arrives (F3: the half of an inserter that is not Ruby);
 6. **craft** — a machine with nothing waiting to go out takes a recipe it has the parts for,
    consumes them, and works at it for `time / speed`.
 
-Deliver is before craft so that a machine that finished last frame is empty again when it is asked
-whether it can start; a machine still holding what it made does not start another, which is
-exactly the rule a blocked miner keeps with its finished dig. A machine holds **one craft's worth
-in and one out** — the smallest buffer that lets it run without a gap, which is why it is not a
-number anybody chose.
+**There is no `deliver` pass**, and there was one until F3: a machine used to push what it had
+made into whatever it faced. Nothing goes into or out of a machine now but through an arm, which
+is what makes the player's Ruby the thing that joins a factory up. A machine still holding what it
+made does not start another craft, which is exactly the rule a blocked miner keeps with its
+finished dig — and a machine in that state **with the parts for the next craft** is the one thing
+this game calls a jam (the control stage, below). A machine holds **one craft's worth in and one
+out** — the smallest buffer that lets it run without a gap, which is why it is not a number
+anybody chose.
+
+**A frame's work is the size of the factory and not the size of the map** (F4). Two of the passes
+above used to walk every tile of the world — the tails were written over the whole map before the
+real ones went in, and what is on the belts was counted by adding up every lane — which cost 5.9 ms
+a frame on a map of 2048 by 2048 with nothing built on it. The tails are written for the tiles
+something stands on and a tile that is taken away is put back to the sentinel there and then; the
+count is kept by the four doors items go in and out by (`Lanes::put_on`, `take_off`, `forget`, and
+`moving`, which only moves them). An empty map of any size now steps in **1 µs**.
 
 **Where an item lives was measured, not chosen.** The plan would not settle on paper whether an
 item should be an entity or a number in a lane, so F1 built both, ran the same rule over both at
@@ -266,6 +282,76 @@ Every pixel of the result is a pixel of Kenney's — eight colours, all of them 
 stands beside the one-tile furnace without looking like it came from another pack. The first
 attempt repeated one middle row instead, and it turned the cabinet's screen into a flat panel and
 lost the frame and the lights; the docstring says so.
+
+## The control stage
+
+`ruby/control.rb` on top of `ruby/control_prelude.rb`, and `factory/src/control.rs`. It is
+Factorio's third stage with the same job and a tenth of the surface: **one script for the whole
+factory**, five things it is told, and a goal.
+
+```ruby
+goal deliver: { gear: 60 }
+
+on(:built)     { |what, n, x, y| log "#{n} #{what} at #{x}, #{y}" }
+on(:crafted)   { |item, n, x, y| … }
+on(:delivered) { |item, n, x, y| … }
+on(:jammed)    { |what, n, x, y| log "the #{what} at #{x}, #{y} is full of what it made" }
+```
+
+**The five are `built`, `removed`, `crafted`, `delivered` and `jammed`**, and every one of them
+carries the same four flat values: *what* (a Symbol — an item's name for the two that are about
+items, a building's for the other three), *how many* of it this frame, and *where* the last of
+them was.
+
+**The grain was worked backwards from a number rubevy has.** A subscription holds sixty-four
+messages before the oldest is dropped, and a script is woken once a frame, so sixty-four is what
+may be published between two looks. Hence: **one message a frame per kind of thing**, with the
+count in it. How many kinds there are is what `data.rb` declares — three items and six kinds of
+building here — so **nothing a data file can say reaches the ceiling**, where a message per
+delivered item would reach it at about sixty arms. Nothing is ever said about one item on one
+belt; there are thousands of those and they are Rust.
+
+**A jam is a machine's and not a belt's**: a machine that is holding what it made **and has the
+parts for another craft**. A working factory has jammed belts in it all the time — the belt in
+front of a machine slower than it *is* a jam — so publishing those would be publishing that the
+factory is running. A machine that cannot get rid of what it made is a chain that has stopped, and
+it stopped for a reason the player can act on: there is no arm on the other side of it. It is a
+*state*, said by the factory every frame it is true, and what the script hears is the frame it
+**became** true.
+
+**The script answers by being read, not by asking.** `win!` sets `@won`; the line for the screen
+is `@saying`; how much of each event it has heard is `@seen_delivered` and its four sisters; what
+its own subscriptions lost is `@dropped`. The game reads them with two `ivar_get`s once a frame,
+which is how the garden reads a creature's `@asleep`. A script that had to *tell* the game these
+would be parked on a request every time a gear arrived, and a request costs a frame. So the only
+thing the control stage does *to* the game is win: **it cannot build**, which is a decision — a
+goal is a thing to say, and building is the player's hand.
+
+**Sixty gears** is the chain `data.rb` is built round (2 miners → 4 furnaces → 1 assembler → a
+gear a second) running for **one minute**, which is the unit the rest of the file is already in: a
+chest holds sixty, a tile of ore holds sixty. So it is also one chestful.
+
+**What it costs**: about **two hundred instructions a frame**, and it does not grow with the
+factory — measured with and without the control stage at 340 arms (1,399 → 1,579 instructions a
+frame at the median) and at 3,400 (11,983 → 11,947, which is inside the noise). **Nothing was ever
+dropped** at either size. That is what one message a frame per kind buys, and the checks watch the
+dropped count from both ends so that the day it stops being true is a `FAIL` rather than a silence.
+
+**A `control.rb` that will not run leaves a factory with no goal**, never a game that stopped, and
+the game says which line of it went wrong — `control.rb:3`, not `control.rb:?`. Getting that took
+one line of wrapping: an inserter's file is `inserter "X" do … end`, so everything in it runs
+inside the block the prelude calls and an exception is inside the prelude's own `rescue`; a
+control file is written at the top level, so without help its exceptions happen while the *program
+is being loaded* and there is nothing left to ask where they were. The game puts the file inside a
+method of one line (`in_a_method`) and the prelude calls it from inside the `begin`. The cost is
+that a syntax error that leaves a block open is reported a little past the end of the file, which
+is the same thing F2 wrote down about half-written lines being reported where the parser gives up.
+
+**Each file gets a class of its own** (`$control_class = Class.new(Control)`), which is the
+garden's `creature "Beetle" do … end` with the wrapper word left out: there is one control stage,
+so `on` and `goal` are written at the top of the file. Without it a `control.rb` applied over
+another would inherit the first one's handlers and goal, because the VM is one VM and
+`class Control` is one class in it.
 
 ## The numbers
 
@@ -436,12 +522,12 @@ than a number in a file a page cannot write. That is F3a, and it is the author's
 the reason written down. `numbers.md` §9.6 says what would settle it (one `?stress` run on a real
 GPU) rather than inventing it.
 
-**What a big map costs, measured** (`worklog/2026-09-21-factory-F3a.md` §7): one step of the
-factory on an *empty* map is 4 µs at 32 by 32, 0.6 ms at 512 by 512 and 5.9 ms at the 2048 the
-drawing allows — two walks a frame are the length of the map rather than the length of the factory
-(the belts' tails, and counting what is on them for the HUD). At 512 that is 4% of a frame; at the
-ceiling it is a third of one, which is why the ceiling is the picture's limit and not a promise
-that a map that big is a good idea.
+**What a big map costs, measured** (`worklog/2026-09-21-factory-F3a.md` §7 and
+`…-2026-09-22-factory-F4.md` §1.1): one step of the factory on an *empty* map was 4 µs at 32 by 32,
+0.6 ms at 512 by 512 and **5.9 ms at the 2048 the drawing allows** — two walks a frame were the
+length of the map rather than the length of the factory. **F4 took both of them out**, and the same
+three maps now step in 1 µs each. What a big map still costs is memory (the log says how much) and
+whatever the drawing costs, which is the number nobody here can measure.
 
 **And one that is derived rather than set**: how fast the belts' two-frame animation runs. The
 pack draws a chevron every 8 px and the second frame is the first with the chevrons moved half of
@@ -488,8 +574,8 @@ runs `web/build.sh all`.
 
 ## The checks
 
-`docs/verification/selftest-lines.md` has the lists — nineteen lines with no window, twenty-two
-with one, and twenty-three in a page. **Two move between them**, and both are `--` where the run
+`docs/verification/selftest-lines.md` has the lists — **twenty-four** lines with no window,
+twenty-seven with one, and twenty-eight in a page. **Two move between them**, and both are `--` where the run
 could not put the check in a position to measure anything: a headless run spawns no chunk and has
 no image loader, and it has no editor either.
 
@@ -520,6 +606,24 @@ thing about the editor that only a page can fail.
 own VM, to prove that each is refused at the line it is broken on. That check runs in a page as
 well, which is the point of it being a check and not only a test: a browser's compiler names
 every program `playground.rb`.
+
+**The five F4 lines are the control stage.** The first says the events reach the script at all.
+Then the checks put their own `control.rb` over the one that ships, twice — a goal of one ore,
+which the miner's line delivers in a dig and three tiles of belt, and a goal of **more ore than
+there is in the whole ground**, which the same factory goes on delivering into without ever
+winning (the number is asked of the world rather than written down). Then a `control.rb` that
+raises, to show that what is left is a factory with no goal and that the game can still say which
+line. And last, **nothing published to the control stage was dropped**, counted from both ends:
+the VM's own total and the script's own `Subscription#dropped`. That is the line to watch if the
+events are ever made finer, because the grain was chosen by dividing the sixty-four a subscription
+holds by what a frame can publish.
+
+**They also ask where the bare ground is** rather than knowing (F4). The checks used to build
+their machine lines in the middle of the map because `Ore::laid_out` leaves the middle bare — which
+is true of an even number of patches and not of an odd one, and `patches:` is a line of `data.rb`.
+Both places that want bare ground now search for it, outwards from the middle, so the default map
+builds where it always did and a map whose ore lands in the middle is a map the checks still work
+on.
 
 `--shot` and the checks now work together (F0 found they could not): a run that was asked for a
 picture stays up for it rather than exiting the moment the checks are done.
