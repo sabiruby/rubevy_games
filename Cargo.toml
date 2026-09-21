@@ -76,9 +76,11 @@ repository = "https://github.com/sabiruby/rubevy_games"
 
 [profile.dev]
 opt-level = 1          # Bevy is unusable at 0
+debug = "line-tables-only"   # backtraces keep file:line; full DWARF made each binary ~1.7GB
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false                # no debug info for dependencies (Bevy etc.)
 
 # The browser build (`web/build.sh`): a release build that favours size, since the page downloads it.
 [profile.web]
