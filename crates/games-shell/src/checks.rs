@@ -296,15 +296,17 @@ impl CheckPace {
     /// |---|---|
     /// | `checks_instructions_a_frame` | [`CheckPace::instructions_a_frame`] |
     ///
-    /// A frame that buys **nothing** is not a frame, and it is worth saying why the floor is here
-    /// rather than trusting the file: this number divides a budget, so a nought in a store would
-    /// make the quotient infinite and `as u32` would saturate — a check that waits 4,294,967,295
-    /// frames is a check that never says anything at all, which is the one failure mode a bound
-    /// exists to prevent.
+    /// A frame that buys **nothing** is not a frame, and it is worth saying why: this number
+    /// divides a budget, so a nought in a store would make the quotient infinite and `as u32`
+    /// would saturate — a check that waits 4,294,967,295 frames is a check that never says
+    /// anything at all, which is the one failure mode a bound exists to prevent.
+    ///
+    /// Until S11 a nought was quietly read as a one, which is a rate nobody measured and nobody
+    /// asked for. It is refused now and the measured default stands
+    /// ([`Settings::positive`](crate::Settings::positive)).
     pub fn read_from(&mut self, settings: &crate::Settings) {
-        if let Some(value) = settings.number("checks_instructions_a_frame") {
-            self.instructions_a_frame = value.max(1.0);
-        }
+        self.instructions_a_frame =
+            settings.positive("checks_instructions_a_frame", self.instructions_a_frame);
     }
 
     /// **How many frames a check may wait for a VM it has asked something of**: the frames the
@@ -492,9 +494,16 @@ mod tests {
         assert_eq!(pace.instructions_a_frame, 22_800.0);
         assert_eq!(pace.frames_to_wait(2, 200_000), 2 + 9);
 
-        // and a frame that buys nothing would be a check that never gives up, so it cannot
+        // **and a frame that buys nothing would be a check that never gives up, so it is
+        // refused** (S11): until then a nought was quietly read as a one, which is a rate nobody
+        // measured, and the run said nothing about it
         settings.set("checks_instructions_a_frame", "0");
-        assert_eq!(CheckPace::of(&settings).instructions_a_frame, 1.0);
+        assert_eq!(CheckPace::of(&settings).instructions_a_frame, INSTRUCTIONS_A_FRAME_BUYS);
+        assert!(
+            settings.refused().iter().any(|said| said.contains("is not more than zero")),
+            "and the run is told: {:?}",
+            settings.refused()
+        );
 
         let _ = std::fs::remove_file(&path);
     }

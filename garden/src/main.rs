@@ -123,9 +123,9 @@ impl Place {
         take(settings, "field_width", &mut self.width);
         take(settings, "field_depth", &mut self.depth);
         take(settings, "wall_margin", &mut self.wall_margin);
-        if let Some(value) = settings.number("separate_passes") {
-            self.separate_passes = value.max(0.0) as usize;
-        }
+        // **no passes at all is a thing somebody may want**; half a pass is not (S11)
+        self.separate_passes =
+            settings.counted("separate_passes", 0, self.separate_passes as u64) as usize;
     }
 }
 
@@ -368,9 +368,9 @@ impl Light {
         take(settings, "light_day_ambient", &mut self.day_ambient[0]);
         take(settings, "light_day_ambient_span", &mut self.day_ambient[1]);
         take(settings, "light_sun_lux", &mut self.sun_lux);
-        if let Some(value) = settings.number("light_shadow_cascades") {
-            self.shadow_cascades = value.max(1.0) as u32;
-        }
+        // a shadow drawn in no cascades at all is no shadow, so one is the fewest (S11)
+        self.shadow_cascades =
+            settings.counted("light_shadow_cascades", 1, self.shadow_cascades as u64) as u32;
         take(settings, "light_shadow_near", &mut self.shadow_near);
         take(settings, "light_shadow_far", &mut self.shadow_far);
         // S9: the nine colours of the day, each `…_r` / `_g` / `_b`
@@ -552,18 +552,16 @@ impl Scenery {
     /// `fog_color_r` / `_g` / `_b` / `fog_start` / `fog_end`, `edge_trees` / `edge_jitter` /
     /// `edge_out_min` / `edge_out_max` / `edge_scale_min` / `edge_scale_max`.
     ///
-    /// The dome wants at least three sides and two rings to be a dome at all, and a count below
-    /// that is raised rather than refused — the store is a text file and this is the same
-    /// clamping `look_floor_pattern` does in Battle.
+    /// The dome wants at least three sides and two rings to be a dome at all. Until S11 a count
+    /// below that was quietly raised to it; it is refused now, with the default left standing and
+    /// a line in the log, because a store that says `sky_sides=1` has said something the game
+    /// cannot do and drawing a triangle instead is not what it asked for
+    /// ([`Settings::counted`](games_shell::Settings::counted)).
     fn read_from(&mut self, settings: &games_shell::Settings) {
         take(settings, "horizon_half", &mut self.horizon_half);
         take(settings, "sky_radius", &mut self.sky_radius);
-        if let Some(value) = settings.number("sky_sides") {
-            self.sky_sides = (value.max(3.0)) as usize;
-        }
-        if let Some(value) = settings.number("sky_rings") {
-            self.sky_rings = (value.max(2.0)) as usize;
-        }
+        self.sky_sides = settings.counted("sky_sides", 3, self.sky_sides as u64) as usize;
+        self.sky_rings = settings.counted("sky_rings", 2, self.sky_rings as u64) as usize;
         take(settings, "fog_near", &mut self.fog_near);
         take(settings, "fog_depth", &mut self.fog_depth);
         take(settings, "fog_color_r", &mut self.fog_color[0]);
@@ -571,9 +569,8 @@ impl Scenery {
         take(settings, "fog_color_b", &mut self.fog_color[2]);
         take(settings, "fog_start", &mut self.fog_at_first[0]);
         take(settings, "fog_end", &mut self.fog_at_first[1]);
-        if let Some(value) = settings.number("edge_trees") {
-            self.edge_trees = value.max(0.0) as usize;
-        }
+        // a horizon with no trees on it is a horizon (S11)
+        self.edge_trees = settings.counted("edge_trees", 0, self.edge_trees as u64) as usize;
         take(settings, "edge_jitter", &mut self.edge_jitter);
         take(settings, "edge_out_min", &mut self.edge_out[0]);
         take(settings, "edge_out_max", &mut self.edge_out[1]);
@@ -739,9 +736,8 @@ impl Picture {
         take(settings, "look_beetle_scale", &mut self.beetle_scale);
         take(settings, "look_rabbit_scale", &mut self.rabbit_scale);
         take(settings, "look_walking_at", &mut self.walking_at);
-        if let Some(value) = settings.number("look_gait_blend_ms") {
-            self.gait_blend_ms = value.max(0.0) as u64;
-        }
+        // a blend of no milliseconds is a gait that snaps, which is a thing to ask for (S11)
+        self.gait_blend_ms = settings.counted("look_gait_blend_ms", 0, self.gait_blend_ms);
         if let Some(name) = settings.get("look_beetle_model") {
             self.beetle_model = name.to_string();
         }
@@ -898,10 +894,9 @@ impl Furniture {
     /// `start_creatures_apart`, `start_beetle_speed` / `_sight` / `_appetite`,
     /// `start_rabbit_speed` / `_sight` / `_appetite`, `start_genome_spread`.
     fn read_from(&mut self, settings: &games_shell::Settings) {
+        // a garden with no rocks in it is a garden, so nought is allowed and a half is not (S11)
         let count = |key: &str, slot: &mut usize| {
-            if let Some(value) = settings.number(key) {
-                *slot = value.max(0.0) as usize;
-            }
+            *slot = settings.counted(key, 0, *slot as u64) as usize;
         };
         count("start_plants", &mut self.plants);
         take(settings, "plant_min", &mut self.plant_min);
@@ -916,9 +911,7 @@ impl Furniture {
         take(settings, "start_hunger_min", &mut self.hunger[0]);
         take(settings, "start_hunger_max", &mut self.hunger[1]);
         // one try is still a try; zero would leave a creature wherever `Vec2::ZERO` is
-        if let Some(value) = settings.number("start_tries") {
-            self.tries = value.max(1.0) as usize;
-        }
+        self.tries = settings.counted("start_tries", 1, self.tries as u64) as usize;
         take(settings, "start_round_chance", &mut self.round_chance);
         take(settings, "start_rock_squash_min", &mut self.rock_squash[0]);
         take(settings, "start_rock_squash_max", &mut self.rock_squash[1]);
@@ -2607,10 +2600,10 @@ impl Budgets {
     /// A `frame_time` of 0 or less means **no wall-clock guard at all**, which is what rubevy's
     /// `Option<Duration>` says with `None`; it is the same reading Battle gives the key.
     fn read_from(&mut self, settings: &games_shell::Settings) {
+        // **a budget of nothing is a VM that runs nothing**, which W1's checks are written to
+        // survive and a player may want; what is not a budget is a negative one (S11)
         let count = |key: &str, slot: &mut u64| {
-            if let Some(value) = settings.number(key) {
-                *slot = value.max(0.0) as u64;
-            }
+            *slot = settings.counted(key, 0, *slot);
         };
         count("script_budget", &mut self.creature);
         take(settings, "script_frame_time_ms", &mut self.creature_frame_time_ms);
@@ -2683,11 +2676,13 @@ fn main() {
     let pace = games_shell::CheckPace::of(&settings);
     // `--headless N`: no window, N seconds, the world reported on stdout. It runs exactly the
     // same systems as the windowed one; only the drawing is missing.
-    let headless = args.headless(settings.number("headless_seconds").unwrap_or(HEADLESS_SECONDS));
+    // **a run of no seconds is not a shorter run, it is no run** (S11), and the same of a picture
+    // taken before the garden has grown
+    let headless = args.headless(settings.positive("headless_seconds", HEADLESS_SECONDS));
     // `--shot FILE [SECONDS]`: a window, a picture of it, and out.
     let shot = args.shot(
         settings.get("shot_file").unwrap_or(SHOT_FILE),
-        settings.number("shot_seconds").unwrap_or(SHOT_SECONDS),
+        settings.positive("shot_seconds", SHOT_SECONDS),
     );
     // `--at SECONDS`: **where the garden's clock stands when the picture is taken** — or, with no
     // `--shot`, where it starts. G6 wanted a picture of midnight, and waiting forty seconds for
@@ -2963,6 +2958,11 @@ fn main() {
     // VMs; only `Picture` and `Scenery` are wholly the window's, and a resource nothing reads
     // costs a headless run nothing. The store itself goes in with them — the night dial writes
     // back to it, and `PanelSettingsPlugin` reads it in `PreStartup`.
+    // **What the store asked for and did not get** (S11). The settings are read at the top of
+    // `main`, where a `warn!` has no log to go to yet (F3a), so the refusals are kept and said
+    // in `Startup` — in both builds, because the budgets and the furniture are the headless
+    // run's settings too.
+    app.add_plugins(games_shell::SettingsRefusalsPlugin);
     app.insert_resource(settings)
         .insert_resource(place)
         .insert_resource(furniture)

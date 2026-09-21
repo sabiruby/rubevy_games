@@ -46,7 +46,7 @@ pub use camera::{
 };
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin, GuideStyle};
 pub use hud::{Hud, HudPlugin, HudStyle, ScriptPanel};
-pub use settings::{remembered, PanelSettingsPlugin, Settings};
+pub use settings::{remembered, PanelSettingsPlugin, Settings, SettingsRefusalsPlugin};
 /// The pixels a panel covers, which both cameras here read. It is `rubevy-egui`'s, because the
 /// panel that writes it is (`rubevy_egui::ViewInsets`); this is the same type under a second name.
 pub use rubevy_egui::ViewInsets;
