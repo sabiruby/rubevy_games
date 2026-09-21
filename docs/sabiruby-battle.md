@@ -255,8 +255,10 @@ the order is the invariant. There is no screen and no taste for which putting th
 tanks is right.
 
 Two more say what the scripts are allowed: `script_budget` (instructions a frame for the whole VM)
-and `script_frame_time_ms`. Left out, they are rubevy's own defaults, which is what this game has
-always run on. And three are the defaults of flags: `headless_seconds`, `shot_file`,
+and `script_frame_time_ms`. Left out, the budget is **114,000** — the Battle's own, measured in
+the largest match it can be given (S10b, 2026-09-21; it was rubevy's inherited 200,000 until
+then), and the wall clock is still rubevy's 8 ms, which nothing here has measured.
+And three are the defaults of flags: `headless_seconds`, `shot_file`,
 `shot_seconds` — the flag still wins where it is given.
 
 A key that is not there is the default. Deleting a line is how to go back.

@@ -2675,6 +2675,12 @@ fn main() {
     eye_at.read_from(&settings);
     let mut budgets = Budgets::default();
     budgets.read_from(&settings);
+    // **How fast this machine's VM is, as far as the checks need to know** (S10): the divisor
+    // `window::scheduler_frames` turns a budget into a number of frames with. It is
+    // `games-shell`'s because Battle's checks were writing the same measurement down a second
+    // time, and it is read from the store here — `checks_instructions_a_frame` — because the
+    // machine it was measured on is not everybody's machine.
+    let pace = games_shell::CheckPace::of(&settings);
     // `--headless N`: no window, N seconds, the world reported on stdout. It runs exactly the
     // same systems as the windowed one; only the drawing is missing.
     let headless = args.headless(settings.number("headless_seconds").unwrap_or(HEADLESS_SECONDS));
@@ -3170,7 +3176,7 @@ fn main() {
         // `choose_watched` reads `F3` and `Tab`. A key pressed into `ButtonInput` after the system
         // that reads it has run in that frame is a key nobody ever sees — `just_pressed` is
         // cleared in the next frame's `PreUpdate`.
-        app.insert_resource(window::WindowTest::after(3.0, &budgets)).add_systems(
+        app.insert_resource(window::WindowTest::after(3.0, &budgets, &pace)).add_systems(
             Update,
             window::window_selftest.before(window::inspect_keys).before(window::choose_watched),
         );
@@ -7955,17 +7961,24 @@ mod tests {
     ///
     /// S5b-5 is where that stopped being hypothetical: [`CREATURE_BUDGET`] went from 200,000 to
     /// 41,000 and this went from 7 to 3 with no edit of its own.
+    ///
+    /// S10: and the divisor is a setting as well now (`games_shell::CheckPace`), so the same sum
+    /// moves when the machine does — which is the last line here.
     #[test]
     fn a_bigger_budget_buys_the_checks_more_frames() {
+        let pace = games_shell::CheckPace::default();
         let budgets = Budgets::default();
         // `2 + ceil(41,000 / 45,600)`, which is what the default budget now buys
-        assert_eq!(window::scheduler_frames(&budgets), 3);
+        assert_eq!(window::scheduler_frames(&budgets, &pace), 3);
         // five times the budget is five times the frames a restart may take to come round
         let rich = Budgets { creature: 1_000_000, ..Budgets::default() };
-        assert_eq!(window::scheduler_frames(&rich), 2 + 22);
+        assert_eq!(window::scheduler_frames(&rich, &pace), 2 + 22);
         // and a VM given almost nothing still gets the two frames that are structural
         let poor = Budgets { creature: 1, ..Budgets::default() };
-        assert_eq!(window::scheduler_frames(&poor), 3);
+        assert_eq!(window::scheduler_frames(&poor, &pace), 3);
+        // a machine whose frames buy half as much is a machine the checks wait twice as long on
+        let slow = games_shell::CheckPace { instructions_a_frame: 22_800.0 };
+        assert_eq!(window::scheduler_frames(&rich, &slow), 2 + 44);
     }
 
     #[test]
