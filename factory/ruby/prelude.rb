@@ -179,7 +179,7 @@ def run_inserter
   # bits means two inserters built in the same frame do not draw the same number, and a run is the
   # same run twice.
   srand(being.me.to_i)
-  sleep being.swing_seconds * rand
+  sleep being.swing_seconds * klass.stagger * rand
   being.run
 rescue => e
   # **the place, worked out here and left where the game will find it.** `@broke_at` on this task

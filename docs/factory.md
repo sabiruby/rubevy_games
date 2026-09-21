@@ -4,7 +4,7 @@ The third game. **This file says what exists, not what is planned** — the plan
 [`plans/factory-plan.md`](plans/factory-plan.md), and everything this page does not mention is
 not written yet.
 
-What exists (stages **F0**, **F1** and **F2**, 2026-09-21):
+What exists (stages **F0** to **F3**, 2026-09-21):
 
 * a crate, `factory/`, in the workspace;
 * a **floor**: one `TilemapChunk` — Bevy's own, one draw call for the whole grid — laid out of
@@ -19,17 +19,24 @@ What exists (stages **F0**, **F1** and **F2**, 2026-09-21):
   the factory is played by are written, read once before the first frame into Rust tables;
 * **furnaces and assemblers** that make what a recipe says in the time it says, including machines
   that cover more than one tile;
-* `--headless N`, `--shot`, `--stress N`, and the checks (`FACTORY_SELFTEST`, `?selftest`).
+* **inserters** — the one machine with a mind. One takes a thing from the tile behind it and puts
+  it in the tile in front, **and when it does that is a line of Ruby**
+  (`ruby/inserter.rb` on top of `ruby/prelude.rb`). Nothing goes into or out of a machine any
+  other way, so a line that ends at a furnace ends there until an arm is put beside it;
+* a **panel to write that Ruby in**, in a window: click an arm and its script is there, Apply runs
+  it in that one or in all of them, Revert puts them back on the file;
+* `--headless N`, `--shot`, `--stress N`, `--arms N`, and the checks (`FACTORY_SELFTEST`,
+  `?selftest`).
 
-What does not exist: the control stage, inserters, an editor, a HUD, a guide, a save file.
-`factory/ruby/prelude.rb` is still an empty file with a note in it — the data stage needed
-nothing in it, and why is written there.
+What does not exist: the control stage, a HUD, a VM panel, a guide, a save file, and Save in the
+panel (it says so rather than doing half of it).
 
 ```
 cargo run -p factory                          # a window
-cargo run -p factory -- --headless 20         # no window
+cargo run -p factory -- --headless 30         # no window
 cargo run -p factory -- --stress 4000         # a loop of belt, measured (sizes its own map)
-FACTORY_SELFTEST=1 cargo run -p factory -- --headless 20
+cargo run -p factory -- --arms 1000           # a thousand inserters, measured (the same)
+FACTORY_SELFTEST=1 cargo run -p factory -- --headless 30
 docker/build.sh factory release && docker/run.sh factory release   # a window, in the container
 web/build.sh factory && web/serve.sh          # then http://localhost:8080/factory/
 ```
@@ -41,12 +48,18 @@ whole of it, and the game says it in the log when it starts:
 
 | | |
 |---|---|
-| `1` `2` `3` | a belt, a miner, a chest in hand |
-| `4` onwards | the machines `data.rb` declares, in the order it declares them (`4` the furnace, `5` the assembler) — the game prints the list when it starts |
+| `1` `2` `3` `4` | a belt, a miner, a chest, an **inserter** in hand |
+| `5` onwards | the machines `data.rb` declares, in the order it declares them (`5` the furnace, `6` the assembler) — the game prints the list when it starts |
 | `0` | nothing in hand: a click takes away what is there |
 | `R` | turn what is in hand a quarter turn anticlockwise |
 | click | build it, or take it away |
+| click an inserter with an inserter in hand | **open its script in the panel** |
 | drag, wheel, `WASD`, `Home` | the camera |
+
+**Opening an arm needs no mode and no key.** A click on a tile that already has an inserter cannot
+have meant "build an inserter", so it means "show me this one" — and building a new one opens it
+too, which is the order a player does it in. It also means a second click never resets an arm in
+the middle of a swing.
 
 **A miner has to stand on ore**, which is what makes a patch worth finding; everything else goes
 anywhere, and building over something replaces it. **A machine may cover more than one tile** —
@@ -58,6 +71,14 @@ and takes things from any side but its own front, so two belts pointing at each 
 than passing the same item back and forth. A miner puts what it digs into whatever it faces — a
 belt or a chest — and if there is nowhere to put it, **it keeps the dig and takes nothing out of
 the ground** until there is.
+
+**A machine has no other door than an inserter.** A belt running into a furnace jams; what a
+furnace made stays in it. A chest still takes from a belt and a miner still puts a dig straight
+onto one, so the first line a player builds — a miner, a belt, a chest — needs no Ruby at all.
+Factorio wants an inserter for the chest too; this game does not, because the line that has to be
+joined up by a script is the line with a *machine* in it, and that is what the game is about.
+**A machine's direction says nothing** (an arm reaches into whichever of its tiles it stands
+behind), which is Factorio's shape as well.
 
 ## What one step of the factory is
 
@@ -370,27 +391,28 @@ which is what keeps the two from disagreeing.
 The budget, set here before F1 starts filling the sheet, the way the garden's models were
 (`CREDITS.md`, "against the plan's budget of 2 MB in ten"): **64 KB, in one sheet plus the item
 icons plus one licence text for each pack used.** Where it comes from: the sheet costs a
-**measured 67 bytes a tile** (9,662 bytes for 145 at F0, 9,369 for 139 at F1, 9,612 for the 142
-it has now — 67.7), so even a sheet of 512 tiles — nearly four times what is in it now, and more
+**measured 68 bytes a tile** (9,662 bytes for 145 at F0, 9,369 for 139 at F1, 9,612 for 142 at F2,
+9,777 for the 143 it has now — 68.4), so even a sheet of 512 tiles — nearly four times what is in it now, and more
 than Kenney's whole pack three times over — is about 35 KB. 64 KB is nearly twice that, and **27%
 of the smaller of the two games already here** (sabibots 234,202 B, garden 322,924 B, `web.md`),
 which is the ceiling the plan sets.
 
 | file | bytes |
 |---|---|
-| `factory/assets/tiles/factory-tiles.png` | 9,612 |
-| `factory/assets/items/items.png` | 317 |
+| `factory/assets/tiles/factory-tiles.png` | 9,777 |
+| `factory/assets/items/items.png` | 414 |
 | `factory/assets/tiles/LICENSE-kenney-tiny-factory.txt` | 569 |
 | `factory/assets/tiles/LICENSE-kenney-tiny-farm.txt` | 566 |
-| **what the page carries** | **11,064 in 4 files**, 17% of the budget |
+| **what the page carries** | **11,326 in 4 files**, 17% of the budget |
 
-Three items cost 317 bytes where one cost 180, which is **46 bytes an icon** after the PNG
-header: at that rate the budget's remaining 53 KB is a thousand items, and it is not the icons
-that will run out.
+Five 8 px pictures cost 414 bytes where one cost 180, which is **about 50 bytes a picture** after
+the PNG header: at that rate the budget's remaining 53 KB is a thousand of them, and it is not
+the small pictures that will run out.
 
 Not in the page: `factory/art/` — the two packs as they came (4,452 and 5,866), their
 `Tilesheet.txt` (238 each), their licences (569 and 566) and the drawn belts, ore and machine
-(330, 376 and 287) — 12,922 bytes of source that `web/build.sh` never copies.
+(330, 376 and 287) and the inserter's base (306) — 13,228 bytes of source that `web/build.sh`
+never copies.
 
 ## The entry page
 
@@ -403,21 +425,35 @@ runs `web/build.sh all`.
 
 ## The checks
 
-`docs/verification/selftest-lines.md` has the lists — thirteen lines with no window, thirteen
-with one, and fourteen in a page. The one that moves between them is about the picture: a
-headless run spawns no chunk and has no image loader, so it says `--` rather than claiming a
-check that never ran.
+`docs/verification/selftest-lines.md` has the lists — nineteen lines with no window, twenty-two
+with one, and twenty-three in a page. **Two move between them**, and both are `--` where the run
+could not put the check in a position to measure anything: a headless run spawns no chunk and has
+no image loader, and it has no editor either.
 
-**They build a factory with clicks**, because that is the road a player takes and the only road
-there is: the checks write a `WorldClick` and the same system that answers a mouse answers them.
-A run with no window has no mouse, which is why the message is registered there too. **One tile a
-frame**, because the system that answers a click reads what is in hand when it runs and not when
-the click was written. Then they wait for **the game's own numbers** rather than for a number of
+**They build a factory the way a player does**, which since F3 means writing a `build::Order` —
+the game's own message, carrying a tile, a thing and a way round — rather than forging a mouse.
+The same system that carries out a player's order carries out theirs, in a run that has no mouse.
+**One tile a frame**, which is now a convenience and not a rule: an order says what was meant, so
+five in one frame build five different things; it stays one a frame because then the log says
+which tile went wrong. Then they wait for **the game's own numbers** rather than for a number of
 seconds — a miner's dig plus four tiles of belt is 3.0 s with what `data.rb` says, measured 2.5 s;
-a furnace's belt and craft and belt is 3.5 s, measured 3.5 — and they check that what came out of
-the ground is either in a chest or on a belt.
+a machine line is `swing + one swing per thing the recipe eats + time ÷ speed + swing + belt`,
+which is 5.5 s for both of them, measured 5.6 and 5.4 — and they check that what came out of the
+ground is either in a chest or on a belt.
 
-**And they put seven broken data files through the door the real one went through**, in the game's
+**The five F3 lines are the stage said as checks.** A machine with no arm beside it takes nothing,
+so the line stops on the belt; an arm in the gap joins it up and the chest fills; every arm on the
+map has a script of its own; one arm given a script that raises stops **and the game knows which
+line of which file**, while the other line goes on filling its chest; and an arm taken away leaves
+no script behind and nothing parked on a `move` that will never be answered.
+
+**Four more are the panel's**, in a window and a page only. They open an arm the way a player
+does, type, and press the three buttons, waiting for **what each one did** — the dearest of those
+being the VM holding one more program, which is three frames after the button. In a page that is
+the playground's own compiler being called synchronously from inside the frame, which is the one
+thing about the editor that only a page can fail.
+
+**And they put eight broken data files through the door the real one went through**, in the game's
 own VM, to prove that each is refused at the line it is broken on. That check runs in a page as
 well, which is the point of it being a check and not only a test: a browser's compiler names
 every program `playground.rb`.

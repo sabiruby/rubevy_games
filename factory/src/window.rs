@@ -107,6 +107,7 @@ pub fn do_editor_actions(
     prelude: Res<Prelude>,
     data: Res<Data>,
     rules: Res<Rules>,
+    stagger: Res<crate::inserters::Stagger>,
     mut crew: Crew,
     mut mrb: ResMut<Assets<rubevy::MrbAsset>>,
 ) {
@@ -118,7 +119,7 @@ pub fn do_editor_actions(
     // of what a panic would say about a file a player is invited to edit. It is compiled here,
     // before anything is written down, so that a refusal changes nothing.
     let compiles = |crew: &mut Crew, mrb: &mut Assets<rubevy::MrbAsset>, text: &str| {
-        crate::inserters::would_compile(&mut crew.minds, &prelude.0, &data, &rules, text, mrb)
+        crate::inserters::would_compile(&mut crew.minds, &prelude.0, &data, &rules, *stagger, text, mrb)
     };
     // what each button does, and what the panel is told about it afterwards
     let said: Result<(String, Option<String>), String> = match action {

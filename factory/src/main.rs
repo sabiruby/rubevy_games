@@ -163,6 +163,41 @@ const TILESET_WAIT_FRAMES: u32 = 400;
 /// Three frames is the longest of the three, and six is twice it.
 const PANEL_WAIT_FRAMES: u32 = 6;
 
+/// **How many instructions this game's VM may run in a frame**, and the one number here that came
+/// out of an instrument rather than out of an argument.
+///
+/// The recipe is rubevy's own (`docs/host-api.md`, "Choosing `budget` and `frame_time`") and it
+/// has three steps, none of which is a multiplier somebody liked:
+///
+/// 1. **measure the rate.** `--arms 3000`, with the scripts' first look spread as it is in play,
+///    runs **10,800 instructions in 1,102 µs** of tick at the median — about **9,800 instructions
+///    a millisecond** (2026-09-21, release, this machine; the same instrument at 1,000 arms says
+///    13,800, and the lower of the two is the one to be conservative at because it is the busier
+///    factory). The garden measured 9,300 for its rules, which is the same kind of Ruby doing the
+///    same kind of thing.
+/// 2. **decide the share of the frame.** A sixtieth of a second is 16.7 ms and this game has one
+///    VM, so a quarter of the frame is 4.2 ms of it.
+/// 3. **what that time buys**: 4 ms × 9,800 ≈ **39,000**.
+///
+/// **What it leaves for a player.** The factory's own inserters at the biggest chain the default
+/// map holds — about 340 arms (`docs/numbers.md` §9.6) — cost about 2,000 instructions in the
+/// worst frame measured, so this is twenty times what the scripts that ship use. At three
+/// thousand arms, which no map here is big enough for, the worst frame measured was 14,040 and
+/// this is still 2.8 times it.
+///
+/// **The budget is what bites and the clock is the guard**, which is the way round rubevy
+/// recommends for a game that wants its scripts to behave the same everywhere: instructions are a
+/// fact about the scripts and are the same number in a browser several times slower, where
+/// milliseconds are a fact about the machine. `frame_time` is left at rubevy's 8 ms, which at the
+/// rate above is about 78,000 instructions — twice this.
+const SCRIPT_BUDGET: f32 = 39_000.0;
+
+/// **The tick's wall-clock bound, in milliseconds.** rubevy's own default, kept rather than
+/// chosen: the measurement above says the scripts that ship use 1.1 ms of it at three thousand
+/// arms and 0.2 ms at the three hundred a map holds, so it is a guard with room and not a
+/// reservation. Zero means no guard at all, which is rubevy's rule and not this game's.
+const SCRIPT_FRAME_TIME_MS: f32 = 8.0;
+
 /// How far the checks are allowed past the time the game's own numbers say their little factory
 /// needs, before they call it stuck. Two, for a frame's granularity at each end and for a browser
 /// whose frames are not a sixtieth of a second.
@@ -243,10 +278,20 @@ struct Shot {
 #[derive(Resource, Debug)]
 struct Stress {
     items: usize,
+    /// **How many inserters to stand beside it** (F3): each one is a chest with something in it,
+    /// an arm, and an empty chest, so every one of them has work to do for as long as the stock
+    /// lasts. It is the scripts' side of the measurement, where `items` is the belts'.
+    arms: usize,
     /// Frames to watch before saying anything, and again between each saying.
     every: u32,
     seen: Vec<f32>,
     steps: Vec<f32>,
+    /// What the VM's own tick came to, frame by frame ([`ScriptWorld::last_frame`]).
+    instructions: Vec<f32>,
+    ticks: Vec<f32>,
+    woke: Vec<f32>,
+    carried: Vec<f32>,
+    dropped: u64,
     said: u32,
 }
 
@@ -300,6 +345,21 @@ fn main() {
         .or_else(|| settings.number("stress_items"))
         .unwrap_or(0.0)
         .max(0.0) as usize;
+    let arms = args
+        .value("--arms")
+        .and_then(|n| n.parse::<f32>().ok())
+        .or_else(|| games_shell::checks::asked_number("FACTORY_ARMS"))
+        .or_else(|| settings.number("stress_arms"))
+        .unwrap_or(0.0)
+        .max(0.0) as usize;
+    // **the measuring instrument's one knob that is not a size**: zero takes the spreading of
+    // the scripts' first look away, which is how the stress run shows what it is worth
+    let stagger = inserters::Stagger(
+        games_shell::checks::asked_number("FACTORY_STAGGER")
+            .or_else(|| settings.number("inserter_stagger"))
+            .unwrap_or(1.0)
+            .max(0.0),
+    );
 
     let mut app = App::new();
     match headless {
@@ -421,6 +481,8 @@ fn main() {
         // from S5b-2 (`Match::MODEL`: no default model in Rust, nothing starts until one arrives)
         // applied to a factory: **there are no numbers of play in this binary**.
         .init_resource::<inserters::Arms>()
+        .insert_resource(stagger)
+        .add_systems(Startup, set_the_budget)
         .add_systems(Startup, read_the_data_stage)
         .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
         // **the inserters' half**, and every line of it is after the data stage: what an arm is
@@ -467,14 +529,20 @@ fn main() {
             .after(RubevySet::Answer)
             .run_if(the_factory_is_up),
     );
-    if stress > 0 {
+    if stress > 0 || arms > 0 {
         app.insert_resource(Stress {
             items: stress,
+            arms,
             // a second of frames at a sixtieth each, which is long enough for the numbers to
             // stop being the first frame's and short enough to see three of them in a run
             every: 60,
             seen: Vec::new(),
             steps: Vec::new(),
+            instructions: Vec::new(),
+            ticks: Vec::new(),
+            woke: Vec::new(),
+            carried: Vec::new(),
+            dropped: 0,
             said: 0,
         })
         .add_systems(
@@ -484,7 +552,10 @@ fn main() {
                 .before(lay_the_land)
                 .run_if(resource_exists::<Rules>),
         )
-        .add_systems(Startup, lay_the_snake.after(lay_the_land).run_if(the_factory_is_up))
+        .add_systems(
+            Startup,
+            (lay_the_snake, lay_the_arms).chain().after(lay_the_land).run_if(the_factory_is_up),
+        )
         .add_systems(
             Update,
             watch_the_frames.after(FactorySet::Step).run_if(the_factory_is_up),
@@ -514,6 +585,24 @@ fn main() {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
     app.run();
+}
+
+/// **What the scripts may spend in a frame**, said by the game rather than inherited.
+///
+/// Both numbers are settings, so a run that writes another one in `factory.settings.txt` is a run
+/// the rustdoc on [`SCRIPT_BUDGET`] is not about — which is the whole of what "measured" buys and
+/// the whole of what changing it costs. A `script_frame_time_ms` of zero or less is rubevy's
+/// "no clock at all", so it is passed through rather than refused.
+fn set_the_budget(settings: Res<games_shell::Settings>, mut world: ResMut<ScriptWorld>) {
+    world.budget = settings.number("script_budget").unwrap_or(SCRIPT_BUDGET).max(0.0) as u64;
+    let ms = settings.number("script_frame_time_ms").unwrap_or(SCRIPT_FRAME_TIME_MS);
+    world.frame_time =
+        (ms > 0.0).then(|| std::time::Duration::from_secs_f32(ms / 1000.0));
+    info!(
+        "the scripts may run {} instructions a frame, and the tick stops at {} ms",
+        world.budget,
+        ms.max(0.0)
+    );
 }
 
 /// Where `ruby/` is, for the two systems that read it.
@@ -677,6 +766,11 @@ fn lay_the_snake(
     mut grid: ResMut<Grid>,
     mut lanes: ResMut<Lanes>,
 ) {
+    // a run that asked only for arms gets only arms: a loop of belt round them would be the
+    // belts' measurement and the scripts' measuring each other
+    if stress.items == 0 {
+        return;
+    }
     // the inside of the map, 1..=n each way, and an even number of rows so that the serpentine
     // comes back to the left-hand column rather than to the right
     let n = grid.tiles - 2;
@@ -731,6 +825,51 @@ fn lay_the_snake(
     );
 }
 
+/// **The stress run's inserters**: `arms` little shuttles, each one a stocked chest, an arm and an
+/// empty chest, laid in rows above the snake.
+///
+/// A shuttle rather than a belt because what is being measured is the **scripts**: every arm in it
+/// has something behind it and room in front of it for as long as the stock lasts, so every one of
+/// them runs the busy path of `ruby/inserter.rb` — read, decide, swing — rather than the idle one.
+/// How long that lasts is the chest's own capacity over the arm's own rate, which at what
+/// `data.rb` says today is sixty seconds, and a stress run says its piece three times in three.
+///
+/// **They are not in the snake.** An arm standing in the loop would be a hole in it, and then the
+/// belts' measurement and the scripts' would be measuring each other.
+fn lay_the_arms(stress: Res<Stress>, rules: Res<Rules>, mut grid: ResMut<Grid>) {
+    if stress.arms == 0 {
+        return;
+    }
+    // a shuttle is three tiles and a gap, and a row of them has a row's gap above it, so that
+    // nothing reaches into its neighbour
+    let across = ((grid.tiles.saturating_sub(2)) / 4).max(1);
+    let mut laid = 0usize;
+    'rows: for row in (1..grid.tiles - 1).step_by(2) {
+        for unit in 0..across {
+            if laid == stress.arms {
+                break 'rows;
+            }
+            let x = 1 + unit * 4;
+            if x + 2 >= grid.tiles {
+                break;
+            }
+            let from = grid.index(UVec2::new(x, row));
+            let arm = grid.index(UVec2::new(x + 1, row));
+            let to = grid.index(UVec2::new(x + 2, row));
+            let mut stocked = Building::new(What::Chest, Dir::East);
+            stocked.held.add(rules.digs, rules.chest_capacity);
+            grid.place(from, stocked);
+            grid.place(arm, Building::new(What::Inserter, Dir::East));
+            grid.place(to, Building::new(What::Chest, Dir::East));
+            laid += 1;
+        }
+    }
+    info!(
+        "stress: {laid} inserters asked for {}, each with {} things to move",
+        stress.arms, rules.chest_capacity
+    );
+}
+
 /// **A stress run sizes its own map**, once the data stage has said how many items fit on a tile.
 ///
 /// The loop it lays holds `items_per_tile` to a tile, so the map it needs is the square root of
@@ -745,6 +884,11 @@ fn size_the_map_for_the_stress_run(
     controls: Option<ResMut<CameraControls>>,
 ) {
     let side = (stress.items as f32 / rules.items_per_tile as f32).sqrt().ceil() as u32;
+    // **and the arms want room too** (F3): a shuttle is three tiles and a gap across and takes a
+    // row of its own with a row's gap above it, so `arms` of them fit on a square of side
+    // √(8 × arms) — four tiles by two, per arm
+    let for_arms = (stress.arms as f32 * 8.0).sqrt().ceil() as u32;
+    let side = side.max(for_arms);
     // an even number of rows, so that the serpentine comes home (`lay_the_snake`)
     let tiles = map.tiles.max(side + side % 2 + 2);
     if tiles == map.tiles {
@@ -759,33 +903,69 @@ fn size_the_map_for_the_stress_run(
 }
 
 /// The stress run's own report: the frame times and what the factory's own step took inside them.
+#[allow(clippy::too_many_arguments)]
 fn watch_the_frames(
     time: Res<Time<Real>>,
     tally: Res<Tally>,
     grid: Res<Grid>,
+    world: Res<ScriptWorld>,
+    crew: inserters::Crew,
     mut stress: ResMut<Stress>,
     mut exit: MessageWriter<AppExit>,
 ) {
     stress.seen.push(time.delta_secs() * 1000.0);
     let step = tally.last_step_us;
     stress.steps.push(step);
+    // **the VM's own frame, kept per frame rather than read off at the end** (`FrameStats` is the
+    // last tick and not a total, rubevy `docs/host-api.md`). Instructions are the number to watch:
+    // they are a fact about the scripts and are the same on a machine several times slower,
+    // where milliseconds are a fact about the machine.
+    let f = world.last_frame();
+    stress.instructions.push(f.instructions as f32);
+    stress.ticks.push(f.time_ns as f32 / 1000.0);
+    stress.woke.push((f.reflect_answers + f.in_tick_answers) as f32);
+    stress.carried.push((f.carried_reflect + f.carried_in_tick) as f32);
+    stress.dropped += f.dropped;
     if stress.seen.len() < stress.every as usize {
         return;
     }
     let frame = spread(&mut stress.seen);
     let inner = spread(&mut stress.steps);
+    let insn = spread(&mut stress.instructions);
+    let tick = spread(&mut stress.ticks);
+    let woke = spread(&mut stress.woke);
+    let carried = spread(&mut stress.carried);
     info!(
-        "stress: items={} belts={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
+        "stress: items={} belts={} arms={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
         tally.items,
         grid.built().len(),
+        crew.how_many(),
         frame.0,
         frame.1,
         1000.0 / frame.0.max(0.001),
         inner.0,
         inner.1,
     );
+    info!(
+        "stress: vm insn p50 {:.0} p95 {:.0} of {} | tick us p50 {:.0} p95 {:.0} | answers p50 {:.0} p95 {:.0} | carried p50 {:.0} p95 {:.0} | dropped {} | programs {}",
+        insn.0,
+        insn.1,
+        world.budget,
+        tick.0,
+        tick.1,
+        woke.0,
+        woke.1,
+        carried.0,
+        carried.1,
+        stress.dropped,
+        world.loaded_programs(),
+    );
     stress.seen.clear();
     stress.steps.clear();
+    stress.instructions.clear();
+    stress.ticks.clear();
+    stress.woke.clear();
+    stress.carried.clear();
     stress.said += 1;
     if stress.said >= STRESS_REPORTS && platform::CHECKS_EXIT_WHEN_DONE {
         exit.write(AppExit::Success);

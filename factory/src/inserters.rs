@@ -260,7 +260,7 @@ impl Crew<'_, '_> {
 /// They are **methods on the class and not constants**, because a program is compiled again every
 /// time a text changes and a constant written twice is a warning a player did not ask for. A name
 /// is quoted (`:"…"`) so that a data file may call an item whatever it likes.
-fn names_and_numbers(data: &Data, rules: &Rules, prelude_lines: u32) -> String {
+fn names_and_numbers(data: &Data, rules: &Rules, stagger: f32, prelude_lines: u32) -> String {
     let names: Vec<String> = data
         .items
         .iter()
@@ -275,22 +275,43 @@ fn names_and_numbers(data: &Data, rules: &Rules, prelude_lines: u32) -> String {
          \x20 def self.swing_seconds\n\
          \x20   {:?}\n\
          \x20 end\n\
+         \x20 def self.stagger\n\
+         \x20   {:?}\n\
+         \x20 end\n\
          \x20 def self.prelude_lines\n\
          \x20   {}\n\
          \x20 end\n\
          end\n",
         names.join(", "),
         rules.swing_seconds,
+        stagger,
         prelude_lines,
     )
+}
+
+/// **How much of a swing a script's first wait is spread over**, and the one knob here that is a
+/// measuring instrument rather than a number of play.
+///
+/// The default is a whole swing: every arm looks for the first time somewhere in the first swing
+/// of its life, so a thousand of them started in one frame do not wake in one frame ever after
+/// (`ruby/prelude.rb`, and rubevy's measurement of what that costs). **Zero turns it off**, which
+/// is not a way to play — it is how the stress run shows what the spreading is worth
+/// (`factory.settings.txt`'s `inserter_stagger`, `FACTORY_STAGGER`, `?stagger=0`).
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct Stagger(pub f32);
+
+impl Default for Stagger {
+    fn default() -> Self {
+        Stagger(1.0)
+    }
 }
 
 /// **How many lines the block above is.** It does not depend on what is in it — every field is on
 /// a line of its own — which is what makes [`compile`]'s two passes exact rather than a guess:
 /// the number the block *carries* is how many lines are in front of the player's first one, and
 /// putting it there changes nothing about how many that is.
-fn lines_of_the_block(data: &Data, rules: &Rules) -> u32 {
-    names_and_numbers(data, rules, 0).lines().count() as u32
+fn lines_of_the_block(data: &Data, rules: &Rules, stagger: f32) -> u32 {
+    names_and_numbers(data, rules, stagger, 0).lines().count() as u32
 }
 
 /// One inserter's program: what the game wrote, the prelude, and the player's own file.
@@ -298,6 +319,7 @@ fn compile(
     prelude: &str,
     data: &Data,
     rules: &Rules,
+    stagger: f32,
     body: &str,
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
@@ -309,8 +331,8 @@ fn compile(
     // the text; the block in front adds exactly its own lines, and that count does not change
     // when the number written into it does, so one extra `Program::new` settles it.
     let without = Program::new(prelude, SCRIPT_FILE, "", "run_inserter").prelude_lines;
-    let prelude_lines = without + lines_of_the_block(data, rules);
-    let front = format!("{}{prelude}", names_and_numbers(data, rules, prelude_lines));
+    let prelude_lines = without + lines_of_the_block(data, rules, stagger);
+    let front = format!("{}{prelude}", names_and_numbers(data, rules, stagger, prelude_lines));
     let program = Program::new(&front, SCRIPT_FILE, body, "run_inserter");
     debug_assert_eq!(program.prelude_lines, prelude_lines, "the block's own length moved");
     match platform::compile(&program.source, SCRIPT_FILE) {
@@ -329,10 +351,11 @@ pub fn would_compile(
     prelude: &str,
     data: &Data,
     rules: &Rules,
+    stagger: Stagger,
     text: &str,
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(), String> {
-    program_of(minds, prelude, data, rules, text, mrb).map(|_| ())
+    program_of(minds, prelude, data, rules, stagger, text, mrb).map(|_| ())
 }
 
 /// The program for a text, compiled if this is the first time it has been seen.
@@ -341,13 +364,14 @@ fn program_of(
     prelude: &str,
     data: &Data,
     rules: &Rules,
+    stagger: Stagger,
     text: &str,
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
     if let Some(ready) = minds.programs.get(text) {
         return Ok(ready.clone());
     }
-    let made = compile(prelude, data, rules, text, mrb)?;
+    let made = compile(prelude, data, rules, stagger.0, text, mrb)?;
     minds.programs.insert(text.to_string(), made.clone());
     Ok(made)
 }
@@ -407,6 +431,7 @@ pub fn keep_the_crew(
     data: Res<Data>,
     rules: Res<Rules>,
     prelude: Res<Prelude>,
+    stagger: Res<Stagger>,
     mut minds: ResMut<Minds>,
     mut arms: ResMut<Arms>,
     mut mrb: ResMut<Assets<MrbAsset>>,
@@ -439,7 +464,7 @@ pub fn keep_the_crew(
             continue;
         }
         // this one has been given a new mind
-        match program_of(&mut minds, &prelude, &data, &rules, &text, &mut mrb) {
+        match program_of(&mut minds, &prelude, &data, &rules, *stagger, &text, &mut mrb) {
             Ok((handle, _)) => {
                 minds.swaps += 1;
                 arms.forget(inserter.tile);
@@ -465,7 +490,7 @@ pub fn keep_the_crew(
             continue;
         }
         let text = minds.text_for(tile).to_string();
-        match program_of(&mut minds, &prelude, &data, &rules, &text, &mut mrb) {
+        match program_of(&mut minds, &prelude, &data, &rules, *stagger, &text, &mut mrb) {
             Ok((handle, _)) => {
                 minds.swaps += 1;
                 arms.forget(tile);
@@ -549,7 +574,8 @@ pub fn install_answers(mut scripts: ResMut<ScriptWorld>) {
             let Some((tile, dir)) = asking(world, request) else { return Answer::Bool(false) };
             // the prelude answers -1 for a name nothing declares, which is no item at all
             let asked = request.num_or(0, -1.0);
-            if !(asked >= 0.0) {
+            // finite and not negative, said that way round because a NaN is neither
+            if !asked.is_finite() || asked < 0.0 {
                 return Answer::Bool(false);
             }
             let item = asked as ItemId;
@@ -705,7 +731,7 @@ mod tests {
             "ore :iron_ore, per_tile: 10\n",
             "inserter :arm, seconds_per_item: 0.25\n",
         ));
-        let written = names_and_numbers(&data, &rules, 123);
+        let written = names_and_numbers(&data, &rules, 1.0, 123);
         assert!(written.contains(":\"iron_ore\""), "{written}");
         assert!(written.contains(":\"a name with spaces\""), "{written}");
         assert!(written.contains("0.25"), "{written}");
@@ -713,8 +739,8 @@ mod tests {
         // **the block's length does not depend on what is in it**, which is what the two passes
         // in `compile` rest on
         assert_eq!(
-            names_and_numbers(&data, &rules, 0).lines().count(),
-            names_and_numbers(&data, &rules, 999_999).lines().count()
+            names_and_numbers(&data, &rules, 1.0, 0).lines().count(),
+            names_and_numbers(&data, &rules, 0.0, 999_999).lines().count()
         );
         // and it compiles, which is the only thing that says the quoting is right
         let bytes = platform::compile(&format!("{written}Inserter"), "written.rb");
