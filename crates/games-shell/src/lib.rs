@@ -15,8 +15,9 @@
 //!   language, the garden's night dial. Where they are kept is the game's `platform.rs`.
 //! * [`platform`] — what differs between a PC build and a browser build: a file or a
 //!   `localStorage` key, the compiler linked in or the page's, a clock for the dice.
-//! * [`checks`] — how a run is asked for its `selftest`, and why a page does not exit when it is
-//!   done.
+//! * [`checks`] — how a run is asked for its `selftest`, why a page does not exit when it is
+//!   done, and [`CheckPace`], how many instructions a frame of the VM buys on this machine (the
+//!   one number two games' checks were both writing down).
 //! * [`Args`] — the flags both games take (`--headless`, `--shot`, `--vm`, `--lang`), with every
 //!   default left to the caller.
 //!
@@ -38,6 +39,7 @@ pub mod hud;
 pub mod platform;
 pub mod settings;
 pub use args::Args;
+pub use checks::CheckPace;
 pub use camera::{
     CameraControls, CameraHome, CameraKeys, CameraPlugin, CameraSet, CameraView, Lens, PanCamera,
     WorldClick,

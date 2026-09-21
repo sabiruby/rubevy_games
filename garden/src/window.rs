@@ -1475,10 +1475,10 @@ fn what_changed<T: PartialEq + std::fmt::Debug>(
 impl WindowTest {
     /// Starts once the garden has been running for `at` seconds — long enough for every creature
     /// to have a task and for the editor to be showing one.
-    pub fn after(at: f32, budgets: &crate::Budgets) -> WindowTest {
+    pub fn after(at: f32, budgets: &crate::Budgets, pace: &games_shell::CheckPace) -> WindowTest {
         WindowTest {
             at,
-            frames: scheduler_frames(budgets),
+            frames: scheduler_frames(budgets, pace),
             egui_frames: crate::platform::egui_frames_asked()
                 .map_or(EGUI_FRAMES, |n| n.max(0.0) as u32),
             ..WindowTest::default()
@@ -1610,12 +1610,11 @@ impl Turn {
 /// * **The rest are one whole frame's budget of the VM's turns.** One frame of the creatures'
 ///   VM buys `ScriptWorld::budget` instructions — the garden's own [`crate::CREATURE_BUDGET`],
 ///   41,000 by default since S5b-5 — or `ScriptWorld::frame_time`, 8 ms of wall clock, whichever
-///   runs out first. What 8 ms buys was measured in S6: with `frame_time` cut to 300 µs the VM
-///   got through 1,708 instructions in its slowest frame (`s6/ft300.log`, f59 — two beetles'
-///   first pass of 854 each), which is 5.7 instructions per microsecond, so a full 8 ms frame
-///   buys about 45,600 and `ceil(41_000 / 45_600)` is one. Past that the VM has been handed a
-///   whole frame's allowance of turns without reaching a task that is ready to run, which is the
-///   scheduler having stopped handing them out — the sabiruby 0.5.1 bug these checks are for
+///   runs out first. What 8 ms of this machine buys is
+///   [`games_shell::checks::INSTRUCTIONS_A_FRAME_BUYS`], where S6's measurement of it is written
+///   down; `ceil(41_000 / 45_600)` is one. Past that the VM has been handed a whole frame's
+///   allowance of turns without reaching a task that is ready to run, which is the scheduler
+///   having stopped handing them out — the sabiruby 0.5.1 bug these checks are for
 ///   (`restart_species`) — rather than a machine that is merely busy.
 ///
 /// A machine that is sharing its CPU makes each frame longer, and that is the point: the same
@@ -1644,49 +1643,31 @@ impl Turn {
 /// wrong the moment the budget became something anybody could change (`script_budget` in
 /// `garden.settings.txt`): a run given ten times the budget would have been judged after the
 /// same seven frames, which is a quarter of what it was promised. The two parts of the sum keep
-/// their own sources — [`STRUCTURAL_FRAMES`] is measured in S6 and cannot be shortened,
-/// [`INSTRUCTIONS_A_FRAME_BUYS`] is S6's measurement of the wall clock — and what is new is that
-/// the division is done at startup instead of in a comment.
+/// their own sources — [`STRUCTURAL_FRAMES`] is measured in S6 and cannot be shortened, and what
+/// a frame of this machine buys is S6's measurement of the wall clock
+/// ([`games_shell::CheckPace`]) — and what is new is that the division is done at startup instead
+/// of in a comment.
 ///
 /// **S5b-5 moved the budget, so this moved with it**, which is the arrangement proving itself:
 /// `2 + ceil(41,000 / 45,600)` is **3** where it was 7. The checks are less patient than they
 /// were because the VM they are waiting on has less work it is allowed to do in a frame, and
 /// nothing here was edited to make that happen.
-pub fn scheduler_frames(budgets: &crate::Budgets) -> u32 {
-    STRUCTURAL_FRAMES + (budgets.creature as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
+///
+/// **S10 took the division out of this file.** The divisor was written down here *and* in
+/// `sabibots/src/main.rs`, with the same value and the same provenance beside each, and it is one
+/// fact about one machine rather than two games agreeing: it lives in `games-shell` now, where
+/// both of them can reach it and where a person can say their machine is a different one
+/// (`checks_instructions_a_frame`). What stayed here is [`STRUCTURAL_FRAMES`], because Battle's
+/// two frames are a different errand that costs the same two — see
+/// [`games_shell::CheckPace::frames_to_wait`].
+pub fn scheduler_frames(budgets: &crate::Budgets, pace: &games_shell::CheckPace) -> u32 {
+    pace.frames_to_wait(STRUCTURAL_FRAMES, budgets.creature)
 }
 
 /// The two frames a restart costs whatever the VM is allowed: the `Script` lands at the end of
 /// the frame that asked for it, and rubevy makes a task of it and runs it on the next.
 /// **Measured** (S6, `docs/worklog/2026-09-20-window-check-flakes.md` §4.4) and structural.
 const STRUCTURAL_FRAMES: u32 = 2;
-
-/// What one frame of the creatures' VM buys, in instructions. It is a number about *this
-/// machine's* wall clock, which is why it is the check's and not a setting: a check is allowed to
-/// know how fast the machine it is running on is.
-///
-/// **There are two measurements of it, and this is the slower one** (S5b-5):
-///
-/// | | how it was measured | rate | 8 ms buys |
-/// |---|---|---|---|
-/// | S6 | `frame_time` cut to **300 µs**, the VM's slowest frame in that run: 1,708 instructions (`s6/ft300.log`, f59 — two beetles' first pass of 854 each) | 5.7 insn/µs | **45,600** |
-/// | S5b-3 | the capped garden at its **own 8 ms**, three runs of a minute | 6.85 insn/µs | 54,800 |
-///
-/// The difference is the condition, not the machine: a frame cut to 300 µs pays the cost of
-/// starting and stopping the tick over a twenty-seventh of the work, so the rate it measures is
-/// the rate of a *short* frame. The garden's own frames are the second row, and they are quicker.
-///
-/// **The slower rate is the one to keep**, and the reason is which way this number's error hurts.
-/// It divides the budget to say how many frames a check may wait, so a number that is too **big**
-/// makes the wait too short and produces a FAIL for a VM that was merely being slow — a false
-/// FAIL, the thing S6 and S7 were called in to remove. A number that is too small only makes a
-/// check wait longer before it says what it was going to say. So the rate that buys *less* per
-/// frame is the safe side, and 45,600 is it.
-///
-/// **At the budget the game ships with the two agree anyway**: `ceil(41,000 / 45,600)` and
-/// `ceil(41,000 / 54,800)` are both 1, so [`scheduler_frames`] is 3 either way. The choice only
-/// shows above 45,600 of budget, which is `script_budget` in somebody's `garden.settings.txt`.
-const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 
 /// **How many frames [`Turn::EguiHasThePointer`] may wait** (S9) — egui's own bound, from egui's
 /// own reason, which until now was the VM's ([`scheduler_frames`]).

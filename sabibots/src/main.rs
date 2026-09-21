@@ -862,6 +862,12 @@ fn main() {
     // thinking bar in the scoreboard is for reading the effect of.
     let budget = settings.number("script_budget");
     let frame_time = settings.number("script_frame_time_ms");
+    // **How fast this machine's VM is, as far as the handler check needs to know** (S10): the
+    // divisor [`handler_frames`] turns that budget into a number of frames with. It is
+    // `games-shell`'s because the garden's checks were writing the same measurement down a second
+    // time, and it is read from the store here — `checks_instructions_a_frame` — because the
+    // machine it was measured on is not everybody's machine.
+    let pace = games_shell::CheckPace::of(&settings);
     app.insert_resource(RubyDir(ruby.clone()))
         .insert_resource(settings)
         .insert_resource(look)
@@ -928,6 +934,7 @@ fn main() {
             frames: platform::handler_frames_asked().map(|n| n.max(0.0) as u32),
             bound: None,
         })
+        .insert_resource(pace)
         .init_resource::<EditChecks>()
         .add_systems(Update, handler_selftest);
     }
@@ -2091,11 +2098,19 @@ const HIT_WINDOW: f32 = 0.3;
 /// * [`HANDLER_STRUCTURAL_FRAMES`], **two**, and they are measured as well as derived: four quiet
 ///   headless runs of twenty-five seconds gave 105 counted hits and the handler's turn came
 ///   **2 frames after the hit in every one of them**.
-/// * plus **one whole frame's allowance of the VM's turns**, `ceil(budget ÷
-///   [`INSTRUCTIONS_A_FRAME_BUYS`])`, which is five at the budget the Battle ships with — because
-///   a frame of wall clock (`script_frame_time_ms`) runs out long before 200,000 instructions do.
-///   Past that the VM has been handed a whole allowance without reaching a task that was ready,
-///   which is the scheduler having stopped handing turns out rather than a machine that is busy.
+/// * plus **one whole frame's allowance of the VM's turns**, `ceil(budget ÷ what a frame of this
+///   machine buys)`, which is five at the budget the Battle ships with — because a frame of wall
+///   clock (`script_frame_time_ms`) runs out long before 200,000 instructions do. Past that the VM
+///   has been handed a whole allowance without reaching a task that was ready, which is the
+///   scheduler having stopped handing turns out rather than a machine that is busy.
+///
+/// **S10 moved the divisor.** It was a `const` in this file *and* one in `garden/src/window.rs`,
+/// same name, same value, same paragraph of provenance beside each — which is not two games
+/// agreeing on a number but one fact about one machine written down twice, and neither copy could
+/// cite the other across two binaries. It is [`games_shell::CheckPace`] now, with a key a person
+/// can put in their own `sabibots.settings.txt` when their machine is a different one
+/// (`checks_instructions_a_frame`). [`HANDLER_STRUCTURAL_FRAMES`] stayed here, because the
+/// garden's two frames are a *different* errand that happens to cost the same two.
 ///
 /// **Seven, and the measurement says it is not too many.** In five browser runs at 1600×900 with
 /// Chromium's CPU throttled twenty times — the nearest this machine could come to F0's failing
@@ -2104,8 +2119,8 @@ const HIT_WINDOW: f32 = 0.3;
 /// anything to see. It is **worked out from the budget** rather than written down, because the
 /// budget is `script_budget` in somebody's `sabibots.settings.txt` (S5b-3's lesson: a run given
 /// ten times the budget would otherwise be judged after the same seven frames).
-fn handler_frames(budget: u64) -> u32 {
-    HANDLER_STRUCTURAL_FRAMES + (budget as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
+fn handler_frames(budget: u64, pace: &games_shell::CheckPace) -> u32 {
+    pace.frames_to_wait(HANDLER_STRUCTURAL_FRAMES, budget)
 }
 
 /// The two frames a published hit costs whatever the VM is allowed: the publish is made after
@@ -2115,25 +2130,14 @@ fn handler_frames(budget: u64) -> u32 {
 /// four quiet headless runs, every one of them 2) and structural.
 const HANDLER_STRUCTURAL_FRAMES: u32 = 2;
 
-/// What one frame of this machine's VM buys, in instructions — **S6's measurement**, which is
-/// written down in `garden/src/window.rs` under this same name and cannot be shared with it
-/// across two binaries: `frame_time` cut to 300 µs, the VM's slowest frame 1,708 instructions,
-/// 5.7 instructions per microsecond, so a full 8 ms frame buys about 45,600. It is a fact about
-/// the machine and the VM, and both are the same here.
-///
-/// It is the **slower** of the two measurements there (S5b-3 measured 6.85 insn/µs in an ordinary
-/// frame, which would buy 54,800) and for the same reason: this number divides a budget to say
-/// how many frames a check may wait, so one that is too big makes the wait too short and produces
-/// a FAIL for a VM that was only being slow. **The two copies should be one**, in a crate both
-/// games can reach — see the worklog's notes.
-const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
-
 fn handler_selftest(
     time: Res<Time>,
     frames: Res<bevy::diagnostic::FrameCount>,
     // the budget this run is really giving, which is what the bound below is worked out from
     // (S5b-3's lesson, arriving here as S9's)
     world: Res<ScriptWorld>,
+    // and what a frame of this machine buys, which is what it is divided by (S10)
+    pace: Res<games_shell::CheckPace>,
     mut test: ResMut<HandlerTest>,
     edits: Res<EditChecks>,
     the_match: Res<TheMatch>,
@@ -2148,7 +2152,18 @@ fn handler_selftest(
     // nothing at all, so a window that holds a pause holds no handler either.
     let paused = world.budget == 0;
     if !paused && test.bound.is_none() {
-        test.bound = Some(handler_frames(world.budget));
+        let bound = handler_frames(world.budget, &pace);
+        test.bound = Some(bound);
+        // **A stage direction, so that the bound can be read off a run** (S10). It carries no
+        // verdict, so `tools/fixedlines.sh` drops it and the list of checks is unchanged — and
+        // without it there is no way to tell from outside whether a line in
+        // `sabibots.settings.txt` reached this sum at all. S9's lesson about the garden's waits
+        // ("a wait that does not name itself cannot be measured") applies to a wait's *bound*
+        // just as much: "it is a setting" and "the setting is doing something" are two claims.
+        info!(
+            "selftest: a hit's handler is given {bound} frame(s) — {HANDLER_STRUCTURAL_FRAMES} structural plus a frame's worth of {} instructions at {:.0} a frame",
+            world.budget, pace.instructions_a_frame
+        );
     }
     for watch in test.watching.iter_mut() {
         if let Ok(robot) = robots.get(watch.robot) {
