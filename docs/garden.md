@@ -1552,7 +1552,14 @@ is the one rule that crosses the boundary **as a number** — the sun is drawn i
 world script that has just started hands it over — so "these rules are the ones running" needs no
 window, no threshold and no statistics. Then Revert, and the day is a minute again.
 
-**They end by asking the app to exit, and only where there is something to exit to.**
+**They end by pressing F5 at a path of their own** (S9): the garden's Save writes
+`SaveFile::path`, so the checks point it at a temporary file — `localStorage` key
+`garden:garden.checks.save.json` in a page — press the key the ordinary way, wait until a garden
+is there, read it back and put the player's path straight again. `save_file` was the one setting
+in the inventory that no run had ever exercised, because a check that saved where the game really
+saves would write into this repository every run.
+
+**And then by asking the app to exit, and only where there is something to exit to.**
 `platform::CHECKS_EXIT_WHEN_DONE` is `true` on a PC — the checks were asked for on a command line
 and the shell wants its prompt back — and `false` in a browser, where `AppExit` does not end a run
 but stops the canvas: winit's wasm loop is no longer pumped, every system stops, and the last frame

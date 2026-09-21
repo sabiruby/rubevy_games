@@ -16,6 +16,8 @@
 //! * **`F5` is taken.** It saves the garden (G3), so the editor's apply key here is
 //!   `Ctrl+Enter` and the button (`Editor::apply_key`).
 
+use std::path::Path;
+
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use rubevy::{replace_script, MrbAsset, Script, ScriptTask, ScriptWorld};
@@ -1226,6 +1228,13 @@ pub struct WindowTest {
     /// same place zooms` fail in four runs of eighty-eight with eight of them at once, both
     /// before S7's changes and after them (`docs/worklog/2026-09-20-window-check-fixes.md`).
     held: bool,
+    /// **where the check pointed the garden's Save, and where it really goes** (S9)
+    ///
+    /// The second is put back the moment the check has read what it wrote, so that a run that
+    /// ends between the two — or a player who presses F5 himself in that half second — cannot
+    /// find his garden in the wrong place. Empty until the step that moves it.
+    save_path: String,
+    save_was: String,
     /// **and whether the editor was in fact drawn in that frame** (S5b-5).
     ///
     /// The control step of the wheel checks shuts the editor and then turns the wheel where the
@@ -1364,7 +1373,27 @@ impl FakePointer<'_, '_> {
     }
 }
 
-/// **The two VMs, as one system parameter** (S5b-5)./// **The two VMs, as one system parameter** (S5b-5).
+/// **The save, as one system parameter** (S9) — and the fourth time this stage has had to do
+/// this, which is what a system at Bevy's limit costs.
+///
+/// `window_selftest` was at fifteen of sixteen and pressing Save wants three resources: where the
+/// save goes ([`crate::SaveFile`], which the check moves for the length of one press), the flag a
+/// key or a button leaves ([`crate::Asked`]), and what the game said about it afterwards
+/// ([`crate::SaveNote`]). The three travel as one, as [`FakePointer`], [`BothVms`] and `HudLook`
+/// already do.
+///
+/// **It presses the garden's Save and not the editor's.** The editor's Save writes
+/// `garden/ruby/*.rb`, whose destination cannot be moved; the garden's writes `SaveFile::path`,
+/// which can (`crate::platform::check_save_file`). That is the whole reason a check about F5 is
+/// possible at all.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct TheSave<'w> {
+    file: ResMut<'w, crate::SaveFile>,
+    asked: ResMut<'w, crate::Asked>,
+    note: Res<'w, crate::SaveNote>,
+}
+
+/// **The two VMs, as one system parameter** (S5b-5).
 ///
 /// `window_selftest` was at fifteen of Bevy's sixteen and the pause is about **both** VMs — `P`
 /// takes the budget off the creatures' and off the world's together ([`inspect_keys`]) — so the
@@ -1464,6 +1493,7 @@ impl WindowTest {
     fn bound(&self) -> u32 {
         match self.turn {
             Turn::EguiHasThePointer(_) => self.egui_frames,
+            Turn::TheSaveIsWritten => SAVE_FRAMES,
             _ => self.frames,
         }
     }
@@ -1538,6 +1568,11 @@ enum Turn {
     /// panel was closed. **Not the VM**; the thing being waited for is bevy_egui learning where
     /// the pointer is, which takes a frame of its own (see the two wheel checks, steps 13-17)
     EguiHasThePointer(bool),
+    /// **the garden the check asked for has been written** (S9): `Asked::save` is a flag, and
+    /// two systems read it before there is a file — `crate::save_load_keys` turns it into
+    /// `SaveNow` and `crate::save_world` writes. Neither is ordered against `window_selftest`
+    /// ([`SAVE_FRAMES`]).
+    TheSaveIsWritten,
 }
 
 impl Turn {
@@ -1554,6 +1589,7 @@ impl Turn {
             Turn::TheDayIs(_) => "the applied rules to be running",
             Turn::EguiHasThePointer(true) => "egui to take the pointer",
             Turn::EguiHasThePointer(false) => "egui to let the pointer go",
+            Turn::TheSaveIsWritten => "the garden to be written",
         }
     }
 }
@@ -1686,6 +1722,18 @@ const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
 /// (`GARDEN_EGUI_FRAMES=N`, `?selftest&egui_frames=N`).
 const EGUI_FRAMES: u32 = 2;
 
+/// **How many frames [`Turn::TheSaveIsWritten`] may wait** (S9), and it is structural: the check
+/// sets `Asked::save`, `crate::save_load_keys` turns that into `SaveNow`, and `crate::save_world`
+/// — ordered after it — writes the file. Neither is ordered against `window_selftest`, so the
+/// flag is read in this frame or the next, and the file is written in the same frame as the
+/// reading (`save_load_keys.before(save_world)`, and `save_world` is in the chain after
+/// `RubevySet::Answer`). **Two**, and it cannot be one, because the frame the flag is set in may
+/// already be past `save_load_keys`.
+///
+/// Writing is not a scheduler, so nothing here divides a budget. It is the third bound in this
+/// file and the third reason (S9's rule: a bound is an argument about what is waited for).
+const SAVE_FRAMES: u32 = 2;
+
 /// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
 /// cannot otherwise arrange, made to happen on purpose so that a check can watch it.
 ///
@@ -1742,6 +1790,8 @@ pub fn window_selftest(
     tasks: Query<&ScriptTask>,
     // 2026-09-18: the pointer and the wheel, for the last two checks
     mut pointing: FakePointer,
+    // S9: and the garden's own Save, pressed at a path of the check's own
+    mut save: TheSave,
     mut exit: MessageWriter<AppExit>,
 ) {
     let now = time.elapsed_secs();
@@ -1775,6 +1825,13 @@ pub fn window_selftest(
                 .any(|(e, now)| test.hunger.iter().any(|(was, then)| was == e && then != now)),
             Turn::TheDayIs(want) => sky.day_length == want,
             Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
+            // **not `is_ok`** (S9): a page's `platform::forget` empties the key rather than
+            // removing it, and an empty string reads back perfectly well — so `is_ok` was
+            // answered by the check's own tidying in the very frame it pressed Save, and the
+            // check read a garden of nought bytes. What is waited for is a garden.
+            Turn::TheSaveIsWritten => {
+                platform::read(Path::new(&test.save_path)).is_ok_and(|text| !text.is_empty())
+            }
         };
         test.waited += 1;
         if !came_round && test.waited < test.bound() + test.spare {
@@ -2231,6 +2288,45 @@ pub fn window_selftest(
                 ok(!held && moved, &what);
             }
             editor.open = true;
+            // --- and F5, at a path of the check's own (S9) --------------------
+            //
+            // Last of all, and pointed somewhere else first. `save_file` was the one setting in
+            // the whole inventory that no run had ever exercised, because the window's checks
+            // deliberately left Save out: the garden's save goes to the directory the game was
+            // started from, which under `cargo run` is this repository
+            // (`docs/worklog/2026-09-21-checks-and-leftovers.md` §13). Moving the target for the
+            // length of one press is what makes the check possible, and putting it back in the
+            // very next step is what makes it safe.
+            test.save_was = save.file.path.clone();
+            test.save_path = platform::check_save_file();
+            save.file.path = test.save_path.clone();
+            // nothing of an earlier run may be mistaken for what this one wrote
+            platform::forget(Path::new(&test.save_path));
+            // the flag a key or the HUD's button leaves — the same road, not a second one
+            save.asked.save = true;
+            test.step = 18;
+            test.at = now;
+            test.turn = Turn::TheSaveIsWritten;
+        }
+        18 => {
+            // put the player's path back **before** anything is judged: a check that failed
+            // here would otherwise leave the garden's Save pointing at a temporary file
+            save.file.path = std::mem::take(&mut test.save_was);
+            let written = platform::read(Path::new(&test.save_path)).unwrap_or_default();
+            ok(
+                written.contains("\"version\""),
+                &format!(
+                    "F5 writes a garden where `save_file` says ({} bytes, version {})",
+                    written.len(),
+                    crate::SAVE_VERSION,
+                ),
+            );
+            ok(
+                !save.note.bad,
+                &format!("and the game says so rather than reporting trouble ({})", save.note.text),
+            );
+            // nothing of the check is left behind: the file goes, the page's key is emptied
+            platform::forget(Path::new(&test.save_path));
             // A PC run was asked for the checks on a command line and should give the prompt
             // back. A page was asked for them in its address, by somebody who is looking at the
             // garden — and `AppExit` there does not end a run, it stops the canvas for good. And
@@ -2241,7 +2337,7 @@ pub fn window_selftest(
             } else {
                 info!("selftest: done — the garden keeps running (a page has nothing to exit to)");
             }
-            test.step = 18;
+            test.step = 19;
         }
         _ => {}
     }

@@ -137,6 +137,47 @@ pub fn egui_frames_asked() -> Option<f32> {
     games_shell::checks::asked_number("GARDEN_EGUI_FRAMES")
 }
 
+/// **Where the window's checks press Save** (S9) — and it is never where the player's garden
+/// goes.
+///
+/// The checks had no line about F5 at all until S9, and the reason was that they had nowhere
+/// safe to press it: the save's own path is the directory the game was started from, which for
+/// `cargo run` is the repository, and a check that wrote a garden into the repository every run
+/// would be a check that changes the thing it is checking. So `save_file` was the one setting in
+/// the whole inventory that nothing had ever exercised (S5b-3's note).
+///
+/// The answer is that the checks move the target for the length of one press and put it back.
+/// On a PC that is a file in the temporary directory, which is where the version check's fixture
+/// already goes ([`another_version_file`]); in a page it is **another `localStorage` key** —
+/// `garden:garden.checks.save.json` beside the player's `garden:garden.save.json` — because
+/// `read` and `write` treat the two the same and the check needs no second road for the browser.
+///
+/// What is left behind afterwards: nothing on a PC (the file is removed), and in a page an empty
+/// string under that key, in the browser of somebody who put `?selftest` in the address himself.
+pub fn check_save_file() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::temp_dir().join("garden-checks.save.json").to_string_lossy().into_owned()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        "garden.checks.save.json".to_string()
+    }
+}
+
+/// And how the checks put it back: the file goes on a PC, the key is emptied in a page (S9).
+/// Neither can touch the player's garden, because neither is ever handed its path.
+pub fn forget(path: &Path) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = write(path, "");
+    }
+}
+
 /// Where the tenth check's file goes (G5). A temporary directory on a PC, because the file is
 /// about `--load` and not about where a file lives.
 #[cfg(not(target_arch = "wasm32"))]
