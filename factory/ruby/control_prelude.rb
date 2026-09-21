@@ -202,18 +202,6 @@ class Control
     Rubevy.log "control.rb: #{text}"
   end
 
-  # **Where an exception happened, in the lines of the file you are editing** — the same trick the
-  # inserters' prelude turns: a task that has ended has no frames left to ask, so the place is
-  # worked out here, where the exception still has its backtrace, and left where the game will
-  # find it.
-  def self.said_at(error)
-    frame = error.backtrace && error.backtrace.first
-    return nil if frame.nil?
-    piece = frame.to_s.split(":").find { |p| p.to_i.to_s == p }
-    at = piece.to_i
-    return nil if at <= 0
-    at > prelude_lines ? "control.rb:#{at - prelude_lines}" : "control_prelude.rb:#{at}"
-  end
 end
 
 # **A class of its own for each file.**
@@ -241,8 +229,9 @@ def run_control
   tasks = []
   # **your file, run here** rather than where it stands. The game puts it inside a method of one
   # line (`crate::control::in_a_method`) so that `goal` and `on` are called from inside this
-  # `begin` — which is what lets the `rescue` below say the line of *your* file anything in it
-  # went wrong on, the way a broken inserter's script says it.
+  # method — which is what lets the ending rubevy sends say the line of *your* file anything in it
+  # went wrong on, the way a broken inserter's script says it. At the top level they would run
+  # while the program was being loaded, before `run_control` was reached at all.
   the_control_file
   being = $control_class.new
   # where the game finds it: the counters above, `@won`, and the line for the screen are read off
@@ -251,11 +240,6 @@ def run_control
   start_control_handlers(being, tasks)
   # and this task becomes the one that watches the goal, for ever
   being.watch_the_goal
-rescue => e
-  at = $control_class && $control_class.said_at(e)
-  Task.current.instance_variable_set(:@broke_at, at) if at
-  Rubevy.log "control.rb stopped at #{at || '?'}: #{e.class}: #{e.message}"
-  raise
 ensure
   # the handlers are tasks of their own: nothing else stops them when this one ends
   tasks.each { |t| t.terminate }

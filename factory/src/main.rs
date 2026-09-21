@@ -47,7 +47,7 @@ use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunk, TilemapChunkTileData};
 use games_shell::camera::{CameraControls, CameraPlugin, CameraSet, WorldClick};
-use rubevy::{RubevyPlugin, RubevySet, ScriptWorld};
+use rubevy::{HoldRequests, RubevyPlugin, RubevySet, ScriptWorld};
 
 use belts::{Lanes, OnBelt, Rules};
 use build::Hand;
@@ -452,7 +452,8 @@ fn main() {
         }
     }
 
-    app.insert_resource(settings)
+    app.hold_requests(inserters::MOVE)
+        .insert_resource(settings)
         .insert_resource(RubyDir(ruby))
         .init_resource::<Hand>()
         .init_resource::<Flow>()
@@ -513,7 +514,15 @@ fn main() {
                 .before(FactorySet::Step)
                 .run_if(the_factory_is_up),
         )
-        .add_systems(Update, inserters::answer_moves.in_set(RubevySet::Answer))
+        // **`move` is a question rubevy keeps for the game** (`hold_requests`): it arrives as a
+        // `Held` on the arm that asked rather than out of `take_requests`, and every way the
+        // waiting can end — the arm taken away, its script replaced, its script raising — takes
+        // the request with it. F3 wrote that index and that tidying-up by hand
+        // (`Arms::waiting`); this line is what is left of it.
+        .add_systems(
+            Update,
+            (inserters::start_swings, inserters::answer_the_rest).in_set(RubevySet::Answer),
+        )
         .add_systems(
             Update,
             (inserters::finish_swings, inserters::watch_endings)
@@ -1698,7 +1707,7 @@ fn selftest(
                     "an inserter taken away leaves no script behind: {} scripts where there were {}, and none of them is waiting on an arm that is gone ({})",
                     crew.how_many(),
                     test.before,
-                    crew.arms.how_many_waiting()
+                    crew.how_many_waiting()
                 ),
             );
             test.step = 24;

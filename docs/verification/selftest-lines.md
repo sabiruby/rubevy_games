@@ -352,7 +352,7 @@ selftest: --   no floor was drawn (this run has no renderer)
 selftest: --   the editor was not driven (this run has no window)
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
-selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: RuntimeError, and the chest went from N to N
+selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: #<NoMethodError: undefined method 'nothing' for Object>, and the chest went from N to N
 selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
@@ -449,7 +449,7 @@ selftest: ok   Apply to every inserter reached all N of them and loaded no new p
 selftest: ok   Revert put all N of them back on inserter.rb
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
-selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: RuntimeError, and the chest went from N to N
+selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: #<NoMethodError: undefined method 'nothing' for Object>, and the chest went from N to N
 selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
@@ -496,7 +496,7 @@ selftest: ok   Apply to every inserter reached all N of them and loaded no new p
 selftest: ok   Revert put all N of them back on inserter.rb
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
-selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: RuntimeError, and the chest went from N to N
+selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: #<NoMethodError: undefined method 'nothing' for Object>, and the chest went from N to N
 selftest: ok   a miner cannot be built where there is no ore (N, N)
 selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it

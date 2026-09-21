@@ -130,27 +130,6 @@ class Inserter
   def log(text)
     Rubevy.log "#{name}: #{text}"
   end
-
-  # **Where an exception happened, in the lines of the file you are editing.**
-  #
-  # The prelude and your script are compiled as one program, so the line the VM reports is that
-  # program's; `prelude_lines` is how far down it your first line is, and the game writes that
-  # number in with the item names. Anything past it is yours; anything before it is the DSL's.
-  #
-  # It is here rather than in the game because **a task that has ended has nothing left to ask**:
-  # by the time the game hears that a script stopped, the frames are gone. The `rescue` at the
-  # bottom of this file runs while the exception still has its backtrace, and leaves the answer on
-  # the task for the game to pick up.
-  def self.said_at(error)
-    frame = error.backtrace && error.backtrace.first
-    return nil if frame.nil?
-    # a frame is `file:line` or `file:line:in method`, so the line is the first piece between
-    # colons that is a whole number — taking the last piece finds "in run"
-    piece = frame.to_s.split(":").find { |p| p.to_i.to_s == p }
-    at = piece.to_i
-    return nil if at <= 0
-    at > prelude_lines ? "inserter.rb:#{at - prelude_lines}" : "prelude.rb:#{at}"
-  end
 end
 
 # `inserter "Smart" do … end` — a subclass of Inserter with the block evaluated in it (so `def run`
@@ -181,12 +160,11 @@ def run_inserter
   srand(being.me.to_i)
   sleep being.swing_seconds * klass.stagger * rand
   being.run
-rescue => e
-  # **the place, worked out here and left where the game will find it.** `@broke_at` on this task
-  # is an ordinary instance variable; the game reads it with one `ivar_get` when it hears that
-  # this script has ended, because by then the backtrace is gone (`Inserter.said_at`).
-  at = klass && klass.said_at(e)
-  Task.current.instance_variable_set(:@broke_at, at) if at
-  Rubevy.log "#{klass ? klass.inserter_name : '?'} stopped at #{at || '?'}: #{e.class}: #{e.message}"
-  raise
 end
+
+# **Where a script stopped is the game's to say, not this file's.** Until 2026-09-22 there was a
+# `rescue` here that read the exception's backtrace, subtracted how far down the program your
+# first line is, and left the answer on the task for the game to read with one `ivar_get` — thirty
+# lines across two files, because a task that has ended keeps no frames. rubevy does it now
+# (`ScriptEnded::at`), where the exception is, and it reaches the one case this could not: a
+# `Task::Overrun` is an `Exception` and not a `StandardError`, so no `rescue => e` ever saw one.

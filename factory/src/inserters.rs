@@ -26,12 +26,17 @@
 //! `RubevySet::Tick`, which is after the last step of the factory and before the next one, so a
 //! script reads a still picture and the swing it starts happens in that same picture.
 //!
-//! `move` is the act, and it is **the thing that waits**: the request is kept — in [`Arms`], by
-//! the tile it belongs to — for as long as the arm takes, and answered when the arm arrives. Why
-//! that and not an event or a `sleep` is written out in
-//! `docs/worklog/2026-09-21-factory-F3.md` §3; the short of it is that a kept request is the only
-//! one of the three where the game does not have to tell the script a number it already knows,
-//! and the only one where an inserter taken away mid-swing takes its own loose ends with it.
+//! `move` is the act, and it is **the thing that waits**: the request is kept for as long as the
+//! arm takes and answered when the arm arrives. Why that and not an event or a `sleep` is written
+//! out in `docs/worklog/2026-09-21-factory-F3.md` §3; the short of it is that a kept request is
+//! the only one of the three where the game does not have to tell the script a number it already
+//! knows, and the only one where an inserter taken away mid-swing takes its own loose ends with
+//! it.
+//!
+//! **Where the request is kept is rubevy's since 2026-09-22** (`hold_requests`, `Held`). F3 wrote
+//! a `HashMap<tile, Request>` here and the tidying-up for every way a wait can end badly; rubevy
+//! took the shape and put the request on the entity whose script asked, which is where the index
+//! already was. What is left of it here is two systems of six lines each.
 //!
 //! # What a data file cannot reach
 //!
@@ -45,8 +50,8 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use rubevy::{
-    in_the_authors_lines, replace_script, Answer, MrbAsset, Program, Request, Script, ScriptEnded,
-    ScriptStatus, ScriptTask, ScriptWorld,
+    in_the_authors_lines, replace_script, Answer, Held, MrbAsset, Program, Request, Script,
+    ScriptEnded, ScriptStatus, ScriptWorld,
 };
 
 use crate::belts::{Lanes, Rules};
@@ -174,11 +179,6 @@ impl Minds {
 /// under one — it is rebuilt when the grid changes — and the tile is what the player clicked.
 #[derive(Resource, Default)]
 pub struct Arms {
-    /// The `move` each arm's script is parked on. A request kept across frames is rubevy's own
-    /// road for an answer that is not ready (`docs/host-api.md`), and keeping it *here* is what
-    /// makes an inserter taken away mid-swing tidy: the tile goes out of the grid, this entry
-    /// goes with it, and the task went with the entity.
-    waiting: HashMap<usize, Request>,
     /// Arms that arrived this step, and whether they put down what they were carrying. Filled by
     /// the factory's own step and emptied by [`finish_swings`].
     pub finished: Vec<(usize, bool)>,
@@ -205,8 +205,13 @@ impl Arms {
 
     /// Everything this tile was in the middle of, forgotten: the inserter is gone, or is being
     /// given a new mind.
+    ///
+    /// **The `move` it was parked on is not here any more.** It is a [`Held`] on the entity, and
+    /// every way the waiting can end takes it: a despawn takes the component, `replace_script`
+    /// removes it beside the `ScriptTask`, and a script that raised or overran has it swept in
+    /// the tick that sends `ScriptEnded` (rubevy `docs/host-api.md`, "Who tidies up"). So what is
+    /// left to forget is the mark that says this arm stopped.
     fn forget(&mut self, tile: usize) {
-        self.waiting.remove(&tile);
         self.stopped.remove(&tile);
     }
 
@@ -214,12 +219,6 @@ impl Arms {
         self.stopped.insert(tile, at);
     }
 
-    /// How many arms are parked on a `move` right now — the number a HUD would show beside the
-    /// frame's statistics, and what the checks read to say an arm that was taken away left
-    /// nothing behind.
-    pub fn how_many_waiting(&self) -> usize {
-        self.waiting.len()
-    }
 }
 
 /// **The inserters, as one system parameter** — and the panel their scripts are edited in, which
@@ -232,6 +231,9 @@ pub struct Crew<'w, 's> {
     pub minds: ResMut<'w, Minds>,
     pub arms: ResMut<'w, Arms>,
     pub standing: Query<'w, 's, (Entity, &'static Inserter)>,
+    /// The arms parked on a `move`. It is a query rather than a field of [`Arms`] because since
+    /// 2026-09-22 the request waits on the entity that asked ([`Held`]) and not in a table here.
+    pub waiting: Query<'w, 's, &'static Held, With<Inserter>>,
     pub panel: Option<ResMut<'w, rubevy_egui::Editor>>,
 }
 
@@ -244,6 +246,13 @@ impl Crew<'_, '_> {
     /// How many arms have a script.
     pub fn how_many(&self) -> usize {
         self.standing.iter().count()
+    }
+
+    /// **How many arms are parked on a `move` right now** — the number the HUD shows beside the
+    /// frame's statistics, and what the checks read to say an arm that was taken away left
+    /// nothing behind.
+    pub fn how_many_waiting(&self) -> usize {
+        self.waiting.iter().map(|held| held.len()).sum()
     }
 }
 
@@ -260,7 +269,7 @@ impl Crew<'_, '_> {
 /// They are **methods on the class and not constants**, because a program is compiled again every
 /// time a text changes and a constant written twice is a warning a player did not ask for. A name
 /// is quoted (`:"…"`) so that a data file may call an item whatever it likes.
-fn names_and_numbers(data: &Data, rules: &Rules, stagger: f32, prelude_lines: u32) -> String {
+fn names_and_numbers(data: &Data, rules: &Rules, stagger: f32) -> String {
     let names: Vec<String> = data
         .items
         .iter()
@@ -278,14 +287,10 @@ fn names_and_numbers(data: &Data, rules: &Rules, stagger: f32, prelude_lines: u3
          \x20 def self.stagger\n\
          \x20   {:?}\n\
          \x20 end\n\
-         \x20 def self.prelude_lines\n\
-         \x20   {}\n\
-         \x20 end\n\
          end\n",
         names.join(", "),
         rules.swing_seconds,
         stagger,
-        prelude_lines,
     )
 }
 
@@ -306,14 +311,6 @@ impl Default for Stagger {
     }
 }
 
-/// **How many lines the block above is.** It does not depend on what is in it — every field is on
-/// a line of its own — which is what makes [`compile`]'s two passes exact rather than a guess:
-/// the number the block *carries* is how many lines are in front of the player's first one, and
-/// putting it there changes nothing about how many that is.
-fn lines_of_the_block(data: &Data, rules: &Rules, stagger: f32) -> u32 {
-    names_and_numbers(data, rules, stagger, 0).lines().count() as u32
-}
-
 /// One inserter's program: what the game wrote, the prelude, and the player's own file.
 fn compile(
     prelude: &str,
@@ -323,18 +320,13 @@ fn compile(
     body: &str,
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
-    // **Twice, because the program has to carry its own length.** A script that raises is the one
-    // case where nobody but the VM knows where it was — a task that has ended has no frames left
-    // to ask (measured, `docs/worklog/2026-09-21-factory-F3.md` §4) — so the *prelude* reads the
-    // exception's backtrace and says the line in the player's own numbering, which means it has
-    // to know how far down the program the player's first line is. `Program::new` counts that off
-    // the text; the block in front adds exactly its own lines, and that count does not change
-    // when the number written into it does, so one extra `Program::new` settles it.
-    let without = Program::new(prelude, SCRIPT_FILE, "", "run_inserter").prelude_lines;
-    let prelude_lines = without + lines_of_the_block(data, rules, stagger);
-    let front = format!("{}{prelude}", names_and_numbers(data, rules, stagger, prelude_lines));
+    // **Once.** Until 2026-09-22 this was two passes: the program had to carry its own length,
+    // because the *prelude* worked out where a script stopped and needed to know how far down the
+    // program the player's first line was. rubevy says it now (`ScriptEnded::at`, given
+    // `Script::with_prelude_lines`), so the number goes on the script rather than into the Ruby,
+    // and `Program::new` counting it off the text is the end of it.
+    let front = format!("{}{prelude}", names_and_numbers(data, rules, stagger));
     let program = Program::new(&front, SCRIPT_FILE, body, "run_inserter");
-    debug_assert_eq!(program.prelude_lines, prelude_lines, "the block's own length moved");
     match platform::compile(&program.source, SCRIPT_FILE) {
         Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines)),
         Err(why) => Err(in_the_authors_lines(&why, program.prelude_lines, PRELUDE_FILE)),
@@ -465,7 +457,7 @@ pub fn keep_the_crew(
         }
         // this one has been given a new mind
         match program_of(&mut minds, &prelude, &data, &rules, *stagger, &text, &mut mrb) {
-            Ok((handle, _)) => {
+            Ok((handle, prelude_lines)) => {
                 minds.swaps += 1;
                 arms.forget(inserter.tile);
                 commands.entity(entity).insert(Inserter {
@@ -475,7 +467,9 @@ pub fn keep_the_crew(
                 replace_script(
                     &mut commands,
                     entity,
-                    Script::new(handle).with_name(name_of(&grid, inserter.tile)),
+                    Script::new(handle)
+                        .with_name(name_of(&grid, inserter.tile))
+                        .with_prelude_lines(prelude_lines),
                 );
             }
             Err(why) => {
@@ -491,12 +485,17 @@ pub fn keep_the_crew(
         }
         let text = minds.text_for(tile).to_string();
         match program_of(&mut minds, &prelude, &data, &rules, *stagger, &text, &mut mrb) {
-            Ok((handle, _)) => {
+            Ok((handle, prelude_lines)) => {
                 minds.swaps += 1;
                 arms.forget(tile);
                 commands.spawn((
                     Inserter { tile, running: hash_of(&text) },
-                    Script::new(handle).with_name(name_of(&grid, tile)),
+                    // **how far down the program the player's first line is**, so that rubevy
+                    // can say where a script stopped in the player's own numbering
+                    // (`ScriptEnded::at`, and [`where_it_broke`])
+                    Script::new(handle)
+                        .with_name(name_of(&grid, tile))
+                        .with_prelude_lines(prelude_lines),
                 ));
             }
             Err(why) => {
@@ -597,7 +596,10 @@ pub fn install_answers(mut scripts: ResMut<ScriptWorld>) {
 // The one act
 // ---------------------------------------------------------------------------------------------
 
-/// **`RubevySet::Answer`: a `move` starts a swing**, and the request is kept until it arrives.
+/// **The one question this game holds** — `move`, whose answer is the arm arriving.
+pub const MOVE: &str = "factory.move";
+
+/// **`RubevySet::Answer`: a `move` that has arrived on an arm starts a swing.**
 ///
 /// What is done here is the picking up, and it is done **now** rather than at the end of the
 /// swing so that the item travels with the arm — it is out of the belt and in the hand, which is
@@ -606,48 +608,58 @@ pub fn install_answers(mut scripts: ResMut<ScriptWorld>) {
 /// A `move` with nothing behind it and nothing in the hand answers `false` at once, which reaches
 /// the script on the next frame; so a `loop { move }` is one frame an iteration and cannot spin
 /// the VM, and it is also an arm swinging at nothing, which is what `behind` is for.
-pub fn answer_moves(
+///
+/// `Added<Held>` is the right edge here because **an arm waits on one thing at a time**: rubevy
+/// takes the component off as the last question is answered and puts it back when the next one
+/// arrives, so a `loop { move }` fires `Added` once an iteration (rubevy `docs/host-api.md`).
+pub fn start_swings(
     mut scripts: ResMut<ScriptWorld>,
-    mut arms: ResMut<Arms>,
     mut grid: ResMut<Grid>,
     mut lanes: ResMut<Lanes>,
-    standing: Query<&Inserter>,
+    mut asked: Query<(&Inserter, &mut Held), Added<Held>>,
 ) {
-    for request in scripts.take_requests() {
-        if request.kind != "factory.move" {
-            // **every request is answered**, or the task that asked it is parked for ever. A
-            // question nothing here knows is `nil`, which is what rubevy answers for one nobody
-            // registered at all.
-            scripts.answer(&request, Answer::Nil);
+    for (inserter, mut held) in &mut asked {
+        if !held.has(MOVE) {
             continue;
         }
-        let tile = request.entity.and_then(|e| standing.get(e).ok()).map(|i| i.tile);
-        let Some(tile) = tile else {
-            scripts.answer(&request, Answer::Bool(false));
-            continue;
-        };
         // an empty hand reaches behind; a full one is carrying on with what it was refused
-        if !machines::start_swing(&mut grid, &mut lanes, tile) {
-            scripts.answer(&request, Answer::Bool(false));
-            continue;
-        }
-        // a second `move` from the same tile would be a second task on one arm, which cannot
-        // happen with one script; if it ever does, the older one is answered rather than lost
-        if let Some(old) = arms.waiting.insert(tile, request) {
-            scripts.answer(&old, Answer::Bool(false));
+        if !machines::start_swing(&mut grid, &mut lanes, inserter.tile) {
+            held.answer(&mut scripts, MOVE, Answer::Bool(false));
         }
     }
 }
 
+/// **`RubevySet::Answer`: everything else gets an answer too.**
+///
+/// A held kind still reaches `take_requests` where there is nothing to wait on — a question from
+/// a task with no entity of its own, and one asked in the very tick its script ended in — and
+/// **every request has to be answered or the task that asked it is parked for the life of the
+/// VM** (rubevy `docs/host-api.md`). A `move` from nowhere is an arm that is not there, which is
+/// `false`; anything else is a question nothing here knows, which is `nil`.
+pub fn answer_the_rest(mut scripts: ResMut<ScriptWorld>) {
+    for request in scripts.take_requests() {
+        let answer =
+            if request.kind == MOVE { Answer::Bool(false) } else { Answer::Nil };
+        scripts.answer(&request, answer);
+    }
+}
+
 /// **After the factory's step: the arms that arrived are the answers.**
-pub fn finish_swings(mut scripts: ResMut<ScriptWorld>, mut arms: ResMut<Arms>) {
+///
+/// The query only matches arms that are waiting on something, which is the same set the F3
+/// `HashMap` held, so this walks no more than it did.
+pub fn finish_swings(
+    mut scripts: ResMut<ScriptWorld>,
+    mut arms: ResMut<Arms>,
+    mut waiting: Query<(&Inserter, &mut Held)>,
+) {
     if arms.finished.is_empty() {
         return;
     }
-    let finished = core::mem::take(&mut arms.finished);
-    for (tile, placed) in finished {
-        if let Some(request) = arms.waiting.remove(&tile) {
-            scripts.answer(&request, Answer::Bool(placed));
+    let finished: HashMap<usize, bool> = core::mem::take(&mut arms.finished).into_iter().collect();
+    for (inserter, mut held) in &mut waiting {
+        if let Some(&placed) = finished.get(&inserter.tile) {
+            held.answer(&mut scripts, MOVE, Answer::Bool(placed));
         }
     }
 }
@@ -665,15 +677,12 @@ pub fn finish_swings(mut scripts: ResMut<ScriptWorld>, mut arms: ResMut<Arms>) {
 pub fn watch_endings(
     mut ended: MessageReader<ScriptEnded>,
     mut arms: ResMut<Arms>,
-    mut scripts: ResMut<ScriptWorld>,
-    standing: Query<(&Inserter, Option<&ScriptTask>)>,
+    standing: Query<&Inserter>,
     grid: Res<Grid>,
 ) {
     for end in ended.read() {
-        let Ok((inserter, task)) = standing.get(end.entity) else { continue };
-        let at = task
-            .and_then(|t| where_it_broke(&mut scripts, t))
-            .unwrap_or_else(|| format!("{SCRIPT_FILE}:?"));
+        let Ok(inserter) = standing.get(end.entity) else { continue };
+        let at = where_it_broke(end);
         arms.mark_stopped(inserter.tile, at.clone());
         let tile = grid.tile_of(inserter.tile);
         match end.status {
@@ -689,28 +698,23 @@ pub fn watch_endings(
     }
 }
 
-/// **`file:line`, in the player's own terms** — read out of the VM, off the task that ended.
+/// **`file:line`, in the player's own terms** — which rubevy says, since 2026-09-22.
 ///
-/// **A task that has ended has no frames left.** `ScriptWorld::stats` answers an empty list and
-/// no location at the moment `ScriptEnded` arrives, which is the one moment this is wanted
-/// (measured 2026-09-21; it is why this is not the four lines it looks like it should be). So the
-/// place is worked out where the exception still has a backtrace — in the prelude's own `rescue`,
-/// which knows how far down the program the player's first line is because the game wrote that
-/// number into it ([`names_and_numbers`]) — and left on the task as an ordinary instance
-/// variable. This reads it back with one `ivar_get`, the way the garden reads a creature's memory
-/// out of a task it never asks anything of.
+/// F3 wrote thirty lines across two files for this: a task that has ended keeps no frames, so the
+/// place was worked out in the prelude's own `rescue` while the exception still had a backtrace,
+/// left on the task in an instance variable, and read back with one `ivar_get`. `ScriptEnded::at`
+/// is the same thing done where the exception is, and it reaches one case the Ruby road could
+/// not — a `Task::Overrun` is an `Exception` and not a `StandardError`, so no `rescue => e` ever
+/// saw one and an arm that overran used to say `inserter.rb:?`.
 ///
-/// `None` where there is nothing there: a script that ran to its end and never raised, or one
-/// stopped by something a `rescue => e` does not catch — `Task::Overrun` is an `Exception` and
-/// not a `StandardError`, so an arm that overran says `inserter.rb:?` and the VM's own message.
-pub fn where_it_broke(scripts: &mut ScriptWorld, task: &ScriptTask) -> Option<String> {
-    let value = scripts.vm.ivar_get(task.task(), BROKE_AT_IVAR);
-    let bytes = scripts.vm.str_bytes(value)?;
-    Some(String::from_utf8_lossy(bytes).into_owned())
+/// `None` is still `?`: a script that ran to its end and never raised, one that never started, or
+/// one that raised inside the prelude before the player's file was reached at all.
+pub fn where_it_broke(end: &ScriptEnded) -> String {
+    match &end.at {
+        Some((file, line)) => format!("{file}:{line}"),
+        None => format!("{SCRIPT_FILE}:?"),
+    }
 }
-
-/// The instance variable the prelude's `rescue` leaves the place in, on its own task.
-const BROKE_AT_IVAR: &str = "@broke_at";
 
 #[cfg(test)]
 mod tests {
@@ -732,17 +736,10 @@ mod tests {
             "map :world, size: [16, 16]\n",
             "inserter :arm, seconds_per_item: 0.25\n",
         ));
-        let written = names_and_numbers(&data, &rules, 1.0, 123);
+        let written = names_and_numbers(&data, &rules, 1.0);
         assert!(written.contains(":\"iron_ore\""), "{written}");
         assert!(written.contains(":\"a name with spaces\""), "{written}");
         assert!(written.contains("0.25"), "{written}");
-        assert!(written.contains("123"), "and how far down the player's first line is: {written}");
-        // **the block's length does not depend on what is in it**, which is what the two passes
-        // in `compile` rest on
-        assert_eq!(
-            names_and_numbers(&data, &rules, 1.0, 0).lines().count(),
-            names_and_numbers(&data, &rules, 0.0, 999_999).lines().count()
-        );
         // and it compiles, which is the only thing that says the quoting is right
         let bytes = platform::compile(&format!("{written}Inserter"), "written.rb");
         assert!(bytes.is_ok(), "{:?}", bytes.err());
