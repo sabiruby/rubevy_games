@@ -227,6 +227,9 @@ class Control
   # It is here rather than in `control.rb` so that a rewritten control stage still has the word.
   def look_at(column, row)
     camera = Rubevy::Camera.find
+    # a run with no window has no camera at all, and that is not a fault: it is what this word is
+    # written to survive. It says so once rather than silently, because a window that had none
+    # would be a fault.
     return nil if camera.nil?
     at = world_of(column, row)
     camera.move_to(at[0], at[1])

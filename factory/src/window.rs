@@ -73,6 +73,13 @@ const DATA: u64 = 0;
 const CONTROL: u64 = 1;
 const ARM: u64 = 2;
 
+/// **The editor's key for the arm on `tile`.** The three buttons and a thousand arms share one
+/// space of keys (`Editor::show` files its drafts by it), so an arm's is its tile past the two
+/// files. The checks spell it through here rather than adding two.
+pub fn key_of_arm(tile: usize) -> u64 {
+    ARM + tile as u64
+}
+
 impl Watched {
     fn of_key(key: u64) -> Watched {
         match key {

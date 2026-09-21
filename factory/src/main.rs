@@ -535,6 +535,12 @@ fn main() {
         // app that does not load it has none. A headless run loads it too and finds no camera,
         // which is exactly what `look_at` is written for.
         .add_systems(Startup, take_up_the_camera_layer)
+        // **What Ruby may name.** `Rubevy::Camera` looks for a `Camera2d` and reads and writes a
+        // `Transform`, and rubevy reaches a component through the type registry — so these two
+        // lines are the whole of "the camera layer has a camera to find". Registering a type
+        // twice is not an error, which is why it is said here rather than per plugin set.
+        .register_type::<Transform>()
+        .register_type::<Camera2d>()
         .add_systems(Startup, say_where_the_map_went)
         .add_systems(Startup, read_the_data_stage)
         .add_systems(Startup, lay_the_land.after(read_the_data_stage).run_if(resource_exists::<Rules>))
@@ -739,6 +745,12 @@ fn main() {
                 Update,
                 (file_checks, window_checks)
                     .chain()
+                    // **before the keys are read**, because a forged press is only a press for
+                    // the frame it was made in: `ButtonInput::clear` wipes `just_pressed` at the
+                    // head of the next one, so a check that presses after the reader has run has
+                    // pressed nothing at all
+                    .before(window::panel_keys)
+                    .before(games_shell::guide::guide_keys)
                     .before(build::orders)
                     .before(reread_the_data_stage)
                     .before(control::follow_the_rewrites)
@@ -1634,6 +1646,11 @@ const WINDOW_CHECKS: std::ops::Range<u8> = 50..60;
 /// is a ceiling on a wait and not a timing: the check passes on the frame the camera moves.
 const CAMERA_WAIT_FRAMES: u32 = 600;
 
+/// **The step the world is laid out anew in**, which is the last check of all in both systems:
+/// it takes the checks' own factory with it, so everything that is about that factory — the save
+/// file, the panels, the camera's win — has said its piece by then.
+const REBUILD_THE_WORLD_CHECK: u8 = 47;
+
 /// **A script that remembers something**, for the check that says a save file carries what an arm
 /// remembers and a load puts it back. It does nothing else: what is being measured is `@memory`
 /// going out through `sabiruby_serde` and coming back in, and an arm that also swings would be
@@ -2208,7 +2225,8 @@ fn selftest(
             // panel on the frame it is written or the one after — a Bevy message is readable for
             // two frames — and the panel is filled in that same frame, so two frames is the
             // answer and [`PANEL_WAIT_FRAMES`] is the bound with room.
-            let opened = crew.panel.as_ref().and_then(|p| p.key) == Some(arm as u64);
+            let opened =
+                crew.panel.as_ref().and_then(|p| p.key) == Some(window::key_of_arm(arm));
             test.waited += 1;
             if !opened && test.waited < PANEL_WAIT_FRAMES {
                 return;
@@ -2699,7 +2717,9 @@ fn file_checks(
                     test.line_before
                 ),
             );
-            test.step = 47;
+            // **the window's checks come before the rebuild**, because the rebuild takes the
+            // checks' own factory with it and the camera check needs a factory to win in
+            test.step = WINDOW_CHECKS.start;
         }
         // ---- and one that would rebuild the world asks first ----------------------------------
         47 => {
@@ -2739,7 +2759,10 @@ fn file_checks(
                     grid.tiles.x, grid.tiles.y, test.map_before.x, test.map_before.y
                 ),
             );
-            test.step = WINDOW_CHECKS.start;
+            // **the last check of all**, which is why the world may be taken away by it: the
+            // step past every range is the one `selftest`'s own `_` arm says the checks are
+            // finished in
+            test.step = WINDOW_CHECKS.end;
         }
         _ => {}
     }
@@ -2763,6 +2786,7 @@ fn window_checks(
     scripts: Res<ScriptWorld>,
     control: Res<control::TheControl>,
     view: Option<Res<games_shell::camera::CameraView>>,
+    typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
     mut rewrite: MessageWriter<control::Rewrite>,
 ) {
     if !WINDOW_CHECKS.contains(&test.step) {
@@ -2772,7 +2796,7 @@ fn window_checks(
         (keys, editor.as_mut(), watched.as_mut(), guide, paused, view)
     else {
         say("--  ", "the panels and the camera were not driven (this run has no window)");
-        test.step = WINDOW_CHECKS.end;
+        test.step = REBUILD_THE_WORLD_CHECK;
         return;
     };
     match test.step {
@@ -2812,13 +2836,27 @@ fn window_checks(
                     editor.choices.len()
                 ),
             );
+            test.waited = 0;
             test.step = 53;
         }
         // ---- P stops the scripts -------------------------------------------------------------
         53 => {
+            // **the editor is shut first, and that is not tidiness.** `P` is a letter, so it is
+            // read only where egui does not want the keyboard — and egui does not give keyboard
+            // focus back when the pointer leaves the panel, so after the editor's checks have
+            // typed into it the caret is still there. A player shuts the panel (`F1`); the check
+            // does the same thing without the key, because the key it is here to press is `P`.
+            editor.open = false;
+            // and a frame for egui to notice: what `wants_keyboard_input` answers is worked out
+            // in the egui pass at the end of a frame, so a panel shut in this one is still
+            // holding the caret as far as this frame is concerned
+            test.waited += 1;
+            if test.waited < 2 {
+                return;
+            }
+            test.waited = 0;
             test.before = scripts.budget as usize;
             keys.press(KeyCode::KeyP);
-            test.waited = 0;
             test.step = 54;
         }
         54 => {
@@ -2832,8 +2870,9 @@ fn window_checks(
             say(
                 if stopped { "ok  " } else { "FAIL" },
                 &format!(
-                    "P stops the factory: the belts stand still and the scripts' budget is {}",
-                    scripts.budget
+                    "P stops the factory: the belts stand still and the scripts' budget is {} (egui holds the keyboard: {})",
+                    scripts.budget,
+                    typing.is_some_and(|t| t.wants_keyboard_input())
                 ),
             );
             keys.press(KeyCode::KeyP);
@@ -2902,11 +2941,11 @@ fn window_checks(
             say(
                 if moved { "ok  " } else { "FAIL" },
                 &format!(
-                    "winning moves the camera from Ruby: it is looking at {:.0}, {:.0} (was {:.0}, {:.0})",
-                    view.focus.x, view.focus.y, test.camera_before.x, test.camera_before.y
+                    "winning moves the camera from Ruby: it is looking at {:.0}, {:.0} (was {:.0}, {:.0}, won {})",
+                    view.focus.x, view.focus.y, test.camera_before.x, test.camera_before.y, control.won
                 ),
             );
-            test.step = WINDOW_CHECKS.end;
+            test.step = REBUILD_THE_WORLD_CHECK;
         }
         _ => {}
     }
