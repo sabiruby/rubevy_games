@@ -22,13 +22,14 @@ games-shell.workspace = true
 sabiruby.workspace = true
 sabiruby-serde.workspace = true
 serde = { version = "1", features = ["derive"] }
+# F3: the panel an inserter's script is edited in. `rubevy-egui` brings `bevy_egui` with it; this
+# game takes the `Editor` and none of the rest yet (the VM panel and the watch list are F5's).
+rubevy-egui.workspace = true
+bevy_egui.workspace = true
 
 # **What this game does not name yet, and why**, so that the list says what this stage is rather
 # than being a copy of sabibots' with holes in it:
 #
-# * `rubevy-egui` and `bevy_egui` — F5's editor and VM panel. `games-shell`'s camera asks egui
-#   whether it is holding the pointer through an `Option<Res<…>>`, so a game with no egui in it
-#   simply answers no.
 # * `sabiruby-compiler`, `wasm-bindgen`, `js-sys`, `web-sys` — `games_shell::platform` is what
 #   holds all four now (S1), and this game reaches them through it rather than naming them again.
 

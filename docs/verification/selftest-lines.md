@@ -35,7 +35,7 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25     # Battle, no wind
 SABIBOTS_SELFTEST=1 docker/run.sh sabibots release             # Battle, a window (WSLg, lavapipe)
 GARDEN_SELFTEST=1   cargo run -p garden   -- --headless 90     # the garden, no window
 GARDEN_SELFTEST=1   docker/run.sh garden   release             # the garden, a window
-FACTORY_SELFTEST=1  cargo run -p factory  -- --headless 20     # Factory, no window
+FACTORY_SELFTEST=1  cargo run -p factory  -- --headless 30     # Factory, no window
 FACTORY_SELFTEST=1  docker/run.sh factory  release             # Factory, a window
 web/build.sh all && web/serve.sh                               # then …/sabibots/?selftest and …/garden/?selftest
 web/build.sh factory                                           # then …/factory/?selftest
@@ -338,16 +338,17 @@ selftest: ok   typing in the rules marks them edited
 selftest: ok   typing marks the text edited
 ```
 
-## Factory, no window — 18 lines
+## Factory, no window — 19 lines
 
-`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 30`. F1's eight, F2's five and F3's five:
+`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 30`. F1's eight, F2's five and F3's six:
 the world, the arithmetic a click goes through, the picture (where there is one), **a factory
 built with orders and watched until it delivers**, the data stage — what it read, what it
 refuses, and what a script can read back out of it — and **the inserters**, which are the machines
-with a mind.
+with a mind. The last of F3's six is a `--` here: driving the panel needs a window.
 
 ```
 selftest: --   no floor was drawn (this run has no renderer)
+selftest: --   the editor was not driven (this run has no window)
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
 selftest: ok   a miner cannot be built where there is no ore (N, N)
@@ -367,10 +368,11 @@ selftest: ok   the rest of the factory is untouched: N of N inserters stopped, a
 selftest: ok   with no inserter in the gap nothing reaches the machine: N/N lines are jammed on the belt with the machine empty
 ```
 
-**`no floor was drawn` is this game's `--` line, and it does not move**: a headless run has no
-renderer at all, so it spawns no `TilemapChunk` and there is no image loader to fetch the tileset
-with. The verdict says the run did not put the check in a position to measure anything, which is
-neither a pass nor a failure.
+**The two `--` lines are this game's, and neither moves.** A headless run has no renderer at all,
+so it spawns no `TilemapChunk` and there is no image loader to fetch the tileset with; and it has
+no `Editor` resource, because the panel is added with the window (`factory/src/window.rs`). Both
+verdicts say the run did not put the check in a position to measure anything, which is neither a
+pass nor a failure — and in a window each is replaced by the checks it stood in for.
 
 **The orders are forged** — the checks write a `build::Order`, which is the message a mouse click
 turns into and carries the tile, the thing and the way round — so the building, the refusal to put
@@ -396,18 +398,28 @@ no tiles wide, a belt that runs backwards, a gap that does not divide a tile (F2
 will not parse. It runs in a page as well as on a PC, which is the point — a browser's compiler
 names every program `playground.rb` and the name has to be put back before a player sees it.
 
-**The five F3 lines are the stage in order.** A machine with no arm beside it takes nothing, so
-the line stops on the belt; an arm in the gap joins it up and the chest fills; every arm on the
-map has a script; one arm given a script that raises stops **and the game knows which line of
-which file**, while the other line goes on filling its chest; and an arm taken away leaves no
-script and nothing parked on a `move` that will never be answered.
+**The F3 lines are the stage in order.** A machine with no arm beside it takes nothing, so the
+line stops on the belt; an arm in the gap joins it up and the chest fills; every arm on the map
+has a script; one arm given a script that raises stops **and the game knows which line of which
+file**, while the other line goes on filling its chest; and an arm taken away leaves no script and
+nothing parked on a `move` that will never be answered. The panel's four are in a window only.
 
-## Factory, a window — 18 lines
+## Factory, a window — 22 lines
 
-`FACTORY_SELFTEST=1 docker/run.sh factory release`. The same seventeen, and the `--` line replaced
-by the check it stood in for.
+`FACTORY_SELFTEST=1 docker/run.sh factory release`. The headless seventeen that are not `--`, the
+tileset the first of those stood in for, and **the four the panel is driven for**.
+
+**The panel is driven the way a player drives it**: an order that would build an inserter on a
+tile that already has one is a click on that inserter, so the check writes that order rather than
+reaching for the editor's key. Then it types, presses Apply, presses Apply to every inserter, and
+presses Revert, waiting for **what each one did** rather than for a number of frames — the dearest
+of those is the VM holding one more program, which is three frames after the button (`main.rs`'s
+`PANEL_WAIT_FRAMES`). Waiting one frame instead passed in a window and failed in a page, which is
+what a check that leans on one system running before another looks like.
 
 ```
+selftest: ok   Apply to every inserter reached all N of them and loaded no new program (N in the VM)
+selftest: ok   Revert put all N of them back on inserter.rb
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
 selftest: ok   a miner cannot be built where there is no ore (N, N)
@@ -416,10 +428,12 @@ selftest: ok   a world point and the tile it is in agree at the corners and the 
 selftest: ok   a wrong data.rb is refused with the line it is wrong on (N/N)
 selftest: ok   an inserter taken away leaves no script behind: N scripts where there were N, and none of them is waiting on an arm that is gone (N)
 selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:N (after N s)
+selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
 selftest: ok   every inserter on the map has a script of its own: N arms, N scripts
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
 selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
 selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
+selftest: ok   the editor applied a script to one inserter and left the other N alone (N programs in the VM, was N)
 selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
@@ -434,12 +448,20 @@ that anything was *drawn* — nothing in a log can be — and the evidence for t
 with its pixels counted, in `worklog/2026-09-21-factory-F0.md` for the floor and
 `worklog/2026-09-21-factory-F1.md` §5.4, `…-F2.md` and `…-F3.md` for the factory built on it.
 
-## Factory, a browser — 19 lines
+## Factory, a browser — 23 lines
 
 `…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
 
+**This is where the editor's Apply means something the other two runs cannot say.** A page has no
+compiler linked in: the text the panel holds is compiled by the playground's wasm module the page
+loads beside the game, called **synchronously** from inside the frame (plan §3.2). The line
+`the editor applied a script to one inserter…` is that call having happened and the program being
+in the VM.
+
 ```
 selftest: done — the factory keeps running (a page has nothing to exit to)
+selftest: ok   Apply to every inserter reached all N of them and loaded no new program (N in the VM)
+selftest: ok   Revert put all N of them back on inserter.rb
 selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
 selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
 selftest: ok   a miner cannot be built where there is no ore (N, N)
@@ -448,10 +470,12 @@ selftest: ok   a world point and the tile it is in agree at the corners and the 
 selftest: ok   a wrong data.rb is refused with the line it is wrong on (N/N)
 selftest: ok   an inserter taken away leaves no script behind: N scripts where there were N, and none of them is waiting on an arm that is gone (N)
 selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:N (after N s)
+selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
 selftest: ok   every inserter on the map has a script of its own: N arms, N scripts
 selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
 selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
 selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
+selftest: ok   the editor applied a script to one inserter and left the other N alone (N programs in the VM, was N)
 selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
 selftest: ok   the map is N by N tiles with N of them holding N of ore
 selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
@@ -472,13 +496,16 @@ gained the `FN is Apply` line and Battle's headless list the `handler tasks …`
 the two things S4 changed.
 
 **Factory's three lists are F3's**, measured on 2026-09-21 on the branch `factory` (headless once,
-the window twice, the page once). **F3 added five to each** and moved two of the others. The five
+the window three times, the page once). **F3 added six to the headless list and nine to the
+other two** and moved two of the others. The five
 are the stage: with no inserter in the gap nothing reaches the machine, every inserter has a
 script of its own, one whose script raises stops and the game knows where, the rest of the factory
 is untouched, and an inserter taken away leaves no script behind. The two that moved are the
 machine lines, which now say what their arms take as well as what their recipe does and are
 watched for 5.5 s rather than 3.5 — the same sentence with the numbers the arms put in it.
-Thirteen became eighteen, and the page's fourteen became nineteen. **The other two games' six
+The panel's four are a window's and a page's only, and the headless run has a second `--` line
+where they would be. Thirteen became nineteen, the window's thirteen became twenty-two, and the
+page's fourteen became twenty-three. **The other two games' six
 lists diffed empty over the whole stage**, twice: once for the VM the workspace rides moving to
 `8d0fea2` and once at the end.
 

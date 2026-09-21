@@ -64,11 +64,6 @@ pub const PRELUDE_FILE: &str = "prelude.rb";
 #[derive(Component, Debug)]
 pub struct Inserter {
     pub tile: usize,
-    /// How far down the program the player's own first line is, so that a line the VM reports can
-    /// be said in the player's terms. The prelude does that arithmetic for an exception
-    /// ([`where_it_broke`]); this is the same number for the editor's own band, which is F3-2's.
-    #[allow(dead_code)] // the editor's, F3-2
-    pub prelude_lines: u32,
     /// **Which text it is running**, as a hash of it. It is what [`keep_the_crew`] compares to
     /// see that this one arm has been given a new mind — and a hash rather than the text so that
     /// a component on a thousand entities is a number and not a thousand copies of a file.
@@ -133,25 +128,21 @@ impl Minds {
     }
 
     /// The file as it was read, for Revert.
-    #[allow(dead_code)] // the editor's, F3-2
     pub fn file(&self) -> &str {
         &self.file
     }
 
     /// Whether this inserter is running a text that is not the file's.
-    #[allow(dead_code)] // the editor's, F3-2
     pub fn in_memory(&self, tile: usize) -> bool {
         self.own.contains_key(&tile) || self.everyone.is_some()
     }
 
     /// Whether `tile` was given a script of its own.
-    #[allow(dead_code)] // the editor's, F3-2
     pub fn is_its_own(&self, tile: usize) -> bool {
         self.own.contains_key(&tile)
     }
 
     /// Give one inserter a text of its own.
-    #[allow(dead_code)] // the editor's, F3-2
     pub fn give_to_one(&mut self, tile: usize, text: String) {
         self.own.insert(tile, text);
         self.generation += 1;
@@ -159,7 +150,6 @@ impl Minds {
 
     /// Give every inserter that has no text of its own this one — and take away the ones that
     /// have, because "every inserter on this script" means every one of them.
-    #[allow(dead_code)] // the editor's, F3-2
     pub fn give_to_all(&mut self, text: String) {
         self.own.clear();
         self.everyone = Some(text);
@@ -167,7 +157,6 @@ impl Minds {
     }
 
     /// Back to the file, for everybody.
-    #[allow(dead_code)] // the editor's, F3-2
     pub fn back_to_the_file(&mut self) {
         self.own.clear();
         self.everyone = None;
@@ -210,7 +199,6 @@ impl Arms {
         self.stopped.get(&tile).map(|s| s.as_str())
     }
 
-    #[allow(dead_code)] // the HUD's and the checks', F3-2 onwards
     pub fn how_many_stopped(&self) -> usize {
         self.stopped.len()
     }
@@ -234,14 +222,17 @@ impl Arms {
     }
 }
 
-/// **The inserters, as one system parameter.** A system that wants to know about them wants all
-/// three of these, and a system already carrying fifteen other things has no room for three more
-/// — the checks are that system.
+/// **The inserters, as one system parameter** — and the panel their scripts are edited in, which
+/// is here for a reason worth writing down rather than for tidiness: a system may take sixteen
+/// parameters and the checks already take sixteen, so a check that is about an arm *and* its
+/// panel has to reach both through one of them. The panel is an `Option` because a run with no
+/// window has no `Editor` at all (`crate::window`).
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct Crew<'w, 's> {
     pub minds: ResMut<'w, Minds>,
     pub arms: ResMut<'w, Arms>,
     pub standing: Query<'w, 's, (Entity, &'static Inserter)>,
+    pub panel: Option<ResMut<'w, rubevy_egui::Editor>>,
 }
 
 impl Crew<'_, '_> {
@@ -326,6 +317,22 @@ fn compile(
         Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), program.prelude_lines)),
         Err(why) => Err(in_the_authors_lines(&why, program.prelude_lines, PRELUDE_FILE)),
     }
+}
+
+/// **Whether a text would compile**, which is what the editor asks before it writes anything
+/// down: a refusal has to leave every arm running what it was running.
+///
+/// It compiles and keeps the result, so the Apply that follows costs nothing — which is also why
+/// it takes the same `&mut Minds` the real thing does.
+pub fn would_compile(
+    minds: &mut Minds,
+    prelude: &str,
+    data: &Data,
+    rules: &Rules,
+    text: &str,
+    mrb: &mut Assets<MrbAsset>,
+) -> Result<(), String> {
+    program_of(minds, prelude, data, rules, text, mrb).map(|_| ())
 }
 
 /// The program for a text, compiled if this is the first time it has been seen.
@@ -433,12 +440,11 @@ pub fn keep_the_crew(
         }
         // this one has been given a new mind
         match program_of(&mut minds, &prelude, &data, &rules, &text, &mut mrb) {
-            Ok((handle, prelude_lines)) => {
+            Ok((handle, _)) => {
                 minds.swaps += 1;
                 arms.forget(inserter.tile);
                 commands.entity(entity).insert(Inserter {
                     tile: inserter.tile,
-                    prelude_lines,
                     running: hash_of(&text),
                 });
                 replace_script(
@@ -460,11 +466,11 @@ pub fn keep_the_crew(
         }
         let text = minds.text_for(tile).to_string();
         match program_of(&mut minds, &prelude, &data, &rules, &text, &mut mrb) {
-            Ok((handle, prelude_lines)) => {
+            Ok((handle, _)) => {
                 minds.swaps += 1;
                 arms.forget(tile);
                 commands.spawn((
-                    Inserter { tile, prelude_lines, running: hash_of(&text) },
+                    Inserter { tile, running: hash_of(&text) },
                     Script::new(handle).with_name(name_of(&grid, tile)),
                 ));
             }

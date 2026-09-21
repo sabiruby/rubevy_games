@@ -38,6 +38,7 @@ mod inserters;
 mod items;
 mod machines;
 mod platform;
+mod window;
 
 use std::path::PathBuf;
 
@@ -147,6 +148,20 @@ const SHOT_SECONDS: f32 = 8.0;
 /// frame. Measured: the tileset was in `Assets<Image>` on **frame 3** in the container and
 /// **frame 4** in the browser, so this is a hundred times the worst of the two.
 const TILESET_WAIT_FRAMES: u32 = 400;
+
+/// **How long the checks wait for the panel and what it applied, in frames.** What is waited for
+/// happens once a frame, so the bound is in frames rather than in seconds (S7's rule), and three
+/// things are waited for in a row:
+///
+/// * the panel opening — an order is read on the frame it is written or the one after (a Bevy
+///   message is readable for two) and the panel is filled in that frame;
+/// * the button being taken — the system that does it runs after the checks, so the same frame;
+/// * **the program being in the VM** — the crew is put in step with the texts on the next frame,
+///   the new `Script` lands at the sync point after that, and rubevy loads it at the head of the
+///   frame after *that*.
+///
+/// Three frames is the longest of the three, and six is twice it.
+const PANEL_WAIT_FRAMES: u32 = 6;
 
 /// How far the checks are allowed past the time the game's own numbers say their little factory
 /// needs, before they call it stuck. Two, for a frame's granularity at each end and for a browser
@@ -349,7 +364,23 @@ fn main() {
                     ..default()
                 }),
                 RubevyPlugin::default(),
+                // **F3's half of the window and not F5's**: the panel an inserter's script is
+                // edited in, and nothing else. `crate::window` says what each of its buttons
+                // means here.
+                window::the_editor(&settings),
             ))
+            .init_resource::<window::Watched>()
+            .add_systems(
+                Update,
+                (
+                    window::follow_the_orders.before(build::orders),
+                    window::show_code,
+                    window::do_editor_actions,
+                    window::watch_the_programs,
+                )
+                    .chain()
+                    .run_if(the_factory_is_up),
+            )
             .init_resource::<items::Pool>()
             .init_resource::<draw::Animation>()
             .insert_resource(draw::SnapZoom(
@@ -621,10 +652,10 @@ fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>, data: 
         .machines
         .iter()
         .enumerate()
-        .map(|(i, m)| format!("{} {}", i + 4, m.name))
+        .map(|(i, m)| format!("{} {}", i + 5, m.name))
         .collect();
     info!(
-        "keys: 1 belt, 2 miner, 3 chest, {}, 0 take away, R turn; click to build",
+        "keys: 1 belt, 2 miner, 3 chest, 4 inserter, {}, 0 take away, R turn; click to build, and click an inserter to write its Ruby",
         machines.join(", ")
     );
     commands.insert_resource(Grid::new(map.tiles));
@@ -854,10 +885,27 @@ struct SelfTest {
     arms: Vec<UVec2>,
     /// The one arm given a script that will not do (step 20), and then taken away (step 22).
     broken: Option<usize>,
-    /// How many arms had a script before one of them was taken away.
+    /// How many arms had a script before one of them was taken away — and, later, how many
+    /// programs the VM was holding before the editor applied one.
     before: usize,
+    /// What every arm but the one in the panel was running, so that "and left the others alone"
+    /// is a comparison and not a hope.
+    others: Vec<String>,
+    /// Frames spent waiting for the panel to catch up ([`PANEL_WAIT_FRAMES`]).
+    waited: u32,
     done: bool,
 }
+
+/// **A script that does nothing but wait**, for the editor to apply. It compiles and runs, which
+/// is what is being measured — in a browser that means the page's own compiler was called
+/// synchronously and answered — and what it does is of no interest here.
+const AN_IDLE_SCRIPT: &str = concat!(
+    "inserter \"Idle\" do\n",
+    "  def run\n",
+    "    loop { idle }\n",
+    "  end\n",
+    "end\n",
+);
 
 /// **A script that will not do**, for the check that says one of those stops one arm and nothing
 /// else. It raises rather than failing to compile because a raise is the harder half: the program
@@ -1329,8 +1377,153 @@ fn selftest(
             );
             test.step = 24;
         }
-        // ---- a data file that is wrong says which line it is wrong on ------------------------
+        // ---- F3: the panel, where there is one -----------------------------------------------
         24 => {
+            // **A run with no window has no `Editor` at all**, so there is nothing here to
+            // measure and saying `ok` would be claiming a check that never ran. It is known on
+            // the first frame, so it says so at once rather than sitting out a wait.
+            // **the last arm and not the first**: the first is the one step 20 gave a broken
+            // script to and step 22 took away, and a check that drives a tile with nothing on it
+            // is a check about nothing. (It passed in a window and failed in a page, which is
+            // what a check that leans on one system running before another looks like.)
+            let arm = test.arms.last().map(|&t| grid.index(t));
+            let (Some(arm), true) = (arm, crew.panel.is_some()) else {
+                say("--  ", "the editor was not driven (this run has no window)");
+                test.step = 29;
+                return;
+            };
+            // what the rest are running, to say afterwards that they still are
+            test.others = crew
+                .standing
+                .iter()
+                .filter(|(_, i)| i.tile != arm)
+                .map(|(_, i)| crew.minds.text_for(i.tile).to_string())
+                .collect();
+            test.before = world.loaded_programs();
+            test.broken = Some(arm);
+            // **the panel is opened the way a player opens it**: an order that would build an
+            // inserter on a tile that already has one is a click on that inserter
+            // (`crate::window::follow_the_orders`), and nothing is rebuilt.
+            orders.write(build::Order {
+                at: grid.tile_of(arm),
+                what: Some(What::Inserter),
+                dir: Dir::East,
+            });
+            test.waited = 0;
+            test.step = 25;
+        }
+        25 => {
+            let Some(arm) = test.broken else {
+                test.step = 29;
+                return;
+            };
+            // **waited for and not assumed.** The order is read by the system that opens the
+            // panel on the frame it is written or the one after — a Bevy message is readable for
+            // two frames — and the panel is filled in that same frame, so two frames is the
+            // answer and [`PANEL_WAIT_FRAMES`] is the bound with room.
+            let opened = crew.panel.as_ref().and_then(|p| p.key) == Some(arm as u64);
+            test.waited += 1;
+            if !opened && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if opened { "ok  " } else { "FAIL" },
+                "clicking an inserter with an inserter in hand opens its script rather than building over it",
+            );
+            if let Some(panel) = crew.panel.as_mut() {
+                panel.text = AN_IDLE_SCRIPT.to_string();
+                panel.action = Some(rubevy_egui::EditorAction::Apply);
+            }
+            test.waited = 0;
+            test.step = 26;
+        }
+        26 => {
+            let Some(arm) = test.broken else {
+                test.step = 29;
+                return;
+            };
+            // the action is taken on the frame it is set, by a system after this one, and the
+            // program is compiled there — **in a browser that is the page's own compiler, called
+            // synchronously**, which is the half of this check only a page can fail
+            let mine = crew.minds.text_for(arm) == AN_IDLE_SCRIPT;
+            let others: Vec<String> = crew
+                .standing
+                .iter()
+                .filter(|(_, i)| i.tile != arm)
+                .map(|(_, i)| crew.minds.text_for(i.tile).to_string())
+                .collect();
+            let grew = world.loaded_programs();
+            // **what is waited for is the whole of what is said**, and the dearest part of it is
+            // the VM holding one more program, which is three frames after the button
+            test.waited += 1;
+            let ready = mine && others == test.others && grew > test.before;
+            if !ready && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if mine && crew.minds.is_its_own(arm) && others == test.others && grew > test.before {
+                    "ok  "
+                } else {
+                    "FAIL"
+                },
+                &format!(
+                    "the editor applied a script to one inserter and left the other {} alone ({} programs in the VM, was {})",
+                    others.len(),
+                    grew,
+                    test.before
+                ),
+            );
+            test.before = grew;
+            if let Some(panel) = crew.panel.as_mut() {
+                panel.action = Some(rubevy_egui::EditorAction::ApplyAll);
+            }
+            test.step = 27;
+        }
+        27 => {
+            let all =
+                crew.standing.iter().all(|(_, i)| crew.minds.text_for(i.tile) == AN_IDLE_SCRIPT);
+            test.waited += 1;
+            if !all && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            // **the same text is the same program**: applying it to every arm loads nothing new,
+            // which is what "one program, one irep" means where it is spent (rubevy)
+            let grew = world.loaded_programs();
+            say(
+                if all && grew == test.before { "ok  " } else { "FAIL" },
+                &format!(
+                    "Apply to every inserter reached all {} of them and loaded no new program ({} in the VM)",
+                    crew.how_many(),
+                    grew
+                ),
+            );
+            if let Some(panel) = crew.panel.as_mut() {
+                panel.action = Some(rubevy_egui::EditorAction::Revert);
+            }
+            test.step = 28;
+        }
+        28 => {
+            let file = crew.minds.file().to_string();
+            let back = crew.standing.iter().all(|(_, i)| crew.minds.text_for(i.tile) == file);
+            test.waited += 1;
+            if !back && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if back { "ok  " } else { "FAIL" },
+                &format!(
+                    "Revert put all {} of them back on {}",
+                    crew.how_many(),
+                    inserters::SCRIPT_FILE
+                ),
+            );
+            test.step = 29;
+        }
+        // ---- a data file that is wrong says which line it is wrong on ------------------------
+        29 => {
             // **The same door the real file went through**, on the game's own VM, in whatever
             // build this is — which is the whole point: a browser's compiler names every program
             // `playground.rb` and this proves that what a player is told is still `data.rb:4`.
@@ -1358,10 +1551,10 @@ fn selftest(
                     "a wrong {DATA_FILE} is refused with the line it is wrong on ({right}/{all})"
                 ),
             );
-            test.step = 25;
+            test.step = 30;
         }
         // ---- and the tables can be read back from Ruby ----------------------------------------
-        25 => {
+        30 => {
             let asked = read_the_tables_back(&mut world.vm, &data);
             say(
                 if asked.is_some() { "ok  " } else { "FAIL" },
@@ -1370,7 +1563,7 @@ fn selftest(
                     asked.unwrap_or_else(|| "it could not".into())
                 ),
             );
-            test.step = 26;
+            test.step = 31;
         }
         _ => {
             test.done = true;

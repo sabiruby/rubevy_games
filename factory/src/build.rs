@@ -196,6 +196,14 @@ pub fn orders(
             Some(What::Miner) if ore.left[at] == 0 => {
                 info!("no ore at {}, {}: a miner needs some", tile.x, tile.y);
             }
+            // **an inserter on an inserter is not a building order, it is a click on that arm.**
+            // There is no mode to switch into and no key to learn: a click on a tile that already
+            // has one cannot have meant "build one", so it means "show me this one", which is
+            // what `crate::window::follow_the_orders` reads the same message for. It also keeps a
+            // second click from resetting an arm that is in the middle of a swing.
+            Some(What::Inserter) if grid.at(at).map(|b| b.what) == Some(What::Inserter) => {
+                info!("the inserter at {}, {} is already there", tile.x, tile.y);
+            }
             Some(What::Machine(kind)) => {
                 match build_a_machine(&mut grid, &mut lanes, &data, kind, tile, dir) {
                     true => info!(
