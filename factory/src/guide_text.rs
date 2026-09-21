@@ -77,7 +77,6 @@ pub fn guide() -> Guide {
     .key("wheel", "zoom", "拡大縮小")
     .key("F1", "the editor", "エディタ")
     .key("F2", "the VM panel", "VM パネル")
-    .key("F3", "the settings", "設定")
     .key("F5  F9", "save, load", "セーブ・ロード")
     .key("Ctrl+Enter", "apply the text", "テキストを適用")
     .key("Ctrl+S", "write the file", "ファイルに書き出す")

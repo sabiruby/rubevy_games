@@ -578,7 +578,7 @@ that anything was *drawn* — nothing in a log can be — and the evidence for t
 with its pixels counted, in `worklog/2026-09-21-factory-F0.md` for the floor and
 `worklog/2026-09-21-factory-F1.md` §5.4, `…-F2.md` and `…-F3.md` for the factory built on it.
 
-## Factory, a browser — 28 lines
+## Factory, a browser — 40 lines
 
 `…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
 
@@ -588,35 +588,54 @@ loads beside the game, called **synchronously** from inside the frame (plan §3.
 `the editor applied a script to one inserter…` is that call having happened and the program being
 in the VM.
 
+**And it is where a name the page gets wrong shows up** (F5). That module names every program it
+compiles `playground.rb`, so the two lines that say *where a script stopped* said
+`playground.rb:4` here and `inserter.rb:4` on a PC, the first time `ScriptEnded::at` replaced the
+thirty lines of Ruby that used to build the name themselves. The game writes the name now —
+`at` is only ever a frame past the prelude, so the file is the one the game handed over — and the
+three lists say the same sentence again.
+
 ```
+selftest: FAIL a control.rb that will not run leaves the factory running: inserter.rb:2: #<NoMethodError: undefined method 'nothing' for Object>, and the chest went from 4 to 5
+selftest: FAIL an inserter whose script raises stops, and the game knows where: inserter.rb:4 (after 1.0 s)
 selftest: done — the factory keeps running (a page has nothing to exit to)
-selftest: ok   Apply to every inserter reached all N of them and loaded no new program (N in the VM)
-selftest: ok   Revert put all N of them back on inserter.rb
-selftest: ok   a click built each of the N things the line needs (miner, belt, belt, belt, chest)
-selftest: ok   a click with nothing in hand takes the belt at N, N away, and what was on it goes with it
-selftest: ok   a control.rb that will not run leaves the factory running: control.rb:N: #<NoMethodError: undefined method 'nothing' for Object>, and the chest went from N to N
-selftest: ok   a miner cannot be built where there is no ore (N, N)
-selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is N
-selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
-selftest: ok   a wrong data.rb is refused with the line it is wrong on (N/N)
-selftest: ok   an inserter taken away leaves no script behind: N scripts where there were N, and none of them is waiting on an arm that is gone (N)
-selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:N (after N s)
+selftest: ok   Apply to every inserter reached all 3 of them and loaded no new program (4 in the VM)
+selftest: ok   H turns the guide: 5 paragraphs and 16 keys, in en
+selftest: ok   P stops the factory: the belts stand still and the scripts' budget is 0 (egui holds the keyboard: false)
+selftest: ok   Revert put all 3 of them back on inserter.rb
+selftest: ok   a click built each of the 5 things the line needs (miner, belt, belt, belt, chest)
+selftest: ok   a click with nothing in hand takes the belt at 9, 8 away, and what was on it goes with it
+selftest: ok   a data.rb that will not read leaves the factory standing: data.rb:2: unknown field `colour`, expected `icon` (TypeError) (21 buildings, was 21)
+selftest: ok   a data.rb that would rebuild the world asks before it does (32 by 32 still)
+selftest: ok   a miner cannot be built where there is no ore (15, 15)
+selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] is furnace and item_of(:gear)[:icon] is 2
+selftest: ok   a world point and the tile it is in agree at the corners and the middle (5/5), and a point off the map is off it
+selftest: ok   a wrong data.rb is refused with the line it is wrong on (10/10)
+selftest: ok   an inserter taken away leaves no script behind: 3 scripts where there were 4, and none of them is waiting on an arm that is gone (0)
+selftest: ok   an inserter's script can remember something across a save (@memory, after 1.0 s)
+selftest: ok   and P again gives back exactly what it took (39000)
+selftest: ok   and control.rb beside it, with the three buttons to switch between (3 choices)
+selftest: ok   and what it remembered is there again after the factory was read back
 selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
-selftest: ok   every inserter on the map has a script of its own: N arms, N scripts
-selftest: ok   every item is either in a chest or on a belt: N dug, N held, N carried
-selftest: ok   nothing published to the control stage was dropped: N in the script, N in the VM
-selftest: ok   the assembler turned N iron_plate into N gear after N s (the numbers say N s)
-selftest: ok   the control stage heard what the factory did: N built, N crafted, N delivered
-selftest: ok   the data stage was done before Update N: N items, N recipes, N machines, a belt of N a second
-selftest: ok   the editor applied a script to one inserter and left the other N alone (N programs in the VM, was N)
-selftest: ok   the furnace turned N iron_ore into N iron_plate after N s (the numbers say N s)
-selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore N / N (after N s)
-selftest: ok   the map is N by N tiles with N of them holding N of ore
-selftest: ok   the miner dug, the belts carried and the chest holds N after N s (the numbers say N s)
-selftest: ok   the rest of the factory is untouched: N of N inserters stopped, and the assembler line has N in its chest
-selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: N delivered, won false
-selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
-selftest: ok   with no inserter in the gap nothing reaches the machine: N/N lines are jammed on the belt with the machine empty
+selftest: ok   every inserter on the map has a script of its own: 4 arms, 4 scripts
+selftest: ok   every item is either in a chest or on a belt: 2 dug, 1 held, 1 carried
+selftest: ok   nothing published to the control stage was dropped: 0 in the script, 0 in the VM
+selftest: ok   reading data.rb again with a bigger map lays out a bigger world (64 by 32, was 32 by 32)
+selftest: ok   save, load, save is the same text (7799 bytes, 21 buildings)
+selftest: ok   the assembler turned 2 iron_plate into 1 gear after 5.9 s (the numbers say 5.5 s)
+selftest: ok   the control stage heard what the factory did: 19 built, 2 crafted, 4 delivered
+selftest: ok   the data stage was done before Update 1: 3 items, 2 recipes, 2 machines, a belt of 4 a second
+selftest: ok   the editor applied a script to one inserter and left the other 2 alone (4 programs in the VM, was 3)
+selftest: ok   the editor opens data.rb (149 lines)
+selftest: ok   the furnace turned 1 iron_ore into 1 iron_plate after 5.7 s (the numbers say 5.5 s)
+selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore 1 / 1 (after 1.8 s)
+selftest: ok   the map is 32 by 32 tiles with 128 of them holding 7680 of ore
+selftest: ok   the miner dug, the belts carried and the chest holds 1 after 2.0 s (the numbers say 3.0 s)
+selftest: ok   the rest of the factory is untouched: 1 of 4 inserters stopped, and the assembler line has 1 in its chest
+selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: 1 delivered, won false
+selftest: ok   the tileset arrived as an array of 143 layers of 16 by 16 px (frame 4)
+selftest: ok   winning moves the camera from Ruby: it is looking at -56, -120 (was -208, -120, won true)
+selftest: ok   with no inserter in the gap nothing reaches the machine: 2/2 lines are jammed on the belt with the machine empty
 ```
 
 ---

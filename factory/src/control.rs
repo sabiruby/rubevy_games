@@ -554,10 +554,7 @@ pub fn watch_the_control_ending(
         if !task.contains(end.entity) {
             continue;
         }
-        let at = crate::inserters::where_it_broke(end);
-        // the arms' helper says `inserter.rb:?` where rubevy has no line; this file is the
-        // control stage's, so the unknown case is said in its own name
-        let at = at.replace(crate::inserters::SCRIPT_FILE, SCRIPT_FILE);
+        let at = crate::inserters::where_it_broke(end, SCRIPT_FILE);
         let says = format!("{at}: {}", end.value);
         match end.status {
             ScriptStatus::Failed => error!("the control stage stopped at {says}"),

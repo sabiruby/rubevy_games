@@ -730,7 +730,7 @@ pub fn watch_endings(
 ) {
     for end in ended.read() {
         let Ok(inserter) = standing.get(end.entity) else { continue };
-        let at = where_it_broke(end);
+        let at = where_it_broke(end, SCRIPT_FILE);
         arms.mark_stopped(inserter.tile, at.clone());
         let tile = grid.tile_of(inserter.tile);
         match end.status {
@@ -757,10 +757,17 @@ pub fn watch_endings(
 ///
 /// `None` is still `?`: a script that ran to its end and never raised, one that never started, or
 /// one that raised inside the prelude before the player's file was reached at all.
-pub fn where_it_broke(end: &ScriptEnded) -> String {
+///
+/// **The name is the caller's and not the one the VM reports**, which is not fussiness: a page has
+/// no compiler linked in and the one it loads names every program `playground.rb`
+/// (`sabiruby-playground`'s `sabi_compile`), so a browser said `playground.rb:4` where a PC said
+/// `inserter.rb:4` — measured, on the page, the first time this replaced the thirty lines of Ruby
+/// that used to build the name themselves. `at` is only ever a frame **past the prelude**, so the
+/// file is always the one the game handed over, and the game knows which that is.
+pub fn where_it_broke(end: &ScriptEnded, file: &str) -> String {
     match &end.at {
-        Some((file, line)) => format!("{file}:{line}"),
-        None => format!("{SCRIPT_FILE}:?"),
+        Some((_, line)) => format!("{file}:{line}"),
+        None => format!("{file}:?"),
     }
 }
 
