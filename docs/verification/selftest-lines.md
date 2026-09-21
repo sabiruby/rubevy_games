@@ -450,7 +450,13 @@ gained the `FN is Apply` line and Battle's headless list the `handler tasks …`
 the two things S4 changed.
 
 **Factory's three lists were F0's, then F1's, and are now F2's**, measured on 2026-09-21 on the
-branch `factory`, one run each. **F2 added five lines to each of the three** and moved none of the
+branch `factory`, one run each. **F2a changed none of them** — it changed what a position on a
+belt *is* (a whole number of the sixteen steps a tile is long) and moved `ore_per_tile` into
+`data.rb`, and the three lists diffed empty over the whole of it, with the garden's and Battle's
+headless lists diffing empty as well. The one thing it added is inside a line that was already
+there: `a wrong data.rb is refused with the line it is wrong on` now puts **seven** broken files
+through the door rather than six, the new one being a gap that does not divide a tile. The count
+is a number in the sentence, so the list does not move. **F2 added five lines to each of the three** and moved none of the
 others: the data stage was done before the first `Update`, six wrong data files are each refused
 at the line they are wrong on, a script reads the tables back, and the furnace and the assembler
 each turned what a recipe says into what it says in the time it says. Eight became thirteen, and
