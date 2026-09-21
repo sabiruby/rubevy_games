@@ -3660,8 +3660,14 @@ fn spawn_world(
         // game for a creature whose genome has no `sight` and reports what it is told. The point
         // is the message — a Hash of the wrong shape has to say what is wrong with it, in the
         // script's own terms, and with serde doing the reading that message is written by nobody.
-        if let Ok((handle, _)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb) {
-            commands.spawn(Script::new(handle).with_name("Tester").with_priority(120));
+        if let Ok((handle, prelude_lines)) = compile_source(&ruby.0, "tester.rb", TESTER, &mut mrb)
+        {
+            commands.spawn(
+                Script::new(handle)
+                    .with_name("Tester")
+                    .with_priority(120)
+                    .with_prelude_lines(prelude_lines),
+            );
             info!("selftest: a tester script will ask for a creature with a gene missing");
         }
     }
@@ -4024,7 +4030,9 @@ fn give_mind(
         (worn.handle.clone(), worn.prelude_lines, worn.in_memory, worn.generation);
     let name = format!("{} {}", species.name(), entity);
     commands.entity(entity).insert((
-        Script::new(handle).with_name(&name).with_priority(100),
+        // **how far down the program the author's first line is**, so that a `ScriptEnded` says
+        // the line of the creature's own file and not of the program the prelude is in front of
+        Script::new(handle).with_name(&name).with_priority(100).with_prelude_lines(prelude_lines),
         Mind {
             name,
             species,

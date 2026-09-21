@@ -2455,10 +2455,17 @@ fn start_match(commands: &mut Commands, ruby: &Path, assets: &mut Assets<MrbAsse
     // the match is a script like a robot is, at a higher priority: it spawns the field and
     // decides when the fight is over, and the game only does what it is told
     let path = ruby.join("matches").join("training.rb");
-    let Some((handle, _)) = compile_with(ruby, "match_prelude.rb", &path, "run_match", assets) else {
+    let Some((handle, prelude_lines)) =
+        compile_with(ruby, "match_prelude.rb", &path, "run_match", assets)
+    else {
         return;
     };
-    commands.spawn((MatchScript, Script::new(handle).with_name("match").with_priority(10)));
+    // **how far down the program the author's first line is**, so that a `ScriptEnded` says the
+    // line of `matches/training.rb` and not of the program the prelude is in front of
+    commands.spawn((
+        MatchScript,
+        Script::new(handle).with_name("match").with_priority(10).with_prelude_lines(prelude_lines),
+    ));
 }
 
 /// Set by the scoreboard's button or `R`: start the match over on the next frame.
@@ -2609,7 +2616,10 @@ fn spawn_robot(
                 handler_off: 0,
                 downed_at: None,
             },
-            Script::new(handle).with_name(&name).with_priority(100),
+            Script::new(handle)
+                .with_name(&name)
+                .with_priority(100)
+                .with_prelude_lines(prelude_lines),
             // what fills the thinking bar, set once here rather than written over every frame in
             // `update_hud` as it was until S5b-2
             ScriptPanel { name, budget: it.look.bar_full as u64, ..default() },
@@ -2686,8 +2696,18 @@ fn compile_text(
 /// S2: the three lines this was are rubevy's [`replace_script`] (R6). The `ScriptDone` is the
 /// one that does not show: without it a robot whose brain had run to its end could never be
 /// given another.
-fn restart(commands: &mut Commands, entity: Entity, name: &str, handle: Handle<MrbAsset>) {
-    replace_script(commands, entity, Script::new(handle).with_name(name).with_priority(128));
+fn restart(
+    commands: &mut Commands,
+    entity: Entity,
+    name: &str,
+    handle: Handle<MrbAsset>,
+    prelude_lines: u32,
+) {
+    replace_script(
+        commands,
+        entity,
+        Script::new(handle).with_name(name).with_priority(128).with_prelude_lines(prelude_lines),
+    );
 }
 
 fn brain_name(robot: &Robot) -> String {
@@ -2744,7 +2764,7 @@ fn do_editor_actions(
                 r.brain = Some(text.clone());
                 r.source = text.clone();
                 r.heat.clear();
-                restart(&mut commands, entity, &r.name, handle.clone());
+                restart(&mut commands, entity, &r.name, handle.clone(), r.prelude_lines);
                 count += 1;
             }
             let what = if count == 1 { label.clone() } else { format!("{count} robots with {name}") };
@@ -2780,7 +2800,7 @@ fn do_editor_actions(
                         r.brain = None;
                         r.source = source.clone();
                         r.heat.clear();
-                        restart(&mut commands, entity, &r.name, handle);
+                        restart(&mut commands, entity, &r.name, handle, r.prelude_lines);
                     }
                     editor.reset_to(source, format!("back to {name}"));
                 }
@@ -3382,14 +3402,14 @@ fn reload_changed(
                     }
                 }
             }
-            let Some((handle, _)) = compile(&ruby.0, &robot.file, &mut assets) else {
+            let Some((handle, prelude_lines)) = compile(&ruby.0, &robot.file, &mut assets) else {
                 hud.line = format!("{}: compile error (see the log)", robot.name);
                 continue;
             };
             fresh.push((entity, platform::read(&robot.file).unwrap_or_default()));
             // the same three lines the editor's Apply goes through, and for the same reason: this
             // is a robot starting over with another brain (S3, the leftover S2 named)
-            restart(&mut commands, entity, &robot.name, handle);
+            restart(&mut commands, entity, &robot.name, handle, prelude_lines);
             hud.line = format!("{} reloaded", robot.name);
             info!("reloaded {}", robot.name);
         }

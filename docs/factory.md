@@ -47,8 +47,8 @@ web/build.sh factory && web/serve.sh          # then http://localhost:8080/facto
 
 ## Playing it
 
-There is no window furniture yet — the editor, the HUD and the guide are F5 — so this is the
-whole of it, and the game says it in the log when it starts:
+The game says the building keys in the log when it starts, and `H` says the rest of it in English
+or Japanese:
 
 | | |
 |---|---|
@@ -59,6 +59,11 @@ whole of it, and the game says it in the log when it starts:
 | click | build it, or take it away |
 | click an inserter with an inserter in hand | **open its script in the panel** |
 | drag, wheel, `WASD`, `Home` | the camera |
+| `H` `?` | the guide, English and Japanese |
+| `F1` `F2` | the editor, the VM panel |
+| `F5` `F9` | write the factory down, read it back |
+| `P` | **the whole factory stands still** — the belts, the arms and the scripts. Building and editing go on, because looking at a jammed line and laying the belt it wanted is what a pause is for |
+| Ctrl+Enter, Ctrl+S | apply what is in the editor, write it to its file |
 
 **Opening an arm needs no mode and no key.** A click on a tile that already has an inserter cannot
 have meant "build an inserter", so it means "show me this one" — and building a new one opens it
@@ -83,6 +88,88 @@ Factorio wants an inserter for the chest too; this game does not, because the li
 joined up by a script is the line with a *machine* in it, and that is what the game is about.
 **A machine's direction says nothing** (an arm reaches into whichever of its tiles it stands
 behind), which is Factorio's shape as well.
+
+## The window
+
+One editor with three buttons, and the three files it switches between are three different kinds
+of thing (`factory/src/window.rs`):
+
+| | what Apply does | what Ctrl+S writes |
+|---|---|---|
+| **the inserter** | hands this one arm, or every arm, a new script | `ruby/inserter.rb` |
+| **`control.rb`** | swaps the control stage's script — and its goal counts from now, because a new goal is a new game | `ruby/control.rb` |
+| **`data.rb`** | **reads the declarations again, and may lay the world out anew** | `ruby/data.rb` |
+
+**Nothing writes a file but Ctrl+S.** Apply is for trying something; the file on disk is untouched
+until you say so, and in a browser "the file" is a `localStorage` key, so a page keeps what you
+wrote.
+
+**`data.rb` while the game runs** is the point of the stage, and it is what makes `map :world,
+size:` — a declaration since F3a — a thing you can *turn*, in a page, without restarting anything.
+Three outcomes, and the first two leave the factory exactly as it is:
+
+1. **It will not read.** The line it is wrong on goes in the panel and in the log; the tables in
+   use are still the ones that built the world, so nothing on the map moves.
+2. **It reads, and the world still fits it.** The tables and the numbers are swapped and nothing
+   is rebuilt: a belt that was carrying goes on carrying, at the new speed.
+3. **It reads, and the world does not fit it** — a different map size, different ore, or the
+   items, machines or recipes are not the same list. Every tile and every item in the world is a
+   number into those, so the world has to be laid out again, **which loses what is built**. The
+   panel says what would change and asks for the Apply a second time. A player does not lose a
+   factory by pressing a button once.
+
+The HUD (egui, top left) is four rows: what is built and carried and how many arms; what one frame
+of scripts spent against the budget, how many arms are parked on a `move` and what the tick took
+against `frame_time`; what the control stage says and **what was dropped**, which should be zero;
+and how many programs the VM is holding, because every distinct text a script is started from is
+an irep SabiRuby keeps for the life of the process.
+
+**The guide is `H`**, English and Japanese, and the Japanese is a font cut down to the characters
+those strings use (`tools/subset-font.sh`, 81,480 B for 396 glyphs). Edit the Japanese and re-cut
+it, or the new character is a blank box.
+
+## The save file
+
+`factory.save.json` beside the game, or the `localStorage` key `factory:factory.save.json` in a
+page; `F5` writes it, `F9` reads it, and `--save PATH` / `--load PATH` do the same for a run with
+no keyboard. `factory/src/save.rs` **is** the format; there is no schema anywhere else.
+
+**What it is** is the grid and the lanes — which is the whole of the difficult half, because F3
+put a miner's half-finished dig, a furnace's half-finished craft and an arm's half-finished swing
+in `Building` rather than in components, for exactly this. Beside them: what is left of the ore,
+the fraction of a step the belts had not taken yet (without it a loaded factory is up to one step
+of sixteen behind), the scripts that were applied in memory, and what each script remembers.
+
+**What it is not** is the tasks. A task parked on a `move` is a request in one VM's heap and
+cannot be written down, so a loaded game starts every `run` again from the top. What a script must
+not forget across that is `memory` — an ordinary Hash, `@memory`, which the save carries and the
+load hands back — and for the control stage, how far through its goal it had got (`@got`, `@won`).
+A factory saved five gears from winning comes back five gears from winning.
+
+**A save is of the `data.rb` it was taken against.** The file carries a print of that file's
+tables (the map's size, the items, the machines, the recipes, and how many steps a tile is), and a
+save whose print does not match is refused with the half that differs rather than read into a
+world where tile 900 is off the map. A file from another build is refused by its `version`, which
+is read on its own before the rest of the file is looked at.
+
+**Two saves of one factory are the same text**, which is what the check measures: `save → load →
+save` compares the two files. That holds because everything written in tile order is *kept* in
+tile order and the `HashMap`s are sorted on the way out — and because the check holds the world
+still while it does it, since a belt moves half a step a frame.
+
+## The camera, from Ruby
+
+`look_at(column, row)` in `ruby/control_prelude.rb` is rubevy's optional `Rubevy::Camera` layer
+(`ScriptWorld::load_and_run(rubevy::layers::CAMERA)`) — Ruby over an entity's `Transform`, and
+nothing the game answers. Winning uses it: `win!` points the camera at the chest the last delivery
+the goal counted went into.
+
+The joining is one system. The camera here is driven by a resource (`games_shell`'s `CameraView`)
+and its `Transform` is written from that every frame, so a script's `move_to` would be painted
+over before anybody saw it; `let_a_script_move_the_camera` takes what the transform says now,
+minus what the panels cover, as the new view. It **settles** rather than drifting: after a script
+has moved the camera it sets `focus = t - shift`, the camera plugin writes `t = focus + shift`
+back, and the next frame finds the transform where it left it and does nothing.
 
 ## What one step of the factory is
 

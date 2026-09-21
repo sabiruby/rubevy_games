@@ -7,10 +7,11 @@
 # **Run this after editing the Japanese of the guide.** The font that goes in the binary carries
 # only the characters the guide's strings use — 63 KB instead of 9.6 MB — so a word with a
 # character that was not there before is drawn as a blank box (tofu) until this is run again.
-# The three files it reads are the three that hold guide text:
+# The four files it reads are the four that hold guide text:
 #
 #   garden/src/guide_text.rs              the garden's words
 #   sabibots/src/guide_text.rs            SabiRuby Battle's words
+#   factory/src/guide_text.rs             Factory's words
 #   crates/games-shell/src/guide.rs       the shared bits: the HUD's "H: help" hint, the footer
 #
 # It writes crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf, which is `include_bytes!`d
@@ -42,7 +43,7 @@ python3 - "$ROOT" > "$WORK/chars.txt" <<'PY'
 import sys, pathlib
 root = pathlib.Path(sys.argv[1])
 chars = {chr(c) for c in range(0x20, 0x7f)}
-for f in ["garden/src/guide_text.rs", "sabibots/src/guide_text.rs", "crates/games-shell/src/guide.rs"]:
+for f in ["garden/src/guide_text.rs", "sabibots/src/guide_text.rs", "factory/src/guide_text.rs", "crates/games-shell/src/guide.rs"]:
     chars |= {c for c in (root / f).read_text(encoding="utf-8") if ord(c) >= 0xa0}
 sys.stdout.write("".join(sorted(chars)))
 sys.stderr.write(f"{len(chars)} characters in the guide\n")
@@ -66,4 +67,4 @@ f.save(sys.argv[1])
 print(f"{sys.argv[1]}: {f['maxp'].numGlyphs} glyphs")
 PY
 ls -l "$OUT"
-echo "now: cargo build --release -p garden -p sabibots   (and web/build.sh all for the pages)"
+echo "now: cargo build --release -p garden -p sabibots -p factory   (and web/build.sh all for the pages)"

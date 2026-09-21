@@ -132,13 +132,13 @@ above has a single CJK character in it:
 
 | file | what it is |
 |---|---|
-| `crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf` | 65,904 bytes: Noto Sans JP pinned to `wght=400` and subset to the 334 characters the guides use (G7 re-cut it) |
+| `crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf` | 81,480 bytes: Noto Sans JP pinned to `wght=400` and subset to the characters the three guides use — 396 glyphs, re-cut for Factory's guide (F5) |
 | `crates/games-shell/assets/fonts/OFL.txt` | its licence |
 
-The source font is 9,589,900 bytes; what is in each binary is 0.65% of that. `tools/subset-font.sh`
+The source font is 9,589,900 bytes; what is in each binary is 0.85% of that. `tools/subset-font.sh`
 is the recipe — it reads the characters out of `garden/src/guide_text.rs`,
-`sabibots/src/guide_text.rs` and `crates/games-shell/src/guide.rs` and cuts the font again, which
-has to be done whenever the Japanese is edited. The OFL allows the font to be modified and bundled
+`sabibots/src/guide_text.rs`, `factory/src/guide_text.rs` and `crates/games-shell/src/guide.rs`
+and cuts the font again, which has to be done whenever the Japanese is edited. The OFL allows the font to be modified and bundled
 (this is a subset, not a renamed font: the name records say "Noto Sans JP Subset" and the copyright
 and licence records are Noto's own, unchanged). What the size costs the browser build is measured
 in `docs/web.md`.

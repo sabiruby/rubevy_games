@@ -291,6 +291,19 @@ impl Lanes {
         self.n
     }
 
+    /// **The fraction of a step not taken yet**, for the save file (F5). It is part of where the
+    /// belts *are*: a factory put back with it at zero is one where everything on every belt is
+    /// up to one step of sixteen behind where it was written down.
+    pub fn part_of_a_step(&self) -> f32 {
+        self.part_of_a_step
+    }
+
+    /// The other half of the same, for a factory being read back. Anything that is not a fraction
+    /// is dropped: the field's own invariant is `0..1` and a file may say anything.
+    pub fn set_part_of_a_step(&mut self, part: f32) {
+        self.part_of_a_step = if part.is_finite() { part.clamp(0.0, 1.0) } else { 0.0 };
+    }
+
     /// The same number added up the long way. It is what the tests compare the kept one against,
     /// at every door items go in and out of.
     #[cfg(test)]

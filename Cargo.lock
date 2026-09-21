@@ -2393,6 +2393,7 @@ dependencies = [
  "sabiruby",
  "sabiruby-serde",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4294,7 +4295,7 @@ dependencies = [
 [[package]]
 name = "rubevy"
 version = "0.0.1"
-source = "git+https://github.com/sabiruby/rubevy#abfc875f066f3c7780596853a0052e3ea96dc77e"
+source = "git+https://github.com/sabiruby/rubevy#c9b52a3d3f166d426c56e7adfd2ca3a4c2c318d5"
 dependencies = [
  "bevy",
  "sabiruby",
@@ -4304,7 +4305,7 @@ dependencies = [
 [[package]]
 name = "rubevy-build"
 version = "0.0.1"
-source = "git+https://github.com/sabiruby/rubevy#abfc875f066f3c7780596853a0052e3ea96dc77e"
+source = "git+https://github.com/sabiruby/rubevy#c9b52a3d3f166d426c56e7adfd2ca3a4c2c318d5"
 
 [[package]]
 name = "rubevy-egui"
@@ -4394,8 +4395,9 @@ dependencies = [
 
 [[package]]
 name = "sabiruby"
-version = "0.5.2"
-source = "git+https://github.com/sabiruby/sabiruby#8d0fea2993e75d05999c0a223b610123beeed86a"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "555e24d4dbfd3f782444088f257b83e7f881897e6a2579c2f60a4d4e0c6a6c27"
 dependencies = [
  "hashbrown 0.15.5",
  "libm",
@@ -4405,8 +4407,9 @@ dependencies = [
 
 [[package]]
 name = "sabiruby-compiler"
-version = "0.2.3"
-source = "git+https://github.com/sabiruby/sabiruby#8d0fea2993e75d05999c0a223b610123beeed86a"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91668a21f0c498020ad2e074ac002ac8c4fe7bcf05794d86a48a79a5c603b245"
 dependencies = [
  "cc",
  "sabiruby",
@@ -4414,8 +4417,9 @@ dependencies = [
 
 [[package]]
 name = "sabiruby-macros"
-version = "0.1.0"
-source = "git+https://github.com/sabiruby/sabiruby#8d0fea2993e75d05999c0a223b610123beeed86a"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f03a69e5337f6d69bb5aee5f06eb226fd23f8d20fbf968b2435d8677e58abb8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4424,8 +4428,9 @@ dependencies = [
 
 [[package]]
 name = "sabiruby-serde"
-version = "0.1.0"
-source = "git+https://github.com/sabiruby/sabiruby#8d0fea2993e75d05999c0a223b610123beeed86a"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac821d7139d205236393e83078bee7f96292935dcc9edb89e272fd75786d21ef"
 dependencies = [
  "sabiruby",
  "serde",

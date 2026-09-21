@@ -574,7 +574,14 @@ fn wear_mind(commands: &mut Commands, entity: Entity, mind: &mut Mind, wearing: 
     // S2: the three lines this was — `ScriptTask` off, `ScriptDone` off, the new `Script` on
     // — are rubevy's `replace_script` (R6). Forgetting the `ScriptDone` is the invisible
     // half: a creature whose script had run to its end could never be given another one.
-    replace_script(commands, entity, Script::new(wearing.handle.clone()).with_name(&mind.name).with_priority(100));
+    replace_script(
+        commands,
+        entity,
+        Script::new(wearing.handle.clone())
+            .with_name(&mind.name)
+            .with_priority(100)
+            .with_prelude_lines(mind.prelude_lines),
+    );
 }
 
 /// **Whoever is behind their species' program, given it** (S7).

@@ -293,7 +293,12 @@ impl Plugin for GuidePlugin {
 
 /// `H` and `?` open and close it; `Esc` closes it. Not while the editor has the keyboard — an `h`
 /// typed into a creature's brain is a letter, not a key.
-fn guide_keys(
+///
+/// **Public so that a game's checks can be ordered before it** (Factory, F5). A forged press is
+/// only a press for the frame it was made in — `ButtonInput::clear` wipes `just_pressed` at the
+/// head of the next one — so a check that presses `H` after this has run has pressed nothing, and
+/// nothing about the two systems' order said which way round they went.
+pub fn guide_keys(
     keys: Res<ButtonInput<KeyCode>>,
     typing: Option<Res<bevy_egui::input::EguiWantsInput>>,
     mut guide: ResMut<Guide>,

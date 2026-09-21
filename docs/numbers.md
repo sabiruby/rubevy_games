@@ -1143,12 +1143,12 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
 
 ---
 
-## 9. Factory（F0〜F4。2026-09-22）
+## 9. Factory（F0〜F5。2026-09-22）
 
 3 本目の crate `factory/` が持っている数の全部。節の番号が 8 の後ろなのは、
 §2〜§5 の番号が他の文書から参照されているため（renumber しない）。
 過程は `docs/worklog/2026-09-21-factory-F0.md`・`…-F1.md`・`…-F2.md`・`…-F3.md`・`…-F3a.md`・
-`docs/worklog/2026-09-22-factory-F4.md`。
+`docs/worklog/2026-09-22-factory-F4.md`・`…-F5.md`。
 
 **方針**: 「遊びの数は Ruby、動かす側は `factory.settings.txt`、`const` は不変量だけ」
 （計画書 `plans/factory-plan.md` §2）。**F2 で data stage ができて、遊びの数は `ruby/data.rb` へ
@@ -1166,6 +1166,7 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
 | `factory/src/main.rs` | `TILESET_LAYERS` | **143**（F2 は 142、F1 は 139） | シートの層の数。**6 の倍数にするとブラウザで何も描かれない**（配列テクスチャがキューブマップ配列として bind される）。判定がこの数を読み返す | 導出: Kenney の 132 + ベルト 4 + 鉱石 2 + 組立機 4 + **インサータの台 1** = 143。143 % 6 = 5 なので `pad_to_a_safe_count` は空白を足さない。根拠は `wgpu-hal-29.0.4/src/gles/mod.rs:458`、実測は 2026-09-21 のブラウザ走行 |
 | `factory/src/draw.rs` | `ITEM_PX` | 8 | アイテムの絵の大きさ。シートを切る所 | 導出: 16 px のタイルに 2 個が触れずに載る大きさ。`data.rb` の `items_per_tile` の既定はこの数から出ている（逆ではない）。既定の 2 は 16 の約数でもあるので F2a でも動かない |
 | `factory/src/draw.rs` | `ITEM_ICONS` / `HAND` / `STOPPED` / `ICONS` | 3 / 3 / 4 / 5 | `assets/items/items.png` のうち**アイテムの絵は 3 枚**で、`data.rb` の `icon:` はそこへの添字。後ろの 2 枚（F3 の腕の手と、止まった腕の印）は**データファイルから届かない** | 引用: `tools/factory-items.py` の `ITEMS` と `MARKS`。単体テストが `data.rb` の `icon:` が全部 `ITEM_ICONS` の範囲にあることを見る |
+| `factory/src/save.rs` | `SAVE_VERSION` | **1** | セーブファイルの**形式のバージョン**（F5）。上げると古いファイルが読まれなくなる — それが目的で、下げると古いファイルが**間違って**読まれる | **導出ではなく約束**: 構造体から導けない（serde が既定値で埋められるフィールドの出し入れは「読めるが意味が違う」ファイルを残す）。動かす規則は箱庭の `SAVE_VERSION` と同じ = 「古いビルドの書いたものが *読めない* ではなく *間違って読める* ならば上げる」。人間にしか決められない数なので `const` にしてある |
 | `factory/src/control.rs` | `WRAPPER_LINES` | **1** | ゲームが `control.rb` を包むメソッドの `def` の行数。ずれると例外の行が 1 行ずれる（F4） | **導出**: `in_a_method` が前に足す行は `def the_control_file` の 1 行だけ（後ろの `end` は数えない — ファイルの末尾より後ろの行は報告されない） |
 | `factory/src/draw.rs` | `Z_ITEM` / `Z_CARRIED` / `Z_MARK` | 2.0 / 2.1 / 2.2 | スプライトの重なり。手と手の中の物は同じ場所なので片方が上でなければならない。**同じ画像で z が 3 つ = バッチ 3 本**で、それが腕の絵の値段（F2 は 1 本） | 導出: `bevy_sprite_render` のバッチは「同じ z の同じ画像の連続」 |
 | `factory/src/draw.rs` | `FLOOR_PLATES` / `GROUND` / `ORE_RICH` / `ORE_POOR` / `BELT_STRAIGHT` / `BELT_CORNER` / `MINER` / `CHEST` | `[0,1,2]` / `3` / `136` / `137` / `[132,133]` / `[134,135]` / `110` / `85` | シートのどのタイルか。違う数は違う絵を描く（設定ではない） | 引用: シートを 2026-09-21 に読んだ（`docs/factory.md` の表、`docs/factory-tiles.png`）。**機械の絵はここに無い** — `data.rb` の `sprite:` が言う |
@@ -1250,6 +1251,9 @@ F2a がその言い方は片方にしか当たっていないと直し（`ore_pe
 | `factory/src/main.rs` | `TILESET_WAIT_FRAMES` | 400 | **測った（2026-09-21）**: タイルセットが `Assets<Image>` に入ったのはコンテナで 3 フレーム目、ブラウザで 4 フレーム目。その 100 倍。**秒ではなくフレーム**なのは、待っているのが「asset server に順番が回ること」で、それが 1 フレームに 1 回だから（S7 の規則） |
 | `factory/src/main.rs` | `PANEL_WAIT_FRAMES` | 6 | **導出（F3）**: パネルを動かす判定が待つものは 3 段で、いちばん遠いのは「VM がプログラムを 1 本多く持つこと」＝ボタンから 3 フレーム後（依頼が読まれる → 次のフレームで crew が差し替える → その次の頭で rubevy が読む）。6 はその倍。**秒ではなくフレーム**なのは待っているものが 1 フレームに 1 回起きるから（S7 の規則）。1 フレームで書いていたときは窓で通りブラウザで落ちた |
 | `factory/src/main.rs` | `CONTROL_CHECKS` | `31..40` | **段の番号であって閾値ではない**（F4）: 判定は 2 つのシステムに分かれていて（Bevy の system は引数 16 個までで `selftest` がちょうど 16 個だった）、この範囲の step のあいだ `control_checks` が run を持つ |
+| `factory/src/main.rs` | `F5_CHECKS` / `WINDOW_CHECKS` | `40..50` / `50..60` | **段の番号であって閾値ではない**（F5、`CONTROL_CHECKS` と同じ理由）: 判定は 4 つのシステムに分かれた。`WINDOW_CHECKS` の側は窓のあるときだけ動く（`Editor`・`Guide`・`Paused`・カメラの 4 つが `Option`） |
+| `factory/src/main.rs` | `REBUILD_THE_WORLD_CHECK` | **47** | **順番であって閾値ではない**（F5）: 「`data.rb` を読み直して世界を組み直す」判定は判定の**いちばん最後**でなければならない — 判定自身の工場を道連れにするので。数そのものは `F5_CHECKS` の中の空いている step |
+| `factory/src/main.rs` | `CAMERA_WAIT_FRAMES` | 600 | **導出（F5）**: 「勝つとカメラが動く」判定が待つのは、判定自身の線が箱にもう 1 つ入れること（掘り 1 回 + ベルト 4 タイル）で、それを窓の走行のフレームレートでフレーム数にしたもの。**上限であって所要時間ではない** — カメラが動いたフレームで通る |
 | `factory/src/main.rs` | `CHECK_SLACK` | 2.0 | **導出**: 判定は「ゲーム自身の数が言う所要時間」を条件の上限に使う。2 倍は、前後 1 フレームの粒度と、1/60 秒でないブラウザのフレームのぶん。実測は 3.0 秒に対して 2.5 秒、3.5 秒に対して 3.5 秒、2.5 秒に対して 2.8 秒 |
 | `factory/src/main.rs` | `STRESS_REPORTS` | 3 | **導出**: 最初の 1 回（窓が開き asset が届くフレームが入る）を捨てて、残り 2 回を見比べられる最小 |
 | `factory/src/main.rs` | `Stress::every` | 60 | **導出**: 60 fps の 1 秒ぶん。p50 / p95 が 1 フレームのぶれでなくなる長さであり、3 回が数秒で終わる短さ |
@@ -1263,6 +1267,14 @@ F2a がその言い方は片方にしか当たっていないと直し（`ore_pe
 64 KB はその倍で、既存 2 本の小さい方（sabibots 234,202 B）の 27%。
 今の実績は **11,326 B / 4 ファイル**（シート 9,777 + 8 px の絵 5 枚 414 + ライセンス 2 通 1,135）で、
 上限の **17%**。詳しくは `docs/factory.md`。
+
+### 9.5a ガイドのフォント（F5）
+
+**81,480 B / 396 グリフ**（`crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf`）。
+F5 の前は 66,372 B で、増えたのは Factory のガイドの日本語のぶん。
+**上限ではなく実測**: `tools/subset-font.sh` が 4 つのガイドのファイルの非 ASCII 文字を集めて
+その字だけを切り出すので、大きさは**文章が決める**。豆腐が無いことは cmap を読み返して確かめた
+（4 ファイルの非 ASCII のうちフォントに無い字 0 件）。
 
 ### 9.6 決められなかった数 → **利用者が決める**（F3a）
 
@@ -1312,13 +1324,22 @@ F2 が 1 つ材料を足した: **鎖 1 本は「採掘機 2・かまど 4・組
 
 ### 9.7 件数
 
-Factory は **51 件**（不変量 (a) 9 行 26 個、動かす側 (c) **10**、**遊びの数 (b) 17**（`data.rb` 16 +
-**`control.rb` の目標 1**）、判定と計測の器 (d) 7、導出で設定でないもの 1、容量 1）。
+Factory は **58 件**（不変量 (a) 10 行 27 個、動かす側 (c) **11**、**遊びの数 (b) 17**（`data.rb` 16 +
+**`control.rb` の目標 1**）、判定と計測の器 (d) **11**、導出で設定でないもの **2**、容量 **2**）。
 出どころは **測った 3**（`TILESET_WAIT_FRAMES`・`script_budget`・そこから「そのままでよい」と
 言えた `script_frame_time_ms`）+ **測って裏を取った 1**（`MOST_TILES_ACROSS`。導出 + 2 つの描画系の実測）
 / 導出 35 / 引用 5 / **不明 1**（窓の大きさ）/
 **根拠なしと正直に書いたもの 1**（`belt_tiles_per_second`）/ **利用者が決めるもの 1**（地図の大きさ。
 既定は F0 の仮の値のまま。§9.6）/ 参照 2（`ore` の名前、`icon:`）。
+
+**F5 が足したもの**: 不変量に **1 件**（`SAVE_VERSION`）、判定と計測の器に **4 件**
+（`F5_CHECKS`・`WINDOW_CHECKS`・`REBUILD_THE_WORLD_CHECK`・`CAMERA_WAIT_FRAMES`）、容量に 1 件
+（ガイドのフォント、§9.5a）。**遊びの数は 1 つも足していない** — 窓は数を持たない
+（パネルの大きさは `games_shell::PanelSettingsPlugin` が `factory.settings.txt` から読む既存の鍵で、
+3 本に共通の `editor_*` / `vm_*` / `guide_*` / `hud_*`）。**動かす側に足したのは名前だけ**:
+`save_file`（既定 `factory.save.json`）は「どこへ書くか」であって調整値ではない。
+`Restoring::patience`（1 秒）は**導出**: ロード後にスクリプトが `run` に着くのは数フレーム後で、
+待っているのは「着かないスクリプトがある」場合の打ち切り。数フレームより長く、人が気づくより短い。
 
 **F4 が足したもの**: 遊びの数に **1 件**（`control.rb` の `goal deliver:`。**3 本目の Ruby のファイル**で、
 `data.rb` と同じ「遊びの数は Ruby」の側にある）、不変量に 1 件（`WRAPPER_LINES`）、判定の器に 1 件

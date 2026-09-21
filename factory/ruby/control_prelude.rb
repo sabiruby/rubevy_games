@@ -138,6 +138,8 @@ class Control
       item = items[payload[0].to_i]
       next if item.nil? || !wanted.key?(item)
       @got[item] += payload[1].to_i
+      # where the last thing the goal counted went, so that `win!` can point the camera at it
+      @where = [payload[2].to_i, payload[3].to_i]
       say_where_it_is
       done = true
       wanted.each { |name, upto| done = false if @got[name].to_i < upto }
@@ -153,6 +155,11 @@ class Control
     @won = true
     say_where_it_is
     log "the goal is reached"
+    # **Ruby moving the camera.** `look_at` is rubevy's optional `Rubevy::Camera` layer and
+    # nothing the game answers; `@where` is the tile the last delivery the goal counted went
+    # into, so winning leaves you looking at the chest you won in. A run with no window has no
+    # camera and this does nothing.
+    look_at(@where[0], @where[1]) if @where
   end
 
   def won?
@@ -202,18 +209,32 @@ class Control
     Rubevy.log "control.rb: #{text}"
   end
 
-  # **Where an exception happened, in the lines of the file you are editing** — the same trick the
-  # inserters' prelude turns: a task that has ended has no frames left to ask, so the place is
-  # worked out here, where the exception still has its backtrace, and left where the game will
-  # find it.
-  def self.said_at(error)
-    frame = error.backtrace && error.backtrace.first
-    return nil if frame.nil?
-    piece = frame.to_s.split(":").find { |p| p.to_i.to_s == p }
-    at = piece.to_i
-    return nil if at <= 0
-    at > prelude_lines ? "control.rb:#{at - prelude_lines}" : "control_prelude.rb:#{at}"
+  # === looking at the factory ==================================================
+
+  # **Where a tile is in the world**, as `[x, y]`. The map is centred on the origin and a tile is
+  # `tile_px` across, both of which the game writes in front of this file out of `data.rb`.
+  def world_of(column, row)
+    across, up = self.class.map_size
+    px = self.class.tile_px.to_f
+    [column * px + px / 2 - across * px / 2, row * px + px / 2 - up * px / 2]
   end
+
+  # **Point the camera at a tile.** `Rubevy::Camera` is rubevy's optional layer (the game loads it
+  # with `ScriptWorld::load_and_run`), so this is ordinary Ruby over `e[:Transform] =` and not
+  # something the game answers — and a run with no window has no camera at all, where it is nil
+  # and this does nothing.
+  #
+  # It is here rather than in `control.rb` so that a rewritten control stage still has the word.
+  def look_at(column, row)
+    camera = Rubevy::Camera.find
+    # a run with no window has no camera at all, and that is not a fault: it is what this word is
+    # written to survive. It says so once rather than silently, because a window that had none
+    # would be a fault.
+    return nil if camera.nil?
+    at = world_of(column, row)
+    camera.move_to(at[0], at[1])
+  end
+
 end
 
 # **A class of its own for each file.**
@@ -241,8 +262,9 @@ def run_control
   tasks = []
   # **your file, run here** rather than where it stands. The game puts it inside a method of one
   # line (`crate::control::in_a_method`) so that `goal` and `on` are called from inside this
-  # `begin` — which is what lets the `rescue` below say the line of *your* file anything in it
-  # went wrong on, the way a broken inserter's script says it.
+  # method — which is what lets the ending rubevy sends say the line of *your* file anything in it
+  # went wrong on, the way a broken inserter's script says it. At the top level they would run
+  # while the program was being loaded, before `run_control` was reached at all.
   the_control_file
   being = $control_class.new
   # where the game finds it: the counters above, `@won`, and the line for the screen are read off
@@ -251,11 +273,6 @@ def run_control
   start_control_handlers(being, tasks)
   # and this task becomes the one that watches the goal, for ever
   being.watch_the_goal
-rescue => e
-  at = $control_class && $control_class.said_at(e)
-  Task.current.instance_variable_set(:@broke_at, at) if at
-  Rubevy.log "control.rb stopped at #{at || '?'}: #{e.class}: #{e.message}"
-  raise
 ensure
   # the handlers are tasks of their own: nothing else stops them when this one ends
   tasks.each { |t| t.terminate }

@@ -21,6 +21,7 @@
 #   idle            wait one swing's worth, and let everyone else have the frame
 #   swing_seconds   how long a swing takes (`inserter :arm, seconds_per_item:` in data.rb)
 #   items           every item name `data.rb` declares
+#   memory          a Hash of your own that **survives a save** (`@memory`)
 #   log "…"         a line in the game's log, with this inserter's name in front
 #
 # **The three questions cost no frame.** `behind`, `holding` and `front_takes?` are answered
@@ -127,29 +128,21 @@ class Inserter
     at.nil? ? -1 : at
   end
 
-  def log(text)
-    Rubevy.log "#{name}: #{text}"
+  # **What this arm remembers, and the one thing of yours a save file keeps.**
+  #
+  # A save cannot hold a task half way through a line, so a loaded game starts every `run` again
+  # from the top (`docs/factory.md`). Anything the arm must not forget across that goes in here:
+  # it is written into the save beside the arm's hand and put back before the script starts.
+  #
+  # It is a Hash, and what may go in it is what JSON can carry — numbers, strings, true, false,
+  # nil, and Arrays and Hashes of those. An entity or a Proxy in here is not saved and says so in
+  # the log. The garden's `memory` is the same word for the same thing.
+  def memory
+    @memory ||= {}
   end
 
-  # **Where an exception happened, in the lines of the file you are editing.**
-  #
-  # The prelude and your script are compiled as one program, so the line the VM reports is that
-  # program's; `prelude_lines` is how far down it your first line is, and the game writes that
-  # number in with the item names. Anything past it is yours; anything before it is the DSL's.
-  #
-  # It is here rather than in the game because **a task that has ended has nothing left to ask**:
-  # by the time the game hears that a script stopped, the frames are gone. The `rescue` at the
-  # bottom of this file runs while the exception still has its backtrace, and leaves the answer on
-  # the task for the game to pick up.
-  def self.said_at(error)
-    frame = error.backtrace && error.backtrace.first
-    return nil if frame.nil?
-    # a frame is `file:line` or `file:line:in method`, so the line is the first piece between
-    # colons that is a whole number — taking the last piece finds "in run"
-    piece = frame.to_s.split(":").find { |p| p.to_i.to_s == p }
-    at = piece.to_i
-    return nil if at <= 0
-    at > prelude_lines ? "inserter.rb:#{at - prelude_lines}" : "prelude.rb:#{at}"
+  def log(text)
+    Rubevy.log "#{name}: #{text}"
   end
 end
 
@@ -168,6 +161,12 @@ def run_inserter
   klass = $inserter_class
   raise "this file defines no inserter" if klass.nil?
   being = klass.new
+  # **Where the game finds this arm's object.** The save reads `@memory` off it and puts one back
+  # before `run` is reached, exactly as the garden reads a creature's (`crate::save`). A task's
+  # own `self` is the VM's one `main` object, shared by every task, so an `@ivar` written at the
+  # top level of an inserter's file would be the same variable in every other arm's — which is
+  # why there is an object per script at all.
+  Task.current.instance_variable_set(:@being, being)
   # **Not all at once.** A thousand inserters started in the same frame would otherwise all wake
   # on the same frame for ever after — every one of them sleeping exactly one swing between looks
   # — and rubevy measured what that costs: three thousand scripts on one `sleep` put the 95th
@@ -181,12 +180,11 @@ def run_inserter
   srand(being.me.to_i)
   sleep being.swing_seconds * klass.stagger * rand
   being.run
-rescue => e
-  # **the place, worked out here and left where the game will find it.** `@broke_at` on this task
-  # is an ordinary instance variable; the game reads it with one `ivar_get` when it hears that
-  # this script has ended, because by then the backtrace is gone (`Inserter.said_at`).
-  at = klass && klass.said_at(e)
-  Task.current.instance_variable_set(:@broke_at, at) if at
-  Rubevy.log "#{klass ? klass.inserter_name : '?'} stopped at #{at || '?'}: #{e.class}: #{e.message}"
-  raise
 end
+
+# **Where a script stopped is the game's to say, not this file's.** Until 2026-09-22 there was a
+# `rescue` here that read the exception's backtrace, subtracted how far down the program your
+# first line is, and left the answer on the task for the game to read with one `ivar_get` — thirty
+# lines across two files, because a task that has ended keeps no frames. rubevy does it now
+# (`ScriptEnded::at`), where the exception is, and it reaches the one case this could not: a
+# `Task::Overrun` is an `Exception` and not a `StandardError`, so no `rescue => e` ever saw one.

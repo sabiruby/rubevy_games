@@ -4,5 +4,9 @@ web/dist/
 garden.settings.txt
 sabibots.settings.txt
 factory.settings.txt
+# F5's save file, and the two the round-trip check writes beside it
+factory.save.json
+factory.check-a.json
+factory.check-b.json
 # `tools/*.py` are run in place, and python leaves this beside them
 __pycache__/

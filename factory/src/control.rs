@@ -45,8 +45,8 @@
 //!
 //! The factory keeps running with no goal in it. Whatever is wrong is said with the line of the
 //! player's own file it is on, exactly as a broken inserter's script is: a compiler's complaint
-//! goes through `in_the_authors_lines`, and an exception's place is worked out in the prelude's
-//! own `rescue` while the backtrace is still there ([`where_it_broke`]).
+//! goes through `in_the_authors_lines`, and an exception's place comes with the ending rubevy
+//! sends ([`crate::inserters::where_it_broke`]).
 
 use std::collections::HashSet;
 
@@ -230,6 +230,21 @@ pub struct TheControl {
     pub dropped: u64,
     /// So that the log says the win once rather than every frame.
     said_won: bool,
+    /// **Whether what is running came out of the panel rather than out of the file** (F5). The
+    /// editor draws the same mark it draws for an arm; Save is what clears it.
+    pub in_memory: bool,
+}
+
+impl TheControl {
+    /// `ruby/control.rb`, or whatever has been applied over it — for the editor and the save.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// How far down the program the player's first line is, for the VM panel.
+    pub fn prelude_lines(&self) -> u32 {
+        self.prelude_lines
+    }
 }
 
 /// **Another control.rb, please** — the game's own message for "run this text instead", which the
@@ -291,12 +306,13 @@ pub fn read_the_control_stage(
         seen: [0; EVENTS.len()],
         dropped: 0,
         said_won: false,
+        in_memory: false,
     };
     if control.trouble.is_none() {
         match compile(&control.prelude, &data, &rules, &control.text, &mut mrb) {
             Ok((handle, lines)) => {
                 control.prelude_lines = lines;
-                commands.entity(entity).insert(the_script(handle));
+                commands.entity(entity).insert(the_script(handle, lines));
                 info!("{SCRIPT_FILE}: the control stage is running");
             }
             Err(why) => control.trouble = Some(why),
@@ -322,9 +338,14 @@ pub struct ControlScript;
 /// the property, and by how much says nothing. The arms are all at one priority among themselves,
 /// which is the other half of §5: a script that is behind another is a script that goes hungry
 /// first when the budget runs out.
-fn the_script(handle: Handle<MrbAsset>) -> Script {
+fn the_script(handle: Handle<MrbAsset>, prelude_lines: u32) -> Script {
     let what_an_arm_runs_at = Script::new(handle.clone()).priority;
-    Script::new(handle).with_name("control").with_priority(what_an_arm_runs_at.saturating_sub(1))
+    Script::new(handle)
+        .with_name("control")
+        .with_priority(what_an_arm_runs_at.saturating_sub(1))
+        // **how far down the program the player's first line is**, wrapper included, so that
+        // `ScriptEnded::at` says the line of `control.rb` and not of the program
+        .with_prelude_lines(prelude_lines)
 }
 
 /// One program: what the game wrote, the prelude, and the player's own file.
@@ -335,20 +356,14 @@ fn compile(
     body: &str,
     mrb: &mut Assets<MrbAsset>,
 ) -> Result<(Handle<MrbAsset>, u32), String> {
-    // twice, for the same reason the inserters' compile is twice: the program has to carry how
-    // far down it the player's first line is, so that the prelude's `rescue` can say the place in
-    // the player's own numbering, and the block in front adds exactly its own lines
-    // (`crate::inserters::compile`).
-    let without = Program::new(prelude, SCRIPT_FILE, "", "run_control").prelude_lines;
-    let prelude_lines =
-        without + names_and_numbers(data, rules, 0).lines().count() as u32 + WRAPPER_LINES;
-    let front = format!("{}{prelude}", names_and_numbers(data, rules, prelude_lines));
+    // **Once**, for the same reason the inserters' compile is once since 2026-09-22: rubevy says
+    // where a script stopped (`ScriptEnded::at`), so the program no longer has to carry its own
+    // length for a `rescue` in the prelude to read. What is still added by hand is the wrapper —
+    // `Program::new` counts what is in front of the *body* it was given, and the body it is given
+    // here is the player's file already inside a method.
+    let front = format!("{}{prelude}", names_and_numbers(data, rules));
     let program = Program::new(&front, SCRIPT_FILE, &in_a_method(body), "run_control");
-    debug_assert_eq!(
-        program.prelude_lines + WRAPPER_LINES,
-        prelude_lines,
-        "the block's own length moved"
-    );
+    let prelude_lines = program.prelude_lines + WRAPPER_LINES;
     match platform::compile(&program.source, SCRIPT_FILE) {
         Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), prelude_lines)),
         Err(why) => Err(in_the_authors_lines(&why, prelude_lines, PRELUDE_FILE)),
@@ -377,7 +392,7 @@ const WRAPPER_LINES: u32 = 1;
 /// They are methods on the class rather than constants for the same reason the inserters' are: a
 /// program is compiled again every time a text changes, and a constant written twice is a warning
 /// nobody asked for. A name is quoted so that a data file may call a thing whatever it likes.
-fn names_and_numbers(data: &Data, _rules: &Rules, prelude_lines: u32) -> String {
+fn names_and_numbers(data: &Data, rules: &Rules) -> String {
     let quoted = |name: &str| format!(":\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
     let items: Vec<String> = data.items.iter().map(|i| quoted(&i.name)).collect();
     let buildings: Vec<String> = FITTINGS
@@ -394,13 +409,18 @@ fn names_and_numbers(data: &Data, _rules: &Rules, prelude_lines: u32) -> String 
          \x20 def self.declared_buildings\n\
          \x20   [{}]\n\
          \x20 end\n\
-         \x20 def self.prelude_lines\n\
+         \x20 def self.map_size\n\
+         \x20   [{}, {}]\n\
+         \x20 end\n\
+         \x20 def self.tile_px\n\
          \x20   {}\n\
          \x20 end\n\
          end\n",
         items.join(", "),
         buildings.join(", "),
-        prelude_lines,
+        rules.map_tiles.x,
+        rules.map_tiles.y,
+        crate::TILE_PX,
     )
 }
 
@@ -431,7 +451,7 @@ pub fn give_it_another_script(
         Ok((handle, lines)) => {
             control.prelude_lines = lines;
             control.trouble = None;
-            replace_script(commands, entity, the_script(handle));
+            replace_script(commands, entity, the_script(handle, lines));
             Ok(())
         }
         Err(why) => {
@@ -521,24 +541,20 @@ fn whole_number(scripts: &mut ScriptWorld, being: sabiruby::value::ObjId, name: 
     }
 }
 
-/// **A control stage that stopped says where** — the same road a stopped inserter takes, for the
-/// same reason: a task that has ended has no frames left to ask, so the prelude's own `rescue`
-/// works the place out and leaves it on the task.
+/// **A control stage that stopped says where** — the same road a stopped inserter takes
+/// ([`crate::inserters::where_it_broke`]): rubevy hands the line the script stopped on with the
+/// ending, in the player's own numbering, because the `Script` was told how far down the program
+/// the player's first line is.
 pub fn watch_the_control_ending(
     mut ended: MessageReader<ScriptEnded>,
-    mut scripts: ResMut<ScriptWorld>,
     mut control: ResMut<TheControl>,
-    task: Query<&ScriptTask, With<ControlScript>>,
+    task: Query<(), With<ControlScript>>,
 ) {
     for end in ended.read() {
         if !task.contains(end.entity) {
             continue;
         }
-        let at = task
-            .get(end.entity)
-            .ok()
-            .and_then(|t| where_it_broke(&mut scripts, t))
-            .unwrap_or_else(|| format!("{SCRIPT_FILE}:?"));
+        let at = crate::inserters::where_it_broke(end, SCRIPT_FILE);
         let says = format!("{at}: {}", end.value);
         match end.status {
             ScriptStatus::Failed => error!("the control stage stopped at {says}"),
@@ -549,42 +565,16 @@ pub fn watch_the_control_ending(
     }
 }
 
-/// `control.rb:12`, read out of the VM off the task that ended — see
-/// [`crate::inserters::where_it_broke`], which is the same three lines for the same reason.
-fn where_it_broke(scripts: &mut ScriptWorld, task: &ScriptTask) -> Option<String> {
-    let value = scripts.vm.ivar_get(task.task(), "@broke_at");
-    let bytes = scripts.vm.str_bytes(value)?;
-    Some(String::from_utf8_lossy(bytes).into_owned())
-}
-
 // ---------------------------------------------------------------------------------------------
-// The line on the screen
+// What it says
 // ---------------------------------------------------------------------------------------------
 
-/// The one line of text a window shows while F5 has no HUD in it yet: what the goal is, how much
-/// of what the game published the script has heard, and **what was dropped**.
-#[derive(Component)]
-pub struct ControlLine;
-
-/// `Startup`, in a run with a window: the text node, empty until there is something to say.
-pub fn put_the_line_on_the_screen(mut commands: Commands) {
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(8.0),
-            left: Val::Px(8.0),
-            ..default()
-        },
-        children![(
-            ControlLine,
-            Text::new(""),
-            TextFont { font_size: 16.0.into(), ..default() },
-            TextColor(Color::srgb(0.95, 0.9, 0.75)),
-        )],
-    ));
-}
-
-/// What that line says, worked out from what the script said and what the VM counted.
+/// **What the control stage has to say**, worked out from what the script said and what the VM
+/// counted — one string, whoever is showing it.
+///
+/// F4 put it on a `Text` node of its own in the top left. F5's HUD is egui and has this line in
+/// it ([`crate::window::draw_hud`]), so the node and the two systems that kept it are gone and
+/// this is what is left: the sentence, with nothing about where it is drawn.
 pub fn what_it_says(control: &TheControl, dropped_in_the_vm: u64) -> String {
     let mut lines: Vec<String> = Vec::new();
     match (&control.trouble, &control.saying) {
@@ -602,19 +592,6 @@ pub fn what_it_says(control: &TheControl, dropped_in_the_vm: u64) -> String {
         dropped_in_the_vm,
     ));
     lines.join("\n")
-}
-
-/// The line, kept up to date. Only a run with a window has one.
-pub fn show_what_it_says(
-    control: Res<TheControl>,
-    scripts: Res<ScriptWorld>,
-    mut line: Query<&mut Text, With<ControlLine>>,
-) {
-    let Ok(mut text) = line.single_mut() else { return };
-    let says = what_it_says(&control, scripts.dropped());
-    if text.0 != says {
-        text.0 = says;
-    }
 }
 
 /// **A run with no window has the same two numbers in its log, said once.**
@@ -773,7 +750,7 @@ mod tests {
     #[test]
     fn a_building_and_its_number_agree_with_the_names_the_game_writes() {
         let (data, rules) = crate::data::for_a_test(DATA);
-        let written = names_and_numbers(&data, &rules, 0);
+        let written = names_and_numbers(&data, &rules);
         let names: Vec<&str> = written
             .lines()
             .find(|l| l.contains(":\"belt\""))
