@@ -20,12 +20,14 @@
 # The order is the order `web/build.sh all` builds in — **and it is also the list the published
 # site has**, because `all` is what CI runs and `web/index.html` is the entry page beside it.
 #
-# **Factory is not in it yet** (F0, 2026-09-21). Its values are below, so `web/build.sh factory`
-# builds its page and a browser check can be run against it here; leaving the word out of this
-# array is what keeps a third, unfinished game off the published site. F6 adds it, and adds the
-# `<li>` that is written out and commented in `web/index.html` beside the other two. The two
-# things move together, which is why the reason is written here rather than in both places.
-GAMES_ALL=(sabibots garden)
+# **Factory joined it at F6** (2026-09-22). From F0 until then its values were below but the word
+# was deliberately not in this array, which is what kept a third, unfinished game off the
+# published site while `web/build.sh factory` still built its page for a browser check. Adding
+# the word and uncommenting the `<li>` in `web/index.html` are one change: the array decides what
+# is built, the `<li>` decides what is linked, and a site with one without the other is either a
+# dead link or a page nobody can reach. Nothing in `.github/workflows/pages.yml` moved — it names
+# no games at all, it runs `web/build.sh all`.
+GAMES_ALL=(sabibots garden factory)
 
 declare -A TITLE BG FG DIM KEYS COMPILE_NOTE KEYS_NOTE
 
@@ -72,25 +74,26 @@ NOTE
 )
 
 # ---- Factory ------------------------------------------------------------------------------
-# F0: the page builds and can be opened with `web/build.sh factory`, and the word is deliberately
-# not in `GAMES_ALL` above until F6 (see the note there).
 TITLE[factory]='Factory'
 BG[factory]='#1a1512'
 FG[factory]='#e6d8c8'
 DIM[factory]='#9a8b7a'
-KEYS[factory]='"F1", "F2", "F5", "Tab"'
+KEYS[factory]='"F1", "F2", "F5", "F9", "Tab"'
 COMPILE_NOTE[factory]=$(cat <<'NOTE'
-// calls window.factoryCompile(source) whenever it needs Ruby as bytecode — the data stage, the
-// control stage and each inserter's own script. Nothing calls it yet: F0 is the floor and the
-// camera, and the first script arrives with the data stage (F2).
+// calls window.factoryCompile(source) whenever it needs Ruby as bytecode. This game asks for it
+// more often than the other two: the data stage (data.rb, before the first frame), the control
+// stage (control.rb) and every inserter's own script, and again for each of them every time the
+// editor's Apply is pressed — a data.rb applied in the page can lay the whole map out anew.
 NOTE
 )
 KEYS_NOTE[factory]=$(cat <<'NOTE'
-// Keys the game uses and the browser would take, kept the same as the other two games' so that a
-// player moving between them is not surprised. F5 is Apply in the editor and Reload in a browser,
-// which is the one that matters; F1 is the guide, F2 the VM panel, and Tab moves the focus off
-// the canvas. The capture phase runs before anything else can see the event, so preventDefault
-// here stops the browser and the game still gets the key. None of those panels is in this game
-// yet (F5 brings them); the list is here because the page is written once.
+// Keys the game uses and the browser would take. F5 is the one that matters, and this game means
+// by it what the garden does: **write the factory down** — the grid, the belts, the ore and what
+// every script remembers — where a browser means Reload, the exact opposite of what the player
+// pressed it for. F9 reads it back and no browser wants it; F1 is the editor (the three Ruby
+// files), F2 the VM panel, and Tab moves the focus off the canvas. The capture phase runs before
+// anything else can see the event, so preventDefault here stops the browser and the game still
+// gets the key. The guide is H, which no browser claims, and Ctrl+S — Save page to a browser —
+// writes the file that is open in the editor, which in a page is a localStorage key of its own.
 NOTE
 )
