@@ -81,8 +81,8 @@ fn query_name(env_name: &str) -> String {
 /// Whether this **platform** ends a run when the checks are done. On a PC it does: they were
 /// asked for on a command line and the shell wants its prompt back.
 ///
-/// It says what the platform can do, not what this run should do — [`checks_end_the_run`] is the
-/// one to ask, and it is this and one thing more.
+/// It says what the platform can do, not what this run should do — [`Errands::left`] is the one
+/// to ask, and it is this and whatever else the run was told to do.
 #[cfg(not(target_arch = "wasm32"))]
 pub const CHECKS_EXIT_WHEN_DONE: bool = true;
 

@@ -59,6 +59,21 @@ The three runs of a game are **three different lists**, not one list seen three 
 run never opens the editor, and a page prints a `done` line a PC does not (there is nothing for
 a page to exit to, `games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
 
+**A run asked for a picture as well prints one more line than the lists below** (S11).
+`GARDEN_SELFTEST=1 docker/run.sh garden release --shot FILE 30` is the same list and then
+
+```
+selftest: done — the garden keeps running (the picture is still to be taken)
+```
+
+because the checks are one of two things such a run was asked for and the camera is the other
+(`games_shell::checks::Errands`). Until S11 that line gave the browser's reason — *a page has
+nothing to exit to* — in a run on a PC, which was simply untrue of it. The `done` line means
+"the checks have finished and the run goes on", so **a run whose picture was taken first does not
+print it at all**: it ends when the checks finish, and Factory's shipped `--shot` moment (8 s,
+against checks that take 13) is exactly that case. Either way the rest of the list is the list
+below, and neither errand can cut the other short.
+
 ## Verdicts
 
 | | |
@@ -66,7 +81,7 @@ a page to exit to, `games_shell::checks::CHECKS_EXIT_WHEN_DONE`).
 | `ok  ` | measured, and it is what it should be |
 | `FAIL` | measured, and it is not |
 | `--  ` | **the run did not put the check in a position to measure anything.** Not a pass and not a failure — the pairing that could not be counted, the probe something walked into. **Both games write `--`** since S5b-5; the garden used to write `n/a` in one of its two places, which was two spellings of one verdict in one game |
-| `done` | the checks are finished and the page keeps running |
+| `done` | the checks are finished and the run goes on — in a page always (nothing to exit to), on a PC when the same command line asked for a picture that has not been taken yet (S11). The reason is in the brackets |
 
 A line whose verdict may move between runs is marked in the lists below, because the alternative
 — leaving the check out of the comparison, which is what was done until 2026-09-20 — means never
@@ -81,6 +96,44 @@ comparing it at all. **There are three**, and S5b-5 added the third:
   the game opened the editor again before the wheel was turned — `choose_watched` does that when
   the creature being watched dies, and a creature starving in that second is the garden's own
   business. The run measured nothing about the wheel, which is neither a pass nor a failure.
+
+## What a check has to get right
+
+Four things that have each cost a stage of work, and none of which a list of lines can show.
+They are here rather than in a worklog because the worklog is the day they were learnt and this
+is the standard a run is held to.
+
+**Wait on a condition, never on a length of time — and a number of frames is a length of time.**
+S7 took the wall clock out of the garden's window checks (0.6 s of waiting became "until the
+restarted beetle has run"), and F3 walked into the same thing twice in a shape that does not look
+like a clock at all: a check that says *look one frame later* passes in a window and fails in a
+browser, because what it is really waiting for — a panel to open, a VM to be given a program —
+takes the frames it takes. A bound is still needed, and the bound is an argument about the thing
+being waited for (`games_shell::checks::CheckPace::frames_to_wait`, whose structural half is the
+caller's for that reason).
+
+**Run the two versions alternately, and then run them the other way round.** S10 took a garden of
+runs six times alternately and read "a smaller budget makes more hits" out of it — 16.7 against
+22.7 — and the difference went away when the order of each pair was swapped (17.5 against 21.1):
+what it had measured was *which of the pair ran second*. Adding rounds in the same order only buys
+more of the same bias.
+
+**Look for a line in which the version names itself, and build before running.** `docker/run.sh`
+mounts a target volume that `docker/build.sh` fills, so a run without a build is the previous
+version, and **it passes**: the list of lines and the count of FAILs are the same as the version
+before. S10b ran a whole window that way and only noticed because a stage direction said
+`7 frame(s) … 200000 instructions` where the new version says 5 and 114,000. So:
+`docker/build.sh <game> release` first, every time, and read one line that could only have come
+out of the version under test (Battle's `a hit's handler is given N frame(s)`, Factory's
+`the data stage was done before Update 1: …`).
+
+**A `warn!` in `main()` is not printed.** `LogPlugin` is inside `DefaultPlugins` and
+`MinimalPlugins`, so nothing said before `App::run` has a subscriber and every line of it is
+dropped. All three games read their settings in `main`, which is why what a store was refused is
+collected there and said in `Startup` (`games_shell::settings::SettingsRefusalsPlugin`, S11), and
+why F3a's warning about a moved key printed nothing at all and was found by running the game and
+watching for a line that never came. **A check that a message appears has to be a check of a real
+run**, not of the line that writes it.
 
 ---
 
@@ -532,6 +585,13 @@ ore*, *a click in the middle of a tile is read as that tile* became the four lin
 factory with clicks and watch it deliver, and the two that did not move (the corners, the tileset)
 are word for word what they were. Four lines became eight. They are a change to nobody else's: the
 six above were re-run at the end of the stage and all six diffed empty.
+
+**S11 moved none of the nine**, on 2026-09-22 on the branch `s11`, which is what it meant to do:
+the end of a run moved into one place for three games, the settings grew a way of refusing what
+they cannot do, and `web/build.sh` learnt where `wasm-opt` is. The three browsers' `done` lines
+are the same sentences they were. What it adds is outside the nine lists — the line a `--shot`
+run prints, above — and what it takes away is a line Factory's `--shot` used to print after the
+picture had already been taken (`worklog/2026-09-22-s11.md` §1).
 
 **S9 moved two**, on 2026-09-21 on the branch `s9`: the garden's window and page lists gained
 `FN writes a garden where \`save_file\` says` and `and the game says so rather than reporting

@@ -1385,3 +1385,43 @@ release、窓なし、2026-09-21。
 **出荷するスクリプトの 20 倍**が利用者のものである。3,000 台（どの地図も持てない数）でも 2.8 倍。
 **噛んだのを 1 回だけ見た**: 3,000 台の走行の**最初の報告**に 39,045 命令のフレームが 1 つあった
 （全台が起動するフレーム）。予算が仕事をして、残りは次のフレームに回った — 正しい振る舞いである。
+
+---
+
+## 10. S11（2026-09-22）— 設定が断る数と、断らずに縛っている数
+
+計画書 §6 の S11 (2)。**既定値は 1 つも動いていない。** 動いたのは「店が書いた値を黙って別の数に
+すり替えていた所」で、そこは既定値が立ち、断りが log に出るようになった
+（`games_shell::Settings::positive` / `counted`、`SettingsRefusalsPlugin`）。
+拾い方と全一覧は `docs/worklog/2026-09-22-s11.md` §2。
+
+### 10.1 床そのものは数である — どこに置いたか
+
+`counted(key, least, default)` の `least` は**呼ぶ側の数**である。同じ「個数」でも床の理由が違う:
+
+| 床 | どこ | 理由（コードのコメント） |
+|---|---|---|
+| 0 | `start_plants` / `start_beetles` / `start_rabbits` / `start_trees` / `start_rocks`、`edge_trees`、`separate_passes`、`look_gait_blend_ms`、`hud_bar_ticks`、`script_budget`（3 本）、`world_script_budget`、`stress_items` / `stress_arms` | **無いことは頼める**（岩の無い庭、目盛りの無いバー、何も走らせない VM）。頼めないのは 1.5 個と −3 個 |
+| 1 | `light_shadow_cascades`、`start_tries`、`look_floor_pattern`、`window_width` / `window_height`（Battle と Factory） | 0 だと物そのものが無くなる（影の無い影、`Vec2::ZERO` に置かれる生き物、0 で割る床の模様、幅 0 の窓）|
+| 2 | `sky_rings` | ドームの輪 |
+| 3 | `sky_sides` | 多角形の辺。**S11 まではここまで黙って持ち上げていた** |
+
+`positive(key, default)`（0 より大きい）: `checks_instructions_a_frame`、`camera_half_height`、
+3 本の `headless_seconds` と `shot_seconds`。
+
+### 10.2 断らずに縛っている数（S11 は意味を変えていない）
+
+| 数 | どこ | 縛り | 出どころ・理由 |
+|---|---|---|---|
+| `night` の範囲 | `garden/src/main.rs` | `.clamp(light_dial_min, light_dial_max)` | **理由あり**: ダイヤルの範囲そのもの。ダイヤルが表示できない値を店から入れても意味が無い |
+| `--eye` の範囲 | `garden/src/main.rs` | `.clamp(eye_at.zoom_min, eye_at.zoom_max)` | **理由あり**: カメラ自身の範囲。店ではなく引数 |
+| `inserter_stagger` の床 0 | `factory/src/main.rs` | `.max(0.0)` | **理由あり**（S11 でコメントに書いた）: 負の散らしと散らし無しは同じ走行なので、すり替えたものが無い |
+| `script_frame_time_ms` ≤ 0 | 3 本 | `None`（時計を持たない） | **理由あり**: rubevy の意味のある指定。断ってはいけない |
+| `vm_regs_frames` / `vm_value_chars` / `code_rows` / `code_chars` の床 | `crates/rubevy-egui` | `.max(0.0)` / `.max(1.0)` | **口が届かない**: `rubevy-egui` は設計上 `Settings` を知らない（S4a）。S11 は触っていない |
+
+### 10.3 出どころ不明のまま残った数（S11 が触った行の隣にあるもの）
+
+| 数 | どこ | 何 | 出どころ |
+|---|---|---|---|
+| 2.0 秒 | `garden/src/main.rs` の `take_shot` | 絵を頼んでからファイルが書かれるまで待つ猶予 | **不明**。3 本で 2.0 / 1.0 / 1.0 と違うが、違う理由はどこにも書かれていない。S11 は動かしていない |
+| 1.0 秒 | `sabibots/src/main.rs`、`factory/src/main.rs` の `take_shot` | 同上 | **不明** |
