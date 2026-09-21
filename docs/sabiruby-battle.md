@@ -238,6 +238,22 @@ thinking bar), `look_life_warn` / `look_life_low` (where the health bar changes 
 `look_blast_down` / `_span`, `look_blast_hit` / `_span`, `look_heat_memory`, `look_floor_tile`,
 `look_floor_pattern`, `window_width` / `window_height`.
 
+**And since 2026-09-21 (S9) the rest of the drawing**, which until then was written into the
+systems that drew it: `look_bullet_size` / `_span` (how large a shot is drawn),
+`look_turret_width` / `_height` and `look_turret_team3_r` / `_g` / `_b` /
+`look_turret_team4_*` (the barrel, and the tints the two teams Kenney did not draw a barrel for
+get), `look_downed_hull_*` / `look_downed_turret_*` (what a wreck is greyed to),
+`look_nameplate_font` / `_scale` / `_shadow_alpha` / `_nudge`, `look_plate_selected_*` /
+`look_plate_down_*` (the name over a robot the editor is showing, and over a wreck), and
+`look_bar_full_color_*` / `look_bar_warn_color_*` / `look_bar_low_color_*` /
+`look_bar_back_alpha` (the health bar). A colour is three keys and not one string, because
+reading a colour out of a text file would need a parser and three numbers need none.
+
+**What is drawn in front of what is not a setting.** The Battle is 2D, so a z coordinate is the
+stacking order and nothing else — sand, wall, tanks, barrels, shots, blasts, bars, names — and
+the order is the invariant. There is no screen and no taste for which putting the sand over the
+tanks is right.
+
 Two more say what the scripts are allowed: `script_budget` (instructions a frame for the whole VM)
 and `script_frame_time_ms`. Left out, they are rubevy's own defaults, which is what this game has
 always run on. And three are the defaults of flags: `headless_seconds`, `shot_file`,
@@ -251,6 +267,18 @@ The 0.3 s a handler has to answer a hit in, the half second a wreck is given bef
 counted: those are in `src/main.rs`, beside the check that uses them, because they are what is
 being measured rather than what the game plays by. Where a check needs one of the match's numbers
 it reads the match's — "every robot starts with full health" asks the match what full health is.
+
+**The 0.3 s is a floor and not the whole window** (S9). A hit's window is 0.3 s *or* the frames
+the delivery costs, whichever is longer: the hit is published after the frame's tick, the
+handler's turn comes in the next frame's, and the check is not ordered against the chain that
+answers its `act` — two frames, measured at exactly two in 105 hits of four quiet headless runs.
+A page drawing four frames a second holds *one* frame in 0.3 s, which is why `?selftest` in a
+large browser window failed both of these lines while a small one passed. The bound on the wait
+is `2 + ceil(script_budget / 45,600)` — the shape the garden's checks took in S7 — and the swerve
+a hit has to produce follows the window the hit was actually given, so a wider window asks for
+proportionally more of a turn rather than for the same one after three times as long.
+`SABIBOTS_HANDLER_FRAMES=N`, or `?selftest&handler_frames=N` in a page, hands the checks another
+bound; it is how the measurement above was taken where the fault shows.
 
 `docs/numbers.md` §4 and §5 are the whole list, with where each value came from (which, for most
 of the tank, is nowhere).

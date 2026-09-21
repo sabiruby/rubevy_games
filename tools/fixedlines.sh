@@ -25,8 +25,19 @@
 # Numbers are blanked because almost every sentence carries one (a time, a count, a distance) and
 # none of them is the same twice. A number that *is* the point of a check is checked by the check,
 # which is what the verdict in front of the sentence says.
+#
+# **The carriage return goes first** (S9). `docker/run.sh` runs a window's game on a TTY (`-t`), so
+# every line of that run ends in CR, and a CR is part of the line `grep -o` cuts out: the sorted
+# list that comes out then differs from a PC run's on every single line, and a `diff` of the two
+# says so — thirty-two lines changed, none of them changed. Until S9 the answer was a sentence in
+# `docs/verification/selftest-lines.md` telling the reader to pipe the log through `tr -d '\r'`
+# first, which is a tool asking to be mended: the comparison this script exists to make is
+# precisely the one between a window's run and a PC's. A log that never had a CR in it is not
+# touched by this, so what the script prints for every run compared before S9 is unchanged.
 set -euo pipefail
-grep -oh 'selftest: .*' "$@" \
+cat "$@" \
+  | tr -d '\r' \
+  | grep -o 'selftest: .*' \
   | sed 's/ color: [a-z#].*$//' \
   | grep -E 'selftest: (ok  |FAIL|--  |done)' \
   | grep -v 'of the hit at' \
