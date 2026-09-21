@@ -62,11 +62,19 @@ the ground** until there is.
 ## What one step of the factory is
 
 `factory/src/belts.rs`, and the tests at the bottom of it run the whole of it with no `App` at
-all. A belt tile is one unit long and an item on it is a number in `0..=1`: how far through that
-tile it has come. A lane is the items on one tile, front first, and **every item is at least a
-gap behind the one in front of it**. That invariant is the model: carrying is adding a step to
-each number, jamming is a number that cannot grow, merging is two tiles handing items to one and
-each finding the gap the other left.
+all. A belt tile is **sixteen steps** long and an item on it is a whole number of them: how far
+through that tile it has come, one step to one pixel of the art. A lane is the items on one tile,
+front first, and **every item is at least a gap behind the one in front of it**. That invariant is
+the model: carrying is adding a step to each number, jamming is a number that cannot grow,
+merging is two tiles handing items to one and each finding the gap the other left.
+
+The steps are F2a's; F1 held the position as a fraction of a tile and the fraction is what made
+"a jammed tile holds one more than the gaps that fit" a statement about `f32` rather than about
+the factory (below). What a whole number of steps buys is that the sentence is now true of every
+gap a belt can have, that a frame's leftover fraction of a step is carried rather than rounded —
+so the same seconds carry an item the same distance at five frames a second and at sixty — and
+that an item's place on the screen is a pixel of the art rather than a multiply and a rounding
+away from one.
 
 Four passes, and their order is the model:
 
@@ -248,17 +256,18 @@ the file, which is the rule S5b-2 set for SabiRuby Battle's match model and the 
 
 ```ruby
 item :iron_ore,   icon: 0
-belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2.0
+belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2
 miner :drill, seconds_per_item: 1.0, digs: :iron_ore
 chest :crate, capacity: 60
+ore :patch, per_tile: 60
 machine :furnace,   size: [1, 1], sprite: [109],                speed: 1.0
 machine :assembler, size: [2, 2], sprite: [138, 139, 140, 141], speed: 1.0
 recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made_in: :furnace
 recipe :gear,       in: { iron_plate: 2 }, out: { gear: 1 },     time: 1.0, made_in: :assembler
 ```
 
-**Six words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
-`miner` and `chest` are the three fittings the world has built in, which no recipe makes and no
+**Seven words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
+`miner`, `chest` and `ore` are the fittings the world has built in, which no recipe makes and no
 machine makes them in, and each has numbers of its own with names of its own. One `machine` shape
 with five optional fields would let `capacity:` on a furnace deserialize perfectly and be refused
 afterwards by hand-written code; a word each means **serde** refuses it, at the line — which is
@@ -289,15 +298,16 @@ camera_half_height=150
 camera_snap_zoom=1
 window_width=1600
 window_height=900
-ore_per_tile=60
 ore_patch_radius=3
 ```
 
-**Why the two `ore_` numbers did not go into `data.rb` with the rest.** They are how the world is
-*laid out* before anybody plays it: `Ore::laid_out` reads them once and one step of the factory
-reads neither. And the smallest map the four patches fit on is derived from
-`ore_patch_radius` — which is wanted in `main`, **before there is a VM to have read any Ruby
-with**. That is where the line got drawn.
+**Why `ore_patch_radius` did not go into `data.rb` with the rest.** The smallest map the four
+patches fit on without touching the border is derived from it, and that floor is wanted in
+`main`, **before there is a VM to have read any Ruby with**. That is where the line is drawn, and
+F2a is where it got drawn in the right place: F2 kept `ore_per_tile` on this side of it too, for
+a reason that only fitted the radius ("the world's layout, read once"), and the cost was that
+"a tile of ore is a chest's worth" spanned two files, so moving the chest moved nothing. It is
+`ore :patch, per_tile: 60` in `data.rb` now, next to the chest it is a chest's worth of.
 
 **A number that is not more than zero is refused**, said where it is written, and the game does
 not start:
@@ -310,15 +320,20 @@ data.rb:6: -1 is not more than zero (TypeError)
 A belt speed of zero is not a slow belt and a gap of zero is not a crowded tile; both are a
 division. The check is in the declaration rather than inside the arithmetic, because a floor
 inside the arithmetic (`1 / items_per_tile.max(0.001)`) is a number with nowhere to have come
-from. Six kinds of mistake are checked, by a test and again by the checks of a running game —
+from. Seven kinds of mistake are checked, by a test and again by the checks of a running game —
 which is how the browser is covered, since a page's compiler names every program `playground.rb`
 and the name has to be put back before a player sees it.
 
-**And a gap is only as exact as `f32` is.** "A jammed tile holds one more than `items_per_tile`"
-is true of the default, and of everything whose gap divides a tile exactly — but at
-`items_per_tile = 3` a jammed tile holds three, not four, because three gaps of `f32(1/3)` are a
-hair longer than a tile. Nothing is lost and no two items are ever closer than a gap; the tile
-just buffers one less. The test at the bottom of `src/belts.rs` runs seven values and says which.
+**And a gap has to divide a tile** — so `items_per_tile` is one of 1, 2, 4, 8 and 16, and the
+rest are refused at their line by a sentence that names what can be written. A tile is sixteen
+steps and a gap is `16 ÷ items_per_tile` of them; a gap that does not come out whole is not a
+gap. This is the one place F2a narrowed what a data file may say, and what it bought is that
+"a jammed tile holds one more than the gaps that fit" is exactly true at all five of them, with
+every item exactly a gap behind the one in front. F1 measured what the fraction cost instead:
+at `items_per_tile = 3` a jammed tile held three and not four, and at 5 it held six — the count
+was decided by which way a chain of roundings fell, not by the number. The test at the bottom of
+`src/belts.rs` runs all five and asserts the positions, and the one in `src/data.rs` runs the
+refusals.
 
 **Four numbers are not settings**, because moving them does not draw the same picture differently
 — it draws a wrong one, or none: the pack's 16 px, how many tiles the sheet has, how big an
@@ -391,7 +406,7 @@ seconds — a miner's dig plus four tiles of belt is 3.0 s with what `data.rb` s
 a furnace's belt and craft and belt is 3.5 s, measured 3.5 — and they check that what came out of
 the ground is either in a chest or on a belt.
 
-**And they put six broken data files through the door the real one went through**, in the game's
+**And they put seven broken data files through the door the real one went through**, in the game's
 own VM, to prove that each is refused at the line it is broken on. That check runs in a page as
 well, which is the point of it being a check and not only a test: a browser's compiler names
 every program `playground.rb`.

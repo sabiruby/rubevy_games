@@ -10,19 +10,24 @@
 //! recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made_in: :furnace
 //! ```
 //!
-//! **The port is `sabiruby_serde::declare`**, and the whole of the reading is six of them:
+//! **The port is `sabiruby_serde::declare`**, and the whole of the reading is seven of them:
 //! `Declarations::<T>::install(vm).define(vm, "item")` puts a method on `Object`, the script calls
 //! it, and each call's keyword arguments are deserialized into a `T` **inside the native** — which
 //! is what puts the error on the declaration's own line.
 //!
-//! # Why six words and not three
+//! # Why seven words and not three
 //!
-//! The plan names `item`, `recipe` and `machine`, which are about *what is made*. The three
-//! fittings the world has built in — the belt, the miner and the chest — are made by no recipe and
-//! in no machine, and each has numbers of its own with names of its own. Giving them one `machine`
-//! shape with five optional fields would mean `capacity:` on a furnace deserializing perfectly and
-//! being refused afterwards by hand-written code; giving each its own word means **serde** refuses
-//! it, at the line, which is the whole reason the declarations are read through serde at all.
+//! The plan names `item`, `recipe` and `machine`, which are about *what is made*. The fittings the
+//! world has built in — the belt, the miner, the chest and the ore in the ground — are made by no
+//! recipe and in no machine, and each has numbers of its own with names of its own. Giving them
+//! one `machine` shape with five optional fields would mean `capacity:` on a furnace deserializing
+//! perfectly and being refused afterwards by hand-written code; giving each its own word means
+//! **serde** refuses it, at the line, which is the whole reason the declarations are read through
+//! serde at all.
+//!
+//! **`ore` is F2a's**, and it is a word rather than a field on `miner` for exactly that reason:
+//! how much a tile of ground holds is not one of the drill's numbers, and putting it there would
+//! be the `capacity:`-on-a-furnace shape again ([`OreDecl`]).
 //!
 //! # Where an error says it is
 //!
@@ -119,8 +124,8 @@ struct MachineDecl {
 struct BeltDecl {
     #[serde(deserialize_with = "more_than_zero")]
     tiles_per_second: f32,
-    #[serde(deserialize_with = "more_than_zero")]
-    items_per_tile: f32,
+    #[serde(deserialize_with = "fits_a_tile")]
+    items_per_tile: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -137,6 +142,23 @@ struct MinerDecl {
 struct ChestDecl {
     #[serde(deserialize_with = "at_least_one")]
     capacity: u32,
+}
+
+/// **What is in the ground**, which is a fitting of the world like the three above it: no recipe
+/// makes it and no machine makes it in.
+///
+/// F2 left `ore_per_tile` in `factory.settings.txt` because its neighbour — how *wide* a patch is
+/// — is wanted in `main`, before there is a VM to have read any Ruby with, and the two were one
+/// number in the same struct. They are not one number: how much a tile holds is a number of play
+/// (a tile of ore is a chest's worth, which is a minute of one miner, and all three of those live
+/// in this file now), while how wide a patch is is where the map's own smallest size comes from.
+/// So this word holds the first and the setting keeps the second, and each says where the other
+/// is (`ruby/data.rb`, `docs/numbers.md` §9.2).
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+struct OreDecl {
+    #[serde(deserialize_with = "at_least_one")]
+    per_tile: u32,
 }
 
 /// **A number the factory divides by or runs on has to be more than zero**, and this is where
@@ -158,6 +180,33 @@ fn more_than_zero<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
 fn at_least_one<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let n = u32::deserialize(d)?;
     if n >= 1 { Ok(n) } else { Err(D::Error::custom("this counts items, so it is at least 1")) }
+}
+
+/// **How many items fit on one tile of belt**, which is the one number in the file that cannot be
+/// anything it likes.
+///
+/// An item's place on a belt is a whole number of steps and a tile is [`crate::TILE_PX`] of them
+/// (`crate::belts`), so the gap between two items — a tile's steps over this number — is only a
+/// gap if the division comes out. **The refusal names what can be written**, because "3 will not
+/// do" is a thing to argue with and "it is one of 1, 2, 4, 8, 16" is a thing to type.
+///
+/// It is read as a float and then required to be whole, rather than being a `u32` and letting
+/// serde refuse the type: every other number in `data.rb` is written with a decimal point, so
+/// `items_per_tile: 2.0` is what a player's hand writes, and `2.5` deserves this sentence rather
+/// than "invalid type: floating point".
+fn fits_a_tile<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let asked = f32::deserialize(d)?;
+    let whole = asked as u32; // saturating, so a negative or a huge number lands off the list
+    if asked.is_finite() && whole as f32 == asked && whole >= 1 && crate::TILE_PX.is_multiple_of(whole) {
+        return Ok(whole);
+    }
+    let fits: Vec<String> =
+        (1..=crate::TILE_PX).filter(|n| crate::TILE_PX.is_multiple_of(*n)).map(|n| n.to_string()).collect();
+    Err(D::Error::custom(format!(
+        "an item's place on a belt is one of the {} steps a tile is long, so items_per_tile is one of {} — not {asked}",
+        crate::TILE_PX,
+        fits.join(", ")
+    )))
 }
 
 /// `{ iron_ore: 1 }` — and none of the counts is zero, because a recipe that consumes none of
@@ -465,6 +514,7 @@ pub fn read_the_declarations(
     let belts = Declarations::<BeltDecl>::install(vm).define(vm, "belt");
     let miners = Declarations::<MinerDecl>::install(vm).define(vm, "miner");
     let chests = Declarations::<ChestDecl>::install(vm).define(vm, "chest");
+    let ores = Declarations::<OreDecl>::install(vm).define(vm, "ore");
 
     let ran = vm.load_and_run(&bytes);
 
@@ -477,20 +527,30 @@ pub fn read_the_declarations(
     let belts = belts.take(vm);
     let miners = miners.take(vm);
     let chests = chests.take(vm);
+    let ores = ores.take(vm);
 
     if let Err(e) = ran {
         return Err(Trouble::from_raise(vm, &e));
     }
 
-    let tables = tables_of(source, items, recipes, machines, belts, miners, chests)?;
+    let tables = tables_of(source, items, recipes, machines, belts, miners, chests, ores)?;
     Ok(tables)
+}
+
+/// `a` or `an`, so that a sentence about a word the file might have written reads like a sentence.
+/// Four of the words are consonants and `ore` is not.
+fn article(word: &str) -> &'static str {
+    match word.chars().next() {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
+    }
 }
 
 /// One of a word that has to be declared exactly once.
 fn exactly_one<T>(source: &str, word: &str, mut all: Vec<(String, T)>) -> Result<(String, T), Trouble> {
     match all.len() {
         1 => Ok(all.remove(0)),
-        0 => Err(Trouble { at: None, what: format!("nothing declares a {word}") }),
+        0 => Err(Trouble { at: None, what: format!("nothing declares {} {word}", article(word)) }),
         n => {
             // the second one is the one that is too many, and it is the one to point at
             let (name, _) = &all[1];
@@ -512,6 +572,7 @@ fn tables_of(
     belts: Vec<(String, BeltDecl)>,
     miners: Vec<(String, MinerDecl)>,
     chests: Vec<(String, ChestDecl)>,
+    ores: Vec<(String, OreDecl)>,
 ) -> Result<(Data, Rules), Trouble> {
     if items.is_empty() {
         return Err(Trouble { at: None, what: "nothing declares an item".into() });
@@ -587,6 +648,7 @@ fn tables_of(
     let (_, belt) = exactly_one(source, "belt", belts)?;
     let (miner_name, miner) = exactly_one(source, "miner", miners)?;
     let (_, chest) = exactly_one(source, "chest", chests)?;
+    let (_, ore) = exactly_one(source, "ore", ores)?;
     let Some(&digs) = by_item.get(&miner.digs) else {
         return Err(Trouble {
             at: line_of(source, "miner", &miner_name),
@@ -600,6 +662,7 @@ fn tables_of(
         mine_seconds: miner.seconds_per_item,
         chest_capacity: chest.capacity,
         digs,
+        ore_per_tile: ore.per_tile,
     };
     let data = Data {
         items: made_items,
@@ -739,9 +802,10 @@ mod tests {
         "machine :furnace, size: [1, 1], sprite: [109], speed: 1.0\n",                // 3
         "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n",         // 4
         "       time: 2.0, made_in: :furnace\n",                                      // 5
-        "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2.0\n",               // 6
+        "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",                 // 6
         "miner :drill, seconds_per_item: 1.0, digs: :iron_ore\n",                     // 7
         "chest :crate, capacity: 60\n",                                               // 8
+        "ore :patch, per_tile: 60\n",                                                 // 9
     );
 
     #[test]
@@ -757,7 +821,7 @@ mod tests {
         assert_eq!(data.machines[0].recipes, vec![0], "the machine knows what is made in it");
         // and the four numbers of play that used to be settings
         assert_eq!(rules.belt_tiles_per_second, 2.0);
-        assert_eq!(rules.items_per_tile, 2.0);
+        assert_eq!(rules.items_per_tile, 2);
         assert_eq!(rules.mine_seconds, 1.0);
         assert_eq!(rules.chest_capacity, 60);
         assert_eq!(rules.digs, 0, "the miner brings up the ore");
@@ -778,7 +842,7 @@ mod tests {
             // a machine no tiles wide
             (wrong("machine :furnace, size: [0, 1], sprite: [109], speed: 1.0\n", "machine :furnace, size: [1, 1], sprite: [109], speed: 1.0\n"), 3, "at least one tile"),
             // and a belt that does not move, which is the contract `Rules` states
-            (wrong("belt :conveyor, tiles_per_second: 0.0, items_per_tile: 2.0\n", "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2.0\n"), 6, "not more than zero"),
+            (wrong("belt :conveyor, tiles_per_second: 0.0, items_per_tile: 2\n", "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n"), 6, "not more than zero"),
         ];
         for (source, line, says) in cases {
             let trouble = read(&source).expect_err("this file is wrong");
@@ -789,6 +853,40 @@ mod tests {
                 trouble.say("data.rb")
             );
             assert!(trouble.say("data.rb").starts_with(&format!("data.rb:{line}: ")));
+        }
+    }
+
+    /// **The gaps a belt may have, and the sentence the rest are refused with** (F2a).
+    ///
+    /// An item's place on a belt is a whole number of the `TILE_PX` steps a tile is long, so a gap
+    /// of `TILE_PX ÷ items_per_tile` is only a gap when the division comes out: 1, 2, 4, 8 and 16
+    /// are what a file may write. The three refused here are the three kinds of wrong — a whole
+    /// number that does not divide (3), one that is not whole (2.5), and one that is not a count
+    /// at all (0) — and what is asserted about the message is that **it names what can be
+    /// written**, because that is what the player needs and "3 will not do" is not it.
+    ///
+    /// The other half of this is in `belts.rs`, where a jam at each of the five is counted.
+    #[test]
+    fn the_gap_between_items_has_to_divide_a_tile() {
+        for fits in [1u32, 2, 4, 8, 16] {
+            let source = GOOD.replace("items_per_tile: 2", &format!("items_per_tile: {fits}"));
+            let (_, rules) = read(&source).expect("a gap that divides a tile");
+            assert_eq!(rules.items_per_tile, fits);
+            assert!(crate::TILE_PX.is_multiple_of(rules.items_per_tile), "and the gap comes out whole");
+        }
+        // and the same number written the way the rest of the file writes its numbers
+        let (_, rules) = read(&GOOD.replace("items_per_tile: 2", "items_per_tile: 2.0")).expect("2.0");
+        assert_eq!(rules.items_per_tile, 2, "a player who writes it as a float means the same thing");
+
+        for asked in ["3", "5", "2.5", "0"] {
+            let source = GOOD.replace("items_per_tile: 2", &format!("items_per_tile: {asked}"));
+            let trouble = read(&source).expect_err("{asked} is not a gap");
+            assert_eq!(trouble.at, Some(6), "{asked}: {}", trouble.say("data.rb"));
+            assert!(
+                trouble.what.contains("1, 2, 4, 8, 16"),
+                "{asked}: the refusal has to say what can be written — {:?}",
+                trouble.what
+            );
         }
     }
 
@@ -827,7 +925,7 @@ mod tests {
     fn a_name_declared_twice_is_refused_at_the_second_one() {
         let source = format!("{GOOD}item :iron_ore, icon: 7\n");
         let trouble = read(&source).expect_err("declared twice");
-        assert_eq!(trouble.at, Some(9), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(10), "{}", trouble.say("data.rb"));
         assert!(trouble.what.contains("already declared"), "{}", trouble.what);
     }
 
@@ -839,14 +937,18 @@ mod tests {
         assert!(trouble.say("data.rb").starts_with("data.rb:1: "), "{}", trouble.say("data.rb"));
     }
 
-    /// **The three fittings are declared exactly once each**, which is the shape F2 has room for.
+    /// **The four fittings are declared exactly once each**, which is the shape the world has room
+    /// for. `ore` is F2a's, and it is one of them for the same reason the other three are: the
+    /// ground is a thing of the world with a number of its own, and the game has one ground.
     #[test]
-    fn the_world_has_one_belt_one_miner_and_one_chest() {
+    fn the_world_has_one_belt_one_miner_one_chest_and_one_ore() {
         let none = GOOD.replace("chest :crate, capacity: 60\n", "");
         assert_eq!(read(&none).expect_err("no chest").what, "nothing declares a chest");
-        let two = format!("{GOOD}belt :fast, tiles_per_second: 8.0, items_per_tile: 2.0\n");
+        let none = GOOD.replace("ore :patch, per_tile: 60\n", "");
+        assert_eq!(read(&none).expect_err("no ore").what, "nothing declares an ore");
+        let two = format!("{GOOD}belt :fast, tiles_per_second: 8.0, items_per_tile: 2\n");
         let trouble = read(&two).expect_err("two belts");
-        assert_eq!(trouble.at, Some(9), "{}", trouble.say("data.rb"));
+        assert_eq!(trouble.at, Some(10), "{}", trouble.say("data.rb"));
     }
 
     /// **The same VM reads a second file.** This is what F5's reload will be and what the checks
