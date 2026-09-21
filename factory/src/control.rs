@@ -232,6 +232,13 @@ pub struct TheControl {
     said_won: bool,
 }
 
+impl TheControl {
+    /// `ruby/control.rb`, or whatever has been applied over it — for the editor and the save.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
 /// **Another control.rb, please** — the game's own message for "run this text instead", which the
 /// checks write and F5's editor will.
 ///

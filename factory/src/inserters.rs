@@ -171,6 +171,29 @@ impl Minds {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// The text applied to every arm, where there is one — for the save file (F5).
+    pub fn everyone(&self) -> Option<&str> {
+        self.everyone.as_deref()
+    }
+
+    /// The arms with a script of their own, **in tile order**, which is what makes two saves of
+    /// one factory the same text (a `HashMap` walks in whatever order it likes).
+    pub fn each_own(&self) -> Vec<(u32, String)> {
+        let mut each: Vec<(u32, String)> =
+            self.own.iter().map(|(t, text)| (*t as u32, text.clone())).collect();
+        each.sort_by(|a, b| a.0.cmp(&b.0));
+        each
+    }
+
+    /// **What a loaded factory was running.** The file is not asked for `inserter.rb` itself —
+    /// that would put an old copy of the file back over one the player has since edited — so what
+    /// comes back is the two kinds of text that were only ever in memory.
+    pub fn restore(&mut self, everyone: Option<String>, own: Vec<(u32, String)>) {
+        self.everyone = everyone;
+        self.own = own.into_iter().map(|(t, text)| (t as usize, text)).collect();
+        self.generation += 1;
+    }
 }
 
 /// **What the arms are waiting on, and which of them have stopped.**

@@ -21,6 +21,7 @@
 #   idle            wait one swing's worth, and let everyone else have the frame
 #   swing_seconds   how long a swing takes (`inserter :arm, seconds_per_item:` in data.rb)
 #   items           every item name `data.rb` declares
+#   memory          a Hash of your own that **survives a save** (`@memory`)
 #   log "…"         a line in the game's log, with this inserter's name in front
 #
 # **The three questions cost no frame.** `behind`, `holding` and `front_takes?` are answered
@@ -127,6 +128,19 @@ class Inserter
     at.nil? ? -1 : at
   end
 
+  # **What this arm remembers, and the one thing of yours a save file keeps.**
+  #
+  # A save cannot hold a task half way through a line, so a loaded game starts every `run` again
+  # from the top (`docs/factory.md`). Anything the arm must not forget across that goes in here:
+  # it is written into the save beside the arm's hand and put back before the script starts.
+  #
+  # It is a Hash, and what may go in it is what JSON can carry — numbers, strings, true, false,
+  # nil, and Arrays and Hashes of those. An entity or a Proxy in here is not saved and says so in
+  # the log. The garden's `memory` is the same word for the same thing.
+  def memory
+    @memory ||= {}
+  end
+
   def log(text)
     Rubevy.log "#{name}: #{text}"
   end
@@ -147,6 +161,12 @@ def run_inserter
   klass = $inserter_class
   raise "this file defines no inserter" if klass.nil?
   being = klass.new
+  # **Where the game finds this arm's object.** The save reads `@memory` off it and puts one back
+  # before `run` is reached, exactly as the garden reads a creature's (`crate::save`). A task's
+  # own `self` is the VM's one `main` object, shared by every task, so an `@ivar` written at the
+  # top level of an inserter's file would be the same variable in every other arm's — which is
+  # why there is an object per script at all.
+  Task.current.instance_variable_set(:@being, being)
   # **Not all at once.** A thousand inserters started in the same frame would otherwise all wake
   # on the same frame for ever after — every one of them sleeping exactly one swing between looks
   # — and rubevy measured what that costs: three thousand scripts on one `sleep` put the 95th
