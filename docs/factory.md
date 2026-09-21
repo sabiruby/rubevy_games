@@ -66,11 +66,11 @@ log. The evidence that it was fixed is a **screenshot with its pixels counted**,
 
 **The fix is to choose the number of tiles.** `tools/factory-tileset.py` builds the one sheet the
 game loads: a vertical strip of 16 px squares, Kenney's 132 in the pack's own order and
-numbering, then the twelve `tools/factory-belts.py` draws, and **blank tiles on the end until
-the count is not a multiple of six** — 145 today.
+numbering, then the four `tools/factory-belts.py` draws, and **blank tiles on the end until
+the count is not a multiple of six** — 136 today, which needs none of them.
 The game reads the count back out of the loaded image and its checks fail if it ever becomes a
-multiple of six again, which is the trap this would otherwise be for whatever F1 adds to the
-sheet.
+multiple of six again, which is the trap this would otherwise be for whatever a later stage adds
+to the sheet.
 
 The sheet is a strip rather than a grid because a strip is what lets the script choose the count:
 `ImageArrayLayout::RowHeight { pixels: 16 }` makes one layer per 16 px of height, and a grid's
@@ -104,9 +104,8 @@ it was wrong is marked.
 | 73, 85, 97 | wooden **crates**, three sizes |
 | 114 | a **gear** |
 | 6, 74, 86, 90, 91 | a bench, two tanks, and an orange head on a stand |
-| 132–139 | **(i)** F0a's four three-quarter corners, two frames each (`tools/factory-belts.py`) |
-| 140–143 | **(ii)** F0a's straight and corner seen from above, two frames each |
-| 144 | blank — the padding tile the paragraph above is about |
+| 132, 133 | a conveyor **straight**, seen from above, frames A and B (`tools/factory-belts.py`) |
+| 134, 135 | a conveyor **corner** — in at the left, out at the top — frames A and B |
 
 **What the pack does not have**, and what `tools/factory-belts.py` is for. The survey said the
 pack had no left and no down; reading the tiles pixel by pixel says otherwise:
@@ -116,10 +115,18 @@ pack had no left and no down; reading the tiles pixel by pixel says otherwise:
 * tile 16 (running up) is **symmetric left to right and has no front face at all** — it is
   already drawn from straight above — so **down is it mirrored vertically**.
 
-So the only thing genuinely missing is **the corner**, and F0a draws it twice over, in the two
-styles the author is choosing between. The screenshots are in `worklog/2026-09-21-factory-F0.md`
-and `src/belt_sample.rs` is the arrangement they are of; F1 keeps one style and deletes both the
-other one and that file.
+So the only thing genuinely missing is **the corner**, and F0a drew it twice over, in the two
+styles the author was choosing between: (i) the pack's three-quarter look, where a belt running
+sideways has a front face under it and a corner has to change width as it turns — four pictures —
+and (ii) everything seen from straight above — one straight and one corner, turned.
+
+**The author chose (ii)** (2026-09-21), so the belts the game draws are the two above and their
+turns: `TileOrientation` makes four directions out of one straight and all eight corners out of
+one corner. The pack's own belt tiles (24–27, 4/16/28 and the railed ones) are **in the sheet and
+not used** — they are three-quarter pictures, and a belt from above is not one. The screenshots
+of both candidates, and what reading the pack's tiles pixel by pixel found, are in
+`worklog/2026-09-21-factory-F0.md` §6–§8; F1 deleted (i)'s four corners, the code that drew them,
+and `src/belt_sample.rs`, which was the arrangement the screenshots are of.
 
 ## The numbers
 
@@ -143,19 +150,20 @@ Two numbers are **not** settings, because moving them does not draw the same pic
 The budget, set here before F1 starts filling the sheet, the way the garden's models were
 (`CREDITS.md`, "against the plan's budget of 2 MB in ten"): **64 KB, in one sheet plus one
 licence text for each pack used.** Where it comes from: the sheet costs a **measured 67 bytes a
-tile** (9,662 bytes for 145, 2026-09-21), so even a sheet of 512 tiles — four times what is in it
-now, and more than Kenney's whole pack three times over — is about 34 KB. 64 KB is nearly twice
-that, and **27% of the smaller of the two games already here** (sabibots 234,202 B, garden
-322,924 B, `web.md`), which is the ceiling the plan sets.
+tile** (9,662 bytes for 145 at F0, and 66.6 for the 136 it has now that (i) is gone), so even a
+sheet of 512 tiles — nearly four times what is in it now, and more than Kenney's whole pack three
+times over — is about 34 KB. 64 KB is nearly twice that, and **27% of the smaller of the two games
+already here** (sabibots 234,202 B, garden 322,924 B, `web.md`), which is the ceiling the plan
+sets.
 
 | file | bytes |
 |---|---|
-| `factory/assets/tiles/factory-tiles.png` | 9,662 |
+| `factory/assets/tiles/factory-tiles.png` | 9,063 |
 | `factory/assets/tiles/LICENSE-kenney-tiny-factory.txt` | 569 |
-| **what the page carries** | **10,231 in 2 files**, 16% of the budget |
+| **what the page carries** | **9,632 in 2 files**, 15% of the budget |
 
 Not in the page: `factory/art/` — the pack as it came (4,452), its `Tilesheet.txt` (238), its
-licence (569) and the drawn belts (877) — 6,136 bytes of source that `web/build.sh` never copies.
+licence (569) and the drawn belts (330) — 5,589 bytes of source that `web/build.sh` never copies.
 
 ## The entry page
 

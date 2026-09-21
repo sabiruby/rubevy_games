@@ -50,9 +50,10 @@ KENNEY_ROWS = 11
 
 # Ours, appended after the pack's in this order. Each entry is (file, how many tiles across, how
 # many down); the file is read as a grid of `TILE` squares in the same row-major order.
-# F0a's conveyor sheet is the first thing in it: the corners Kenney's pack has none of, in the
-# two styles the author is choosing between (`tools/factory-belts.py`).
-OWN: list[tuple[str, int, int]] = [("belts.png", 12, 1)]
+# F0a's conveyor sheet is the first thing in it: the straight and the corner Kenney's pack has
+# none of, seen from straight above — the style the author chose on 2026-09-21
+# (`tools/factory-belts.py`).
+OWN: list[tuple[str, int, int]] = [("belts.png", 4, 1)]
 
 
 def tiles_of(path: pathlib.Path, columns: int, rows: int) -> list[Image.Image]:
