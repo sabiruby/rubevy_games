@@ -22,7 +22,7 @@ use games_shell::camera::CameraView;
 
 use crate::belts::{Lanes, Rules};
 use crate::grid::{Dir, Flow, Grid, Ore, What};
-use crate::items::{OnBelt, Pool};
+use crate::items::Pool;
 use crate::{Map, TILE_PX};
 
 // ---------------------------------------------------------------------------------------------
@@ -112,8 +112,7 @@ pub struct Chunks {
     pub buildings: Entity,
 }
 
-/// The item's picture, loaded once. A [`Sprite`] per item is what both ways of holding an item
-/// end up drawing, so the handle is shared rather than loaded per item.
+/// The item's picture, loaded once and shared by every sprite in the pool.
 #[derive(Resource, Debug)]
 pub struct Icons {
     pub ore: Handle<Image>,
@@ -243,11 +242,12 @@ pub fn draw_buildings(
 // The items
 // ---------------------------------------------------------------------------------------------
 
-/// **The lanes' items, drawn out of a pool of sprites.** There is no entity per item here: the
-/// pool is as long as the most items that have ever been on screen at once, and the rest are
-/// hidden rather than despawned, so a busy factory does not spawn and despawn thousands of
-/// entities a second.
-pub fn draw_items_from_lanes(
+/// **The items, drawn out of a pool of sprites.** There is no entity per item: the pool is as
+/// long as the most items that have ever been on screen at once, and the rest are hidden rather
+/// than despawned, so a busy factory does not spawn and despawn thousands of entities a second.
+///
+/// Which is also the reason the items are not entities at all (`src/items.rs`).
+pub fn draw_items(
     map: Res<Map>,
     grid: Res<Grid>,
     flow: Res<Flow>,
@@ -275,30 +275,6 @@ pub fn draw_items_from_lanes(
     for &entity in pool.sprites.iter().skip(places.len()) {
         if let Ok((_, mut visible)) = sprites.get_mut(entity) {
             *visible = Visibility::Hidden;
-        }
-    }
-}
-
-/// **The items that are entities, drawn where they say they are.** Each one gets its picture the
-/// first frame it is seen, which is also the only place a sprite is put on an item: a run with no
-/// window never does this and its items are three numbers each.
-pub fn draw_items_as_entities(
-    map: Res<Map>,
-    grid: Res<Grid>,
-    flow: Res<Flow>,
-    icons: Res<Icons>,
-    mut items: Query<(Entity, &OnBelt, Option<&mut Transform>)>,
-    mut commands: Commands,
-) {
-    for (entity, on, transform) in &mut items {
-        let at = on.tile as usize;
-        let Some(building) = grid.at(at) else { continue };
-        let place = crate::grid::item_at(&map, grid.tile_of(at), flow.came_in[at], building.dir, on.along);
-        match transform {
-            Some(mut transform) => transform.translation = place.extend(2.0),
-            None => {
-                commands.entity(entity).insert(item_sprite(&icons, place));
-            }
         }
     }
 }

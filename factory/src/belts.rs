@@ -12,8 +12,9 @@
 //! tiles handing items to one and each finding the gap the other left.
 //!
 //! **Why the positions are `f32` in a `Vec` and not a component on an entity.** Because the rule
-//! above needs *the item in front*, and an ECS query has no such thing — F1 measured both ways
-//! round (`src/items.rs`, `docs/worklog/2026-09-21-factory-F1.md`).
+//! above needs *the item in front*, and an ECS query has no such thing. F1 built both ways round
+//! and measured them at thousands of items before choosing (`src/items.rs`,
+//! `docs/worklog/2026-09-21-factory-F1.md` §3).
 //!
 //! **Where the numbers are.** [`Rules`] is a resource read out of `factory.settings.txt` at
 //! startup, and F2 moves the ones a player plays with into `ruby/data.rb`, which is what the data
@@ -102,9 +103,11 @@ impl Lanes {
 
 /// **What happened to the items this step**, in the order it happened.
 ///
-/// The stepping is written once and the game has two ways of holding an item (`src/items.rs`), so
-/// the one that keeps an entity per item replays this list to keep its entities in step with the
-/// lanes. Replaying it in order is what makes the two hold exactly the same factory.
+/// The counters on the other end of it are what a HUD and the checks read. It is a list rather
+/// than three numbers because F1's measurement had a second way of holding an item that replayed
+/// it to keep an entity per item in step with the lanes (`src/items.rs`), and an order is what
+/// that needed; the shape is worth keeping for the next thing that wants to watch the items
+/// rather than count them.
 #[derive(Debug, Default)]
 pub struct Moves(pub Vec<Move>);
 

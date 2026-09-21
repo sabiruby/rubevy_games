@@ -14,7 +14,7 @@
 //! |---|---|
 //! | `src/grid.rs` | the tiles, what is built on them, the ore, and which way an item arrives |
 //! | `src/belts.rs` | **the rule**: one step of the whole factory, and the tests of it |
-//! | `src/items.rs` | the two ways of holding an item, and the one measurement that chose |
+//! | `src/items.rs` | where an item lives, and the measurement that settled it |
 //! | `src/build.rs` | the keys and the click |
 //! | `src/draw.rs` | the two chunks, the sprites, and the zoom |
 //!
@@ -42,7 +42,7 @@ use rubevy::RubevyPlugin;
 use belts::{Lanes, Rules};
 use build::Hand;
 use grid::{Building, Dir, Flow, Grid, Ore, What};
-use items::{Holding, OnBelt, Tally};
+use items::Tally;
 
 // ---------------------------------------------------------------------------------------------
 // The two numbers that are not settings
@@ -74,9 +74,20 @@ const TILESET_LAYERS: u32 = 139;
 // The defaults, every one of which `factory.settings.txt` can move
 // ---------------------------------------------------------------------------------------------
 
-/// **How big the map is, in tiles each way.** Where it comes from is in `docs/numbers.md` §9.2
-/// and it is measured rather than chosen: a map the browser cannot keep up with is not a bigger
-/// map, and F1 measured how many items a browser carries at 60 frames a second.
+/// **How big the map is, in tiles each way. Still F0's provisional value**, and F1 could not
+/// settle it honestly — the plan (§3.7) says it comes from "how many machines have to fit", and
+/// two of the three things that would say are not known yet:
+///
+/// * **what the drawing can carry.** F1 measured the factory's own step at 16,000 items (0.3 ms,
+///   `docs/worklog/2026-09-21-factory-F1.md` §3), which is nowhere near a frame; what runs out
+///   first is the picture. Both renderers on the machine this was written on are **software**
+///   (lavapipe in the container, SwiftShader in the browser) and neither says anything about a
+///   real one: a browser there drew 900 belts at the same five frames a second with two items on
+///   them as with eighteen hundred.
+/// * **how many scripted inserters a frame holds**, which is F3's measurement.
+///
+/// So it stays where F0 put it, with the reason written down rather than a number invented to
+/// replace it (`docs/numbers.md` §9.2). A stress run sizes its own map and ignores this.
 const MAP_TILES: f32 = 32.0;
 
 /// **Half of how much world the window holds, top to bottom, in world units** — and one world
@@ -182,7 +193,8 @@ struct Shot {
 /// `--stress N` on a PC, `FACTORY_STRESS=N` in a shell, `?stress=N` in a page — the last of the
 /// three is why it is a number the checks' own reader understands rather than an argument: a page
 /// has no command line, and a measurement that cannot be taken in a browser is not a measurement
-/// of the browser.
+/// of the browser. It stays after F1 has used it: the next stage to wonder what a number costs
+/// can lay a loop and watch it rather than arguing.
 #[derive(Resource, Debug)]
 struct Stress {
     items: usize,
@@ -232,17 +244,6 @@ fn main() {
         ore_per_tile: settings.number("ore_per_tile").unwrap_or(60.0).max(1.0) as u32,
         ore_patch_radius: settings.number("ore_patch_radius").unwrap_or(3.0),
     };
-    // Which way the items are held. A word in the store or after `--holding`; in a page, where
-    // there is neither, the number 1 for entities (`?holding=1`).
-    let holding = args
-        .value("--holding")
-        .and_then(|word| Holding::from_word(&word))
-        .or_else(|| settings.get("items_holding").and_then(|word| Holding::from_word(&word)))
-        .or_else(|| {
-            games_shell::checks::asked_number("FACTORY_HOLDING")
-                .map(|n| if n >= 1.0 { Holding::Entities } else { Holding::Lanes })
-        })
-        .unwrap_or(Holding::Lanes);
     let stress = args
         .value("--stress")
         .and_then(|n| n.parse::<f32>().ok())
@@ -338,38 +339,22 @@ fn main() {
                 (draw::draw_floor, draw::draw_buildings).after(FactorySet::Step),
             )
             .add_systems(Update, draw::snap_zoom.after(CameraSet::Drive));
-            match holding {
-                Holding::Lanes => {
-                    app.add_systems(Update, draw::draw_items_from_lanes.after(FactorySet::Step));
-                }
-                Holding::Entities => {
-                    app.add_systems(Update, draw::draw_items_as_entities.after(FactorySet::Step));
-                }
-            }
+            app.add_systems(Update, draw::draw_items.after(FactorySet::Step));
         }
     }
 
     app.insert_resource(map)
         .insert_resource(settings)
         .insert_resource(rules)
-        .insert_resource(holding)
         .init_resource::<Hand>()
         .init_resource::<Flow>()
         .init_resource::<Tally>()
-        .init_resource::<items::Sorting>()
         .add_systems(Startup, lay_the_land)
         .add_systems(
             Update,
             (build::clicks, build::follow_the_flow).chain().before(FactorySet::Step),
         );
-    match holding {
-        Holding::Lanes => {
-            app.add_systems(Update, items::run_with_lanes.in_set(FactorySet::Step));
-        }
-        Holding::Entities => {
-            app.add_systems(Update, items::run_with_entities.in_set(FactorySet::Step));
-        }
-    }
+    app.add_systems(Update, items::run_the_factory.in_set(FactorySet::Step));
     if stress > 0 {
         app.insert_resource(Stress {
             items: stress,
@@ -435,10 +420,8 @@ fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>) {
 fn lay_the_snake(
     stress: Res<Stress>,
     rules: Res<Rules>,
-    holding: Res<Holding>,
     mut grid: ResMut<Grid>,
     mut lanes: ResMut<Lanes>,
-    mut commands: Commands,
 ) {
     // the inside of the map, 1..=n each way, and an even number of rows so that the serpentine
     // comes back to the left-hand column rather than to the right
@@ -484,27 +467,19 @@ fn lay_the_snake(
         let mut along = 1.0;
         while laid < upto {
             lanes.of[t as usize].push_back(along);
-            if *holding == Holding::Entities {
-                commands.spawn(OnBelt { tile: t, along });
-            }
             along -= spacing;
             laid += 1;
         }
     }
     info!(
-        "stress: a loop of {} belts, {} items asked for, {} laid ({} is the most they hold), held as {}",
-        belts,
-        stress.items,
-        laid,
-        most,
-        holding.word()
+        "stress: a loop of {} belts, {} items asked for, {} laid ({} is the most they hold)",
+        belts, stress.items, laid, most
     );
 }
 
 /// The stress run's own report: the frame times and what the factory's own step took inside them.
 fn watch_the_frames(
     time: Res<Time<Real>>,
-    holding: Res<Holding>,
     tally: Res<Tally>,
     grid: Res<Grid>,
     mut stress: ResMut<Stress>,
@@ -519,8 +494,7 @@ fn watch_the_frames(
     let frame = spread(&mut stress.seen);
     let inner = spread(&mut stress.steps);
     info!(
-        "stress: holding={} items={} belts={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
-        holding.word(),
+        "stress: items={} belts={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
         tally.items,
         grid.built().len(),
         frame.0,
