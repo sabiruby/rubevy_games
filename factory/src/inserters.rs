@@ -694,9 +694,9 @@ mod tests {
             "machine :furnace, size: [1, 1], sprite: [109], speed: 1.0\n",
             "recipe :iron_ore, in: {}, out: { iron_ore: 1 }, time: 1.0, made_in: :furnace\n",
             "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",
-            "miner :drill, seconds_per_item: 1.0, digs: :iron_ore\n",
+            "miner :drill, seconds_per_item: 1.0\n",
             "chest :crate, capacity: 4\n",
-            "ore :patch, per_tile: 10\n",
+            "ore :iron_ore, per_tile: 10\n",
             "inserter :arm, seconds_per_item: 0.25\n",
         ));
         let written = names_and_numbers(&data, &rules, 123);

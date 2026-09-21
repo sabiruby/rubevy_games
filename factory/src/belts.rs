@@ -465,9 +465,9 @@ mod tests {
         "recipe :plate, in: { ore: 1 }, out: { plate: 1 }, time: 1.0, made_in: :furnace\n",
         "recipe :gear, in: { plate: 2 }, out: { gear: 1 }, time: 1.0, made_in: :works\n",
         "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",
-        "miner :drill, seconds_per_item: 1.0, digs: :ore\n",
+        "miner :drill, seconds_per_item: 1.0\n",
         "chest :crate, capacity: 4\n",
-        "ore :patch, per_tile: 10\n",
+        "ore :ore, per_tile: 10\n",
         "inserter :arm, seconds_per_item: 1.0\n",
     );
 

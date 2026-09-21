@@ -41,24 +41,31 @@ item :gear,       icon: 2    # two plates, assembled. The end of the line, for n
 belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2
 
 # One item a second is **a quarter of a full belt**, so four miners fill one belt and a line of
-# them is worth building. `digs:` is what comes out of the ground.
-miner :drill, seconds_per_item: 1.0, digs: :iron_ore
+# them is worth building. **What comes up is whatever the ground it stands on is** — see `ore`
+# below — so a miner has nothing to say about which item it digs.
+miner :drill, seconds_per_item: 1.0
 
 # **A minute of one miner** (60 s at one item a second), which is long enough that a chest at the
 # end of a line is somewhere to leave things and not a thing to watch.
 chest :crate, capacity: 60
 
+# **The name of the ground is what comes out of it.** `ore :iron_ore` is a ground made of iron
+# ore, and a miner standing on it brings up iron ore — it has no say in the matter. Put a second
+# `ore` line here and you have said there is a second kind of ground; nothing else has to change.
+# (Until 2026-09-21 the name was a label and the miner said `digs: :iron_ore`, which meant "what
+# comes out of the ground" was written in two places and the miner was the one that had to be
+# edited to add a kind of ore.)
+#
 # **One tile of ore is one chest's worth**, which is that same minute of one miner: a miner
 # standing on a tile empties it in a minute. The two numbers are next to each other here on
 # purpose — before F2a this one lived in `factory.settings.txt` and the chest did not, so moving
-# the chest moved nothing. **What comes out of the ground is the miner's `digs:`**, above; the
-# name here is a label, the way `:conveyor` and `:crate` are.
+# the chest moved nothing.
 #
 # **How wide a patch is stayed a setting** (`ore_patch_radius` in factory.settings.txt): the
 # smallest map the four patches fit on without touching the border is worked out from it before
 # the game has a VM to read this file with, so it cannot be here. This number is read once the
 # world is laid out, which is after.
-ore :patch, per_tile: 60
+ore :iron_ore, per_tile: 60
 
 # **One item a second is a quarter of a full belt** — and it is exactly one miner's output, which
 # is the whole derivation: one inserter keeps up with one miner, one keeps two furnaces fed (they

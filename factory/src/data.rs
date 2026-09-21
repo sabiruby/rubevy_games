@@ -137,8 +137,6 @@ struct BeltDecl {
 struct MinerDecl {
     #[serde(deserialize_with = "more_than_zero")]
     seconds_per_item: f32,
-    /// What it brings up out of the ground.
-    digs: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -165,6 +163,13 @@ struct InserterDecl {
 
 /// **What is in the ground**, which is a fitting of the world like the three above it: no recipe
 /// makes it and no machine makes it in.
+///
+/// **Its name is the item that comes out of it** (the author, 2026-09-21): `ore :iron_ore,
+/// per_tile: 60` says what the ground is made of, and a miner brings up whatever the ground it
+/// stands on is. F2a wrote it the other way — the name was a label and `miner :drill, digs:
+/// :iron_ore` said what came up — which put "what comes out of the ground" in two places and
+/// made the miner the one that had to change when a second kind of ore was added. Now there is
+/// one place, and a second kind of ore is a second `ore` line.
 ///
 /// F2 left `ore_per_tile` in `factory.settings.txt` because its neighbour — how *wide* a patch is
 /// — is wanted in `main`, before there is a VM to have read any Ruby with, and the two were one
@@ -630,14 +635,16 @@ fn tables_of(
     }
 
     let belt = exactly_one("belt", belts)?.value;
-    let Declared { value: miner, line: miner_line, .. } = exactly_one("miner", miners)?;
+    let miner = exactly_one("miner", miners)?.value;
     let chest = exactly_one("chest", chests)?.value;
-    let ore = exactly_one("ore", ores)?.value;
     let arm = exactly_one("inserter", arms)?.value;
-    let Some(&digs) = by_item.get(&miner.digs) else {
+    // **the ground is named after what comes out of it**, so this is the one reference between
+    // declarations the ore has — and, since there is one ground, it is what a miner digs
+    let Declared { name: ore_name, value: ore, line: ore_line, .. } = exactly_one("ore", ores)?;
+    let Some(&digs) = by_item.get(&ore_name) else {
         return Err(Trouble {
-            at: miner_line,
-            what: format!("the miner digs {} and nothing declares an item called that", miner.digs),
+            at: ore_line,
+            what: format!("the ground is {ore_name} and nothing declares an item called that"),
         });
     };
 
@@ -791,9 +798,9 @@ mod tests {
         "recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 },\n",         // 4
         "       time: 2.0, made_in: :furnace\n",                                      // 5
         "belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2\n",                 // 6
-        "miner :drill, seconds_per_item: 1.0, digs: :iron_ore\n",                     // 7
+        "miner :drill, seconds_per_item: 1.0\n",                                      // 7
         "chest :crate, capacity: 60\n",                                               // 8
-        "ore :patch, per_tile: 60\n",                                                 // 9
+        "ore :iron_ore, per_tile: 60\n",                                              // 9
         "inserter :arm, seconds_per_item: 1.0\n",                                     // 10
     );
 
@@ -813,7 +820,7 @@ mod tests {
         assert_eq!(rules.items_per_tile, 2);
         assert_eq!(rules.mine_seconds, 1.0);
         assert_eq!(rules.chest_capacity, 60);
-        assert_eq!(rules.digs, 0, "the miner brings up the ore");
+        assert_eq!(rules.digs, 0, "what the ground is made of is what a miner brings up");
         assert_eq!(rules.swing_seconds, 1.0, "and an inserter takes a second over one item");
     }
 
@@ -943,13 +950,37 @@ mod tests {
     fn the_world_has_one_belt_one_miner_one_chest_one_ore_and_one_inserter() {
         let none = GOOD.replace("chest :crate, capacity: 60\n", "");
         assert_eq!(read(&none).expect_err("no chest").what, "nothing declares a chest");
-        let none = GOOD.replace("ore :patch, per_tile: 60\n", "");
+        let none = GOOD.replace("ore :iron_ore, per_tile: 60\n", "");
         assert_eq!(read(&none).expect_err("no ore").what, "nothing declares an ore");
         let none = GOOD.replace("inserter :arm, seconds_per_item: 1.0\n", "");
         assert_eq!(read(&none).expect_err("no arm").what, "nothing declares an inserter");
         let two = format!("{GOOD}belt :fast, tiles_per_second: 8.0, items_per_tile: 2\n");
         let trouble = read(&two).expect_err("two belts");
         assert_eq!(trouble.at, Some(11), "{}", trouble.say("data.rb"));
+    }
+
+    /// **The ground is named after what comes out of it** (the author, 2026-09-21), and both
+    /// ways of getting that wrong are refused at their own line.
+    ///
+    /// `ore :coal` with no `item :coal` is a reference between two declarations, so the line is
+    /// the one `take_with_lines` carried. `miner … digs:` is a field that no longer exists, so it
+    /// is serde's own refusal and needs nothing written here at all — which is the whole reason
+    /// each fitting has a word of its own (the head of this file).
+    #[test]
+    fn the_ground_is_named_after_what_comes_out_of_it() {
+        let (_, rules) = read(GOOD).expect("a good file");
+        assert_eq!(rules.digs, 0, "iron_ore, which is item 0");
+
+        let unknown = GOOD.replace("ore :iron_ore,", "ore :coal,");
+        let trouble = read(&unknown).expect_err("nothing declares coal");
+        assert_eq!(trouble.at, Some(9), "{}", trouble.say("data.rb"));
+        assert!(trouble.what.contains("coal"), "{}", trouble.what);
+
+        let old_spelling =
+            GOOD.replace("miner :drill, seconds_per_item: 1.0", "miner :drill, seconds_per_item: 1.0, digs: :iron_ore");
+        let trouble = read(&old_spelling).expect_err("digs: is gone");
+        assert_eq!(trouble.at, Some(7), "{}", trouble.say("data.rb"));
+        assert!(trouble.what.contains("unknown field"), "{}", trouble.what);
     }
 
     /// **The same VM reads a second file.** This is what F5's reload will be and what the checks

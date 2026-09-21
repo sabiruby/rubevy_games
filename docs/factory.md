@@ -257,21 +257,31 @@ the file, which is the rule S5b-2 set for SabiRuby Battle's match model and the 
 ```ruby
 item :iron_ore,   icon: 0
 belt :conveyor, tiles_per_second: 2.0, items_per_tile: 2
-miner :drill, seconds_per_item: 1.0, digs: :iron_ore
+miner :drill, seconds_per_item: 1.0
 chest :crate, capacity: 60
-ore :patch, per_tile: 60
+ore :iron_ore, per_tile: 60
+inserter :arm, seconds_per_item: 1.0
 machine :furnace,   size: [1, 1], sprite: [109],                speed: 1.0
 machine :assembler, size: [2, 2], sprite: [138, 139, 140, 141], speed: 1.0
 recipe :iron_plate, in: { iron_ore: 1 }, out: { iron_plate: 1 }, time: 2.0, made_in: :furnace
 recipe :gear,       in: { iron_plate: 2 }, out: { gear: 1 },     time: 1.0, made_in: :assembler
 ```
 
-**Seven words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
-`miner`, `chest` and `ore` are the fittings the world has built in, which no recipe makes and no
-machine makes them in, and each has numbers of its own with names of its own. One `machine` shape
-with five optional fields would let `capacity:` on a furnace deserialize perfectly and be refused
-afterwards by hand-written code; a word each means **serde** refuses it, at the line — which is
-the whole reason the declarations are read through `sabiruby_serde::declare` at all.
+**Eight words and not three.** `item`, `recipe` and `machine` are about what is *made*; `belt`,
+`miner`, `chest`, `ore` and `inserter` are the fittings the world has built in, which no recipe
+makes and no machine makes them in, and each has numbers of its own with names of its own. One
+`machine` shape with five optional fields would let `capacity:` on a furnace deserialize perfectly
+and be refused afterwards by hand-written code; a word each means **serde** refuses it, at the
+line — which is the whole reason the declarations are read through `sabiruby_serde::declare` at
+all.
+
+**The ground is named after what comes out of it** (the author, 2026-09-21). `ore :iron_ore` says
+the ground is made of iron ore and a miner standing on it brings up iron ore; the miner has no
+say in the matter and no `digs:` to say it with. It was the other way round until then — the
+`ore` name was a label and the miner named the item — which put "what comes out of the ground" in
+two places, let `ore :coal` sit quietly next to `digs: :iron_ore`, and would have made the *miner*
+the thing to edit when a second kind of ground was added. A second kind of ground is a second
+`ore` line now, and a name nothing declares is refused at its own line.
 
 **Every number is set against the belt.** A full belt carries `tiles_per_second × items_per_tile`
 = 4 items a second, and:
@@ -279,6 +289,7 @@ the whole reason the declarations are read through `sabiruby_serde::declare` at 
 | | rate | of a full belt |
 |---|---|---|
 | a miner | 1 ore a second | a quarter |
+| an inserter | 1 thing a second | a quarter |
 | a furnace | 0.5 plates a second | an eighth |
 | an assembler | 1 gear a second, eating 2 plates | a quarter |
 
@@ -307,7 +318,7 @@ patches fit on without touching the border is derived from it, and that floor is
 F2a is where it got drawn in the right place: F2 kept `ore_per_tile` on this side of it too, for
 a reason that only fitted the radius ("the world's layout, read once"), and the cost was that
 "a tile of ore is a chest's worth" spanned two files, so moving the chest moved nothing. It is
-`ore :patch, per_tile: 60` in `data.rb` now, next to the chest it is a chest's worth of.
+`ore :iron_ore, per_tile: 60` in `data.rb` now, next to the chest it is a chest's worth of.
 
 **A number that is not more than zero is refused**, said where it is written, and the game does
 not start:

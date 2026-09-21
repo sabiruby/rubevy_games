@@ -1511,9 +1511,9 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         "machine :oven, size: [1, 1], sprite: [109], speed: 1.0\n",
         "recipe :rock, in: {}, out: { rock: 1 }, time: 1.0, made_in: :oven\n",
         "belt :line, tiles_per_second: 1.0, items_per_tile: 1\n",
-        "miner :drill, seconds_per_item: 1.0, digs: :rock\n",
+        "miner :drill, seconds_per_item: 1.0\n",
         "chest :box, capacity: 1\n",
-        "ore :patch, per_tile: 1\n",
+        "ore :rock, per_tile: 1\n",
         "inserter :arm, seconds_per_item: 1.0\n",
     );
     vec![
@@ -1524,6 +1524,9 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         (good.replace("tiles_per_second: 1.0", "tiles_per_second: -1.0"), 4, "a belt that runs backwards"),
         // F2a's: a gap that is not a whole number of steps (`crate::data::fits_a_tile`)
         (good.replace("items_per_tile: 1", "items_per_tile: 3"), 4, "a gap that does not divide a tile"),
+        // F3's: the ground named after an item nothing declares — the one reference the `ore`
+        // word has, and the only check left that needs two declarations to be wrong
+        (good.replace("ore :rock,", "ore :coal,"), 7, "ground nothing declares"),
         // **last, and on purpose**: a half-written line is reported where the parser gives up,
         // which is the *next* token — so `icon:` on line 1 of a file with six more lines is
         // reported at line 2. At the end of the file the next token is the end of the file, and
