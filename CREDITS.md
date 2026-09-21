@@ -18,6 +18,29 @@ text beside them as `LICENSE-kenney.txt`:
 CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is
 how anyone who wants more of it finds the pack.
 
+## Tiles (Factory)
+
+**Tiny Factory 1.0** by Kenney (<https://kenney.nl/assets/tiny-factory>), **CC0 1.0 Universal
+(public domain)**, downloaded 2026-09-21 from the pack's own zip. 16 × 16 tiles; the pack's
+`Tilemap/tilemap_packed.png` is 12 × 11 = 132 of them.
+
+The pack as it came is in `factory/art/`, with its own licence text beside it as
+`LICENSE-kenney-tiny-factory.txt` and its `Tilesheet.txt` as `Tilesheet-tiny-factory.txt`.
+**What the game loads is one file built from it** by `tools/factory-tileset.py` — a vertical
+strip of the same 132 tiles, in the pack's own order and numbering, with blank tiles on the end
+(the script's own comment says why: a browser will not bind an array texture whose square layers
+number a multiple of six). The strip is `factory/assets/tiles/factory-tiles.png`, with a copy of
+the licence text beside it, because that is the file that redistributes the art.
+
+| tile of the pack | used as |
+|---|---|
+| 0, 1, 2 | the factory floor plates |
+| 3 | the plain ground, which F0 lays as a border |
+| the other 128 | in the sheet, not used yet: the conveyors, the machines, the crates, the pipes and the gear that F1 onwards will place. `docs/factory.md` has the numbered table |
+
+CC0 asks for nothing, but saying where the art came from is the decent thing to do, and it is how
+anyone who wants more of it finds the pack.
+
 ## Models (the Garden)
 
 Two more packs by **Kenney** (<https://kenney.nl>), both **CC0 1.0 Universal (public domain)**.
