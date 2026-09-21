@@ -16,22 +16,27 @@ on 2026-09-21 says otherwise, and it changes the size of this job:
     rotation of it is a perfectly good belt running sideways seen from above.
 
 `TileData::orientation` does all of that without a new picture. So the only thing genuinely
-missing is **the corner**, in whichever of the two styles the author picks:
+missing is **the corner**.
 
-  (i)  the pack's three-quarter look kept. A belt running right is eight pixels of surface with
-       **six pixels of front face under it**; a belt running up is twelve pixels wide with a rail
-       down each side and no face. A corner between them has to get from one to the other, so it
-       **changes width as it turns** and has to be drawn once for turning up and again for
-       turning down — a face that is always at the bottom is not something a rotation makes.
+F0a drew the corner twice over, in the two styles the author was choosing between:
+
+  (i)  the pack's three-quarter look kept — a belt running right is eight pixels of surface with
+       six pixels of front face under it, so a corner **changes width as it turns** and has to be
+       drawn four times over;
   (ii) everything seen from straight above. One straight and one corner, twelve pixels wide with
        the same rails whichever way they point, and every direction and every corner comes out of
        them by rotating and mirroring.
 
-Both are drawn with **the pack's own colours**, counted out of its belt tiles rather than typed
-in, and both use **the pack's own cross-section**, measured across tile 16.
+**The author chose (ii) on 2026-09-21**, so (i)'s four corner pictures are gone from the list
+below and the sheet is four tiles rather than twelve. What (i) was and why it cost three times as
+much is in `docs/worklog/2026-09-21-factory-F0.md` §6–§8; the code that laid the two mock-ups out
+side by side (`factory/src/belt_sample.rs`) went with it.
 
-The corners are a first draft: what the author is being asked is which of the two to go on with,
-not whether these particular pixels are right. F1 keeps one of them.
+What is left is drawn with **the pack's own colours**, counted out of its belt tiles rather than
+typed in, and with **the pack's own cross-section**, measured across tile 16. The machinery that
+only (i) needed — a band that widens as it turns, a front face that runs out with the turn, the
+face rows lifted out of the pack's own tile 26 — went with it: a script that can still draw a
+picture nothing loads is a picture nobody checks. `git show 5aea5c6:tools/factory-belts.py` has it.
 
 Needs: python3 with Pillow (12.3 was used).
 """
@@ -45,29 +50,23 @@ from PIL import Image
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ART = ROOT / "factory" / "art"
-PACK = ART / "kenney_tiny-factory_tilemap_packed.png"
 OUT = ART / "belts.png"
 
 TILE = 16
-PACK_COLUMNS = 12
 
 # The pack's belt palette, counted out of tiles 25–27, 4/16/28 and 49–51 on 2026-09-21, with the
-# name each colour earns in the pack's own tiles.
+# name each colour earns in the pack's own tiles. (The two the pack's *front face* is drawn in,
+# `#5a6988` and `#3e4e6e`, are not here: a belt seen from above has no face.)
 GAP = (0x3F, 0x26, 0x31, 255)         # the dark ground a belt sits in
 RAIL_LIGHT = (0xC0, 0xCB, 0xDC, 255)  # the lit edge of the frame, and the chevrons
 SURFACE = (0x8B, 0x9B, 0xB4, 255)     # the belt's running surface, and the shaded edge
-FACE = (0x5A, 0x69, 0x88, 255)        # the front of a belt seen in three-quarter view
-FACE_DARK = (0x3E, 0x4E, 0x6E, 255)   # the rollers' shadow across that front
 
 # **Measured across the pack's tile 16**, which is one belt's width in 16 px: 0–1 gap, 2 light
 # rail, 3 rail, 4–11 surface, 12 rail, 13 light rail, 14–15 gap. In half-widths from the middle
 # of the band (which is at 8.0): the band ends at 6, the light rail is the outermost pixel of it
-# and the shaded rail the one inside that.
-HALF_WIDTH_FROM_ABOVE = 6.0
-# **And across the pack's tile 26**: rows 0–1 gap, 2–9 surface, 10–15 front face. Half of eight
-# is four, and the face is six deep.
-HALF_WIDTH_THREE_QUARTER = 4.0
-FACE_DEPTH = 6
+# and the shaded rail the one inside that. **This is the width of every belt in the game**, in
+# every direction, which is what choosing (ii) settled.
+HALF_WIDTH = 6.0
 
 #: how often a chevron repeats along the belt, in pixels — two to a tile, as the pack draws them
 CHEVRON_EVERY = 8.0
@@ -78,18 +77,12 @@ CHEVRON_THICK = 2.0
 SAMPLES = 200
 
 
-def pack_tile(index: int) -> Image.Image:
-    sheet = Image.open(PACK).convert("RGBA")
-    c, r = index % PACK_COLUMNS, index // PACK_COLUMNS
-    return sheet.crop((c * TILE, r * TILE, c * TILE + TILE, r * TILE + TILE))
-
-
-def colour_at(along: float, across: float, half: float, phase: float, backwards: bool = False):
+def colour_at(along: float, across: float, half: float, phase: float):
     """The belt's own colour at a point, given where it is along the belt and across it.
 
     `across` is signed, and the sign is which side of the middle the point is on. Outside the
-    band this returns `None` — what is there is the caller's business, because in three-quarter
-    view one side of the band has a front face on it and the other has the ground.
+    band this returns `None`, and what is there is the caller's business — which is the ground,
+    now that there is no front face on one side of it.
     """
     d = abs(across)
     if d > half:
@@ -100,79 +93,54 @@ def colour_at(along: float, across: float, half: float, phase: float, backwards:
         return SURFACE
     # A chevron points the way the belt runs, so its apex — the middle of the band — is the part
     # furthest along: the stroke is where `along + |across|` is constant, a `>` on its side.
-    front = (-along if backwards else along) + d
+    front = along + d
     return RAIL_LIGHT if (front - phase) % CHEVRON_EVERY < CHEVRON_THICK else SURFACE
 
 
-def centre_line(kind: str, y_in: float, half_in: float, half_out: float):
-    """The middle of the belt through the tile, sampled: point, distance travelled, half-width,
-    and how deep the front face is there.
+def centre_line():
+    """The middle of the belt through a corner tile, sampled: each point and how far along it is.
 
-    `up` turns a belt arriving at the left edge into one leaving at the top, and `down` into one
-    leaving at the bottom. Both are quarter ellipses rather than circles, because a belt arriving
-    in three-quarter view is centred six pixels down and one leaving upwards is centred eight
-    pixels across, and those are not the same distance from the corner they turn about.
-
-    **The face runs out as the belt turns.** A front face belongs to a belt seen from the side,
-    and by the end of the turn the belt is pointing away from the viewer and has none — which is
-    the whole of why (i) needs two corner pictures and (ii) needs one.
+    One shape: in at the middle of the left edge, out at the middle of the top edge, a quarter
+    circle about the tile's top left corner — so both ends line up with the straight tiles either
+    side of it. **The other seven corners are this one turned** (`TileData::orientation`), which
+    is what the author's choice of a belt seen from above bought.
     """
     points = []
     travelled = 0.0
     previous = None
     for i in range(SAMPLES + 1):
         t = (math.pi / 2) * i / SAMPLES
-        half = half_in + (half_out - half_in) * (t / (math.pi / 2))
-        # in at the left edge, centred `y_in` down, and moving right before it turns
-        if kind == "up":
-            point = (8.0 * math.sin(t), y_in * math.cos(t))
-        else:  # "down": out at the bottom edge instead
-            point = (8.0 * math.sin(t), y_in + (TILE - y_in) * (1.0 - math.cos(t)))
+        point = (8.0 * math.sin(t), (TILE / 2) * math.cos(t))
         if previous is not None:
             travelled += math.dist(previous, point)
         previous = point
-        points.append((point, travelled, half, FACE_DEPTH * math.cos(t)))
+        points.append((point, travelled))
     return points
 
 
-def draw_corner(kind: str, phase: float, three_quarter: bool, backwards: bool = False) -> Image.Image:
-    """A corner tile: the band swept along the centre line, and in (i) a front face under it.
-
-    **The two styles differ in the line's two ends**, which is the whole of what the author is
-    being shown. In (i) a belt arriving from the left is eight pixels of surface centred six
-    pixels down, with its face below that, and one leaving upwards is twelve pixels wide — so the
-    band has to widen as it turns. In (ii) both ends are the same twelve pixels and it does not.
-    """
-    if three_quarter:
-        line = centre_line(kind, 6.0, HALF_WIDTH_THREE_QUARTER, HALF_WIDTH_FROM_ABOVE)
-    else:
-        line = centre_line(kind, TILE / 2, HALF_WIDTH_FROM_ABOVE, HALF_WIDTH_FROM_ABOVE)
+def draw_corner(phase: float) -> Image.Image:
+    """A corner tile: the band swept along the centre line."""
+    line = centre_line()
     out = Image.new("RGBA", (TILE, TILE), GAP)
-    face = pack_tile(26)
     for y in range(TILE):
         for x in range(TILE):
             px, py = x + 0.5, y + 0.5
-            (cx, cy), along, half, face_deep = min(line, key=lambda s: math.dist(s[0], (px, py)))
+            (cx, cy), along = min(line, key=lambda s: math.dist(s[0], (px, py)))
             d = math.dist((cx, cy), (px, py))
-            # which side of the middle: below the centre line is the side the face is on
             side = 1.0 if py > cy else -1.0
-            colour = colour_at(along, side * d, half, phase, backwards)
+            colour = colour_at(along, side * d, HALF_WIDTH, phase)
             if colour is not None:
                 out.putpixel((x, y), colour)
-            elif three_quarter and side > 0 and d <= half + face_deep:
-                # the front face, taken row for row from the pack's own right-running tile so
-                # that a corner set beside a straight one is the same picture
-                out.putpixel((x, y), face.getpixel((x, 10 + min(int(d - half), FACE_DEPTH - 1))))
     return out
 
 
-def draw_straight_from_above(phase: float) -> Image.Image:
-    """(ii): a belt running right, seen from straight above. Symmetric top to bottom, so one
-    picture turns into all four directions."""
+def draw_straight(phase: float) -> Image.Image:
+    """A belt running right, seen from straight above. Symmetric top to bottom, so one picture
+    turns into all four directions."""
     out = Image.new("RGBA", (TILE, TILE), GAP)
     for y in range(TILE):
         for x in range(TILE):
-            colour = colour_at(x + 0.5, (y + 0.5) - TILE / 2, HALF_WIDTH_FROM_ABOVE, phase)
+            colour = colour_at(x + 0.5, (y + 0.5) - TILE / 2, HALF_WIDTH, phase)
             if colour is not None:
                 out.putpixel((x, y), colour)
     return out
@@ -180,25 +148,15 @@ def draw_straight_from_above(phase: float) -> Image.Image:
 
 #: what the sheet holds, in order. The index here is the tile's number within the sheet, and
 #: `tools/factory-tileset.py` puts the sheet after the pack's 132.
-# **(i) needs four corner pictures and (ii) needs one**, and that is the number the author is
-# really choosing between. A corner joins two of the tile's edges and is travelled one way or the
-# other, which is eight cases. Mirroring left to right keeps a front face at the bottom of the
-# tile where it belongs, so it halves (i)'s eight to four; rotating does not, because a rotated
-# face ends up on the side or the top. (ii) has no face, so all eight of its cases are one
-# picture under `TileData::orientation`.
+# **A corner joins two of the tile's edges and is travelled one way or the other, which is eight
+# cases, and these are one picture** — a belt seen from above has no front face, so rotating and
+# mirroring it makes all eight. (That is what the author's choice bought: (i) kept a face at the
+# bottom of the tile, which only a mirror preserves, so its eight cases needed four pictures.)
 TILES = [
-    ("(i)  corner: left in, top out, frame A", lambda: draw_corner("up", 0.0, True)),
-    ("(i)  corner: left in, top out, frame B", lambda: draw_corner("up", 4.0, True)),
-    ("(i)  corner: top in, left out, frame A", lambda: draw_corner("up", 0.0, True, True)),
-    ("(i)  corner: top in, left out, frame B", lambda: draw_corner("up", 4.0, True, True)),
-    ("(i)  corner: left in, bottom out, frame A", lambda: draw_corner("down", 0.0, True)),
-    ("(i)  corner: left in, bottom out, frame B", lambda: draw_corner("down", 4.0, True)),
-    ("(i)  corner: bottom in, left out, frame A", lambda: draw_corner("down", 0.0, True, True)),
-    ("(i)  corner: bottom in, left out, frame B", lambda: draw_corner("down", 4.0, True, True)),
-    ("(ii) straight: running right, frame A", lambda: draw_straight_from_above(0.0)),
-    ("(ii) straight: running right, frame B", lambda: draw_straight_from_above(4.0)),
-    ("(ii) corner: left in, top out, frame A", lambda: draw_corner("up", 0.0, False)),
-    ("(ii) corner: left in, top out, frame B", lambda: draw_corner("up", 4.0, False)),
+    ("straight: running right, frame A", lambda: draw_straight(0.0)),
+    ("straight: running right, frame B", lambda: draw_straight(4.0)),
+    ("corner: left in, top out, frame A", lambda: draw_corner(0.0)),
+    ("corner: left in, top out, frame B", lambda: draw_corner(4.0)),
 ]
 
 
