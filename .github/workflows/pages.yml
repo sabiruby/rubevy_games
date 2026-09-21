@@ -1,8 +1,10 @@
 # The browser version of the games, on GitHub Pages: https://sabiruby.github.io/rubevy_games/
-# One site, two games (G5): the entry page at the top, SabiRuby Battle at /sabibots/ and the
-# garden at /garden/. Built by `web/build.sh all`, as locally. The Ruby compiler module comes from
-# sabiruby-playground, built against the same SabiRuby commit as the games' VM (the one Cargo.lock
-# names), and each game gets its own copy of it.
+# One site, three games since F6: the entry page at the top, SabiRuby Battle at /sabibots/, the
+# garden at /garden/ and Factory at /factory/. Built by `web/build.sh all`, as locally. **This
+# file names no games** — the list is `GAMES_ALL` in `web/games.sh` — which is why the third one
+# arrived without an edit here. The Ruby compiler module comes from sabiruby-playground, built
+# against the same SabiRuby the games' VM is (the one Cargo.lock names), and each game gets its
+# own copy of it.
 name: pages
 on:
   push:

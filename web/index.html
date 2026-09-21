@@ -26,8 +26,8 @@
 <body>
 <main>
 <h1>rubevy games</h1>
-<p class="lead">Two samples of <a href="https://github.com/sabiruby/rubevy">rubevy</a>: Bevy for the
-rules, <a href="https://github.com/sabiruby/sabiruby">SabiRuby</a> for the behaviours. Both run here —
+<p class="lead">Three samples of <a href="https://github.com/sabiruby/rubevy">rubevy</a>: Bevy for the
+rules, <a href="https://github.com/sabiruby/sabiruby">SabiRuby</a> for the behaviours. All three run here —
 the Ruby is compiled in the page and runs in the same VM the PC build uses.</p>
 <ul>
   <li><a class="game" href="sabibots/"><b>SabiRuby Battle</b>
@@ -36,20 +36,19 @@ the Ruby is compiled in the page and runs in the same VM the PC build uses.</p>
   <li><a class="game" href="garden/"><b>Garden</b>
     <span>A small world whose creatures read and write their own ECS components from Ruby
     (<code>me[:Hunger]</code>), breed, remember, and can be saved and loaded.</span></a></li>
-  <!-- The third game, written out and kept out (F0, 2026-09-21). `web/build.sh factory` builds
-       its page and it can be opened at /factory/ from a local `web/serve.sh`, but the word is not
-       in `GAMES_ALL` in web/games.sh, so `web/build.sh all` — which is what CI publishes — does
-       not build it and this entry would link to nothing. F6 takes both out of their brackets at
-       once, and then the word "Two" in the lead above becomes "Three".
   <li><a class="game" href="factory/"><b>Factory</b>
-    <span>A small factory seen from above: what the items, the recipes and the machines are is
-    declared in Ruby, and every inserter on the line runs a script you can edit while it runs.
-    Under construction — a floor and a camera so far.</span></a></li>
-  -->
+    <span>A small factory seen from above: belts, miners, furnaces and assemblers, and
+    <b>three Ruby files you write</b> — <code>data.rb</code> declares the items, the recipes and
+    the machines (and how big the world is), <code>control.rb</code> hears what the factory does
+    and says what it is for, and each inserter runs its own script that decides when to move a
+    thing from the tile behind it to the tile in front.</span></a></li>
 </ul>
 <footer>
 <p>SabiRuby Battle used to be at this address itself; it moved to
 <code>/sabibots/</code> when the garden arrived, and this page took its place.</p>
+<p>All three games' art is <a href="https://kenney.nl">Kenney</a>'s, CC0 — tanks, a nature kit and
+cube pets, and Tiny Factory — with a few sprites drawn to the same palettes
+(<a href="https://github.com/sabiruby/rubevy_games/blob/main/CREDITS.md">CREDITS.md</a>).</p>
 <p><a href="https://github.com/sabiruby/rubevy_games">Source</a> · built by
 <code>web/build.sh all</code> from the same commit as the games.</p>
 </footer>

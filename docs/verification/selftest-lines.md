@@ -37,13 +37,12 @@ GARDEN_SELFTEST=1   cargo run -p garden   -- --headless 90     # the garden, no 
 GARDEN_SELFTEST=1   docker/run.sh garden   release             # the garden, a window
 FACTORY_SELFTEST=1  cargo run -p factory  -- --headless         # Factory, no window (the default is 66 s)
 FACTORY_SELFTEST=1  docker/run.sh factory  release             # Factory, a window
-web/build.sh all && web/serve.sh                               # then …/sabibots/?selftest and …/garden/?selftest
-web/build.sh factory                                           # then …/factory/?selftest
+web/build.sh all && web/serve.sh                               # all three, then …/<game>/?selftest
 ```
 
-**Factory is not in `web/build.sh all`** until F6 (`web/games.sh`, `docs/factory.md`), so its page
-is built by name. Its run is a `docker/run.sh` like the other two, with no edit to that script:
-the environment it hands over is found by the game's own name in capitals.
+**Factory joined `web/build.sh all` at F6** (`web/games.sh`, `docs/factory.md`); until then its
+page had to be built by name. Its run is a `docker/run.sh` like the other two, with no edit to
+that script: the environment it hands over is found by the game's own name in capitals.
 
 A run of a `docker/run.sh` is on a TTY, so **its lines end in CR**. Until S9 the reader was told
 here to put such a log through `tr -d '\r'` before comparing, or every line looked changed —

@@ -1434,6 +1434,14 @@ fn watch_the_frames(
     crew: inserters::Crew,
     mut stress: ResMut<Stress>,
     errands: Res<platform::Errands>,
+    // **What the measurement was taken on, said in the measurement** (F6). A number of
+    // milliseconds means nothing without the map it was drawing and the adapter it was drawing
+    // with, and the one reader this report was written for is somebody on a machine nobody here
+    // has — the author opening `…/factory/?stress=4000` on a real GPU, where the two software
+    // renderers this machine has cannot answer for. `RenderAdapterInfo` is in the main world
+    // (`bevy_render`'s `RenderResources::unpack_into`) and is **absent in a headless run**, which
+    // has no renderer at all, so it is an `Option` and says so.
+    adapter: Option<Res<bevy::render::renderer::RenderAdapterInfo>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     stress.seen.push(time.delta_secs() * 1000.0);
@@ -1459,7 +1467,9 @@ fn watch_the_frames(
     let woke = spread(&mut stress.woke);
     let carried = spread(&mut stress.carried);
     info!(
-        "stress: items={} belts={} arms={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0}",
+        "stress: map {}x{} items={} belts={} arms={} frame ms p50 {:.2} p95 {:.2} (about {:.0} fps) | step us p50 {:.0} p95 {:.0} | {}",
+        grid.tiles.x,
+        grid.tiles.y,
         tally.items,
         grid.built().len(),
         crew.how_many(),
@@ -1468,6 +1478,10 @@ fn watch_the_frames(
         1000.0 / frame.0.max(0.001),
         inner.0,
         inner.1,
+        match &adapter {
+            Some(a) => format!("{} ({:?}, {:?})", a.name, a.backend, a.device_type),
+            None => "no renderer (headless)".to_string(),
+        },
     );
     info!(
         "stress: vm insn p50 {:.0} p95 {:.0} of {} | tick us p50 {:.0} p95 {:.0} | answers p50 {:.0} p95 {:.0} | carried p50 {:.0} p95 {:.0} | dropped {} | programs {}",

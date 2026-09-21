@@ -1,12 +1,13 @@
 # The browser build
 
-Both games run in a browser as well as in a window on a PC, on one GitHub Pages site:
+All three games run in a browser as well as in a window on a PC, on one GitHub Pages site:
 
 | | |
 |---|---|
-| <https://sabiruby.github.io/rubevy_games/> | the entry page: what the two games are, and a link to each |
+| <https://sabiruby.github.io/rubevy_games/> | the entry page: what the three games are, and a link to each |
 | <https://sabiruby.github.io/rubevy_games/sabibots/> | SabiRuby Battle |
 | <https://sabiruby.github.io/rubevy_games/garden/> | Garden |
+| <https://sabiruby.github.io/rubevy_games/factory/> | Factory (F6, 2026-09-22) |
 
 **SabiRuby Battle's address changed.** It used to be the top one; when the garden arrived (G5) the
 top became the entry page and Battle moved down a directory. Anything outside this repository that
@@ -18,17 +19,18 @@ what differs is chosen by the target at compile time.
 ```
 cargo run -p sabibots               # PC
 cargo run -p garden                 # the other one
-web/build.sh && web/serve.sh        # both, in a browser, at http://localhost:8080/
+cargo run -p factory                # the third one
+web/build.sh && web/serve.sh        # all three, in a browser, at http://localhost:8080/
 web/build.sh garden                 # just one, at http://localhost:8080/garden/
 ```
 
-## One site, two games
+## One site, three games
 
 `web/build.sh <game>` writes `web/dist/<game>/`, and `web/build.sh all` (the default, and what CI
-runs) writes both and the entry page above them:
+runs) writes all of them and the entry page above them:
 
 ```
-web/index.html      →  dist/index.html      the entry page: two links and a sentence each
+web/index.html      →  dist/index.html      the entry page: three links and a sentence each
 web/page.html.in  ┐
 web/games.sh      ┘ →  dist/<game>/index.html    the game's page, one template + that game's values
                        dist/<game>/pkg/          the game (wasm-bindgen's output)
@@ -61,9 +63,19 @@ values are prose with slashes, ampersands, apostrophes, backticks and newlines i
 of that has to be escaped in `${page//'{{X}}'/$value}`; it refuses to write a page that still
 has a `{{` in it. **A third game is one word in `GAMES_ALL` and one block in `games.sh`** — plus
 its own `<li>` in `web/index.html`, the entry page, which is a name and a sentence about the game
-and not a value. The two pages it writes today are byte-identical to the two files it replaced,
-except that Battle's page used to point at `web/garden.html` for the other key list and now
-points at the block beside it.
+and not a value. The two pages it writes for the older games are byte-identical to the two files
+it replaced, except that Battle's page used to point at `web/garden.html` for the other key list
+and now points at the block beside it.
+
+**That claim was paid out at F6 and it held.** Factory's block had been in `games.sh` since F0,
+with the word deliberately kept out of `GAMES_ALL` so that `web/build.sh factory` could build a
+page for a browser check while `all` — which is what CI publishes — would not. Publishing it was
+the word, the `<li>`, and **nothing in `.github/workflows/pages.yml`**, which names no games at
+all. Two of the values had gone stale in the six stages between, and that is the cost of a block
+of prose written before the game existed: the key list had no `F9` (F5 gave Factory a save file,
+and it means by `F5`/`F9` what the garden means), and both notes still said *nothing calls the
+compiler yet* and *none of those panels is in this game yet*. Neither is a thing a build can
+catch — they are prose for whoever opens `view-source`.
 
 **Each game's directory is complete on its own**, down to its own copy of the 2.4 MB compiler
 module. That is the one deliberate duplication here, and it is for the thing the script is mostly
@@ -94,7 +106,9 @@ Everything that differs is in each game's `src/platform.rs`, one module per targ
 | `assets_dir` | `<game>/assets` found from the crate | `assets/` next to the page |
 | `SAVE_LABEL` | Save to file | Save in browser |
 | the garden's save (G3) | `garden.save.json`, a file | `localStorage`, key `garden:garden.save.json` |
+| Factory's save (F5) | `factory.save.json`, a file | `localStorage`, key `factory:factory.save.json` — and the three Ruby files Ctrl+S writes are `factory:ruby/data.rb`, `factory:ruby/control.rb` and `factory:ruby/inserter.rb`, so **a `data.rb` saved in this browser is what the next reload reads**, which is what makes the map's size a thing a page can be given |
 | the garden's checks | `GARDEN_SELFTEST=1` | `?selftest` in the page's address (G5) |
+| Factory's checks and knobs | `FACTORY_SELFTEST=1`, `--stress N`, `--arms N` | `?selftest`, `?stress=N`, `?arms=N` — the knobs are `games_shell::checks::asked_number` (S5b-5) and **`?stress`/`?arms` are how a measurement is taken on a machine nobody here has** (`verification/factory-on-a-real-gpu.md`) |
 | the Battle's checks | `SABIBOTS_SELFTEST=1` | `?selftest` in the page's address (2026-09-18) — the same query string, the same `CHECKS_EXIT_WHEN_DONE`, and a page that said nothing before it now runs the editor's whole sequence. What each run has to print, line by line, is [`verification/selftest-lines.md`](verification/selftest-lines.md) |
 
 And outside that module:
@@ -151,13 +165,49 @@ past the prelude's length, not by the name (`watch_minds`) — so this is a labe
 Giving the bridge a name is a change to sabiruby-playground.
 
 In CI (`.github/workflows/pages.yml`) the compiler module is built from sabiruby-playground at a
-pinned commit (`PLAYGROUND_REF`, `d72e000` since 2026-09-18), against the SabiRuby commit
-`Cargo.lock` names for the games, so the bytecode the compiler writes and the VM that reads it
-come from the same source. **The two pins move together.** A bridge the game calls has to exist in
-the pinned playground — `sabi_take_binary` was why the pin moved last time and `sabi_highlight` is
-why it moved this time — and the playground is built here against the games' own SabiRuby, so a
-`sabiruby_compiler` function that arrived after `Cargo.lock`'s commit would not compile in CI even
-though it compiles at home.
+pinned commit (`PLAYGROUND_REF`), against the SabiRuby `Cargo.lock` names for the games, so the
+bytecode the compiler writes and the VM that reads it come from the same source. A bridge the game
+calls has to exist in the pinned playground — `sabi_take_binary` was why the pin moved once and
+`sabi_highlight` why it moved again — and the playground is built here against the games' own
+SabiRuby, so a `sabiruby_compiler` function that arrived after the lock's commit would not compile
+in CI even though it compiles at home.
+
+### Three pins, and they are one pin
+
+There is not one pin here but **three, and they all name the same SabiRuby**:
+
+| | where | what it says | how it is read |
+|---|---|---|---|
+| 1 | this repository's `Cargo.lock` | which SabiRuby the games' **VM** is — today `sabiruby 0.6.1`, a published version; until 2026-09-22 a `[patch.crates-io]` git rev | `pages.yml`'s first step greps for the rev, then falls back to `v` + the version, and **fails rather than checking out an empty ref** (an empty one is "the default branch", which would silently publish against the VM's `main`) |
+| 2 | `pages.yml`'s `PLAYGROUND_REF` | which **playground** the compiler module is built from | checked out by commit |
+| 3 | that playground's own `SABIRUBY_REF` | which SabiRuby **it** is built against for its own site | not read here at all — it is how you tell whether the playground commit you are pinning was ever built against pin 1 |
+
+**A release that removes a name has to move all three, and 2026-09-22 is what it looks like when
+one is left behind.** SabiRuby 0.6.0 removed `Vm::current_line` (renamed `next_line`). Pins 1 and
+3 moved to 0.6.1; `PLAYGROUND_REF` stayed at `d72e000`, whose stepper still called the old name.
+The games' own build was green — **the games do not call it** — and the failure was in CI's *other*
+checkout, so two pages runs went red, nothing deployed, and the published site stayed as it was
+with no sign on it. The pin moved to `5337b2f`, whose stepper asks `next_line` and whose own
+`SABIRUBY_REF` is `v0.6.1`.
+
+**Moving one of them, in order.** Raise the VM (pin 1) → find or make a playground commit whose
+`SABIRUBY_REF` is that same version (pin 3), because a playground that does not build against it
+will not build here either → put that commit in `PLAYGROUND_REF` (pin 2). Going the other way —
+wanting a newer bridge — is the same three in the same order, because the playground commit you
+want is only usable if its own SabiRuby is one the lock can name.
+
+**Run the step locally before pushing**, which is cheap and catches exactly this. It is the one CI
+step that builds something this repository never builds:
+
+```
+git clone <playground> pg && git -C pg checkout $PLAYGROUND_REF
+git clone <sabiruby> sabiruby && git -C sabiruby checkout v$(the lock's version)   # beside pg
+cd pg && tools/build.sh      # needs WASI_SDK_PATH and wasm-opt; ~20 s warm
+```
+
+The two checkouts have to be **siblings**, because the playground's `wasm/Cargo.toml` names
+`../../sabiruby` by path — the same layout `pages.yml` makes. Done for F6 on 2026-09-22 with
+`5337b2f` and `v0.6.1`: it builds, and the module is 2,448,533 bytes (840,475 gzipped).
 
 ## Keys
 
@@ -165,15 +215,15 @@ A browser wants some of a game's keys for itself: **F5 reloads**, Ctrl+S opens a
 opens Help, Tab moves the focus. Each page takes them first — `keydown` in the capture phase,
 `preventDefault` — and the game still sees them, so the keys are the same two builds:
 
-| | SabiRuby Battle | Garden |
-|---|---|---|
-| F5 | Apply the edited behaviour | **save the whole garden** |
-| F9 | — | read it back |
-| Ctrl+S | Save the behaviour (in the browser: `localStorage`) | Save the creature's file |
-| Ctrl+Enter | — | Apply to every creature of that species |
-| Tab | the next robot | the next creature |
-| F1 / F2 / P | the editor / the VM panel / pause the scripts | the same |
-| H, ? | the in-game guide (G6) | the same |
+| | SabiRuby Battle | Garden | Factory |
+|---|---|---|---|
+| F5 | Apply the edited behaviour | **save the whole garden** | **save the whole factory** |
+| F9 | — | read it back | read it back |
+| Ctrl+S | Save the behaviour (in the browser: `localStorage`) | Save the creature's file | Save the file open in the editor — one of three |
+| Ctrl+Enter | — | Apply to every creature of that species | Apply |
+| Tab | the next robot | the next creature | — |
+| F1 / F2 / P | the editor / the VM panel / pause the scripts | the same | the same, and `P` stops **the world** as well as the scripts (F5) |
+| H, ? | the in-game guide (G6) | the same | the same |
 | wheel | — | zoom: a tenth of the distance per notch, and the browser's `deltaY` is read as 100 pixels to the notch (G6; `docs/garden.md`) |
 | right-drag, Shift+drag, WASD, Home | — | slide the view, and put it back (G6) |
 
@@ -225,28 +275,38 @@ older build wrote. `docs/garden.md` has the rest.
 ## Size
 
 Measured with `--profile web` (release, `opt-level = "s"`, thin LTO, stripped) and binaryen 132 —
-the version CI installs. **Taken again on 2026-09-21**, at the end of S5b of
-`plans/shared-crate-plan.md` (the whole of the numbers work: the two shared crates, Battle, the
-garden's settings, its numbers of play, and the checks), all four columns of both games on one
-machine within the same minutes, so the four are comparable with each other. The four stages
-since the reading below moved these by a quarter of a percent between them, which is why the
-table is taken again rather than adjusted:
+the version CI installs. **Taken again on 2026-09-22 at F6**, when the site became three games,
+all four columns of all three on one machine within the same minutes (one `web/build.sh all`, and
+a second `wasm-bindgen` run over the same three `target/…/web/*.wasm` for the two raw columns,
+because the script optimises the module in place):
 
 | | bytes | gzip -9 | with `wasm-opt -Os` | its gzip |
 |---|---|---|---|---|
-| `sabibots/pkg/game_bg.wasm` | 39,212,650 | 10,060,181 | 35,216,606 | 10,768,420 |
-| `garden/pkg/game_bg.wasm` | 40,035,901 | 10,283,236 | 35,980,029 | 10,992,359 |
-| `compiler/sabiruby.wasm` (each game's copy) | 2,445,509 | 840,268 | — | — |
+| `sabibots/pkg/game_bg.wasm` | 39,265,829 | 10,082,522 | 35,264,746 | 10,793,564 |
+| `factory/pkg/game_bg.wasm` | 39,693,676 | 10,235,529 | **35,668,110** | 10,942,946 |
+| `garden/pkg/game_bg.wasm` | 40,099,872 | 10,305,560 | 36,038,000 | 11,013,138 |
+| `compiler/sabiruby.wasm` (each game's copy) | 2,448,533 | 840,475 | — | — |
 | `sabibots/assets/` (16 files) | 234,202 | | | |
-| `garden/assets/` (10 files) | 322,924 | 62,606 | | |
+| `garden/assets/` (10 files) | 322,924 | | | |
+| `factory/assets/` (4 files) | **11,326** | | | |
 
-Against the 2026-09-20 reading in the same four columns, Battle's module is **+111,915 raw
-(+0.29%) and +104,988 after `wasm-opt` (+0.30%)**, and the garden's **+162,350 (+0.41%) and
-+151,729 (+0.42%)**. What is in that quarter-to-half a percent is S5b: seven `Resource`s of
-numbers in the garden and one in Battle, the `Settings` keys that read them, the match's model in
-Ruby, and the checks' own new lines. (The garden's assets gzip about a kilobyte differently
-between readings because the measurement concatenates the ten files and `find` does not promise
-an order; the files are the same files.)
+**Factory lands between the other two**, 1.1% above Battle and 1.0% below the garden, which is
+where a 2D game with one more VM-facing stage and no 3D belongs: it pays Battle's sprite renderer
+and not the garden's `bevy_pbr`, `bevy_gltf` and `bevy_animation`, and what it adds over Battle is
+its own eleven modules — the data stage's serde, the control stage, the save file, three editors —
+at four hundred kilobytes. **Its assets are 3.5% of the garden's** (one 143-tile sheet, one strip
+of five 8 px pictures and two licence texts, `docs/factory.md`), which is the whole of the
+difference between a pack of glTF models and a tile sheet.
+
+Against the 2026-09-21 reading (S5b) the two older games moved **+53,179 raw / +48,140 optimised
+for Battle (+0.14%)** and **+63,971 / +57,971 for the garden (+0.16%)**. What is in that sixth of
+a percent is S11 — `Settings::positive`/`counted` and `checks::Errands` in the shared crate, which
+both games link — and F5's re-cut guide font, which is in `games-shell` and therefore in all three
+(81,480 B against 64,616; `CREDITS.md`).
+
+**The compiler module moved too**, +3,024 raw and +207 gzipped, and it is the one row here that is
+not this repository's doing: the playground pin went `d72e000` → `5337b2f` and its SabiRuby with
+it, 0.5.2 → 0.6.1 ("Three pins" above).
 
 The rows before these were measured at the sabiruby 0.5.1 build, before G6's Japanese font and
 everything after it, so the difference between the two tables is not any one change's — the
@@ -257,11 +317,12 @@ two new lines in Battle's checks cost 92 bytes. (The garden's assets gzip a kilo
 last time because the two readings concatenated the ten files in different orders; the files are
 the same files.)
 
-The compiler module's row is the playground at `d72e000` (2026-09-18), which is what
-`PLAYGROUND_REF` pins; it was 2,435,191 / 835,234 at `3f47c9d`, and **+10,318 raw / +5,034
-gzipped** of that is `sabi_highlight` and the SabiRuby the playground was rebuilt against.
-Of it, +1,736 / +493 is the export itself (measured in sabiruby-playground's
-`docs/worklog/2026-09-18-highlight.md`, the same tree built with and without it).
+The compiler module's row is the playground at `5337b2f` (2026-09-22), which is what
+`PLAYGROUND_REF` pins; it was 2,445,509 / 840,268 at `d72e000` and 2,435,191 / 835,234 at
+`3f47c9d`, and **+10,318 raw / +5,034 gzipped** of the older of those two steps is
+`sabi_highlight` and the SabiRuby the playground was rebuilt against. Of it, +1,736 / +493 is the
+export itself (measured in sabiruby-playground's `docs/worklog/2026-09-18-highlight.md`, the same
+tree built with and without it).
 
 ### What the editor's colours cost (2026-09-18)
 
@@ -329,9 +390,11 @@ The font was 9,589,900 bytes as it comes from Google Fonts. Shipping it whole wo
 27% increase on the module, which is the decision the subsetting avoided; `tools/subset-font.sh`
 is what has to be run again when the Japanese is edited (`docs/garden.md`, `CREDITS.md`).
 
-**The garden is 2.0% bigger than Battle** (39.87 vs 39.10 MB raw, 2026-09-20), which is the whole of 3D:
-`bevy_pbr`, `bevy_gltf`, `bevy_animation` and the glTF loader against Battle's sprites. The plan
-guessed 35–40 MB against "Battle's 30 MB"; both games are at the top of that. The figure recorded
+**The garden is 2.1% bigger than Battle** (40.10 vs 39.27 MB raw, 2026-09-22), which is the whole
+of 3D: `bevy_pbr`, `bevy_gltf`, `bevy_animation` and the glTF loader against Battle's sprites.
+**Factory, 2D like Battle, is 1.1% above it** — so a whole third game, with three Ruby stages, a
+save file and a three-file editor, costs less than the garden's renderer does. The plan
+guessed 35–40 MB against "Battle's 30 MB"; all three are at the top of that. The figure recorded
 here at the time of the Battle's own build was 26.7 MB — the module has grown by 8 MB since, on
 an unchanged `web` profile, and what grew it (Bevy 0.19, `bevy_egui` 0.42, `rubevy-egui` and `games-shell`) has
 not been taken apart. Most of what is in there is Bevy's renderer.
@@ -383,6 +446,49 @@ several shorter ones:
   they cover most of the window and the VM panel's bottom rows run past the edge at that height.
   They are egui windows and can be dragged and collapsed. This is what moved the save buttons
   above the creature list.
+
+### Factory in a page (F6, 2026-09-22)
+
+Driven the same way, at 1280×720, from a `web/build.sh all` of the same commit. `?selftest`
+prints its **forty lines with no `FAIL`**, no page error and no failed request, its list is the one
+in `verification/selftest-lines.md` with the diff empty, and the screenshot has **no pure black
+pixel in it at all** (577 distinct colours — the floor's two oranges and the panels), which is the
+check F0 had to invent when a tileset whose square layers numbered a multiple of six drew a black
+canvas and said nothing.
+
+**What start-up costs in a page**, which is the number this game has more of than the other two
+because it compiles three files instead of one. Each compile now says what it took, and over three
+runs:
+
+| | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| `data.rb` (read *and* run, before the first frame) | 24.3 ms | 18.1 ms | 8.8 ms |
+| `control.rb` (392 lines with its prelude) | 7.4 | 11.9 | 3.8 |
+| `inserter.rb` (244 lines, when the first arm is built) | 0.7 | 0.6 | 0.7 |
+| **all three** | **32.4** | **30.6** | **13.3** |
+| from `page.goto` to the last of them | 1.07 s | 0.80 s | 0.94 s |
+
+The spread is the compiler module warming up, not the files: `data.rb` is the first thing compiled
+and is dearest every time, `inserter.rb` is the longest program and is the cheapest because it is
+third. Against F2's reading of about 7 ms for `data.rb` alone, what grew is the file (F2a's
+`ore`, F3a's `map`) and what was added is two more programs. **All of it is inside one second of
+a page that has just fetched a 35 MB module**, which is where the second the visitor actually
+waits is.
+
+**What a frame costs is all drawing, and this machine cannot measure it.** `?stress=4000` — a
+loop of belt on a 48×48 map with four thousand items on it — reports
+
+```
+stress: map 48x48 items=4000 belts=2116 arms=0 frame ms p50 361.70 p95 710.80 (about 3 fps) | step us p50 100 p95 200 | ANGLE (… SwiftShader driver) (Gl, Cpu)
+```
+
+**100 µs of factory inside a 360 ms frame.** The same page with `?arms=1` on the shipped 32×32 map
+is 306 ms a frame. Two orders of magnitude between the simulation and the picture, and the
+adapter line says why: `device_type: Cpu`. F1 found the same thing from the other end — two items
+and eighteen hundred items were both 5 fps — and wrote that the browser could not be measured
+here. It still cannot. The map's default size is the one number in this game nobody has been able
+to derive, and what it waits on is one reading from a real GPU:
+`verification/factory-on-a-real-gpu.md` is five lines that take it.
 
 ### Three things it found, and where they went
 

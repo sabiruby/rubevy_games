@@ -4,7 +4,10 @@ The third game. **This file says what exists, not what is planned** — the plan
 [`plans/factory-plan.md`](plans/factory-plan.md), and everything this page does not mention is
 not written yet.
 
-What exists (stages **F0** to **F4**, 2026-09-22):
+**It is playable, and it is on the published site**: <https://sabiruby.github.io/rubevy_games/factory/>
+(F6, 2026-09-22).
+
+What exists (stages **F0** to **F6**, 2026-09-22):
 
 * a crate, `factory/`, in the workspace;
 * a **floor**: one `TilemapChunk` — Bevy's own, one draw call for the whole grid — laid out of
@@ -23,17 +26,23 @@ What exists (stages **F0** to **F4**, 2026-09-22):
   it in the tile in front, **and when it does that is a line of Ruby**
   (`ruby/inserter.rb` on top of `ruby/prelude.rb`). Nothing goes into or out of a machine any
   other way, so a line that ends at a furnace ends there until an arm is put beside it;
-* a **panel to write that Ruby in**, in a window: click an arm and its script is there, Apply runs
-  it in that one or in all of them, Revert puts them back on the file;
+* a **panel to write that Ruby in**, in a window and in a page: click an arm and its script is
+  there, Apply runs it in that one or in all of them, Revert puts them back on the file, and the
+  same panel switches between all three Ruby files (below);
 * a **control stage** — `ruby/control.rb` on top of `ruby/control_prelude.rb`, one script for the
   whole factory that hears five things at the grain of a *machine* (`built`, `removed`, `crafted`,
   `delivered`, `jammed`), says what the factory is for (`goal deliver: { gear: 60 }`) and says when
   it has been won, with a line of text on the screen for the goal and for **what was dropped**;
-* `--headless N`, `--shot`, `--stress N`, `--arms N`, and the checks (`FACTORY_SELFTEST`,
-  `?selftest`).
+* **the window**, which since F5 is the whole set: an egui HUD, the VM panel (`F2`), the guide in
+  English and Japanese (`H`), the settings panels, `P` that stops the world and not only the
+  scripts, a **save file** (`F5` / `F9`) that holds the grid, the belts, the ore and what every
+  script remembers, and a camera **a line of Ruby can move**;
+* `--headless N`, `--shot`, `--stress N`, `--arms N`, `--save` / `--load`, and the checks
+  (`FACTORY_SELFTEST`, `?selftest`).
 
-What does not exist: a HUD (F4's goal is one line of `bevy_ui` text, and F5 makes it egui), a VM
-panel, a guide, a save file, and Save in the panel (it says so rather than doing half of it).
+What does not exist: nothing the plan asked for. The things this game *chose* not to have are in
+their own paragraphs below — no inserter is wanted between a belt and a chest, a machine has no
+direction, and a chunked map is not worth buying.
 
 ```
 cargo run -p factory                          # a window
@@ -42,8 +51,13 @@ cargo run -p factory -- --stress 4000         # a loop of belt, measured (sizes 
 cargo run -p factory -- --arms 1000           # a thousand inserters, measured (the same)
 FACTORY_SELFTEST=1 cargo run -p factory -- --headless
 docker/build.sh factory release && docker/run.sh factory release   # a window, in the container
-web/build.sh factory && web/serve.sh          # then http://localhost:8080/factory/
+web/build.sh && web/serve.sh                  # all three, then http://localhost:8080/factory/
 ```
+
+**In a page the same knobs are the address**: `?selftest`, `?stress=4000`, `?arms=340`
+(`games_shell::checks::asked_number`). `docs/verification/factory-on-a-real-gpu.md` is five lines
+that use them to measure the one number here nobody has been able to measure — how big a map a
+real GPU draws comfortably.
 
 ## Playing it
 
@@ -652,19 +666,27 @@ never copies.
 
 ## The entry page
 
-The published site (`web/build.sh all`, which is what CI runs) has **two** games on it. Factory's
-page builds — `web/build.sh factory`, and `/factory/` from a local `web/serve.sh` — and its
-values are in `web/games.sh`, but the word `factory` is deliberately **not** in `GAMES_ALL`, and
-its `<li>` in `web/index.html` is written out and commented. Stage F6 takes both out of their
-brackets at once. Nothing in `.github/workflows/pages.yml` had to change: it names no games, it
-runs `web/build.sh all`.
+The published site (`web/build.sh all`, which is what CI runs) has had **three** games on it
+since F6: <https://sabiruby.github.io/rubevy_games/factory/>. What made it three was two lines —
+the word `factory` in `GAMES_ALL` in `web/games.sh`, which is what `all` builds, and the `<li>`
+in `web/index.html`, which is what links to it. From F0 to F5 both were written out and held
+back, deliberately and in that pair: the array alone would have published a game nothing linked
+to, the `<li>` alone would have linked to nothing. **Nothing in
+`.github/workflows/pages.yml` had to change at any point**, because it names no games at all — it
+runs `web/build.sh all`, and the list of games is one array in one shell file.
+
+What the page differs by is the same block of values every game has (`docs/web.md`): the title,
+three colours, the canvas id, and the keys it takes back from the browser. Factory's list of keys
+is the garden's — `F1`, `F2`, `F5`, `F9`, `Tab` — because it means by `F5` and `F9` what the
+garden means: write the world down and read it back, where a browser means Reload.
 
 ## The checks
 
-`docs/verification/selftest-lines.md` has the lists — **twenty-four** lines with no window,
-twenty-seven with one, and twenty-eight in a page. **Two move between them**, and both are `--` where the run
-could not put the check in a position to measure anything: a headless run spawns no chunk and has
-no image loader, and it has no editor either.
+`docs/verification/selftest-lines.md` has the lists — **thirty-one** lines with no window,
+**thirty-nine** with one, and **forty** in a page (the extra one is the `done` line a page prints
+and a PC does not). The ones that move between them are `--` where the run could not put the check
+in a position to measure anything: a headless run spawns no chunk and has no image loader, and it
+has no editor, no guide and no panels either.
 
 **They build a factory the way a player does**, which since F3 means writing a `build::Order` —
 the game's own message, carrying a tile, a thing and a way round — rather than forging a mouse.

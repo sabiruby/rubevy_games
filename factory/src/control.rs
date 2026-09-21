@@ -364,10 +364,21 @@ fn compile(
     let front = format!("{}{prelude}", names_and_numbers(data, rules));
     let program = Program::new(&front, SCRIPT_FILE, &in_a_method(body), "run_control");
     let prelude_lines = program.prelude_lines + WRAPPER_LINES;
-    match platform::compile(&program.source, SCRIPT_FILE) {
-        Ok(bytes) => Ok((mrb.add(MrbAsset { bytes }), prelude_lines)),
-        Err(why) => Err(in_the_authors_lines(&why, prelude_lines, PRELUDE_FILE)),
-    }
+    // **What this costs is the page's business** — the same reason the data stage times itself
+    // (`main::read_the_data_stage`): in a browser `platform::compile` is a second wasm module
+    // called synchronously, this one runs in `Startup`, and the three compiles a start-up does
+    // (`data.rb` here, `control.rb`, and an arm's program the first time one is built) are all
+    // time the canvas is blank for. Said once per compile, which is once at start-up and once
+    // per Apply, so it is not a line in a loop.
+    let started = bevy::platform::time::Instant::now();
+    let bytes = platform::compile(&program.source, SCRIPT_FILE)
+        .map_err(|why| in_the_authors_lines(&why, prelude_lines, PRELUDE_FILE))?;
+    info!(
+        "{SCRIPT_FILE}: {} lines compiled in {:.1} ms",
+        program.source.lines().count(),
+        started.elapsed().as_secs_f32() * 1e3,
+    );
+    Ok((mrb.add(MrbAsset { bytes }), prelude_lines))
 }
 
 /// **The player's file, put inside a method** — one line in front of it and one after.

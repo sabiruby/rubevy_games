@@ -9,17 +9,18 @@ so editing a file changes what happens on screen without a rebuild.
 |---|---|---|
 | [`sabibots`](sabibots) | **SabiRuby Battle** — robots that fight; each robot's behaviour is one Ruby file | playable v0.1 |
 | [`garden`](garden) | **Garden** — a 3D world whose creatures read and write their own ECS components from Ruby by name, breed by mixing a `Genome` that is a Rust struct and a Ruby class at once, and are saved to JSON along with what each of them remembers | playable v0.1: the world, the behaviours, the genome, the save file, the window and the browser build (G0–G5) |
-| [`factory`](factory) | **Factory** — a small top-down factory: the items, recipes and machines are declared in Ruby, the control stage reacts to what happens, and each inserter runs a script the player writes | planned; the crate exists from F0 and F1 — a grid you build on, conveyors that carry and jam and merge, ore, miners and chests, and **no Ruby in it yet** (`docs/factory.md`) |
+| [`factory`](factory) | **Factory** — a small top-down factory: `ruby/data.rb` declares the items, the recipes, the machines and how big the world is; `ruby/control.rb` hears what the factory does and says what it is for; and each **inserter** runs a script of its own that decides when to move a thing from the tile behind it to the tile in front. All three can be edited and applied while the factory runs | playable v0.1: the floor, the grid, belts, miners and chests, the three Ruby files, the editor, the save file, the HUD, the VM panel and the guide (F0–F6) |
 | `cards` | a card game whose rules are a Ruby DSL | planned |
 
-**Play them in a browser:** <https://sabiruby.github.io/rubevy_games/> — both games, built for
+**Play them in a browser:** <https://sabiruby.github.io/rubevy_games/> — all three, built for
 the web, from the same source as the PC build:
 
 * SabiRuby Battle: <https://sabiruby.github.io/rubevy_games/sabibots/>
 * Garden: <https://sabiruby.github.io/rubevy_games/garden/>
+* Factory: <https://sabiruby.github.io/rubevy_games/factory/>
 
 (Battle used to be at the top address itself; it moved down one when the garden arrived, and the
-top address is now the page that links to both.) Or on a PC:
+top address is now the page that links to all three.) Or on a PC:
 
 ```
 cargo run -p sabibots                   # a window, 2D, 16:9
@@ -28,14 +29,19 @@ cargo run -p garden                     # the other one, 3D: click a creature, e
                                         #   (F2 the VM panel, P pause, F5 saves the garden, F9 brings it back)
 cargo run -p garden -- --headless 90    # no window: 90 seconds
 cargo run -p garden -- --headless 30 --save garden.save.json   # ... and write it down at the end
-web/build.sh && web/serve.sh            # both browser builds, at http://localhost:8080/
+cargo run -p factory                    # the third one: 1-4 and 5.. build, click an inserter to
+                                        #   write its Ruby, F1 the editor's three files, H the guide
+cargo run -p factory -- --headless 66   # no window: 66 seconds
+cargo run -p factory -- --stress 4000   # a loop of belt, measured (it sizes its own map)
+web/build.sh && web/serve.sh            # all three browser builds, at http://localhost:8080/
 web/build.sh garden                     # just one, at http://localhost:8080/garden/
 ```
 
 The PC build and the browser build are the same code; which one you get is chosen by the target
-(`sabibots/src/platform.rs` and `garden/src/platform.rs`, and [`docs/web.md`](docs/web.md) for how
-the browser one is put together). In the browser, **Save** keeps the behaviour — or the whole garden —
-in the browser's local storage instead of a file, and there is no file to edit from outside.
+(each game's `src/platform.rs`, and [`docs/web.md`](docs/web.md) for how the browser one is put
+together). In the browser, **Save** keeps the behaviour — or the whole garden, or the whole
+factory — in the browser's local storage instead of a file, and there is no file to edit from
+outside.
 
 Then change how a robot fights in the editor on the right of the game window: **Apply** (F5)
 runs the edited behaviour in that robot straight away, in memory, without touching the file; **Save
@@ -73,11 +79,20 @@ garden/               Garden: the 3D world, and the components its creatures rea
   src/platform.rs     the same split as sabibots'
   ruby/prelude.rb     the DSL the creatures are written in
   ruby/creatures/*.rb one file per species
+factory/              Factory: the grid, the belts, the machines and the arms
+  src/belts.rs        what one step of the factory is — no Bevy in it, so it unit-tests alone
+  src/data.rs         the data stage: ruby/data.rb read into tables before the first frame
+  src/control.rs      the control stage: the five events, the goal, and winning
+  src/inserters.rs    the one machine with a mind, and the scripts the player writes
+  ruby/data.rb        the items, the recipes, the machines, the map and every number of play
+  ruby/control.rb     what the factory is for
+  ruby/inserter.rb    when an arm moves a thing
 web/                  the browser build: build.sh, serve.sh, index.html (the entry page), and
                       one page.html.in with one block of values a game in games.sh, which
                       build.sh fills in (dist/ is the output)
 tools/                fixedlines.sh, which turns a run of the checks into a list two runs can
-                      be diffed by, and subset-font.sh for the guide's Japanese
+                      be diffed by, subset-font.sh for the guide's Japanese, and the factory-*.py
+                      that build Factory's tile sheet out of Kenney's packs
 docs/                 how it is put together, what the checks have to say, and what is next
 ```
 
@@ -98,4 +113,6 @@ in `Cargo.lock`, optionally `wasm-opt`, and a checkout of
 ## License
 
 MIT (`LICENSE`). The Ruby in `*/ruby/` is part of the games and under the same terms.
-The art is Kenney's *Top-down Tanks Remastered* (CC0); see [`CREDITS.md`](CREDITS.md).
+The art is Kenney's (CC0) — *Top-down Tanks Remastered*, *Nature Kit* and *Cube Pets*, *Tiny
+Factory* and *Tiny Farm* — with a few sprites drawn to the same palettes, and one subset of Noto
+Sans JP (OFL) for the guide's Japanese; see [`CREDITS.md`](CREDITS.md).
