@@ -552,6 +552,15 @@ fn main() {
             selftest.before(build::orders).before(FactorySet::Step).run_if(the_factory_is_up),
         );
     }
+    // **What this run was asked for besides being a factory, and the end of the run** (S11).
+    // Both errands are known here — the checks are the `if` above and the picture is the line
+    // below — and neither of them ends the run itself any more:
+    // `games_shell::checks::end_the_run` does, when nothing is left.
+    app.add_plugins(platform::Errands::of(
+        "the factory",
+        platform::selftest_asked(),
+        shot.is_some(),
+    ));
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
@@ -973,6 +982,7 @@ fn watch_the_frames(
     world: Res<ScriptWorld>,
     crew: inserters::Crew,
     mut stress: ResMut<Stress>,
+    errands: Res<platform::Errands>,
     mut exit: MessageWriter<AppExit>,
 ) {
     stress.seen.push(time.delta_secs() * 1000.0);
@@ -1029,7 +1039,11 @@ fn watch_the_frames(
     stress.woke.clear();
     stress.carried.clear();
     stress.said += 1;
-    if stress.said >= STRESS_REPORTS && platform::CHECKS_EXIT_WHEN_DONE {
+    // **A stress run is a third thing a run can be asked for, and it ends the same way**: when it
+    // has said its reports and nothing else this run was told to do is unfinished (S11). Before
+    // that it asked only whether the platform could exit, which in a run that was also asked for
+    // a picture is the same lie `--shot` and the checks told each other (`platform::Errands`).
+    if stress.said >= STRESS_REPORTS && errands.left().is_none() {
         exit.write(AppExit::Success);
     }
 }
@@ -1045,24 +1059,23 @@ fn spread(samples: &mut [f32]) -> (f32, f32) {
     (at(0.5), at(0.95))
 }
 
-/// `--shot FILE SECONDS`: the picture, and then the end of the run.
+/// `--shot FILE SECONDS`: the picture, and then — since S11 — nothing else.
 ///
 /// **A run that is also being checked does not end until the checks have finished.** F1 made the
 /// checks wait for the camera (they used to end the run before the picture's moment came); F2
 /// found the other half of the same thing — its checks take thirteen seconds of the game's own
 /// time and the camera's moment is at eight, so the picture was ending the run with four of the
-/// lines unsaid. Whichever of the two is still working keeps the run alive.
+/// lines unsaid. Whichever of the two is still working keeps the run alive, and since S11 it is
+/// `games_shell::checks::Errands` that knows which, for all three games rather than this one.
 fn take_shot(
     mut commands: Commands,
     time: Res<Time>,
-    test: Option<Res<SelfTest>>,
     mut shot: ResMut<Shot>,
-    mut exit: MessageWriter<AppExit>,
+    mut errands: ResMut<platform::Errands>,
 ) {
     if shot.taken {
-        let checks_still_going = test.is_some_and(|t| !t.done);
-        if time.elapsed_secs() > shot.after + 1.0 && !checks_still_going {
-            exit.write(AppExit::Success);
+        if time.elapsed_secs() > shot.after + 1.0 {
+            errands.the_picture_is_taken();
         }
         return;
     }
@@ -1214,9 +1227,10 @@ fn selftest(
     images: Res<Assets<Image>>,
     mut world: ResMut<ScriptWorld>,
     mut crew: inserters::Crew,
-    shot: Option<Res<Shot>>,
     mut orders: MessageWriter<build::Order>,
-    mut exit: MessageWriter<AppExit>,
+    // S11: what this run was asked for, and what is left of it — the checks are one errand of
+    // two and no longer end the run themselves (`games_shell::checks::Errands`)
+    mut errands: ResMut<platform::Errands>,
 ) {
     if test.done {
         return;
@@ -1814,15 +1828,13 @@ fn selftest(
         }
         _ => {
             test.done = true;
-            // **A run that was asked for a picture is not over when the checks are.** F0 noticed
-            // that `--shot` and the checks could not be used together — the checks end the run
-            // before the picture's moment comes — and it is the checks' little factory that is
-            // worth a picture, so the one waiting for a camera wins.
-            if platform::CHECKS_EXIT_WHEN_DONE && shot.is_none() {
-                exit.write(AppExit::Success);
-            } else {
-                info!("selftest: done — the factory keeps running (a page has nothing to exit to)");
-            }
+            // **The checks have said their last word, which is not the same as the run being
+            // over** (S11). F0 noticed that `--shot` and the checks could not be used together —
+            // the checks ended the run before the picture's moment came — and F1 mended it here,
+            // in this game, by asking whether a picture had been asked for. Both directions of
+            // that are `games_shell::checks::end_the_run`'s now, in one place for three games,
+            // and the `done` line with its reason is written there.
+            errands.the_checks_are_done();
         }
     }
 }

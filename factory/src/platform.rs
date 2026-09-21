@@ -42,9 +42,12 @@ const HIGHLIGHT_BRIDGE: &str = "factoryHighlight";
 // browser's road). Neither is re-exported here yet: F5 is the first stage with a Save button,
 // and a `pub use` nothing calls is a warning.
 
-/// Whether the checks end the run when they are done — `true` on a PC, `false` in a page, which
-/// has nothing to exit to.
-pub use games_shell::checks::CHECKS_EXIT_WHEN_DONE;
+/// **What this run was asked for besides being a factory**, and the end of the run (S11): the
+/// checks and a `--shot`, each of which used to be able to cut the other short. F1 and F2 mended
+/// both directions of that inside this game; S11 moved the mend into the shared crate so that
+/// three games answer it in one place. A page has nothing to exit to, which is one of the reasons
+/// this run may go on.
+pub use games_shell::checks::Errands;
 
 /// **Where the settings live**: a small `key=value` text file in the directory the game was
 /// started from, and in a browser the `localStorage` key `factory:factory.settings.txt`.

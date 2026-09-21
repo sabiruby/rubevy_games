@@ -3212,6 +3212,16 @@ fn main() {
                     .run_if(resource_exists::<Meadow>),
             );
     }
+    // **What this run was asked for besides being a garden, and the end of the run** (S11). Both
+    // errands are known here — the checks are the `if` above and the picture is the line below —
+    // and neither of them ends the run itself any more: `games_shell::checks::end_the_run` does,
+    // when nothing is left. The checks that count are the window's, which are the ones that say
+    // when they are finished; a headless run ends when its `--headless` seconds are up.
+    app.add_plugins(platform::Errands::of(
+        "the garden",
+        selftest && headless.is_none(),
+        shot.is_some(),
+    ));
     if let Some((path, after)) = shot {
         app.insert_resource(Shot { path, after, taken: false }).add_systems(Update, take_shot);
     }
@@ -7711,10 +7721,19 @@ fn stop_when_over(
     exit.write(AppExit::Success);
 }
 
-fn take_shot(mut commands: Commands, time: Res<Time>, mut shot: ResMut<Shot>, mut exit: MessageWriter<AppExit>) {
+/// `--shot`: the picture, and then — since S11 — nothing else. **Whether the run ends here is not
+/// this system's to say**: the checks may still be talking (`games_shell::checks::Errands`), and
+/// the two seconds below are how long the observer that writes the file is given, not how long
+/// the rest of the run is worth.
+fn take_shot(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut shot: ResMut<Shot>,
+    mut errands: ResMut<platform::Errands>,
+) {
     if shot.taken {
         if time.elapsed_secs() > shot.after + 2.0 {
-            exit.write(AppExit::Success);
+            errands.the_picture_is_taken();
         }
         return;
     }
