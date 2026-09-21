@@ -370,19 +370,27 @@ impl Flow {
     }
 }
 
-/// Where an item sitting `along` of the way through a belt tile is, in world units.
+/// Where an item `along` steps through a belt tile is, in world units.
 ///
 /// **A corner is two straight halves.** An item on a belt that turns comes in at the middle of one
 /// edge and leaves at the middle of another, so the first half of its journey is along the
 /// direction it arrived in and the second is along the direction it leaves in. On a straight tile
 /// `came_in` is the same as `goes_out` and the two halves are one line.
-pub fn item_at(map: &Map, tile: UVec2, came_in: Dir, goes_out: Dir, along: f32) -> Vec2 {
+///
+/// **Nothing is scaled and nothing is rounded** (F2a). One step is one pixel of the art —
+/// [`TILE_PX`] steps to a tile and `TILE_PX` pixels to a tile — so how far from the middle of the
+/// tile an item is *is* the number of steps between it and the middle, as it stands. A tile's
+/// middle is a whole number of world units ([`Map::tile_centre`]), so an item's place is one too,
+/// and with the zoom rounded to whole pixels ([`crate::draw::snapped`]) it lands on a pixel of the
+/// screen rather than between two. While it was a fraction of a tile, every item's place was a
+/// multiply and a rounding away from the pixel it wanted.
+pub fn item_at(map: &Map, tile: UVec2, came_in: Dir, goes_out: Dir, along: crate::belts::Steps) -> Vec2 {
     let centre = map.tile_centre(tile);
-    let half = TILE_PX as f32 / 2.0;
-    if along < 0.5 {
-        centre - came_in.as_vec() * (0.5 - along) * 2.0 * half
+    let half = (TILE_PX / 2) as crate::belts::Steps;
+    if along < half {
+        centre - came_in.as_vec() * (half - along) as f32
     } else {
-        centre + goes_out.as_vec() * (along - 0.5) * 2.0 * half
+        centre + goes_out.as_vec() * (along - half) as f32
     }
 }
 

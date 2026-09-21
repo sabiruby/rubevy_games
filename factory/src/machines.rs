@@ -300,9 +300,11 @@ pub fn hand_to(
     match grid.at(into).map(|b| b.what) {
         Some(What::Belt) => {
             let spacing = rules.spacing();
+            // it goes on at the tile's entry edge, which is step 0, and it only goes on if what
+            // is already there has moved a gap's worth away from it
             let room = lanes.of[into].back().is_none_or(|last| last.along >= spacing);
             if room {
-                lanes.of[into].push_back(OnBelt { along: 0.0, item });
+                lanes.of[into].push_back(OnBelt { along: 0, item });
             }
             room
         }

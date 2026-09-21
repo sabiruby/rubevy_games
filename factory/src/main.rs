@@ -156,13 +156,12 @@ const CHECK_SLACK: f32 = 2.0;
 pub struct Map {
     /// How many tiles across and down. Square, for now.
     pub tiles: u32,
-    /// **How many items can be dug out of one tile of ore**, and **how wide a patch is**, in
-    /// tiles. They are the map's rather than [`Rules`]'s because they are how the world is *laid
-    /// out* before anybody plays it: nothing in one step of the factory reads them, `Ore::laid_out`
-    /// reads them once, and the smallest map a patch fits on is derived from the second of them in
-    /// `main` — **before there is a VM to have read any Ruby with**. That is the line between the
-    /// numbers that stayed in `factory.settings.txt` and the four that moved into `ruby/data.rb`.
-    pub ore_per_tile: u32,
+    /// **How wide a patch of ore is**, in tiles, and the one number of the world's layout that is
+    /// still a setting: the smallest map the four patches fit on is derived from it right here in
+    /// `main` — **before there is a VM to have read any Ruby with**. That is the line, and F2a
+    /// moved the number that was on the other side of it (`ore_per_tile`, which `Ore::laid_out`
+    /// reads in `Startup`, after the data stage) into `ruby/data.rb` with the rest of the numbers
+    /// of play.
     pub ore_patch_radius: f32,
 }
 
@@ -258,7 +257,6 @@ fn main() {
     let smallest_map = Ore::smallest_map(ore_patch_radius);
     let map = Map {
         tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(smallest_map as f32) as u32,
-        ore_per_tile: counted(&settings, "ore_per_tile", 60.0),
         ore_patch_radius,
     };
     let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
@@ -548,17 +546,6 @@ fn positive(settings: &games_shell::Settings, key: &str, default: f32) -> f32 {
     }
 }
 
-/// The same, for a setting that counts **things**. Items are whole and there is at least one of
-/// them, which is not a threshold anybody chose: half an item in a chest is not a smaller chest.
-fn counted(settings: &games_shell::Settings, key: &str, default: f32) -> u32 {
-    let asked = positive(settings, key, default).round();
-    if asked < 1.0 {
-        warn!("{key} counts items, so it cannot round to less than one; using {default}");
-        return default as u32;
-    }
-    asked as u32
-}
-
 /// Where one step of the factory happens, so that everything else can say whether it is before or
 /// after it. Building is before (a belt laid this frame carries this frame) and the picture is
 /// after (what is drawn is where things are now).
@@ -568,8 +555,12 @@ pub enum FactorySet {
 }
 
 /// **The world, before anything is built on it**: the grid, the ore and the empty lanes.
-fn lay_the_land(mut commands: Commands, map: Res<Map>, data: Res<Data>) {
-    let ore = Ore::laid_out(map.tiles, map.ore_patch_radius, map.ore_per_tile);
+///
+/// It runs after the data stage and only when that left a [`Rules`] behind, which is what lets the
+/// ore in the ground be a number of play: `ore_per_tile` is `data.rb`'s since F2a, and this is the
+/// one place that reads it.
+fn lay_the_land(mut commands: Commands, map: Res<Map>, rules: Res<Rules>, data: Res<Data>) {
+    let ore = Ore::laid_out(map.tiles, map.ore_patch_radius, rules.ore_per_tile);
     info!(
         "a map of {} by {} tiles, {} of them with ore in ({} in the ground)",
         map.tiles,
@@ -641,13 +632,13 @@ fn lay_the_snake(
     // loop in front of it, and a jam is the case this is not measuring
     let spacing = rules.spacing();
     let belts = grid.built().len();
-    let most = (belts as f32 * rules.items_per_tile) as usize;
+    let most = belts * rules.items_per_tile as usize;
     let wanted = stress.items.min(most);
     let mut laid = 0usize;
     for (i, &t) in grid.built().iter().enumerate() {
         // how many this tile gets, so that the remainder is spread rather than all at the end
         let upto = (wanted * (i + 1)) / belts.max(1);
-        let mut along = 1.0;
+        let mut along = rules.tile();
         while laid < upto {
             lanes.of[t as usize].push_back(OnBelt { along, item: rules.digs });
             along -= spacing;
@@ -673,7 +664,7 @@ fn size_the_map_for_the_stress_run(
     mut map: ResMut<Map>,
     controls: Option<ResMut<CameraControls>>,
 ) {
-    let side = (stress.items as f32 / rules.items_per_tile).sqrt().ceil() as u32;
+    let side = (stress.items as f32 / rules.items_per_tile as f32).sqrt().ceil() as u32;
     // an even number of rows, so that the serpentine comes home (`lay_the_snake`)
     let tiles = map.tiles.max(side + side % 2 + 2);
     if tiles == map.tiles {
@@ -880,7 +871,7 @@ fn selftest(
                 ),
             );
             let patches = ore.tiles_with_ore();
-            let ok = patches > 0 && ore.total() == patches as u64 * map.ore_per_tile as u64;
+            let ok = patches > 0 && ore.total() == patches as u64 * rules.ore_per_tile as u64;
             say(
                 if ok { "ok  " } else { "FAIL" },
                 &format!(
@@ -1276,7 +1267,7 @@ fn seed_the_machine_lines(
         let Some(&recipe) = machine.recipes.first() else { continue };
         let recipe = &data.recipes[recipe as usize];
         let feed = grid.index(UVec2::new(left, row));
-        let mut along = 0.0;
+        let mut along = 0;
         for &(item, n) in &recipe.inputs {
             for _ in 0..n {
                 lanes.of[feed].push_back(OnBelt { along, item });
@@ -1299,9 +1290,10 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         "item :rock, icon: 0\n",
         "machine :oven, size: [1, 1], sprite: [109], speed: 1.0\n",
         "recipe :rock, in: {}, out: { rock: 1 }, time: 1.0, made_in: :oven\n",
-        "belt :line, tiles_per_second: 1.0, items_per_tile: 1.0\n",
+        "belt :line, tiles_per_second: 1.0, items_per_tile: 1\n",
         "miner :drill, seconds_per_item: 1.0, digs: :rock\n",
         "chest :box, capacity: 1\n",
+        "ore :patch, per_tile: 1\n",
     );
     vec![
         (good.replace("item :rock, icon: 0", "item :rock, icon: 0, colour: :grey"), 1, "an unknown field"),
@@ -1309,11 +1301,13 @@ fn wrong_data_files() -> Vec<(String, u32, &'static str)> {
         (good.replace("out: { rock: 1 }", "out: { pebble: 1 }"), 3, "an item nothing declares"),
         (good.replace("size: [1, 1]", "size: [0, 1]"), 2, "a machine no tiles wide"),
         (good.replace("tiles_per_second: 1.0", "tiles_per_second: -1.0"), 4, "a belt that runs backwards"),
+        // F2a's: a gap that is not a whole number of steps (`crate::data::fits_a_tile`)
+        (good.replace("items_per_tile: 1", "items_per_tile: 3"), 4, "a gap that does not divide a tile"),
         // **last, and on purpose**: a half-written line is reported where the parser gives up,
         // which is the *next* token — so `icon:` on line 1 of a file with six more lines is
         // reported at line 2. At the end of the file the next token is the end of the file, and
         // the line is the line. That is the compiler's reading and not something to work around.
-        (format!("{good}item :half, icon:\n"), 7, "Ruby that will not parse"),
+        (format!("{good}item :half, icon:\n"), 8, "Ruby that will not parse"),
     ]
 }
 
@@ -1352,7 +1346,7 @@ mod tests {
     /// run because a run needs a window for one of its checks and this needs nothing.
     #[test]
     fn a_tiles_middle_is_in_that_tile() {
-        let map = Map { tiles: 32, ore_per_tile: 60, ore_patch_radius: 3.0 };
+        let map = Map { tiles: 32, ore_patch_radius: 3.0 };
         for tile in [UVec2::ZERO, UVec2::new(31, 0), UVec2::new(0, 31), UVec2::new(31, 31), UVec2::new(8, 11)] {
             assert_eq!(map.tile_at(map.tile_centre(tile)), Some(tile), "tile {tile}");
         }
@@ -1363,7 +1357,7 @@ mod tests {
     /// something outside the world.
     #[test]
     fn the_edges_belong_to_one_tile_and_outside_is_outside() {
-        let map = Map { tiles: 32, ore_per_tile: 60, ore_patch_radius: 3.0 };
+        let map = Map { tiles: 32, ore_patch_radius: 3.0 };
         let half = map.span() / 2.0;
         assert_eq!(map.tile_at(Vec2::new(-half, -half)), Some(UVec2::ZERO));
         assert_eq!(map.tile_at(Vec2::new(-half - 0.01, -half)), None);

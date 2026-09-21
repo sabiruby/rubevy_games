@@ -100,14 +100,17 @@ pub fn belt_picture(came_in: Dir, goes_out: Dir, frame: usize) -> (u16, TileOrie
 }
 
 /// Which tile of the sheet the floor has at a place: the border, a patch of ore, or a plate.
-pub fn floor_picture(map: &Map, ore: &Ore, tile: UVec2) -> u16 {
+///
+/// `per_tile` is how much a full tile of ore holds — `data.rb`'s since F2a — because what the
+/// picture says is *how much is left of it*, which is a fraction and not an amount.
+pub fn floor_picture(map: &Map, ore: &Ore, per_tile: u32, tile: UVec2) -> u16 {
     let last = map.tiles - 1;
     let at = (tile.y * map.tiles + tile.x) as usize;
     if tile.x == 0 || tile.y == 0 || tile.x == last || tile.y == last {
         GROUND
     } else if ore.left[at] > 0 {
         // half a patch left is where it starts looking dug out
-        if ore.left[at] * 2 > map.ore_per_tile { ORE_RICH } else { ORE_POOR }
+        if ore.left[at] * 2 > per_tile { ORE_RICH } else { ORE_POOR }
     } else {
         FLOOR_PLATES[((tile.x + tile.y) % FLOOR_PLATES.len() as u32) as usize]
     }
@@ -199,6 +202,7 @@ pub fn start_drawing(
 /// The floor, when a patch of ore has changed — which is rare, and is why this is not every frame.
 pub fn draw_floor(
     map: Res<Map>,
+    rules: Res<crate::belts::Rules>,
     mut ore: ResMut<Ore>,
     chunks: Res<Chunks>,
     mut tiles: Query<&mut TilemapChunkTileData>,
@@ -213,6 +217,7 @@ pub fn draw_floor(
             picture.0[at] = Some(TileData::from_tileset_index(floor_picture(
                 &map,
                 &ore,
+                rules.ore_per_tile,
                 UVec2::new(x, y),
             )));
         }
