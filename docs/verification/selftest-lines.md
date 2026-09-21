@@ -649,7 +649,24 @@ produce when they are put through `tools/fixedlines.sh`; Battle's window and pag
 gained the `FN is Apply` line and Battle's headless list the `handler tasks …` line, which are
 the two things S4 changed.
 
-**Factory's three lists are F4's**, measured on 2026-09-22 on the branch `factory` (headless
+**Factory's three lists are F5's**, measured on 2026-09-22 on the branch `factory` (headless twice
+— the two runs diffed empty against each other — the window once and the page once, after
+`web/build.sh factory`). **F5 added seven to the headless list and thirteen to the other two**,
+and changed the wording of two of the others. Twenty-four became **thirty-one**, the window's
+twenty-seven became **thirty-nine** and the page's twenty-eight became **forty**.
+
+The seven are the save file and `data.rb` read again; the six more a window has are the editor's
+other two files, `P` in both directions, the guide, and the camera a line of Ruby moves. The two
+that changed wording are the ones that say **where a script stopped**: `RuntimeError` became the
+exception the script actually raised (the prelude's `rescue … raise` had been re-raising, which
+`ScriptEnded::at` replaced), and the page said `playground.rb:4` until the game started writing
+the name itself.
+
+**Two of the four games' other lists were run again at the end of the stage**, and the rest with
+them: the garden's headless list diffed empty, and Battle's headless run said `--` for the line
+about handler tasks, which is one of the three lines whose verdict moves. No `FAIL` anywhere.
+
+**Before that they were F4's**, measured on 2026-09-22 on the branch `factory` (headless
 twice — the two runs diffed empty against each other — the window once and the page once). **F4
 added five to each of the three** and moved none of the others: the headless nineteen became
 twenty-four, the window's twenty-two became twenty-seven and the page's twenty-three became
