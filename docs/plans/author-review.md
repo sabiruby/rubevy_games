@@ -32,6 +32,11 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 | 09-21 sabiruby | `symbol_keys` の意味は変えず `symbol_map_keys` と `Options::symbols()` を足した。`Options` に `#[non_exhaustive]` | 既存の利用者の map が黙って Symbol にならないように。Symbol は GC されない（実測）ので map のキーは利用者が選ぶ | sabiruby `serde/src/lib.rs` |
 | 09-21 sabiruby | VM に `Vm::backtrace_line()` を足した（safe、追加のみ） | `next_line`（旧 `current_line`）は次の命令の行で、native の中からは 1 行ずれる | sabiruby `src/vm.rs` |
 | 09-22 | rubevy の待ちを F4 の前提にせず、F4 を先に始めた | 著者「時間が掛かりすぎ」。control stage のイベントは publish / subscribe で、`Held` が無くても書ける | factory の `Arms::waiting` の乗り換えは `Held` が main に入った後の小さい段 |
+| 09-22 F4 | control stage のイベントは機械の粒度の 5 つ（`built`・`removed`・`crafted`・`delivered`・`jammed`）、**1 フレームに種類ごと 1 件**（何が・幾つ・どこで） | 購読 1 本 64 件/フレームからの逆算。種類の数は `data.rb` が決めるので天井に届かない（1 個ずつだと腕 60 台で当たる）。実測: 腕 3,400 台で `dropped` 0、control は毎フレーム約 200 命令 | `factory/src/control.rs` の `EVENTS` と `Happenings::add` |
+| 09-22 F4 | 詰まり = 作った物を持っていて次の材料もある機械（ベルトの詰まりは出さない） | 動いている工場のベルトは常に詰まっている。機械のそれだけが「鎖が止まった」 | `factory/src/machines.rs` の `Move::Jammed` |
+| 09-22 F4 | 目標は `control.rb` の `goal deliver: { gear: 60 }`。control がゲームに働きかける口は `win!` だけ | 60 = 鎖 1 本 × 1 分 = 箱 1 杯（`data.rb` の他の数と同じ「1 分」）。目標は遊び方なので `data.rb` ではない。建てる口は F5 と絡むので広げない | `factory/ruby/control.rb`、`factory/src/control.rs` |
+| 09-22 F4 | スクリプトは ivar を読まれることで答える（`@won`・`@saying`・`@dropped`）。control の優先度は腕より 1 つ前。`control.rb` を差し替えると目標と数はゼロから | `ask` だと納品 1 件に 1 フレーム。3,000 台の腕が control を飢えさせない。新しい目標は新しいゲーム | `control::hear_the_control_stage`、`control::the_script` |
+| 09-22 F4 | `headless_seconds` の既定 30 → 66 | 判定自身の待ちの上限の和（44 秒）の 1.5 倍 | `factory.settings.txt` の `headless_seconds` |
 
 ## B. 著者にしか決められないもの（公開後に）
 
