@@ -22,7 +22,12 @@ env:
   # without colour, because window.gardenHighlight would not exist. The playground's own module
   # is built here against the SabiRuby commit below, which is Cargo.lock's — and `highlight()`
   # arrived in SabiRuby at 7be7b86, so the two have to move together.
-  PLAYGROUND_REF: d72e0002812c0f674189f6429c7770230fd1a70c
+  # 5337b2f: the stepper asks `Vm::next_line`. SabiRuby 0.6.0 removed the former name,
+  # `Vm::current_line`, so d72e000 stopped building the day the lock named 0.6.1 (2026-09-22:
+  # two red runs, nothing deployed, the published pages stayed as they were). **This is the
+  # third pin of the same pair** — the lock's SabiRuby, the playground's own SABIRUBY_REF, and
+  # this — and a release that removes a name has to move all three.
+  PLAYGROUND_REF: 5337b2f2b452b3377bd03db3418fad9c1bba27c4
   WASI_SDK: "34"
   BINARYEN: "132"
 jobs:
