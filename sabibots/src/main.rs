@@ -762,9 +762,20 @@ fn main() {
         // `EditChecks` is read by the handler check and written by the editor's checks below.
         // It is initialised for both modes, because headless has no editor's checks and an empty
         // one excludes nothing.
-        app.init_resource::<HandlerTest>()
-            .init_resource::<EditChecks>()
-            .add_systems(Update, handler_selftest);
+        // S9: the one number of the handler check a run may be handed, for the same reason the
+        // garden's knobs exist — this check's fault shows in a browser and nowhere else, and a
+        // knob that could only be turned in a shell could not be in the same run as the fault
+        // (`games_shell::checks::asked_number`).
+        app.insert_resource(HandlerTest {
+            watching: Vec::new(),
+            checked: 0,
+            ran: 0,
+            turned: 0,
+            widest: 0.0,
+            frames: platform::handler_frames_asked().map(|n| n.max(0.0) as u32),
+        })
+        .init_resource::<EditChecks>()
+        .add_systems(Update, handler_selftest);
     }
     if checks_asked && headless.is_none() {
         // before `inspect_keys`, so a key it presses is still `just_pressed` when that reads it
@@ -1748,13 +1759,18 @@ fn stop_when_over(
             },
         );
         ok(test.checked > 0, format!("{} hits on a robot with a handler were checked", test.checked));
+        // **the window these two say they measured is the widest one a hit was given** (S9), not
+        // `HIT_WINDOW` written out again: a page drawing four frames a second judges a hit after
+        // the frames the delivery costs, and a sentence that still said 0.3 would be describing
+        // a run that did not happen (`HandlerTest::widest`, `handler_frames`)
+        let window = test.widest;
         ok(
             test.checked > 0 && test.ran == test.checked,
-            format!("a handler ran within 0.3 s of the hit ({}/{})", test.ran, test.checked),
+            format!("a handler ran within {window:.2} s of the hit ({}/{})", test.ran, test.checked),
         );
         ok(
             test.checked > 0 && test.turned == test.checked,
-            format!("the heading changed within 0.3 s of the hit ({}/{})", test.turned, test.checked),
+            format!("the heading changed within {window:.2} s of the hit ({}/{})", test.turned, test.checked),
         );
     }
     // the VM inspector's own numbers, where there is no window to draw them in (D2): the frames
@@ -1776,13 +1792,23 @@ fn stop_when_over(
 /// window, since a handler needs a fight rather than a mouse:
 ///
 ///     SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct HandlerTest {
     /// one per hit taken by a robot with a handler
     watching: Vec<WatchedHit>,
     checked: u32,
     ran: u32,
     turned: u32,
+    /// **the widest window any counted hit was given** (S9), which is what the two summing lines
+    /// say they measured. On a machine that draws faster than it takes hits it is
+    /// [`HIT_WINDOW`] and a hundredth over; on a page drawing four frames a second it is what
+    /// those frames came to. A sentence saying `0.3 s` while the run judged at 0.9 would be a
+    /// copy of a constant standing where a measurement belongs (S5b-2, S5b-5).
+    widest: f32,
+    /// **A number of frames this run was handed** instead of the one [`handler_frames`] works
+    /// out from the VM's budget (`SABIBOTS_HANDLER_FRAMES=N`, `?selftest&handler_frames=N`), and
+    /// `None` where it was not — which is every run but a measurement.
+    frames: Option<u32>,
 }
 
 /// A hit being watched: the robot, when it was hit, which way it faced then, the number of
@@ -1795,9 +1821,16 @@ struct HandlerTest {
 struct WatchedHit {
     robot: Entity,
     at: f32,
+    /// **the frame it was taken in** (S9), because the window is counted in frames as well as in
+    /// the match's seconds — see [`handler_frames`]
+    frame: u32,
     heading: f32,
     runs: u32,
     peak: f32,
+    /// **how many frames after the hit the handler first ran** (S9), or `None` while it has not.
+    /// It is read every frame rather than once at the end, so that it is a latency and not a
+    /// yes-or-no: the failing runs are the ones worth a number.
+    ran_after: Option<u32>,
     /// the task its brain was running then. A different one (or none) when the window is up
     /// means the game took its brain away and started it over inside the window, which is not a
     /// robot that failed to swerve.
@@ -1812,7 +1845,7 @@ fn angle_between(a: f32, b: f32) -> f32 {
 }
 
 /// **How far a hit has to have thrown the tank** for the check to call it a swerve: a quarter of
-/// the full turning rate over the window above.
+/// the full turning rate over the window the hit was actually given.
 ///
 /// The threshold was written out as `0.2` until S5b-2, with that sentence beside it — which was
 /// this arithmetic on the `TURN_RATE` of 2.6, rounded up from 0.195. Now that the turning rate is
@@ -1820,10 +1853,19 @@ fn angle_between(a: f32, b: f32) -> f32 {
 /// that gave its tanks a slower hull would be checked against a swerve they cannot make, and one
 /// that gave them a quicker hull would be checked against nothing at all.
 ///
+/// **And the window is the second half of the same argument** (S9). It was [`HIT_WINDOW`] here,
+/// which was right while every hit was judged after exactly that; a run whose frames are a fifth
+/// of a second long gives the hit a wider window ([`handler_frames`]), and a threshold that
+/// stayed at the narrow one would be a tank asked for a quarter of 0.3 s of turning after
+/// three times that long — which is not a quarter of anything, and is passed by a tank that was
+/// merely driving. A share of the window is the statement; the window is whichever one this hit
+/// was given.
+///
 /// So the check does the arithmetic its own comment stated, and the threshold moves with the
-/// match. On the default model it is 0.195 rather than 0.200, which is the rounding coming off.
-fn enough_of_a_swerve(turn_rate: f32) -> f32 {
-    turn_rate * HIT_WINDOW / 4.0
+/// match. On the default model and an ordinary window it is 0.195 rather than 0.200, which is
+/// the rounding coming off.
+fn enough_of_a_swerve(turn_rate: f32, window: f32) -> f32 {
+    turn_rate * window / 4.0
 }
 
 /// **The window a handler has to answer a hit in** (`docs/sabiruby-battle.md`: the scout's
@@ -1831,8 +1873,87 @@ fn enough_of_a_swerve(turn_rate: f32) -> f32 {
 /// being measured, not a number the game plays by.
 const HIT_WINDOW: f32 = 0.3;
 
+/// **And how many frames of this run that window has to hold** (S9), where [`HIT_WINDOW`]
+/// seconds did not hold them.
+///
+/// A hit is published by `move_bullets`, which is in `RubevySet::Answer` — *after* this frame's
+/// tick of the VM. So the earliest tick that can give the woken handler task its turn is the
+/// **next** frame's, and in that same frame `answer_requests` answers its `act` and
+/// `move_robots`, next in the chain, turns the tank. `handler_selftest` has no order against
+/// that chain, so the frame it is *certain* to see the swerve in is the one after that: two
+/// frames, and neither of them can be taken away by anything this game could be written
+/// differently.
+///
+/// Until S9 the window was 0.3 s of the match's clock and nothing else, which is five frames
+/// when the game draws sixty of them a second and **one** when a page draws four — and one frame
+/// is less than the delivery costs, so the check said FAIL about a run that had not yet had the
+/// chance to pass. That is F0's finding: `?selftest` in a Chromium window of 1600×900 failed
+/// both of these lines every run, while 1280×720 passed (`docs/worklog/2026-09-21-factory-F0.md`
+/// §10, item 1), and S9 reproduced it with the same page throttled twenty times
+/// (`docs/worklog/2026-09-21-s9.md` §2). It is the shape S7 took out of the garden's checks —
+/// **wait for the thing, count the wait in the unit the thing happens in, bound it with a number
+/// that is derived** (`garden::window::scheduler_frames`) — arriving at the Battle's.
+///
+/// The wait ends the moment the handler has run, so the bound is reached only when it has not,
+/// and a run that went past it is a scheduler that was handed a whole frame's allowance of turns
+/// and reached a task that was ready in none of them. **The seconds are still the floor**: a
+/// quick machine's hit is judged after 0.3 s exactly as before, because by then the frames are
+/// long gone.
+///
+/// A run may be handed another number — `SABIBOTS_HANDLER_FRAMES=N`, or
+/// `?selftest&handler_frames=N` in a page, which is how the measurement below was taken in the
+/// browser where the fault only shows (S5b-5's knobs).
+///
+/// **What it is made of**, which is the garden's sum for the garden's reason
+/// ([`garden::window::scheduler_frames`], S7 — this file cannot cite it across the two binaries,
+/// so it says the same thing again):
+///
+/// * [`HANDLER_STRUCTURAL_FRAMES`], **two**, and they are measured as well as derived: four quiet
+///   headless runs of twenty-five seconds gave 105 counted hits and the handler's turn came
+///   **2 frames after the hit in every one of them**.
+/// * plus **one whole frame's allowance of the VM's turns**, `ceil(budget ÷
+///   [`INSTRUCTIONS_A_FRAME_BUYS`])`, which is five at the budget the Battle ships with — because
+///   a frame of wall clock (`script_frame_time_ms`) runs out long before 200,000 instructions do.
+///   Past that the VM has been handed a whole allowance without reaching a task that was ready,
+///   which is the scheduler having stopped handing turns out rather than a machine that is busy.
+///
+/// **Seven, and the measurement says it is not too many.** In five browser runs at 1600×900 with
+/// Chromium's CPU throttled twenty times — the nearest this machine could come to F0's failing
+/// page, which would not fail here unthrottled — the eleven counted hits had their handler's turn
+/// after **2, 3 and 4** frames. Two would have judged three of those eleven before there was
+/// anything to see. It is **worked out from the budget** rather than written down, because the
+/// budget is `script_budget` in somebody's `sabibots.settings.txt` (S5b-3's lesson: a run given
+/// ten times the budget would otherwise be judged after the same seven frames).
+fn handler_frames(budget: u64) -> u32 {
+    HANDLER_STRUCTURAL_FRAMES + (budget as f32 / INSTRUCTIONS_A_FRAME_BUYS).ceil() as u32
+}
+
+/// The two frames a published hit costs whatever the VM is allowed: the publish is made after
+/// this frame's tick, so the next frame's is the earliest that can give the handler its turn, and
+/// `handler_selftest` is not ordered against the chain that answers its `act`, so the frame it is
+/// *certain* to see the swerve in is the one after that. **Measured** as well (S9: 105 hits of
+/// four quiet headless runs, every one of them 2) and structural.
+const HANDLER_STRUCTURAL_FRAMES: u32 = 2;
+
+/// What one frame of this machine's VM buys, in instructions — **S6's measurement**, which is
+/// written down in `garden/src/window.rs` under this same name and cannot be shared with it
+/// across two binaries: `frame_time` cut to 300 µs, the VM's slowest frame 1,708 instructions,
+/// 5.7 instructions per microsecond, so a full 8 ms frame buys about 45,600. It is a fact about
+/// the machine and the VM, and both are the same here.
+///
+/// It is the **slower** of the two measurements there (S5b-3 measured 6.85 insn/µs in an ordinary
+/// frame, which would buy 54,800) and for the same reason: this number divides a budget to say
+/// how many frames a check may wait, so one that is too big makes the wait too short and produces
+/// a FAIL for a VM that was only being slow. **The two copies should be one**, in a crate both
+/// games can reach — see the worklog's notes.
+const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
+
 fn handler_selftest(
     time: Res<Time>,
+    frames: Res<bevy::diagnostic::FrameCount>,
+    // the budget this run is really giving, which is what the bound below is worked out from
+    // (S5b-3's lesson, arriving here as S9's)
+    world: Res<ScriptWorld>,
     mut test: ResMut<HandlerTest>,
     edits: Res<EditChecks>,
     the_match: Res<TheMatch>,
@@ -1842,14 +1963,27 @@ fn handler_selftest(
     // a hit is taken by a robot a match put on the field, so the match's numbers are here
     let Some(turn_rate) = the_match.0.as_ref().map(|m| m.turn_rate) else { return };
     let now = time.elapsed_secs();
+    let frame = frames.0;
     for watch in test.watching.iter_mut() {
         if let Ok(robot) = robots.get(watch.robot) {
             watch.peak = watch.peak.max(angle_between(watch.heading, robot.heading).abs());
+            // the frame it first ran in, not whether it had by the end: a latency is what a
+            // failing run has to say for itself (S9)
+            if watch.ran_after.is_none() && robot.handler_runs > watch.runs {
+                watch.ran_after = Some(frame.wrapping_sub(watch.frame));
+            }
         }
     }
+    let bound = test.frames.unwrap_or_else(|| handler_frames(world.budget));
     let mut due: Vec<WatchedHit> = Vec::new();
     test.watching.retain(|w| {
-        if now - w.at < 0.3 {
+        if now - w.at < HIT_WINDOW {
+            return true;
+        }
+        // **S9**: and, where the handler has still not had its turn, for as many frames as the
+        // delivery costs ([`handler_frames`]). The moment it has run there is something to
+        // judge, so this holds nobody up on a machine that is keeping up.
+        if w.ran_after.is_none() && frame.wrapping_sub(w.frame) < bound {
             return true;
         }
         due.push(WatchedHit { ..*w });
@@ -1857,6 +1991,10 @@ fn handler_selftest(
     });
     for watch in due {
         let Ok(robot) = robots.get(watch.robot) else { continue };
+        // the window this hit was really given, which is [`HIT_WINDOW`] and a little on any run
+        // that draws faster than it takes hits, and the frames' own length where it is not
+        let window = now - watch.at;
+        let waited = frame.wrapping_sub(watch.frame);
         // **Why this hit could not be measured, if it could not be** — and nothing else changes
         // with it (S4). Each of the three used to print a sentence of its own instead of the two
         // below, so a hit that was excluded left one line where a hit that was counted left two,
@@ -1869,8 +2007,12 @@ fn handler_selftest(
             // takes its task away and sets its controls to zero. The hit is not counted either way.
             // (Found here: one run in four ended with `turned (13/14)`, the miss being a scout hit at
             // 19.37 s that went down before the 0.3 s were up — 0.04 rad.)
-            if robot.downed_at.is_some_and(|down| down < watch.at + 0.3) {
-                Some("it went down inside the 0.3 s".to_string())
+            //
+            // The three windows named here are this hit's own since S9: they were `0.3` written
+            // out three times, which is a copy of [`HIT_WINDOW`] where the whole point is that
+            // the window is the one the hit was given.
+            if robot.downed_at.is_some_and(|down| down < watch.at + window) {
+                Some(format!("it went down inside the {window:.2} s"))
             }
             // Nor is a robot whose brain was taken away and started again inside the window (the
             // editor's Apply, or a saved file). The old task is terminated and the new one subscribes
@@ -1879,7 +2021,7 @@ fn handler_selftest(
             // is a different brain. It is not rare in the editor's selftest, which applies a brain
             // three times while the match is being fought.
             else if tasks.get(watch.robot).ok().map(|t| t.task()) != watch.task {
-                Some("its behaviour was replaced inside the 0.3 s".to_string())
+                Some(format!("its behaviour was replaced inside the {window:.2} s"))
             }
             // **Nor any robot at all, while the editor's checks are handing behaviours out**
             // (2026-09-18). The test above catches the robot the editor was showing; `Apply to all`
@@ -1888,30 +2030,41 @@ fn handler_selftest(
             // terminated and its replacement had not subscribed yet. The moments come from
             // [`EditChecks`], which is where the steps that press the buttons write them down; the
             // window asked about is this check's own, and unchanged.
-            else if let Some(what) = edits.over(watch.at, watch.at + 0.3) {
-                Some(format!("the editor's checks were handing out behaviours ({what}) inside the 0.3 s"))
+            else if let Some(what) = edits.over(watch.at, watch.at + window) {
+                Some(format!("the editor's checks were handing out behaviours ({what}) inside the {window:.2} s"))
             } else {
                 None
             };
         if let Some(why) = unmeasured {
             let (at, name) = (watch.at, &robot.name);
-            info!("selftest: --   {name} ran a handler within 0.3 s of the hit at {at:.2} s: not counted, {why}");
-            info!("selftest: --   {name} turned within 0.3 s of the hit at {at:.2} s: not counted, {why}");
+            info!("selftest: --   {name} ran a handler within {window:.2} s of the hit at {at:.2} s: not counted, {why}");
+            info!("selftest: --   {name} turned within {window:.2} s of the hit at {at:.2} s: not counted, {why}");
             continue;
         }
-        let ran = robot.handler_runs > watch.runs;
-        // a quarter of the full turning rate over the 0.3 s: the swerve, not the brain's steering
-        let turned = watch.peak > enough_of_a_swerve(turn_rate);
+        let ran = watch.ran_after.is_some();
+        // a quarter of the full turning rate over the window this hit was given: the swerve, not
+        // the brain's steering
+        let need = enough_of_a_swerve(turn_rate, window);
+        let turned = watch.peak > need;
         test.checked += 1;
         test.ran += u32::from(ran);
         test.turned += u32::from(turned);
+        test.widest = test.widest.max(window);
         let (at, name, peak) = (watch.at, &robot.name, watch.peak);
+        // the latency, beside the verdict, in both units: a run that failed says how long it
+        // waited and how many of its frames that was, and a run that passed says how close it
+        // came (S9). `tools/fixedlines.sh` drops these two lines — `of the hit at` — so what
+        // they carry costs the comparison nothing.
+        let after = match watch.ran_after {
+            Some(n) => format!("{n} frame(s) after the hit"),
+            None => format!("never, in {waited} frame(s)"),
+        };
         info!(
-            "selftest: {} {name} ran a handler within 0.3 s of the hit at {at:.2} s",
+            "selftest: {} {name} ran a handler within {window:.2} s of the hit at {at:.2} s ({after})",
             if ran { "ok  " } else { "FAIL" }
         );
         info!(
-            "selftest: {} {name} turned within 0.3 s of the hit at {at:.2} s ({peak:.2} rad)",
+            "selftest: {} {name} turned within {window:.2} s of the hit at {at:.2} s ({peak:.2} of {need:.2} rad)",
             if turned { "ok  " } else { "FAIL" }
         );
     }
@@ -2784,6 +2937,9 @@ fn separate_robots(
 
 fn move_bullets(
     time: Res<Time>,
+    // S9: the frame a hit was taken in, so the handler check's window can be counted in frames
+    // as well as in seconds (`handler_frames`)
+    frames: Res<bevy::diagnostic::FrameCount>,
     mut commands: Commands,
     mut events: ResMut<Events>,
     mut scripts: ResMut<ScriptWorld>,
@@ -2865,9 +3021,11 @@ fn move_bullets(
                         test.watching.push(WatchedHit {
                             robot: target,
                             at: now,
+                            frame: frames.0,
                             heading: robot.heading,
                             runs: robot.handler_runs,
                             peak: 0.0,
+                            ran_after: None,
                             task: tasks.get(target).ok().map(|t| t.task()),
                         });
                     }
@@ -3132,16 +3290,24 @@ mod tests {
         assert_eq!(wall_layout(32.0, 2.6).0, 25);
     }
 
-    /// **The swerve a hit has to produce follows the match's turning rate** (S5b-2). It was
-    /// `0.2` written into the check, which is this arithmetic on 2.6 rounded up — and once the
-    /// turning rate is the match's, a number here would be a copy of it.
+    /// **The swerve a hit has to produce follows the match's turning rate** (S5b-2) **and the
+    /// window the hit was given** (S9). It was `0.2` written into the check, which is this
+    /// arithmetic on 2.6 and 0.3 rounded up — and once the turning rate is the match's and the
+    /// window is whatever this run's frames came to, a number here would be a copy of both.
     #[test]
-    fn what_counts_as_a_swerve_follows_the_hull() {
-        // the default model: 2.6 × 0.3 ÷ 4, which the source used to round to 0.2
-        assert!((enough_of_a_swerve(2.6) - 0.195).abs() < 1e-6);
+    fn what_counts_as_a_swerve_follows_the_hull_and_the_window() {
+        // the default model on an ordinary window: 2.6 × 0.3 ÷ 4, which the source rounded to 0.2
+        assert!((enough_of_a_swerve(2.6, HIT_WINDOW) - 0.195).abs() < 1e-6);
         // a match with quicker hulls asks for more of a swerve, and a slower one for less
-        assert!(enough_of_a_swerve(5.2) > enough_of_a_swerve(2.6));
-        assert!(enough_of_a_swerve(1.3) < enough_of_a_swerve(2.6));
+        assert!(enough_of_a_swerve(5.2, HIT_WINDOW) > enough_of_a_swerve(2.6, HIT_WINDOW));
+        assert!(enough_of_a_swerve(1.3, HIT_WINDOW) < enough_of_a_swerve(2.6, HIT_WINDOW));
+        // and a page slow enough to be given three times the window is asked for three times the
+        // swerve: the statement is a *share* of the window, not a number of radians
+        assert!(
+            (enough_of_a_swerve(2.6, 3.0 * HIT_WINDOW) - 3.0 * enough_of_a_swerve(2.6, HIT_WINDOW))
+                .abs()
+                < 1e-6
+        );
     }
 
     /// **What a player left in `sabibots.settings.txt` reaches the drawing** (S5b-2), and a key

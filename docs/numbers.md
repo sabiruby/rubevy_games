@@ -678,8 +678,10 @@ S5a の網は `const` と名前のある数に寄っていた。**S5b-5 で数�
 
 | 何を見るか | 位置 | 閾値 | 出どころ |
 |---|---|---|---|
-| ハンドラが走った・向きが変わった | `main.rs:1830`（`HIT_WINDOW`） | 当たりから 0.3 秒 | **引用**: `docs/sabiruby-battle.md:314, 327`（scout の `sleep 0.3` と対） |
-| どれだけ向きが変わったか | `main.rs:1824`（`enough_of_a_swerve`） | `turn_rate × 0.3 ÷ 4` | **導出**: 「a quarter of the full turning rate over the 0.3 s」。**S5b-2 で式にした**——`turn_rate` が試合のものになったので、0.2 という数はその写しになってしまう。既定の模型では 0.195 で、**この 1 件だけ既定値が動いた**（0.200 は同じ導出を丸めた数。§7-12） |
+| ハンドラが走った・向きが変わった | `main.rs` の `HIT_WINDOW` | 当たりから 0.3 秒、**または `handler_frames(budget)` フレーム**（長い方。S9） | **引用**: `docs/sabiruby-battle.md`（scout の `sleep 0.3` と対）。フレームの側は**導出＋実測**（下の行） |
+| その窓が持つべきフレーム数 | `main.rs` の `handler_frames` / `HANDLER_STRUCTURAL_FRAMES` / `INSTRUCTIONS_A_FRAME_BUYS` | `2 + ceil(script_budget ÷ 45,600)` = 出荷時 **7** | **導出＋実測**（**S9 が足した**）。2 は構造（publish は tick の後 → 次のフレームの tick でハンドラに順番、判定はその鎖と順序を持たないのでさらに次のフレームで確実に見える）で、**静かなヘッドレス 6 走行・145 件の当たりが全部 2**。45,600 は S6 の実測（`garden/src/window.rs` に同じ名前で書いてある数の**写し**。2 つのバイナリにまたがるので cite できない）。**実測の最悪は 4**（ブラウザ 1600×900・CPU ×20 の 5 走行、11 件） |
+| どれだけ向きが変わったか | `main.rs` の `enough_of_a_swerve` | `turn_rate × (その当たりがもらった窓) ÷ 4` | **導出**: 「a quarter of the full turning rate over the window」。**S5b-2 で `turn_rate` を式にし、S9 で窓も式にした**——窓が広がった走行で「0.3 秒ぶんの 4 分の 1」を訊くと、ただ走っているだけの機体が通る。既定の模型・普通の窓では 0.195（0.200 は同じ導出を丸めた数。§7-12） |
+| ハンドラの上限のつまみ | `platform.rs` の `handler_frames_asked` | `SABIBOTS_HANDLER_FRAMES=N` / `?selftest&handler_frames=N` | **(d) の道具**（S9）。この判定の不具合はブラウザでしか出ないので、ページでも回せる形にした（S5b-5 のつまみと同じ道） |
 | 落ちたロボットを外す | `main.rs:1728` | 落ちてから 0.5 秒 | **不明** |
 | 体力が満で始まる | `main.rs:1570` | `hp_max` | **導出**: S5b-2 で数の写しをやめ、試合が渡した値を読む |
 | 壁が隅で終わる | `main.rs:1565-1566` | 誤差 0.01 | **導出**: ε（判定の一部として挙げた） |

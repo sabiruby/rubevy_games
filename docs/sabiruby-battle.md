@@ -252,6 +252,18 @@ counted: those are in `src/main.rs`, beside the check that uses them, because th
 being measured rather than what the game plays by. Where a check needs one of the match's numbers
 it reads the match's — "every robot starts with full health" asks the match what full health is.
 
+**The 0.3 s is a floor and not the whole window** (S9). A hit's window is 0.3 s *or* the frames
+the delivery costs, whichever is longer: the hit is published after the frame's tick, the
+handler's turn comes in the next frame's, and the check is not ordered against the chain that
+answers its `act` — two frames, measured at exactly two in 105 hits of four quiet headless runs.
+A page drawing four frames a second holds *one* frame in 0.3 s, which is why `?selftest` in a
+large browser window failed both of these lines while a small one passed. The bound on the wait
+is `2 + ceil(script_budget / 45,600)` — the shape the garden's checks took in S7 — and the swerve
+a hit has to produce follows the window the hit was actually given, so a wider window asks for
+proportionally more of a turn rather than for the same one after three times as long.
+`SABIBOTS_HANDLER_FRAMES=N`, or `?selftest&handler_frames=N` in a page, hands the checks another
+bound; it is how the measurement above was taken where the fault shows.
+
 `docs/numbers.md` §4 and §5 are the whole list, with where each value came from (which, for most
 of the tank, is nowhere).
 

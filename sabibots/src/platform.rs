@@ -98,3 +98,14 @@ pub fn highlight(src: &str) -> Vec<u8> {
 pub fn selftest_asked() -> bool {
     games_shell::checks::selftest_asked("SABIBOTS_SELFTEST")
 }
+
+/// `SABIBOTS_HANDLER_FRAMES=N`, and `?selftest&handler_frames=N` in a page (S9): how many frames
+/// past its 0.3 s a hit may be given while its handler has still not run (`HANDLER_FRAMES`).
+///
+/// It is here rather than left at the derived default because the fault it is about — a page
+/// slow enough that 0.3 s holds one frame — **only shows in a browser**, and S5b-5's whole point
+/// in giving a page the knobs a shell has was that a measurement which cannot be taken where the
+/// thing happens is not a measurement. It is read only when the checks were asked for.
+pub fn handler_frames_asked() -> Option<f32> {
+    games_shell::checks::asked_number("SABIBOTS_HANDLER_FRAMES")
+}
