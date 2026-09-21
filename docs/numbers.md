@@ -1159,7 +1159,7 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
 | `factory/src/main.rs` | `CHECK_SLACK` | 2.0 | **導出**: 判定は「ゲーム自身の数が言う所要時間」（`mine_seconds + 4 ÷ belt_tiles_per_second`）を条件の上限に使う。2 倍は、前後 1 フレームの粒度と、1/60 秒でないブラウザのフレームのぶん。実測は 3.0 秒に対して 2.3〜2.4 秒 |
 | `factory/src/main.rs` | `STRESS_REPORTS` | 3 | **導出**: 計測の走行が何回報告して終わるか。最初の 1 回（窓が開き asset が届くフレームが入る）を捨てて、残り 2 回を見比べられる最小 |
 | `factory/src/main.rs` | `Stress::every` | 60 | **導出**: 1 報告あたり何フレーム集めるか。60 fps の 1 秒ぶんで、p50 / p95 が 1 フレームのぶれでなくなる長さであり、`STRESS_REPORTS` = 3 回が数秒で終わる短さ |
-| `factory/src/main.rs` | `map_tiles` の下限 `8` | 8 | **不明**。F1 が `settings.number("map_tiles")` に置いた下限で、出どころが無い。畑（半径 3）が縁に掛からない最小は `4 × (ore_patch_radius + 1)` = 16 なので、**導くなら 8 ではない**。既定の 32 では効かないので実害は無く、F2 で `ore_patch_radius` から導き直す |
+| `factory/src/grid.rs` | `map_tiles` の下限 = `Ore::smallest_map(ore_patch_radius)` | 15（半径 3 のとき） | **導出（F2 で置き換えた。F1 の `8` は「不明」だった）**: 畑の中心は `tiles/4` と `3×tiles/4`、判定は**タイルの中心**との距離。円が横にいちばん広がるのは中心を通る行なので、縁の輪（タイル 0 と `tiles-1`）に掛からない十分条件は `tiles/4 − radius − 0.5 > 0`、すなわち `tiles > 4 × radius + 2`。その上の最小の整数が下限。**計画書の `4 × (radius + 1)` = 16 ではなく 15** — `radius + 1` は半タイルを切り上げている。**保証であって毎回ちょうどの最小ではない**（中心を通る行が実在しない半径では 1 タイル早く空く）。単体テスト `the_smallest_map_is_the_smallest_map_the_patches_clear_the_border_on` が両方を実際に敷いて確かめる。既定の 32 では効かない |
 
 ### 9.5 素材の容量の上限
 
@@ -1187,7 +1187,7 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
 ### 9.7 件数
 
 Factory は **29 件**（不変量 (a) 4 行 15 個、動かす側 (c) 8、遊びの数 (b) 6、判定と計測の器 (d) 5、導出で設定でないもの 1、容量 1）。
-出どころは 測った 1 / 導出 22 / 引用 3 / **不明 2**（窓の大きさ、`map_tiles` の下限 8）/
+出どころは 測った 1 / 導出 23 / 引用 3 / **不明 1**（窓の大きさ）/
 **根拠なしと正直に書いたもの 1**（`belt_tiles_per_second`）/ **決められなかったもの 1**（`map_tiles`）。
 
 F1 の終わりの見直しで**消えた数が 3 つ**ある: `Rules::spacing` と `Rules::belt_frame_seconds` と

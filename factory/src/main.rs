@@ -226,7 +226,18 @@ fn main() {
         args.value("--lang").as_deref(),
     );
 
-    let mut map = Map { tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(8.0) as u32 };
+    // **The floor under the map's size is derived and not chosen.** F1 wrote `.max(8.0)` and
+    // could not say where the 8 came from; what says it is the ore, because a map too small for
+    // the four patches to clear its border ring is a map the game cannot be played on
+    // (`Ore::smallest_map`, which is 15 tiles at the default radius). It is read before the map
+    // so that the map can be clamped by it, which is the whole reason `ore_patch_radius` stays a
+    // setting rather than moving into `data.rb` with the rest of the numbers of play: this is
+    // wanted here, before there is a VM to have read any Ruby.
+    let ore_patch_radius = positive(&settings, "ore_patch_radius", 3.0);
+    let smallest_map = Ore::smallest_map(ore_patch_radius);
+    let mut map = Map {
+        tiles: settings.number("map_tiles").unwrap_or(MAP_TILES).max(smallest_map as f32) as u32,
+    };
     let half_height = positive(&settings, "camera_half_height", CAMERA_HALF_HEIGHT);
     let window = [
         settings.number("window_width").unwrap_or(WINDOW[0]),
@@ -243,7 +254,7 @@ fn main() {
         mine_seconds: positive(&settings, "mine_seconds", 1.0),
         chest_capacity: counted(&settings, "chest_capacity", 60.0),
         ore_per_tile: counted(&settings, "ore_per_tile", 60.0),
-        ore_patch_radius: positive(&settings, "ore_patch_radius", 3.0),
+        ore_patch_radius,
     };
     let stress = args
         .value("--stress")

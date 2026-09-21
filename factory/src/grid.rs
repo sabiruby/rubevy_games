@@ -232,6 +232,35 @@ impl Ore {
         Ore { left, changed: true }
     }
 
+    /// **The smallest map the patches fit on without touching the border**, in tiles — the floor
+    /// under the `map_tiles` setting, derived from [`Ore::laid_out`] rather than chosen.
+    ///
+    /// The first patch's middle is at `tiles / 4`, and a tile is in it when **its own middle** is
+    /// within `radius` of that. The widest the circle ever reaches sideways is along the row
+    /// through its middle, so no tile of it has `x ≤ 0` as soon as
+    ///
+    /// ```text
+    /// tiles / 4 − radius − 0.5 > 0   ⇔   tiles > 4 × radius + 2
+    /// ```
+    ///
+    /// and the far patch, at `3 × tiles / 4`, gives the same condition mirrored. So the answer is
+    /// the smallest whole number **strictly above** `4 × radius + 2`. The border ring is tile 0
+    /// and tile `tiles − 1` — [`crate::draw::floor_picture`] draws them as plain ground — so a
+    /// patch reaching it is ore nobody can see.
+    ///
+    /// **This is one tile less than the `4 × (radius + 1)` the plan's note guessed** (15 rather
+    /// than 16 at the default radius of 3): `radius + 1` rounds the half-tile a tile's middle
+    /// sits at up to a whole one.
+    ///
+    /// **It is a guarantee and not always the very smallest.** The row through the circle's
+    /// middle is only a row of real tiles when `tiles / 4 − 0.5` happens to be whole; when it is
+    /// not, the circle is a little narrower where the tiles actually are and it can clear the
+    /// border a tile sooner. A floor that is sometimes one tile generous is a floor; one that is
+    /// sometimes one tile short is ore in the wall. The test below runs both halves of that.
+    pub fn smallest_map(radius: f32) -> u32 {
+        (4.0 * radius + 2.0).floor() as u32 + 1
+    }
+
     pub fn total(&self) -> u64 {
         self.left.iter().map(|&n| n as u64).sum()
     }
@@ -370,5 +399,43 @@ mod tests {
         assert_eq!(ore.left[(16 * 32 + 16) as usize], 0, "the middle of the map is bare");
         assert_eq!(ore.total(), ore.tiles_with_ore() as u64 * 100);
         assert!(ore.tiles_with_ore() >= 4 * 25, "a circle of radius 3 is 25 tiles or more");
+    }
+
+    /// Whether any of the ore is on the border ring, which is what [`Ore::smallest_map`] is
+    /// about. It lives here rather than on [`Ore`] because nothing in the game asks it: the game
+    /// asks the floor, and this is what makes the floor true.
+    fn touches_the_border(ore: &Ore, tiles: u32) -> bool {
+        let last = tiles - 1;
+        (0..tiles).any(|i| {
+            [(i, 0), (i, last), (0, i), (last, i)]
+                .iter()
+                .any(|&(x, y)| ore.left[(y * tiles + x) as usize] > 0)
+        })
+    }
+
+    /// **The floor under `map_tiles` is derived, and this is the derivation run.** At the size
+    /// [`Ore::smallest_map`] gives, the four patches clear the border ring; one tile smaller and
+    /// they do not. Run over a spread of radii, because a formula that is right at one value is
+    /// not a formula.
+    #[test]
+    fn the_smallest_map_is_the_smallest_map_the_patches_clear_the_border_on() {
+        for radius in [0.5f32, 1.0, 1.5, 2.0, 3.0, 3.7, 5.0] {
+            let smallest = Ore::smallest_map(radius);
+            let fits = Ore::laid_out(smallest, radius, 1);
+            assert!(
+                !touches_the_border(&fits, smallest),
+                "radius {radius}: {smallest} tiles should clear the border"
+            );
+            assert!(fits.tiles_with_ore() > 0, "radius {radius}: and there is ore on it");
+        }
+        // **And at the radius the game is played at it is the smallest**: one tile under it, the
+        // row through the patch's middle is a row of real tiles and the ore reaches the wall.
+        assert_eq!(Ore::smallest_map(3.0), 15, "and not the 16 that 4 × (radius + 1) gives");
+        assert!(touches_the_border(&Ore::laid_out(14, 3.0, 1), 14), "14 tiles is too few");
+        // the other half of the rustdoc's last paragraph: a radius whose middle row is not a row
+        // of tiles clears sooner than the guarantee, which is why this is a floor and not an
+        // equality. At radius 0.5 the guarantee is 5 and 4 already clears.
+        assert_eq!(Ore::smallest_map(0.5), 5);
+        assert!(!touches_the_border(&Ore::laid_out(4, 0.5, 1), 4), "4 clears it too, a tile early");
     }
 }
