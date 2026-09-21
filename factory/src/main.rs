@@ -436,7 +436,6 @@ fn main() {
             // a picture.
             .insert_resource(VmInspector::following().opened(args.has("--vm")))
             .init_resource::<window::Watched>()
-            .init_resource::<window::Paused>()
             .add_systems(
                 Update,
                 (
@@ -524,6 +523,10 @@ fn main() {
         // from S5b-2 (`Match::MODEL`: no default model in Rust, nothing starts until one arrives)
         // applied to a factory: **there are no numbers of play in this binary**.
         .init_resource::<inserters::Arms>()
+        // **Whether the factory's own step runs** (F5). `P` is the window's key for it, but
+        // "the belts are standing still" is a fact about the game and not about the window —
+        // and the save's round-trip check holds the world in a headless run.
+        .init_resource::<window::Paused>()
         .insert_resource(stagger)
         .add_systems(Startup, set_the_budget)
         // **The camera, in the words a script uses about one** — rubevy's optional layer (R9).
@@ -663,7 +666,8 @@ fn main() {
         items::run_the_factory
             .in_set(FactorySet::Step)
             .after(RubevySet::Answer)
-            .run_if(the_factory_is_up),
+            .run_if(the_factory_is_up)
+            .run_if(window::the_world_is_running),
     );
     if stress > 0 || arms > 0 {
         app.insert_resource(Stress {
@@ -723,6 +727,20 @@ fn main() {
                 Update,
                 control_checks
                     .before(build::orders)
+                    .before(control::follow_the_rewrites)
+                    .before(FactorySet::Step)
+                    .run_if(the_factory_is_up)
+                    .run_if(resource_exists::<control::TheControl>),
+            )
+            // **F5's are two more** ([`F5_CHECKS`], [`WINDOW_CHECKS`]), for the reason F4's were
+            // one more: sixteen parameters is what a system may take, and the window is six
+            // resources a headless run does not have at all
+            .add_systems(
+                Update,
+                (file_checks, window_checks)
+                    .chain()
+                    .before(build::orders)
+                    .before(reread_the_data_stage)
                     .before(control::follow_the_rewrites)
                     .before(FactorySet::Step)
                     .run_if(the_factory_is_up)
@@ -1586,6 +1604,13 @@ struct SelfTest {
     /// **F4**: what the control stage's own subscriptions had lost while one was running, read
     /// before the checks break it on purpose.
     dropped_in_the_script: u64,
+    /// **F5**: how many tiles had something on them before a `data.rb` that will not read was
+    /// handed in, so that "the factory is still standing" is a comparison.
+    line_before: usize,
+    /// **F5**: the size of the map before it was read again with a bigger one.
+    map_before: UVec2,
+    /// **F5**: where the camera was looking before the goal was reached.
+    camera_before: Vec2,
     done: bool,
 }
 
@@ -1594,6 +1619,44 @@ struct SelfTest {
 /// The first of them is where [`selftest`] hands over and the last is where it takes the run back
 /// to say it is done.
 const CONTROL_CHECKS: std::ops::Range<u8> = 31..40;
+
+/// **F5's checks**, which are a third system for the reason F4's were a second: a Bevy system may
+/// take sixteen parameters, and the window is six resources nothing else here wanted.
+const F5_CHECKS: std::ops::Range<u8> = 40..50;
+
+/// **F5's window-only checks** — the panels, `P`, the guide and the camera. A fourth system, for
+/// the reason there was a third: the window is six resources nothing else here takes.
+const WINDOW_CHECKS: std::ops::Range<u8> = 50..60;
+
+/// **How long the camera check waits for the win it asked for.** It is the checks' own delivery —
+/// a dig and four tiles of belt — as frames at the frame rate a windowed run keeps, which is the
+/// same arithmetic `games_shell::checks` does for everything else that waits on a condition. It
+/// is a ceiling on a wait and not a timing: the check passes on the frame the camera moves.
+const CAMERA_WAIT_FRAMES: u32 = 600;
+
+/// **A script that remembers something**, for the check that says a save file carries what an arm
+/// remembers and a load puts it back. It does nothing else: what is being measured is `@memory`
+/// going out through `sabiruby_serde` and coming back in, and an arm that also swings would be
+/// two things at once.
+const A_REMEMBERING_SCRIPT: &str = concat!(
+    "inserter \"Remembering\" do\n",
+    "  def run\n",
+    "    memory[\"kept\"] = 7\n",
+    "    loop { idle }\n",
+    "  end\n",
+    "end\n",
+);
+
+/// What [`A_REMEMBERING_SCRIPT`] leaves in its `@memory`, as the save file writes it.
+const WHAT_IT_REMEMBERS: &str = "kept";
+
+/// **A `data.rb` that will not read**, for the check that says one of those leaves the factory
+/// exactly as it was. It is wrong in the one way a player is likeliest to be wrong — a field the
+/// declaration does not have — and `deny_unknown_fields` says so at its line.
+const A_WRONG_DATA_FILE: &str = concat!(
+    "item :iron_ore, icon: 0\n",
+    "item :iron_plate, icon: 1, colour: :grey\n",
+);
 
 /// **A script that does nothing but wait**, for the editor to apply. It compiles and runs, which
 /// is what is being measured — in a browser that means the page's own compiler was called
@@ -1682,10 +1745,14 @@ fn selftest(
     if test.done {
         return;
     }
-    // **F4's are next door** ([`control_checks`]), because this system already takes the sixteen
-    // parameters a Bevy system may take. It carries the run on from where this one left it and
-    // hands it back at the end of [`CONTROL_CHECKS`], where the `_` arm below says it is done.
-    if CONTROL_CHECKS.contains(&test.step) {
+    // **F4's and F5's are next door** ([`control_checks`], [`file_checks`], [`window_checks`]),
+    // because this system already takes the sixteen parameters a Bevy system may take. Each
+    // carries the run on from where the one before it left it, and the last hands it back here,
+    // where the `_` arm below says the checks are done.
+    if CONTROL_CHECKS.contains(&test.step)
+        || F5_CHECKS.contains(&test.step)
+        || WINDOW_CHECKS.contains(&test.step)
+    {
         return;
     }
     test.frames += 1;
@@ -2444,9 +2511,430 @@ fn control_checks(
                     test.dropped_in_the_script
                 ),
             );
-            test.step = CONTROL_CHECKS.end;
+            test.step = F5_CHECKS.start;
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// F5's checks
+// ---------------------------------------------------------------------------------------------
+
+/// **The save file, and `data.rb` read again while the game runs** — the two halves of F5 that a
+/// run with no window has as well, so they are here and not in [`window_checks`].
+///
+/// The order matters and is the one thing worth saying about it: **the world is rebuilt last**.
+/// A `data.rb` that makes the map a different size takes the checks' own factory with it, so
+/// everything that is about that factory has said its piece by then.
+#[allow(clippy::too_many_arguments)]
+fn file_checks(
+    mut test: ResMut<SelfTest>,
+    time: Res<Time>,
+    mut world: ResMut<ScriptWorld>,
+    mut paused: ResMut<window::Paused>,
+    rules: Res<Rules>,
+    grid: Res<Grid>,
+    mut minds: ResMut<inserters::Minds>,
+    arms: Query<(&inserters::Inserter, &rubevy::ScriptTask)>,
+    mut file: ResMut<save::SaveFile>,
+    mut asked: ResMut<save::Asked>,
+    note: Res<save::SaveNote>,
+    data_file: Res<window::DataFile>,
+    mut rereads: MessageWriter<window::Reread>,
+    mut commands: Commands,
+) {
+    if !F5_CHECKS.contains(&test.step) {
+        return;
+    }
+    match test.step {
+        // ---- an arm is given something to remember, for the save file to carry ---------------
+        40 => {
+            let Some((arm, _)) = arms.iter().next().map(|(i, t)| (i.tile, t)) else {
+                say("--  ", "no inserter was left standing to remember anything");
+                test.step = 43;
+                return;
+            };
+            minds.give_to_one(arm, A_REMEMBERING_SCRIPT.to_string());
+            test.broken = Some(arm);
+            test.started = time.elapsed_secs();
+            test.step = 41;
+        }
+        41 => {
+            let Some(arm) = test.broken else {
+                test.step = 43;
+                return;
+            };
+            // **waited for and not assumed**: the script is compiled and started on the frame
+            // after the text changed and reaches `run` on the frame after that, and in a page the
+            // compiling is the page's own compiler called synchronously in between
+            let remembered = arms
+                .iter()
+                .find(|(i, _)| i.tile == arm)
+                .and_then(|(_, task)| save::read_memory(&mut world, task.task()))
+                .is_some_and(|m| m.get(WHAT_IT_REMEMBERS).is_some());
+            // **the bound is a swing and not a handful of frames**: an arm's first look is spread
+            // over one swing on purpose (`ruby/prelude.rb`, `stagger`), so a script's own first
+            // line does not run until as much as `swing_seconds` after it started
+            let waited = time.elapsed_secs() - test.started;
+            if !remembered && waited < rules.swing_seconds * CHECK_SLACK {
+                return;
+            }
+            say(
+                if remembered { "ok  " } else { "FAIL" },
+                &format!(
+                    "an inserter's script can remember something across a save (@memory, after {waited:.1} s)"
+                ),
+            );
+            // **the world is held where it stands for the round trip.** A factory written down,
+            // read back and written down again is the same text only if nothing moved in
+            // between, and a belt moves half a step a frame. The scripts go on running, because
+            // a loaded arm has nowhere to put what it remembered until its own script has
+            // reached `run` (`window::Paused::hold_the_world`).
+            paused.hold_the_world(true);
+            file.path = SAVE_A.into();
+            asked.save = true;
+            test.waited = 0;
+            test.step = 42;
+        }
+        42 => {
+            // the save runs after the step, so the file is there on the frame after the ask
+            let Ok(first) = platform::read(std::path::Path::new(SAVE_A)) else {
+                test.waited += 1;
+                if test.waited < PANEL_WAIT_FRAMES {
+                    return;
+                }
+                test.waited = 0;
+                say("FAIL", &format!("the factory was not written to {SAVE_A}: {}", note.text));
+                test.step = 43;
+                return;
+            };
+            test.waited = 0;
+            // **read it back and write it again**: the same world twice is the same text, which
+            // is the whole of what "the file is the world" means. It is done in one process
+            // because a page has one — `localStorage` is where a browser's save lives — and the
+            // two-process spelling (`--save`, `--load --save`) is in `docs/factory.md`.
+            match save::read_save(SAVE_A) {
+                Ok(read) => commands.insert_resource(save::Loading(read)),
+                Err(e) => {
+                    say("FAIL", &format!("the factory would not be read back: {e}"));
+                    test.step = 43;
+                    return;
+                }
+            }
+            test.before = first.len();
+            test.step = 44;
+        }
+        // ---- a data.rb that will not read leaves the factory exactly as it was ---------------
+        43 => {
+            let before = (rules.map_tiles, grid.built().len());
+            rereads.write(window::Reread(A_WRONG_DATA_FILE.into()));
+            test.line_before = before.1;
+            test.waited = 0;
+            test.step = 46;
+        }
+        // ---- save -> load -> save is the same text --------------------------------------------
+        44 => {
+            // the load is put into the world by `load_the_factory` before the step; the arms are
+            // rebuilt by `keep_the_crew` after it, and the memories are handed back after that
+            let remembered = test
+                .broken
+                .and_then(|arm| arms.iter().find(|(i, _)| i.tile == arm))
+                .and_then(|(_, task)| save::read_memory(&mut world, task.task()))
+                .is_some_and(|m| m.get(WHAT_IT_REMEMBERS).is_some());
+            // the same bound as above, for the same reason: the arms are started again by
+            // `keep_the_crew` and each of them spreads its first look over a swing
+            let waited = time.elapsed_secs() - test.started;
+            if !remembered && waited < rules.swing_seconds * CHECK_SLACK * 2.0 {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if remembered { "ok  " } else { "FAIL" },
+                "and what it remembered is there again after the factory was read back",
+            );
+            file.path = SAVE_B.into();
+            asked.save = true;
+            test.step = 45;
+        }
+        45 => {
+            let (Ok(first), Ok(second)) = (
+                platform::read(std::path::Path::new(SAVE_A)),
+                platform::read(std::path::Path::new(SAVE_B)),
+            ) else {
+                test.waited += 1;
+                if test.waited < PANEL_WAIT_FRAMES {
+                    return;
+                }
+                test.waited = 0;
+                say("FAIL", "the factory was not written a second time");
+                test.step = 43;
+                return;
+            };
+            test.waited = 0;
+            say(
+                if first == second { "ok  " } else { "FAIL" },
+                &format!(
+                    "save, load, save is the same text ({} bytes, {} buildings)",
+                    first.len(),
+                    grid.built().len()
+                ),
+            );
+            paused.hold_the_world(false);
+            test.step = 43;
+        }
+        // ---- what the wrong data.rb did, which is nothing ------------------------------------
+        46 => {
+            let unhurt = grid.built().len() == test.line_before && data_file.trouble.is_some();
+            test.waited += 1;
+            if data_file.trouble.is_none() && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if unhurt { "ok  " } else { "FAIL" },
+                &format!(
+                    "a {DATA_FILE} that will not read leaves the factory standing: {} ({} buildings, was {})",
+                    data_file.trouble.clone().unwrap_or_else(|| "it was not refused".into()),
+                    grid.built().len(),
+                    test.line_before
+                ),
+            );
+            test.step = 47;
+        }
+        // ---- and one that would rebuild the world asks first ----------------------------------
+        47 => {
+            test.map_before = rules.map_tiles;
+            rereads.write(window::Reread(a_bigger_map(&data_file.text, rules.map_tiles)));
+            test.waited = 0;
+            test.step = 48;
+        }
+        48 => {
+            let asked_first = rules.map_tiles == test.map_before;
+            test.waited += 1;
+            if test.waited < PANEL_WAIT_FRAMES && asked_first && data_file.confirming.is_none() {
+                return;
+            }
+            say(
+                if asked_first && data_file.confirming.is_some() { "ok  " } else { "FAIL" },
+                &format!(
+                    "a {DATA_FILE} that would rebuild the world asks before it does ({} by {} still)",
+                    rules.map_tiles.x, rules.map_tiles.y
+                ),
+            );
+            // the same text again is the confirmation
+            rereads.write(window::Reread(a_bigger_map(&data_file.text, test.map_before)));
+            test.waited = 0;
+            test.step = 49;
+        }
+        49 => {
+            let bigger = rules.map_tiles != test.map_before && grid.tiles == rules.map_tiles;
+            test.waited += 1;
+            if !bigger && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if bigger { "ok  " } else { "FAIL" },
+                &format!(
+                    "reading {DATA_FILE} again with a bigger map lays out a bigger world ({} by {}, was {} by {})",
+                    grid.tiles.x, grid.tiles.y, test.map_before.x, test.map_before.y
+                ),
+            );
+            test.step = WINDOW_CHECKS.start;
+        }
+        _ => {}
+    }
+}
+
+/// **The three panels and the camera** — the half of F5 only a run with a window has at all.
+///
+/// It is a fourth system, and every resource it takes is an `Option`: a headless run has no
+/// `Editor`, no `Guide`, no `Paused` and no camera, and a check that cannot be put in a position
+/// to measure anything says `--` rather than `ok` (`docs/verification/selftest-lines.md`).
+#[allow(clippy::too_many_arguments)]
+fn window_checks(
+    mut test: ResMut<SelfTest>,
+    // **every one of these is an `Option`**, including the keys: `MinimalPlugins` brings no
+    // `InputPlugin`, so a headless run has no `ButtonInput` at all
+    keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    mut editor: Option<ResMut<rubevy_egui::Editor>>,
+    mut watched: Option<ResMut<window::Watched>>,
+    guide: Option<Res<games_shell::Guide>>,
+    paused: Option<Res<window::Paused>>,
+    scripts: Res<ScriptWorld>,
+    control: Res<control::TheControl>,
+    view: Option<Res<games_shell::camera::CameraView>>,
+    mut rewrite: MessageWriter<control::Rewrite>,
+) {
+    if !WINDOW_CHECKS.contains(&test.step) {
+        return;
+    }
+    let (Some(mut keys), Some(editor), Some(watched), Some(guide), Some(paused), Some(view)) =
+        (keys, editor.as_mut(), watched.as_mut(), guide, paused, view)
+    else {
+        say("--  ", "the panels and the camera were not driven (this run has no window)");
+        test.step = WINDOW_CHECKS.end;
+        return;
+    };
+    match test.step {
+        // ---- the editor has three files, and each of them shows its own text ------------------
+        50 => {
+            **watched = window::Watched::Data;
+            test.waited = 0;
+            test.step = 51;
+        }
+        51 => {
+            let showing = editor.file == DATA_FILE && editor.text.contains("map ");
+            test.waited += 1;
+            if !showing && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if showing { "ok  " } else { "FAIL" },
+                &format!("the editor opens {DATA_FILE} ({} lines)", editor.text.lines().count()),
+            );
+            **watched = window::Watched::Control;
+            test.step = 52;
+        }
+        52 => {
+            let showing =
+                editor.file == control::SCRIPT_FILE && editor.text.contains("goal deliver");
+            test.waited += 1;
+            if !showing && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if showing { "ok  " } else { "FAIL" },
+                &format!(
+                    "and {} beside it, with the three buttons to switch between ({} choices)",
+                    control::SCRIPT_FILE,
+                    editor.choices.len()
+                ),
+            );
+            test.step = 53;
+        }
+        // ---- P stops the scripts -------------------------------------------------------------
+        53 => {
+            test.before = scripts.budget as usize;
+            keys.press(KeyCode::KeyP);
+            test.waited = 0;
+            test.step = 54;
+        }
+        54 => {
+            keys.release(KeyCode::KeyP);
+            let stopped = paused.on() && paused.scripts_too() && scripts.budget == 0;
+            test.waited += 1;
+            if !stopped && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if stopped { "ok  " } else { "FAIL" },
+                &format!(
+                    "P stops the factory: the belts stand still and the scripts' budget is {}",
+                    scripts.budget
+                ),
+            );
+            keys.press(KeyCode::KeyP);
+            test.step = 55;
+        }
+        55 => {
+            keys.release(KeyCode::KeyP);
+            let running =
+                !paused.on() && !paused.scripts_too() && scripts.budget as usize == test.before;
+            test.waited += 1;
+            if !running && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if running { "ok  " } else { "FAIL" },
+                &format!("and P again gives back exactly what it took ({})", scripts.budget),
+            );
+            test.step = 56;
+        }
+        // ---- H opens the guide ---------------------------------------------------------------
+        56 => {
+            // it starts open unless a picture was asked for, so this shuts it first and then
+            // presses the key a player presses
+            test.before = usize::from(guide.open);
+            keys.press(KeyCode::KeyH);
+            test.waited = 0;
+            test.step = 57;
+        }
+        57 => {
+            keys.release(KeyCode::KeyH);
+            let turned = usize::from(guide.open) != test.before;
+            test.waited += 1;
+            if !turned && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            test.waited = 0;
+            say(
+                if turned && !guide.notes.is_empty() && !guide.keys.is_empty() { "ok  " } else { "FAIL" },
+                &format!(
+                    "H turns the guide: {} paragraphs and {} keys, in {}",
+                    guide.notes.len(),
+                    guide.keys.len(),
+                    guide.lang.tag()
+                ),
+            );
+            test.step = 58;
+        }
+        // ---- winning points the camera at the chest the goal was finished in -------------------
+        58 => {
+            test.camera_before = view.focus;
+            // a goal this factory finishes on its next delivery, so that the win is a frame or
+            // two away rather than a minute
+            rewrite.write(control::Rewrite(a_goal_of(1)));
+            test.waited = 0;
+            test.step = 59;
+        }
+        59 => {
+            test.waited += 1;
+            let moved = control.won && view.focus != test.camera_before;
+            // **the bound is the checks' own delivery**, the same one F4's checks wait for: a
+            // dig and four tiles of belt, times the slack (`CHECK_SLACK`)
+            if !moved && test.waited < CAMERA_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if moved { "ok  " } else { "FAIL" },
+                &format!(
+                    "winning moves the camera from Ruby: it is looking at {:.0}, {:.0} (was {:.0}, {:.0})",
+                    view.focus.x, view.focus.y, test.camera_before.x, test.camera_before.y
+                ),
+            );
+            test.step = WINDOW_CHECKS.end;
+        }
+        _ => {}
+    }
+}
+
+/// The two files the round-trip check writes. They are beside the game on a PC and two
+/// `localStorage` keys in a page, which is what lets one check serve both.
+const SAVE_A: &str = "factory.check-a.json";
+const SAVE_B: &str = "factory.check-b.json";
+
+/// **The `data.rb` this run read, with its map twice as wide** — for the check that a player may
+/// change the size of the world while playing.
+///
+/// It is the file as it stands with one line rewritten, so that everything else about it (the
+/// items, the machines, the recipes) is the same list and the only thing that moved is the thing
+/// being measured; and it is the file *this run read* rather than a copy written here, because a
+/// copy is a second `data.rb` to keep in step with the first.
+fn a_bigger_map(text: &str, tiles: UVec2) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("map ") {
+            out.push_str(&format!("map :world, size: [{}, {}]\n", tiles.x * 2, tiles.y));
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// **A goal of so much ore**, which is the one thing the checks' own factory goes on delivering:

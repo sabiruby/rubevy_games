@@ -159,17 +159,28 @@ pub fn panel_keys(
 /// asked for.
 #[derive(Resource, Debug, Default)]
 pub struct Paused {
-    /// What the budget was before, so that `P` again gives back exactly what was taken. `None` is
-    /// "running".
+    /// **Whether the factory's own step runs.** It is the run condition on
+    /// [`crate::FactorySet::Step`] and it is read by nothing else.
+    world: bool,
+    /// What the VM's budget was before, so that `P` again gives back exactly what was taken.
+    /// `None` is "the scripts are running".
     was: Option<u64>,
 }
 
 impl Paused {
+    /// Whether the belts and the arms are standing still.
     pub fn on(&self) -> bool {
+        self.world
+    }
+
+    /// Whether the scripts are stopped as well, which `P` does and the checks do not.
+    pub fn scripts_too(&self) -> bool {
         self.was.is_some()
     }
 
+    /// **`P`: both halves.** The world by the flag above, the scripts by their budget.
     fn turn(&mut self, scripts: &mut ScriptWorld, panel: &mut VmInspector) {
+        self.world = !self.world;
         match self.was.take() {
             Some(budget) => {
                 scripts.budget = budget;
@@ -182,6 +193,20 @@ impl Paused {
             }
         }
     }
+
+    /// **The world alone, held where it stands**, which is what the save's round-trip check needs
+    /// and `P` is not: a factory written down, read back and written down again is the same text
+    /// only if nothing moved in between, and the reading back *needs the VM running* — a loaded
+    /// arm has nowhere to put what it remembered until its script has reached `run`. So the two
+    /// halves of a pause are two things here, and only `P` does both.
+    pub fn hold_the_world(&mut self, yes: bool) {
+        self.world = yes;
+    }
+}
+
+/// The run condition on the factory's own step.
+pub fn the_world_is_running(paused: Option<Res<Paused>>) -> bool {
+    paused.is_none_or(|p| !p.on())
 }
 
 // ---------------------------------------------------------------------------------------------

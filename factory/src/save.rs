@@ -408,8 +408,9 @@ fn the_factory_as_a_file(
     }
 }
 
-/// One script's `@memory`, as JSON, or `None` where there is nothing to keep.
-fn read_memory(scripts: &mut ScriptWorld, task: sabiruby::value::ObjId) -> Option<serde_json::Value> {
+/// One script's `@memory`, as JSON, or `None` where there is nothing to keep. Public because the
+/// checks read an arm's back after a load, which is the half of a save file a test can see.
+pub fn read_memory(scripts: &mut ScriptWorld, task: sabiruby::value::ObjId) -> Option<serde_json::Value> {
     let vm = &mut scripts.vm;
     let being = vm.ivar_get(task, BEING_IVAR).obj()?;
     let memory = vm.ivar_get(being, MEMORY_IVAR);
