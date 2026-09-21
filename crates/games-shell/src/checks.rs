@@ -10,6 +10,12 @@
 //! be given too: `<GAME>_<NAME>=<value>` in a shell is `?selftest&<name>=<value>` in an address.
 //! A browser is where two of this game's flakes have shown themselves, and a knob that could only
 //! be turned on a PC meant the probe and the flake could not be in the same run.
+//!
+//! **And the one number a check needs that is about the machine rather than about a game**
+//! ([`CheckPace`], S10): how many instructions a frame of the VM buys here, which is what turns a
+//! script budget into "how many frames this check may wait".
+
+use bevy::prelude::*;
 
 /// Whether this run was asked for the checks: `<NAME>=anything` on a PC, `?selftest` in the
 /// page's address in a browser.
@@ -122,9 +128,127 @@ pub fn checks_end_the_run() -> bool {
     CHECKS_EXIT_WHEN_DONE
 }
 
+/// **How fast this machine's VM is, as far as a check needs to know** — and the sum that turns a
+/// script budget into a number of frames a check may wait (S10).
+///
+/// Both games here wait on a VM and both have to give up eventually, and both worked the giving-up
+/// point out of the same two things: the frames the errand costs whatever the VM is allowed, and
+/// one whole frame's allowance of the VM's turns. The second half is a budget divided by
+/// [`INSTRUCTIONS_A_FRAME_BUYS`], and **that number was written out twice** — in
+/// `garden/src/window.rs` and in `sabibots/src/main.rs`, under the same name, with the same value
+/// and the same paragraph of provenance beside each (S9's first finding). It is not a coincidence
+/// of two games agreeing on a number; it is **one fact about one machine**, and neither copy could
+/// so much as cite the other, because they are in two binaries.
+///
+/// It is a setting and not a `const` for the reason every number here is
+/// (`/home/kishima/book/CLAUDE.md`): the default is a measurement of *this* machine, and the next
+/// machine is a different measurement. The key is `checks_instructions_a_frame` and it is spelt
+/// the same in every game's store, because what it describes is the same in every game.
+///
+/// ```
+/// # use games_shell::checks::CheckPace;
+/// let pace = CheckPace::default();
+/// // two structural frames, and one frame's worth of a 41,000-instruction budget
+/// assert_eq!(pace.frames_to_wait(2, 41_000), 3);
+/// ```
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct CheckPace {
+    /// [`INSTRUCTIONS_A_FRAME_BUYS`], or what `checks_instructions_a_frame` said instead.
+    pub instructions_a_frame: f32,
+}
+
+impl Default for CheckPace {
+    fn default() -> Self {
+        CheckPace { instructions_a_frame: INSTRUCTIONS_A_FRAME_BUYS }
+    }
+}
+
+impl CheckPace {
+    /// The pace this run is really going at: the default with whatever the store says written
+    /// over it.
+    pub fn of(settings: &crate::Settings) -> CheckPace {
+        let mut pace = CheckPace::default();
+        pace.read_from(settings);
+        pace
+    }
+
+    /// | key | field |
+    /// |---|---|
+    /// | `checks_instructions_a_frame` | [`CheckPace::instructions_a_frame`] |
+    ///
+    /// A frame that buys **nothing** is not a frame, and it is worth saying why the floor is here
+    /// rather than trusting the file: this number divides a budget, so a nought in a store would
+    /// make the quotient infinite and `as u32` would saturate — a check that waits 4,294,967,295
+    /// frames is a check that never says anything at all, which is the one failure mode a bound
+    /// exists to prevent.
+    pub fn read_from(&mut self, settings: &crate::Settings) {
+        if let Some(value) = settings.number("checks_instructions_a_frame") {
+            self.instructions_a_frame = value.max(1.0);
+        }
+    }
+
+    /// **How many frames a check may wait for a VM it has asked something of**: the frames the
+    /// errand costs whatever the VM is allowed, plus one whole frame's allowance of the VM's
+    /// turns.
+    ///
+    /// `structural` is **an argument and not a number in here**, and that is the point of the
+    /// signature. Both games pass a two, and the two twos are not the same two:
+    ///
+    /// * the garden's (`window::STRUCTURAL_FRAMES`) is a **restart** — the `Script` lands at the
+    ///   end of the frame that asked for it and rubevy makes a task of it and runs it on the next.
+    /// * Battle's (`HANDLER_STRUCTURAL_FRAMES`) is a **published message** — the publish is made
+    ///   after this frame's tick, so the next frame's tick is the earliest that can give the woken
+    ///   handler its turn, and the check is not ordered against the chain that answers the
+    ///   handler's `act`, so the frame it is *certain* to see the swerve in is the one after that.
+    ///
+    /// Two errands, two derivations, the same answer today. Folding them into one number here
+    /// would be S5b-5's mistake in a new place: the garden's `script_budget` moved, the egui wait
+    /// that had been riding on the same sum quietly got shorter, and three runs in eighty-eight
+    /// gave up (`docs/worklog/2026-09-21-checks-and-leftovers.md` §14-1). **A bound is an argument
+    /// about what is being waited for**, so a game that changes what its errand costs must be able
+    /// to move its own half and nobody else's.
+    ///
+    /// What *is* shared is the division, because the divisor is a fact about the machine and the
+    /// VM rather than about either errand.
+    pub fn frames_to_wait(&self, structural: u32, budget: u64) -> u32 {
+        structural + (budget as f32 / self.instructions_a_frame).ceil() as u32
+    }
+}
+
+/// **What one frame of this machine's VM buys, in instructions** — the default of
+/// [`CheckPace::instructions_a_frame`], and the one place this measurement is written down.
+///
+/// It is a number about *this machine's* wall clock, which is why it is the checks' and not a
+/// number a game plays by: a check is allowed to know how fast the machine it is running on is.
+///
+/// **There are two measurements of it, and this is the slower one** (S5b-5):
+///
+/// | | how it was measured | rate | 8 ms buys |
+/// |---|---|---|---|
+/// | S6, 2026-09-20 | the garden's `frame_time` cut to **300 µs**, the VM's slowest frame in that run: 1,708 instructions (`docs/worklog/2026-09-20-window-check-flakes.md` §4.4, `s6/ft300.log`, f59 — two beetles' first pass of 854 each) | 5.7 insn/µs | **45,600** |
+/// | S5b-3, 2026-09-21 | the capped garden at its **own 8 ms**, three runs of a minute, 10,749 frames (`docs/worklog/2026-09-21-numbers-garden-settings.md` §4) | 6.85 insn/µs | 54,800 |
+///
+/// The difference is the condition, not the machine: a frame cut to 300 µs pays the cost of
+/// starting and stopping the tick over a twenty-seventh of the work, so the rate it measures is
+/// the rate of a *short* frame. A garden's own frames are the second row, and they are quicker.
+///
+/// **The slower rate is the one to keep**, and the reason is which way this number's error hurts.
+/// It divides a budget to say how many frames a check may wait, so a number that is too **big**
+/// makes the wait too short and produces a FAIL for a VM that was merely being slow — a false
+/// FAIL, the thing S6 and S7 were called in to remove. A number that is too small only makes a
+/// check wait longer before it says what it was going to say. So the rate that buys *less* per
+/// frame is the safe side, and 45,600 is it.
+///
+/// **At the budgets the games ship with, the two agree anyway**: `ceil(41,000 / 45,600)` and
+/// `ceil(41,000 / 54,800)` are both 1, so the garden's sum is 3 either way, and Battle's 200,000
+/// gives 5 against 4. The choice shows above 45,600 of budget, which is `script_budget` in
+/// somebody's `*.settings.txt` — and the machine it was measured on is not the machine the next
+/// person runs this on, which is what `checks_instructions_a_frame` is for.
+pub const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
+
 #[cfg(test)]
 mod tests {
-    use super::query_name;
+    use super::{query_name, CheckPace, INSTRUCTIONS_A_FRAME_BUYS};
 
     /// **A run that was also asked for a picture is not over when the checks are** (S9). The
     /// three games all press this one button, and the thing it turns on is a word on the
@@ -148,5 +272,58 @@ mod tests {
         assert_eq!(query_name("SABIBOTS_SELFTEST"), "selftest");
         // a name with no prefix at all is its own lower case, rather than nothing
         assert_eq!(query_name("SELFTEST"), "selftest");
+    }
+
+    /// **The shape of the sum** (S10), which until now was written out in two games. The two
+    /// halves are tested apart because they come from different places: the structural frames are
+    /// the caller's and are added whatever the budget is, and the quotient is this crate's.
+    #[test]
+    fn a_bigger_budget_buys_a_check_more_frames() {
+        let pace = CheckPace::default();
+        // the two the games ship with: the garden's 41,000 and Battle's 200,000
+        assert_eq!(pace.frames_to_wait(2, 41_000), 3);
+        assert_eq!(pace.frames_to_wait(2, 200_000), 7);
+        // ten times the budget is not the same wait (S5b-3's lesson, which is why this is worked
+        // out rather than written down): `ceil(410,000 / 45,600)` is nine
+        assert_eq!(pace.frames_to_wait(2, 410_000), 2 + 9);
+        // the structural frames survive a budget too small to buy a whole frame, and they are the
+        // caller's number: two games pass a two for two different reasons, and a third may not
+        assert_eq!(pace.frames_to_wait(2, 1), 3);
+        assert_eq!(pace.frames_to_wait(0, 1), 1);
+        // a budget of nothing is a VM that runs nothing, and the errand still costs what it costs
+        assert_eq!(pace.frames_to_wait(2, 0), 2);
+    }
+
+    /// **A store reaches it** (S10) — "it is a setting" and "the setting is doing anything" are
+    /// two claims, and this is the first of them; the second is a run of the game with a line in
+    /// its file (`docs/worklog/2026-09-21-s10.md`).
+    #[test]
+    fn a_store_can_say_how_fast_the_machine_is() {
+        use crate::Settings;
+        use std::path::Path;
+        fn read(path: &Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        }
+        fn write(path: &Path, text: &str) -> Result<(), String> {
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        }
+        let path = std::env::temp_dir().join("games-shell-checkpace-test.txt");
+        let _ = std::fs::remove_file(&path);
+
+        let settings = Settings::load(&path, "a test", read, write);
+        assert_eq!(CheckPace::of(&settings).instructions_a_frame, INSTRUCTIONS_A_FRAME_BUYS);
+
+        let mut settings = Settings::load(&path, "a test", read, write);
+        // half the machine: a frame buys half as much, so a budget costs twice the frames
+        settings.set("checks_instructions_a_frame", "22800");
+        let pace = CheckPace::of(&settings);
+        assert_eq!(pace.instructions_a_frame, 22_800.0);
+        assert_eq!(pace.frames_to_wait(2, 200_000), 2 + 9);
+
+        // and a frame that buys nothing would be a check that never gives up, so it cannot
+        settings.set("checks_instructions_a_frame", "0");
+        assert_eq!(CheckPace::of(&settings).instructions_a_frame, 1.0);
+
+        let _ = std::fs::remove_file(&path);
     }
 }
