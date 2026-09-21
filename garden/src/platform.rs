@@ -127,6 +127,16 @@ pub fn reload_asked_at() -> Option<f32> {
     games_shell::checks::asked_number("GARDEN_RELOAD_AT")
 }
 
+/// `GARDEN_EGUI_FRAMES=N`, and `?selftest&egui_frames=N` in a page (S9): how many frames the
+/// window's checks wait for bevy_egui to learn where the pointer is (`window::EGUI_FRAMES`).
+///
+/// It is a knob for the same reason the one above is: the wait it bounds is the one that has
+/// twice been measured *in a browser*, where the frames are four times longer than a PC's and
+/// an environment variable cannot be set. Read only when the checks were asked for.
+pub fn egui_frames_asked() -> Option<f32> {
+    games_shell::checks::asked_number("GARDEN_EGUI_FRAMES")
+}
+
 /// Where the tenth check's file goes (G5). A temporary directory on a PC, because the file is
 /// about `--load` and not about where a file lives.
 #[cfg(not(target_arch = "wasm32"))]

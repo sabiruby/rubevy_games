@@ -1167,10 +1167,20 @@ pub struct WindowTest {
     turn: Turn,
     /// and how many frames it has been waiting for it
     waited: u32,
-    /// and how many it may wait — [`scheduler_frames`], worked out from the budget the run is
-    /// actually giving the creatures' VM (S5b-3). It is kept here rather than read in
+    /// and how many it may wait **for the VM** — [`scheduler_frames`], worked out from the budget
+    /// the run is actually giving the creatures' VM (S5b-3). It is kept here rather than read in
     /// `window_selftest`, which is at Bevy's sixteen parameters.
     frames: u32,
+    /// **and how many it may wait for egui, which is a different number for a different reason**
+    /// (S9. [`EGUI_FRAMES`]).
+    ///
+    /// S7 gave all three waits one bound, saying that the largest of the three would do and that
+    /// one number is better than three. S5b-5 showed what that costs: the author's new
+    /// `script_budget` took [`scheduler_frames`] from seven frames to three, and the egui wait —
+    /// which has nothing to do with the VM — ran out of patience in three runs of eighty-eight
+    /// (`docs/worklog/2026-09-21-checks-and-leftovers.md` §14-1). **Two reasons sharing one
+    /// number means that when one of them moves, the other breaks quietly.**
+    egui_frames: u32,
     /// **and the frames that come before the VM's, where there are any** (S5b-5).
     ///
     /// [`scheduler_frames`] counts from the moment something was asked of the VM. A step that
@@ -1354,7 +1364,7 @@ impl FakePointer<'_, '_> {
     }
 }
 
-/// **The two VMs, as one system parameter** (S5b-5).
+/// **The two VMs, as one system parameter** (S5b-5)./// **The two VMs, as one system parameter** (S5b-5).
 ///
 /// `window_selftest` was at fifteen of Bevy's sixteen and the pause is about **both** VMs — `P`
 /// takes the budget off the creatures' and off the world's together ([`inspect_keys`]) — so the
@@ -1437,7 +1447,25 @@ impl WindowTest {
     /// Starts once the garden has been running for `at` seconds — long enough for every creature
     /// to have a task and for the editor to be showing one.
     pub fn after(at: f32, budgets: &crate::Budgets) -> WindowTest {
-        WindowTest { at, frames: scheduler_frames(budgets), ..WindowTest::default() }
+        WindowTest {
+            at,
+            frames: scheduler_frames(budgets),
+            egui_frames: crate::platform::egui_frames_asked()
+                .map_or(EGUI_FRAMES, |n| n.max(0.0) as u32),
+            ..WindowTest::default()
+        }
+    }
+
+    /// **How many frames this wait may take, which depends on what is being waited for** (S9).
+    ///
+    /// Three of the four [`Turn`]s are the VM's scheduler and share [`scheduler_frames`], which
+    /// is the sum their common reason gives. The fourth is bevy_egui learning where a pointer is
+    /// and has its own ([`EGUI_FRAMES`]).
+    fn bound(&self) -> u32 {
+        match self.turn {
+            Turn::EguiHasThePointer(_) => self.egui_frames,
+            _ => self.frames,
+        }
     }
 
     /// **The frame the editor pressed Apply** — the one frame a forced birth has to land in
@@ -1512,6 +1540,24 @@ enum Turn {
     EguiHasThePointer(bool),
 }
 
+impl Turn {
+    /// **What a stage direction calls this wait** (S9), so that a log of many runs can be read
+    /// for how long each *kind* of wait took. The three bounds are derived from three different
+    /// things and cannot be measured apart otherwise — which is how S5b-5's "three runs in
+    /// eighty-eight gave up" came to be a sentence about the waits in general rather than about
+    /// the one wait it was really about.
+    fn what(self) -> &'static str {
+        match self {
+            Turn::NotWaiting => "nothing",
+            Turn::RestartedBeetles => "every beetle's task to run an instruction",
+            Turn::AMeterMoved => "a meter to move",
+            Turn::TheDayIs(_) => "the applied rules to be running",
+            Turn::EguiHasThePointer(true) => "egui to take the pointer",
+            Turn::EguiHasThePointer(false) => "egui to let the pointer go",
+        }
+    }
+}
+
 /// **How many frames a check waits for the thing it is about before it judges anyway** (S7).
 /// Not a length of time, and not a number anybody picked. The case it is derived from is the
 /// dearest of the three, which is the VM's scheduler reaching a task that has just been made.
@@ -1546,12 +1592,16 @@ enum Turn {
 /// budget is 45,000 (`crate::install_world_answers`), so one frame's worth is one frame. It also
 /// covers [`Turn::TheDayIs`] (S5b-5), where the world's script **is** made rather than resumed —
 /// Apply on `world.rb` replaces it — so that one wants the same two structural frames the
-/// creatures' restarts want, and `2 + ceil(45,000 / 45,600)` is three as well. And it covers
-/// [`Turn::EguiHasThePointer`], which is not the VM at all and wants **one** frame:
-/// bevy_egui reads the forged `CursorMoved` in `PreUpdate` and the pass that sets
-/// `EguiWantsInput` is in `EguiPrimaryContextPass`, so the frame after the one the check wrote it
-/// in is the frame egui knows. This is the largest of the three, and one number is better than
-/// three.
+/// creatures' restarts want, and `2 + ceil(45,000 / 45,600)` is three as well.
+///
+/// **It does not cover [`Turn::EguiHasThePointer`] any more** (S9). S7 wrote that it did, on the
+/// ground that egui wants one frame, that this was the largest of the three, and that one number
+/// is better than three. The first two are still true and the third was wrong: when the author's
+/// `script_budget` took this sum from seven frames to three, the egui wait — which has nothing
+/// to do with the VM's budget — was the one that ran out, in three runs of eighty-eight
+/// (`docs/worklog/2026-09-21-checks-and-leftovers.md` §14-1). A bound is an argument about *what
+/// is being waited for*, so two things waited on for two reasons need two of them, and moving
+/// one must not be able to move the other. egui's is [`EGUI_FRAMES`].
 ///
 /// **S5b-3: it is worked out from the budget the run is really giving, not from a literal.** S7
 /// wrote rubevy's then-default 200,000 into the sum as a number, which was right on the day and
@@ -1601,6 +1651,40 @@ const STRUCTURAL_FRAMES: u32 = 2;
 /// `ceil(41,000 / 54,800)` are both 1, so [`scheduler_frames`] is 3 either way. The choice only
 /// shows above 45,600 of budget, which is `script_budget` in somebody's `garden.settings.txt`.
 const INSTRUCTIONS_A_FRAME_BUYS: f32 = 45_600.0;
+
+/// **How many frames [`Turn::EguiHasThePointer`] may wait** (S9) — egui's own bound, from egui's
+/// own reason, which until now was the VM's ([`scheduler_frames`]).
+///
+/// What is waited for is bevy_egui learning where the pointer is. The check writes the
+/// `CursorMoved` winit would have written ([`FakePointer::point_at`]); bevy_egui reads that
+/// message in `PreUpdate` and the pass that answers `EguiWantsInput` is `EguiPrimaryContextPass`,
+/// so **the frame after the one the check wrote it in is the frame egui knows** — one frame, and
+/// it cannot be less, because the message is not read in the frame it is written.
+///
+/// **It is two, and the two are the two directions this wait has.**
+///
+/// * *Letting go* takes **one**. `wants_pointer_input` is false as soon as egui has been told
+///   the pointer is somewhere it does not want, which is the pass of the frame after the
+///   message.
+/// * *Taking* takes **two**, because the second half of the answer is a **layout**:
+///   `is_pointer_over_area` asks which layer is under a point, and the rectangles it asks are the
+///   ones the previous pass left. So the pass of frame N+1 is where egui first has the position,
+///   and frame N+2 is the first frame in which a system can read an answer that used it.
+///
+/// **Measured, in the browser, where the frames are longest** (S9): with the bound handed up to
+/// thirty (`?selftest&egui_frames=30`), two runs of the garden's page gave
+/// `waited 2 of 30 frame(s) for egui to take the pointer` and
+/// `waited 1 of 30 frame(s) for egui to let the pointer go`, both times — the derivation exactly,
+/// with nothing above it. The stage direction naming which wait it was is what makes that
+/// readable (`Turn::what`); before S9 the log said how many frames a wait took and not which
+/// wait, which is why S5b-5 could say "three runs in eighty-eight gave up" and not say of what.
+///
+/// **What it is not**: a number that moves when the VM's budget moves. That was the whole of
+/// S5b-5's finding — the egui wait had been riding on `scheduler_frames`, and when the author
+/// chose a smaller `script_budget` the egui wait quietly got shorter and three runs in
+/// eighty-eight gave up. A run may still hand another number in for a measurement
+/// (`GARDEN_EGUI_FRAMES=N`, `?selftest&egui_frames=N`).
+const EGUI_FRAMES: u32 = 2;
 
 /// **One beetle born in the very frame the editor presses Apply** (S7) — the race the checks
 /// cannot otherwise arrange, made to happen on purpose so that a check can watch it.
@@ -1693,13 +1777,17 @@ pub fn window_selftest(
             Turn::EguiHasThePointer(want) => pointing.egui_has_it() == want,
         };
         test.waited += 1;
-        if !came_round && test.waited < test.frames + test.spare {
+        if !came_round && test.waited < test.bound() + test.spare {
             return;
         }
-        // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict
+        // a stage direction, not a check: `tools/fixedlines.sh` keeps the lines with a verdict.
+        // **It names what was waited for** (S9) — without that, a log says how many frames a
+        // wait took but not which wait, and the two bounds cannot be measured apart.
         info!(
-            "selftest: waited {} frame(s) for the thing the next check is about, and it {}",
+            "selftest: waited {} of {} frame(s) for {}, and it {}",
             test.waited,
+            test.bound() + test.spare,
+            test.turn.what(),
             if came_round { "happened" } else { "did not — judging it as it stands" },
         );
         test.turn = Turn::NotWaiting;
