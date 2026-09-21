@@ -32,9 +32,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: rubevy_games
-      - name: the SabiRuby commit of Cargo.lock
+      # Which SabiRuby the Playground's compiler module is built from: the one Cargo.lock names.
+      # Two spellings, because the lock has had both — a `[patch.crates-io]` git rev while the
+      # games rode the VM's main branch (until 2026-09-22), and a published version since. A
+      # version becomes the tag the release carries (`v0.6.1`); the grep for a rev is tried first
+      # so that going back to a patch needs no change here. An empty ref would silently check out
+      # the VM's default branch, so the step fails instead.
+      - name: the SabiRuby Cargo.lock names
         id: vm
-        run: echo "ref=$(grep -m1 -o 'github.com/sabiruby/sabiruby#[0-9a-f]*' rubevy_games/Cargo.lock | cut -d'#' -f2)" >> "$GITHUB_OUTPUT"
+        run: |
+          ref=$(grep -m1 -o 'github.com/sabiruby/sabiruby#[0-9a-f]*' rubevy_games/Cargo.lock | cut -d'#' -f2)
+          if [ -z "$ref" ]; then
+            ref="v$(grep -m1 -A1 '^name = "sabiruby"$' rubevy_games/Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')"
+          fi
+          [ "$ref" != "v" ] || { echo "Cargo.lock names no sabiruby" >&2; exit 1; }
+          echo "the Playground compiler is built from sabiruby $ref"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: sabiruby/sabiruby-playground
