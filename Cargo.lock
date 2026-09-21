@@ -2388,6 +2388,9 @@ dependencies = [
  "games-shell",
  "rubevy",
  "rubevy-build",
+ "sabiruby",
+ "sabiruby-serde",
+ "serde",
 ]
 
 [[package]]

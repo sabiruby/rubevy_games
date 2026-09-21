@@ -15,12 +15,17 @@ rubevy-build.workspace = true
 bevy.workspace = true
 rubevy.workspace = true
 games-shell.workspace = true
+# F2's data stage. The VM itself, for the `Vm` the declarations are collected in and for the
+# exception a bad `data.rb` raises; `sabiruby-serde` for `declare`, which is the port the whole of
+# `src/data.rs` is written against. Both are named by version and sent to git by the workspace's
+# `[patch.crates-io]`, which is what keeps one VM — and one `Value` — in the binary.
+sabiruby.workspace = true
+sabiruby-serde.workspace = true
+serde = { version = "1", features = ["derive"] }
 
-# **What this game does not name yet, and why**, so that the list says what F0 is rather than
-# being a copy of sabibots' with holes in it:
+# **What this game does not name yet, and why**, so that the list says what this stage is rather
+# than being a copy of sabibots' with holes in it:
 #
-# * `sabiruby` and `sabiruby-serde` — F2's data stage is the first thing here to hand a Ruby Hash
-#   to serde; F0 has no declarations to read.
 # * `rubevy-egui` and `bevy_egui` — F5's editor and VM panel. `games-shell`'s camera asks egui
 #   whether it is holding the pointer through an `Option<Res<…>>`, so a game with no egui in it
 #   simply answers no.

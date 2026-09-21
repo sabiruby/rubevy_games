@@ -57,7 +57,11 @@ KENNEY_ROWS = 11
 # `ore.png` is F1's: the ground with ore in it, Kenney's Tiny Farm rocks in Tiny Factory's orange
 # (`tools/factory-ore.py`). The item that comes out of it is **not** here — it is 8 px and a sheet
 # of 16 px squares has no room for half a tile; it is its own file, drawn as a sprite.
-OWN: list[tuple[str, int, int]] = [("belts.png", 4, 1), ("ore.png", 2, 1)]
+# `machine.png` is F2's: Kenney's green machine stretched to two tiles by two
+# (`tools/factory-machine.py`), which is what a `machine :assembler, size: [2, 2]` wants four
+# pictures for. It is cut **row by row from the top**, like every other entry here, and that is
+# the order a machine's `sprite:` list is written in.
+OWN: list[tuple[str, int, int]] = [("belts.png", 4, 1), ("ore.png", 2, 1), ("machine.png", 2, 2)]
 
 
 def tiles_of(path: pathlib.Path, columns: int, rows: int) -> list[Image.Image]:

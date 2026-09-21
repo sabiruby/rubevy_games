@@ -20,7 +20,8 @@ use bevy::prelude::*;
 use bevy::sprite_render::{AlphaMode2d, TileData, TileOrientation, TilemapChunk, TilemapChunkTileData};
 use games_shell::camera::CameraView;
 
-use crate::belts::{Lanes, Rules};
+use crate::belts::Lanes;
+use crate::data::Data;
 use crate::grid::{Dir, Flow, Grid, Ore, What};
 use crate::items::Pool;
 use crate::{Map, TILE_PX};
@@ -49,6 +50,15 @@ const BELT_CORNER: [u16; 2] = [134, 135];
 const MINER: u16 = 110;
 /// A wooden crate, used as the chest.
 const CHEST: u16 = 85;
+/// **How big an item's icon is.** 8 px, and it is not a setting for the same reason `TILE_PX` is
+/// not: it is where the sheet is cut. Two of them fit across a 16 px tile without touching, which
+/// is where the default `items_per_tile` in `data.rb` comes from — the number follows the art,
+/// and a player who wants a denser belt moves the number and lets them overlap.
+pub const ITEM_PX: u32 = 8;
+/// **How many icons `assets/items/items.png` has.** One per item the default `data.rb` declares,
+/// and `icon:` is an index into it; the checks read the count back out of the loaded image, so a
+/// sheet and a data file that disagree say so. `tools/factory-items.py` draws it.
+pub const ITEM_ICONS: u32 = 3;
 
 /// **A quarter turn anticlockwise per direction**, for a picture drawn running east.
 /// `Rotate90` turns the pack's east-running belt into a north-running one, which is what F0a's
@@ -90,14 +100,14 @@ pub fn belt_picture(came_in: Dir, goes_out: Dir, frame: usize) -> (u16, TileOrie
 }
 
 /// Which tile of the sheet the floor has at a place: the border, a patch of ore, or a plate.
-pub fn floor_picture(map: &Map, ore: &Ore, rules: &Rules, tile: UVec2) -> u16 {
+pub fn floor_picture(map: &Map, ore: &Ore, tile: UVec2) -> u16 {
     let last = map.tiles - 1;
     let at = (tile.y * map.tiles + tile.x) as usize;
     if tile.x == 0 || tile.y == 0 || tile.x == last || tile.y == last {
         GROUND
     } else if ore.left[at] > 0 {
         // half a patch left is where it starts looking dug out
-        if ore.left[at] * 2 > rules.ore_per_tile { ORE_RICH } else { ORE_POOR }
+        if ore.left[at] * 2 > map.ore_per_tile { ORE_RICH } else { ORE_POOR }
     } else {
         FLOOR_PLATES[((tile.x + tile.y) % FLOOR_PLATES.len() as u32) as usize]
     }
@@ -113,10 +123,16 @@ pub struct Chunks {
     pub buildings: Entity,
 }
 
-/// The item's picture, loaded once and shared by every sprite in the pool.
+/// **The items' pictures**: one sheet of [`ITEM_PX`] squares and the layout that cuts it, loaded
+/// once and shared by every sprite in the pool.
+///
+/// One image and one layout rather than one image per item, because a sprite batch is the run of
+/// the same image at the same z (`bevy_sprite_render`): a belt carrying ore, plates and gears is
+/// one draw call this way and three the other.
 #[derive(Resource, Debug)]
 pub struct Icons {
-    pub ore: Handle<Image>,
+    pub sheet: Handle<Image>,
+    pub layout: Handle<TextureAtlasLayout>,
 }
 
 /// Which frame of the belts' two-frame animation is showing, and when it last turned over.
@@ -126,7 +142,12 @@ pub struct Animation {
     pub since: f32,
 }
 
-pub fn start_drawing(mut commands: Commands, assets: Res<AssetServer>, map: Res<Map>) {
+pub fn start_drawing(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    mut layouts: ResMut<Assets<TextureAtlasLayout>>,
+    map: Res<Map>,
+) {
     // The tileset is one image and the chunk wants an array texture with one layer per tile, so
     // the cut is asked for through the loader's settings — it cannot be asked for in a `.meta`
     // file beside the image, because `AssetMetaCheck::Never` is what keeps a page from being
@@ -165,13 +186,19 @@ pub fn start_drawing(mut commands: Commands, assets: Res<AssetServer>, map: Res<
         ))
         .id();
     commands.insert_resource(Chunks { floor, buildings });
-    commands.insert_resource(Icons { ore: assets.load("items/ore.png") });
+    let layout = layouts.add(TextureAtlasLayout::from_grid(
+        UVec2::splat(ITEM_PX),
+        ITEM_ICONS,
+        1,
+        None,
+        None,
+    ));
+    commands.insert_resource(Icons { sheet: assets.load("items/items.png"), layout });
 }
 
 /// The floor, when a patch of ore has changed — which is rare, and is why this is not every frame.
 pub fn draw_floor(
     map: Res<Map>,
-    rules: Res<Rules>,
     mut ore: ResMut<Ore>,
     chunks: Res<Chunks>,
     mut tiles: Query<&mut TilemapChunkTileData>,
@@ -179,14 +206,13 @@ pub fn draw_floor(
     if !ore.changed {
         return;
     }
-    let Ok(mut data) = tiles.get_mut(chunks.floor) else { return };
+    let Ok(mut picture) = tiles.get_mut(chunks.floor) else { return };
     for y in 0..map.tiles {
         for x in 0..map.tiles {
             let at = (y * map.tiles + x) as usize;
-            data.0[at] = Some(TileData::from_tileset_index(floor_picture(
+            picture.0[at] = Some(TileData::from_tileset_index(floor_picture(
                 &map,
                 &ore,
-                &rules,
                 UVec2::new(x, y),
             )));
         }
@@ -197,7 +223,8 @@ pub fn draw_floor(
 /// The buildings, when something is built or taken away, and when the belts' animation turns over.
 pub fn draw_buildings(
     time: Res<Time>,
-    rules: Res<Rules>,
+    rules: Res<crate::belts::Rules>,
+    data: Res<Data>,
     grid: Res<Grid>,
     flow: Res<Flow>,
     mut animation: ResMut<Animation>,
@@ -214,11 +241,11 @@ pub fn draw_buildings(
     if !turned && *seen == grid.changes {
         return;
     }
-    let Ok(mut data) = tiles.get_mut(chunks.buildings) else { return };
+    let Ok(mut picture) = tiles.get_mut(chunks.buildings) else { return };
     if *seen != grid.changes {
         // everything that had a picture and may not have one now
         for &at in drawn.iter() {
-            data.0[at as usize] = None;
+            picture.0[at as usize] = None;
         }
         drawn.clear();
         drawn.extend_from_slice(grid.built());
@@ -227,7 +254,7 @@ pub fn draw_buildings(
     for &at in drawn.iter() {
         let at = at as usize;
         let Some(building) = grid.at(at) else { continue };
-        data.0[at] = Some(match building.what {
+        picture.0[at] = Some(match building.what {
             What::Belt => {
                 let (index, orientation) =
                     belt_picture(flow.came_in[at], building.dir, animation.frame);
@@ -235,8 +262,41 @@ pub fn draw_buildings(
             }
             What::Miner => TileData::from_tileset_index(MINER),
             What::Chest => TileData::from_tileset_index(CHEST),
+            // **a machine is as many pictures as it covers tiles**, and which one a tile gets is
+            // where that tile is inside the footprint — row by row from the bottom left, which is
+            // the order `machine :name, sprite: […]` lists them in (`crate::data`)
+            What::Machine(kind) => TileData::from_tileset_index(machine_picture(
+                &data,
+                kind,
+                grid.tile_of(at),
+                grid.tile_of(at),
+            )),
+            What::Covered { origin } => {
+                let origin = origin as usize;
+                let Some(What::Machine(kind)) = grid.at(origin).map(|b| b.what) else { continue };
+                TileData::from_tileset_index(machine_picture(
+                    &data,
+                    kind,
+                    grid.tile_of(origin),
+                    grid.tile_of(at),
+                ))
+            }
         });
     }
+}
+
+/// Which of a machine's pictures the tile at `here` gets, given that the machine was built at
+/// `origin`. A tile outside the footprint — which should not happen — gets the first, because a
+/// picture that is in the wrong place is easier to see than none at all.
+fn machine_picture(data: &Data, kind: crate::data::MachineId, origin: UVec2, here: UVec2) -> u16 {
+    let Some(machine) = data.machines.get(kind as usize) else { return 0 };
+    // **row by row from the top**, which is the order a `sprite:` list is written in and the
+    // order `tools/factory-tileset.py` cuts a sheet in. The map counts rows upwards, so the
+    // topmost row of the footprint is the one with the *largest* `y`.
+    let offset = here.as_ivec2() - origin.as_ivec2();
+    let from_the_top = (machine.size.y as i32 - 1 - offset.y).max(0) as u32;
+    let at = from_the_top * machine.size.x + offset.x.max(0) as u32;
+    *machine.sprite.get(at as usize).or_else(|| machine.sprite.first()).unwrap_or(&0)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -253,40 +313,48 @@ pub fn draw_items(
     grid: Res<Grid>,
     flow: Res<Flow>,
     lanes: Res<Lanes>,
+    data: Res<Data>,
     icons: Res<Icons>,
     mut pool: ResMut<Pool>,
     mut commands: Commands,
-    mut sprites: Query<(&mut Transform, &mut Visibility)>,
-    mut places: Local<Vec<Vec2>>,
+    mut sprites: Query<(&mut Transform, &mut Visibility, &mut Sprite)>,
+    mut places: Local<Vec<(Vec2, crate::data::ItemId)>>,
 ) {
     crate::items::places(&map, &grid, &flow, &lanes, &mut places);
-    for (i, at) in places.iter().enumerate() {
+    for (i, &(at, item)) in places.iter().enumerate() {
+        // which of the sheet's icons this item wears is `data.rb`'s `icon:`, and an item whose
+        // number is off the end of the sheet wears the first rather than nothing
+        let icon = data.items.get(item as usize).map(|i| i.icon).unwrap_or(0) as usize;
         match pool.sprites.get(i) {
             Some(&entity) => {
-                if let Ok((mut transform, mut visible)) = sprites.get_mut(entity) {
+                if let Ok((mut transform, mut visible, mut sprite)) = sprites.get_mut(entity) {
                     transform.translation = at.extend(2.0);
                     *visible = Visibility::Inherited;
+                    if let Some(atlas) = sprite.texture_atlas.as_mut() {
+                        atlas.index = icon;
+                    }
                 }
             }
             // a sprite spawned now cannot be written until the next frame, which is when this
             // item will be drawn; one frame late for one item is not a thing anybody sees
-            None => pool.sprites.push(commands.spawn(item_sprite(&icons, *at)).id()),
+            None => pool.sprites.push(commands.spawn(item_sprite(&icons, at, icon)).id()),
         }
     }
     for &entity in pool.sprites.iter().skip(places.len()) {
-        if let Ok((_, mut visible)) = sprites.get_mut(entity) {
+        if let Ok((_, mut visible, _)) = sprites.get_mut(entity) {
             *visible = Visibility::Hidden;
         }
     }
 }
 
-fn item_sprite(icons: &Icons, at: Vec2) -> impl Bundle {
+fn item_sprite(icons: &Icons, at: Vec2, icon: usize) -> impl Bundle {
     (
         Sprite {
-            image: icons.ore.clone(),
-            // one world unit is one pixel of the art, and the icon is 8 px: drawn at its own
+            image: icons.sheet.clone(),
+            texture_atlas: Some(TextureAtlas { layout: icons.layout.clone(), index: icon }),
+            // one world unit is one pixel of the art, and the icon is `ITEM_PX`: drawn at its own
             // size, which is the only size pixel art is drawn at
-            custom_size: Some(Vec2::splat(8.0)),
+            custom_size: Some(Vec2::splat(ITEM_PX as f32)),
             ..default()
         },
         Transform::from_translation(at.extend(2.0)),

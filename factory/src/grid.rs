@@ -12,6 +12,7 @@
 
 use bevy::prelude::*;
 
+use crate::machines::Stock;
 use crate::{Map, TILE_PX};
 
 /// **Which way a building faces**, and the only four there are. `East` is the direction tile
@@ -77,18 +78,29 @@ impl Dir {
     }
 }
 
-/// **What kinds of thing can be on a tile.** Three, which is what F1's line needs: something that
-/// digs, something that carries, something that holds.
+/// **What kinds of thing can be on a tile.** Three of them are the world's own fittings and the
+/// fourth is whatever `data.rb` declares; the fifth is not a thing at all but the rest of a
+/// machine that covers more than one tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum What {
     /// Carries items the way it faces. Takes them from any side but its own front.
     Belt,
-    /// Digs the ore under it and puts it into whatever it faces.
+    /// Digs the ore under it and puts what [`Rules::digs`] names into whatever it faces.
+    ///
+    /// [`Rules::digs`]: crate::belts::Rules::digs
     Miner,
-    /// Holds what a belt or a miner delivers into it, up to [`Rules::chest_capacity`].
+    /// Holds what is delivered into it, up to [`Rules::chest_capacity`] things altogether.
     ///
     /// [`Rules::chest_capacity`]: crate::belts::Rules::chest_capacity
     Chest,
+    /// A machine of the kind `data.rb` declared, **on its origin tile** — the bottom-left of its
+    /// footprint, which is the tile that was clicked. Everything that happens to a machine
+    /// happens here ([`crate::machines`]).
+    Machine(crate::data::MachineId),
+    /// The rest of a machine that covers more than one tile: not a building of its own, but the
+    /// index of the tile that is. A belt handing an item to one of these is handing it to the
+    /// machine, which is what lets a big machine be fed from any of its sides.
+    Covered { origin: u32 },
 }
 
 impl What {
@@ -97,27 +109,46 @@ impl What {
             What::Belt => "belt",
             What::Miner => "miner",
             What::Chest => "chest",
+            What::Machine(_) => "machine",
+            What::Covered { .. } => "part of a machine",
         }
     }
 }
 
 /// One building. The state a machine keeps while it runs is in here too, because it is the grid
 /// that a save file will be (F5) and a machine's half-finished work is part of the world.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// **It stopped being `Copy` at F2**, when a chest stopped being a number: what a chest or a
+/// machine holds is a few items of a few kinds ([`Stock`]), which is a `Vec`. A belt, which is
+/// most of the tiles of a busy map, carries two empty ones and they allocate nothing.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Building {
     pub what: What,
     /// Where it sends what it makes or carries. A chest faces nowhere in particular; it keeps the
     /// direction it was built with so that turning it is not a special case.
     pub dir: Dir,
-    /// A miner: how far through the current dig it is, in seconds. A chest: unused.
+    /// A miner: how far through the current dig it is, in seconds. A machine: how far through the
+    /// craft in [`Building::making`]. A belt and a chest: unused.
     pub work: f32,
-    /// A chest: how many items are in it. A miner: unused.
-    pub held: u32,
+    /// A chest: what is in it. A machine: the parts it has taken in and not used yet.
+    pub held: Stock,
+    /// A machine: what it has made and not got rid of yet. It is what stops it starting another
+    /// craft, which is the same rule a miner keeps with a finished dig.
+    pub made: Stock,
+    /// A machine: which recipe it is part way through, if any.
+    pub making: Option<crate::data::RecipeId>,
 }
 
 impl Building {
     pub fn new(what: What, dir: Dir) -> Building {
-        Building { what, dir, work: 0.0, held: 0 }
+        Building {
+            what,
+            dir,
+            work: 0.0,
+            held: Stock::default(),
+            made: Stock::default(),
+            making: None,
+        }
     }
 }
 
@@ -270,6 +301,17 @@ impl Ore {
     }
 }
 
+/// **Whether a building pushes what it has into the tile it faces**, which is what makes the tile
+/// in front of it a corner rather than a straight.
+///
+/// A machine does, and a machine of more than one tile does it from a tile that is not the one
+/// its neighbour is next to ([`crate::data::Data::output_of`]), so for a big machine this answers
+/// about the origin only and the belt beside a covered tile is drawn as a straight. That is the
+/// picture it wants anyway; nothing about where the items really go is decided here.
+fn feeds(building: &Building) -> bool {
+    matches!(building.what, What::Belt | What::Miner | What::Machine(_))
+}
+
 /// **Which way an item arrives at each tile**, which is not the same as which way the tile faces:
 /// a belt is a corner when what feeds it comes in from the side.
 ///
@@ -310,7 +352,7 @@ impl Flow {
                 let Some(n) = grid.step_from(t, side) else { continue };
                 let feeding = grid
                     .at(n)
-                    .is_some_and(|b| matches!(b.what, What::Belt | What::Miner) && b.dir == side.back());
+                    .is_some_and(|b| feeds(b) && b.dir == side.back());
                 if !feeding {
                     continue;
                 }
