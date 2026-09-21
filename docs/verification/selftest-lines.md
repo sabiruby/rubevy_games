@@ -1,6 +1,6 @@
-# What the two games' checks have to say
+# What the games' checks have to say
 
-Both games run a `selftest` that prints one line per thing it has proved. Until 2026-09-20 the
+Every game here runs a `selftest` that prints one line per thing it has proved. Until 2026-09-20 the
 standard those runs were held to was a **number** — "the garden: ok 43", "Battle: 31 fixed lines
 plus two a hit" — which is not a standard. A number does not say *which* lines, so a check that
 quietly stopped running and another that quietly started cancel out, and a check whose sentence
@@ -35,8 +35,18 @@ SABIBOTS_SELFTEST=1 cargo run -p sabibots -- --headless 25     # Battle, no wind
 SABIBOTS_SELFTEST=1 docker/run.sh sabibots release             # Battle, a window (WSLg, lavapipe)
 GARDEN_SELFTEST=1   cargo run -p garden   -- --headless 90     # the garden, no window
 GARDEN_SELFTEST=1   docker/run.sh garden   release             # the garden, a window
+FACTORY_SELFTEST=1  cargo run -p factory  -- --headless 10     # Factory, no window
+FACTORY_SELFTEST=1  docker/run.sh factory  release             # Factory, a window
 web/build.sh all && web/serve.sh                               # then …/sabibots/?selftest and …/garden/?selftest
+web/build.sh factory                                           # then …/factory/?selftest
 ```
+
+**Factory is not in `web/build.sh all`** until F6 (`web/games.sh`, `docs/factory.md`), so its page
+is built by name. Its run is a `docker/run.sh` like the other two, with no edit to that script:
+the environment it hands over is found by the game's own name in capitals.
+
+A run of a `docker/run.sh` is on a TTY, so **its lines end in CR** and `tools/fixedlines.sh` does
+not strip it. Put the log through `tr -d '\r'` before comparing, or every line looks changed.
 
 A window needs a GPU, which this machine does not have outside the container
 (`docs/wsl-gpu.md`). A browser run is driven with playwright-core out of the neighbouring
@@ -322,6 +332,53 @@ selftest: ok   typing in the rules marks them edited
 selftest: ok   typing marks the text edited
 ```
 
+## Factory, no window — 4 lines
+
+`FACTORY_SELFTEST=1 cargo run -p factory -- --headless 10`. F0's four checks: the grid, the
+arithmetic a click goes through, and — where there is something to draw with — the tileset.
+
+```
+selftest: --   no floor was drawn (this run has no renderer)
+selftest: ok   a click in the middle of a tile is read as that tile (asked Some((N, N)), read Some((N, N)))
+selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
+selftest: ok   the floor is N by N tiles, all N of them laid with a tile of the sheet
+```
+
+**`no floor was drawn` is this game's `--` line, and it does not move**: a headless run has no
+renderer at all, so it spawns no `TilemapChunk` and there is no image loader to fetch the tileset
+with. The verdict says the run did not put the check in a position to measure anything, which is
+neither a pass nor a failure. The click is *forged* — the checks write a `WorldClick` rather than
+driving a mouse — so the arithmetic is measured where there is no camera to click with.
+
+## Factory, a window — 4 lines
+
+`FACTORY_SELFTEST=1 docker/run.sh factory release`. The same three, and the `--` line replaced by
+the check it stood in for.
+
+```
+selftest: ok   a click in the middle of a tile is read as that tile (asked Some((N, N)), read Some((N, N)))
+selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
+selftest: ok   the floor is N by N tiles, all N of them laid with a tile of the sheet
+selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
+```
+
+The tileset line checks the **number** of layers as well as their size, because a count that is a
+multiple of six is what a browser draws a black page over (`docs/factory.md`). It is not a check
+that anything was *drawn* — nothing in a log can be — and the evidence for that is a screenshot
+with its pixels counted, in `worklog/2026-09-21-factory-F0.md`.
+
+## Factory, a browser — 5 lines
+
+`…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
+
+```
+selftest: done — the factory keeps running (a page has nothing to exit to)
+selftest: ok   a click in the middle of a tile is read as that tile (asked Some((N, N)), read Some((N, N)))
+selftest: ok   a world point and the tile it is in agree at the corners and the middle (N/N), and a point off the map is off it
+selftest: ok   the floor is N by N tiles, all N of them laid with a tile of the sheet
+selftest: ok   the tileset arrived as an array of N layers of N by N px (frame N)
+```
+
 ---
 
 ## Where these lists came from
@@ -332,6 +389,11 @@ logs in the stage's scratchpad. Every list but Battle's two is byte-identical to
 produce when they are put through `tools/fixedlines.sh`; Battle's window and page lists have
 gained the `FN is Apply` line and Battle's headless list the `handler tasks …` line, which are
 the two things S4 changed.
+
+**Factory's three lists are F0's**, measured on 2026-09-21 on the branch `factory`, one run each,
+with the logs in that stage's scratchpad. They are new lists and not a change to anybody else's:
+the six above were re-run on the same day, after the rubevy bump that opened the stage and again
+at the end of it, and all six diffed empty.
 
 **S7 moved one line**, on 2026-09-20 on the same branch: the garden's window and page lists gained
 `a beetle born in the very frame of Apply is restarted too`, and nothing else in any of the six
