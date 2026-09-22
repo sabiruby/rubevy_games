@@ -1,15 +1,127 @@
-//! **The words of Factory's in-game guide — the one file to edit.**
+//! **The words of Factory's in-game guide and its palette — the one file to edit.**
 //!
-//! Every string the `H` panel shows is here, English and Japanese side by side, and nothing else
-//! is: the window, the keys that open it and the Japanese font are `games-shell`'s
-//! ([`games_shell::guide`]). The garden's words are in `garden/src/guide_text.rs` and Battle's in
-//! `sabibots/src/guide_text.rs`; the frame is shared and the words are not.
+//! Every string the `H` panel shows is here, English and Japanese side by side: the window, the
+//! keys that open it and the Japanese font are `games-shell`'s ([`games_shell::guide`]). The
+//! garden's words are in `garden/src/guide_text.rs` and Battle's in `sabibots/src/guide_text.rs`;
+//! the frame is shared and the words are not.
+//!
+//! **F7's palette says its words from here too** ([`Say`]), and that is not tidiness: the font in
+//! the binary is cut to the characters `tools/subset-font.sh` finds, and the four files it reads
+//! are the three games' `guide_text.rs` and the shared `guide.rs`. A Japanese word written
+//! anywhere else in this crate is drawn as a blank box. So this file is "Factory's Japanese",
+//! not only "Factory's guide".
 //!
 //! **After editing the Japanese, re-cut the font**: `tools/subset-font.sh`. The font in the
 //! binary carries only the characters these strings use, so a word with a character that was not
 //! here before would be drawn as a blank box until the subset is made again.
 
+use games_shell::guide::GuideLang;
 use games_shell::Guide;
+
+use crate::data::Data;
+use crate::grid::{Dir, What};
+
+/// **One thing to say, in both languages** — the shape [`games_shell::GuideNote`] has, for the
+/// words that are not in the guide at all (F7's palette, the line under it).
+#[derive(Debug, Clone, Copy)]
+pub struct Say {
+    pub en: &'static str,
+    pub ja: &'static str,
+}
+
+impl Say {
+    pub const fn new(en: &'static str, ja: &'static str) -> Say {
+        Say { en, ja }
+    }
+
+    pub fn of(&self, lang: GuideLang) -> &'static str {
+        match lang {
+            GuideLang::En => self.en,
+            GuideLang::Ja => self.ja,
+        }
+    }
+}
+
+/// The palette's own words (F7): the window, the row of zoom buttons, and the line that says
+/// which way what is in hand is facing.
+pub const PALETTE_TITLE: Say = Say::new("Build", "設置");
+pub const PALETTE_HINT: Say = Say::new(
+    "Click one, or press its key. Then click the map.",
+    "クリックするか、キーを押して手に持ちます。そのあと地図をクリック。",
+);
+pub const FACING: Say = Say::new("facing", "向き");
+pub const TURN_IT: Say = Say::new("R turns it", "R で向きを変える");
+pub const ZOOM: Say = Say::new("Zoom", "拡大縮小");
+pub const WHOLE_MAP: Say = Say::new("Whole map", "地図全体");
+pub const BACK_HOME: Say = Say::new("Home", "はじめの見え方");
+pub const NEXT_STEP: Say = Say::new("Next", "次の 1 手");
+
+/// **What to build next**, one step at a time (F7): the sentences, with the key to press and the
+/// name of the thing left as `{key}` and `{name}` so that a `data.rb` which declares a different
+/// machine says its own name.
+pub const STEP_MINER: Say = Say::new(
+    "{key}: put a {name} on a patch of ore",
+    "{key}: まず鉱石の上に{name}を置く",
+);
+pub const STEP_BELT: Say = Say::new(
+    "{key}: a {name} leading away from it — R turns it",
+    "{key}: そこから伸びる{name}(R で向き)",
+);
+pub const STEP_CHEST: Say = Say::new(
+    "{key}: a {name} at the end of the line",
+    "{key}: 線の終わりに{name}",
+);
+pub const STEP_MACHINE: Say = Say::new(
+    "{key}: a {name} beside the belt",
+    "{key}: ベルトの隣に{name}",
+);
+pub const STEP_INSERTER: Say = Say::new(
+    "{key}: an {name} between the belt and the machine — click it to write what it does",
+    "{key}: ベルトと機械の間に{name}。クリックで中身を書く",
+);
+
+/// **The four fittings, in Japanese.** A machine is called whatever `data.rb` called it — that is
+/// the only name a player has for one ([`crate::build::word_for`]) — but the belt, the miner, the
+/// chest and the arm are this game's own and the guide has been calling them these all along.
+const FITTINGS: [(&str, Say); 5] = [
+    ("belt", Say::new("belt", "ベルト")),
+    ("miner", Say::new("miner", "採掘機")),
+    ("chest", Say::new("chest", "箱")),
+    ("inserter", Say::new("inserter", "インサータ")),
+    ("the wrecking ball", Say::new("the wrecking ball", "撤去")),
+];
+
+/// What to call what is in hand, in the language the guide is showing.
+pub fn word_in(lang: GuideLang, what: Option<What>, data: &Data) -> String {
+    let english = crate::build::word_for(what, data);
+    match lang {
+        GuideLang::En => english,
+        GuideLang::Ja => FITTINGS
+            .iter()
+            .find(|(en, _)| *en == english)
+            .map(|(_, say)| say.ja.to_string())
+            .unwrap_or(english),
+    }
+}
+
+/// **Which way, as a word and as an arrow.** The arrows are here rather than in the palette for
+/// the reason the Japanese is: they are characters, and the font is cut to this file.
+pub fn way_round(lang: GuideLang, dir: Dir) -> String {
+    let arrow = match dir {
+        Dir::East => "→",
+        Dir::North => "↑",
+        Dir::West => "←",
+        Dir::South => "↓",
+    };
+    let word = match (lang, dir) {
+        (GuideLang::En, _) => dir.word(),
+        (GuideLang::Ja, Dir::East) => "東",
+        (GuideLang::Ja, Dir::North) => "北",
+        (GuideLang::Ja, Dir::West) => "西",
+        (GuideLang::Ja, Dir::South) => "南",
+    };
+    format!("{arrow} {word}")
+}
 
 /// What the `H` panel says about the factory: what the three Ruby files are for, what an inserter
 /// is, and — the part a first player actually needs — **how to build the first line**.
@@ -48,15 +160,14 @@ pub fn guide() -> Guide {
          機械への出入りは腕だけなので、腕を置かないかまどには何も入りません。",
     )
     .note(
-        "Your first line: press 2 and click on ore for a miner, 1 and click a few tiles for a \
-         belt running away from it (R turns what you are holding), then 3 for a chest at the end. \
-         That line runs with no Ruby at all. To smelt, put a furnace (5) beside the belt and an \
-         inserter (4) in the gap between them — and then click that inserter to write what it \
-         does.",
-        "最初の線の引き方。2 を押して鉱石の上をクリックすると採掘機、1 を押してそこから伸びる\
-         タイルを何枚かクリックするとベルト(R で向きが変わります)、最後に 3 で箱。\
-         ここまでは Ruby なしで動きます。焼くには、ベルトの隣に 5 でかまどを置き、\
-         その間の 1 タイルに 4 でインサータを置いて、そのインサータをクリックして中身を書きます。",
+        "Your first line: the Build panel lists everything you can put down, with the key beside \
+         it. Click one — or press the key — and the tile under the mouse shows what you are about \
+         to build, red where it cannot go. The panel's bottom line says the one thing to do next, \
+         all the way from the first miner to the goal.",
+        "最初の線の引き方。「設置」の窓に、置けるものが全部キーつきで並んでいます。\
+         クリックするかキーを押すと手に持ち、マウスのあるタイルにこれから建つものが出ます\
+         (置けない所は赤)。窓の下の 1 行が「次にやること」を 1 つだけ言います。\
+         最初の採掘機から目標まで、それに従えば線が引けます。",
     )
     .note(
         "Nothing is written to disk until you press Ctrl+S in the editor. Apply runs a text \
@@ -73,8 +184,11 @@ pub fn guide() -> Guide {
     .key("0", "nothing in hand — click to take away", "手ぶら(クリックで撤去)")
     .key("R", "turn what you are holding", "手に持っているものの向きを変える")
     .key("click", "build, or open an inserter", "建てる/インサータを開く")
+    .key("Build", "the same list, with pictures", "「設置」の窓。同じ一覧を絵で")
     .key("right-drag", "walk the map", "地図を動かす")
-    .key("wheel", "zoom", "拡大縮小")
+    .key("wheel", "zoom where the mouse is", "マウスの位置を中心に拡大縮小")
+    .key("+  -", "zoom in, zoom out", "拡大・縮小")
+    .key("Home", "back to the first view", "はじめの見え方に戻る")
     .key("F1", "the editor", "エディタ")
     .key("F2", "the VM panel", "VM パネル")
     .key("F5  F9", "save, load", "セーブ・ロード")

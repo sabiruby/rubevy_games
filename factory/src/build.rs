@@ -73,6 +73,37 @@ impl Hand {
     }
 }
 
+/// **The one place anything is put in hand** (F7) — the digits, and the palette's pictures.
+///
+/// It is a function and not a message, which is the other way round from [`Order`], and the
+/// difference is what each of the two *is*. An order is a thing that was meant at a moment and is
+/// carried out later, so what was meant has to travel with it; a hand is a **state**, and the
+/// ghost on the grid ([`crate::draw::draw_ghost`]) draws it in the frame it changed. A message
+/// would put the palette's click a frame behind the picture of it for nothing.
+///
+/// What it is for is that the sentence in the log, and anything else that ever wants to know that
+/// the hand changed, is written once rather than once per way of asking.
+pub fn take_in_hand(hand: &mut Hand, what: Option<What>, data: &Data) {
+    hand.what = what;
+    info!("in hand: {} facing {}", hand.word(data), hand.dir.word());
+}
+
+/// **`R`, wherever it is pressed.** It answers whether anything turned, because a machine has
+/// nothing to turn (F4) and says so instead.
+pub fn turn_the_hand(hand: &mut Hand, data: &Data) -> bool {
+    // **A machine has nothing to turn** (F4). A direction used to say where a machine pushed what
+    // it made; nothing comes out of one but through an inserter's hand since F3, so turning one
+    // changes nothing at all — and an operation that changes nothing is one to refuse rather than
+    // to accept quietly. Factorio's assembler has no direction either.
+    if let Some(What::Machine(_)) = hand.what {
+        info!("a {} has no direction: nothing goes in or out of one but through an arm", hand.word(data));
+        return false;
+    }
+    hand.dir = hand.dir.left();
+    info!("in hand: {} facing {}", hand.word(data), hand.dir.word());
+    true
+}
+
 /// **What to call a thing in a sentence.** A machine is called whatever `data.rb` called it, which
 /// is the only name a player has for one; the three fittings have words of their own; nothing in
 /// hand is the wrecking ball.
@@ -128,30 +159,59 @@ pub fn choose(
     if digits.is_empty() {
         *digits = what_the_digits_hold(&data);
     }
-    let mut said = false;
     for &(key, what) in digits.iter() {
         if keys.just_pressed(key) {
-            hand.what = what;
-            said = true;
+            take_in_hand(&mut hand, what, &data);
         }
     }
-    // **A machine has nothing to turn** (F4). A direction used to say where a machine pushed what
-    // it made; nothing comes out of one but through an inserter's hand since F3, so turning one
-    // changes nothing at all — and an operation that changes nothing is one to refuse rather than
-    // to accept quietly. Factorio's assembler has no direction either.
     if keys.just_pressed(KeyCode::KeyR) {
-        match hand.what {
-            Some(What::Machine(_)) => {
-                info!("a {} has no direction: nothing goes in or out of one but through an arm", hand.word(&data));
-            }
-            _ => {
-                hand.dir = hand.dir.left();
-                said = true;
-            }
-        }
+        turn_the_hand(&mut hand, &data);
     }
-    if said {
-        info!("in hand: {} facing {}", hand.word(&data), hand.dir.word());
+}
+
+/// **Why a tile would refuse what is in hand** (F7) — the four answers [`orders`] gives, as a
+/// value, so that the ghost on the grid can be red *before* the click rather than a sentence in
+/// the log after it.
+///
+/// It is the rule and [`orders`] is what says it out loud: both read this, so a ghost that is
+/// green cannot be followed by a refusal, and the day a fifth rule arrives there is one place for
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// There is no such tile.
+    OffTheMap,
+    /// A miner has to stand on ore.
+    NoOre,
+    /// A machine would hang off the edge of the map.
+    NoRoom,
+    /// The wrecking ball, over a tile with nothing on it.
+    NothingThere,
+}
+
+/// Whether putting `what` on `tile` would be refused, and why. `None` is "it would be built".
+///
+/// **An inserter on an inserter is not a refusal**: that click opens the arm's script
+/// ([`crate::window::follow_the_orders`]), which is something happening rather than nothing.
+pub fn would_refuse(
+    grid: &Grid,
+    ore: &Ore,
+    data: &Data,
+    tile: UVec2,
+    what: Option<What>,
+) -> Option<Refusal> {
+    if !grid.holds(tile) {
+        return Some(Refusal::OffTheMap);
+    }
+    let at = grid.index(tile);
+    match what {
+        None => grid.at(at).is_none().then_some(Refusal::NothingThere),
+        Some(What::Miner) => (ore.left[at] == 0).then_some(Refusal::NoOre),
+        Some(What::Machine(kind)) => data
+            .footprint(kind, tile)
+            .iter()
+            .any(|t| !grid.holds(*t))
+            .then_some(Refusal::NoRoom),
+        _ => None,
     }
 }
 
@@ -193,23 +253,33 @@ pub fn orders(
     mut happenings: ResMut<crate::control::Happenings>,
 ) {
     for &Order { at: tile, what, dir } in asked.read() {
-        if !grid.holds(tile) {
-            info!("nowhere to build at {}, {}: that is off the map", tile.x, tile.y);
+        // **the same rule the ghost is drawn from** (F7, [`would_refuse`]) — there is one list of
+        // what a tile will not take, and this is where it is said out loud
+        if let Some(why) = would_refuse(&grid, &ore, &data, tile, what) {
+            match why {
+                Refusal::OffTheMap => {
+                    info!("nowhere to build at {}, {}: that is off the map", tile.x, tile.y)
+                }
+                Refusal::NothingThere => info!("nothing at {}, {} to take away", tile.x, tile.y),
+                // **a miner has to stand on ore**, which is the whole reason a patch is somewhere
+                // in particular rather than everywhere
+                Refusal::NoOre => info!("no ore at {}, {}: a miner needs some", tile.x, tile.y),
+                Refusal::NoRoom => info!(
+                    "a {} does not fit at {}, {}: it would go off the map",
+                    word_for(what, &data),
+                    tile.x,
+                    tile.y
+                ),
+            }
             continue;
         }
         let at = grid.index(tile);
         match what {
-            None => match take_away(&mut grid, &mut lanes, at) {
-                Some((gone, what)) => {
+            None => {
+                if let Some((gone, what)) = take_away(&mut grid, &mut lanes, at) {
                     happenings.was_removed(what, at);
                     info!("took away the {} at {}, {}", gone, tile.x, tile.y);
                 }
-                None => info!("nothing at {}, {} to take away", tile.x, tile.y),
-            },
-            // **a miner has to stand on ore**, which is the whole reason a patch is somewhere in
-            // particular rather than everywhere
-            Some(What::Miner) if ore.left[at] == 0 => {
-                info!("no ore at {}, {}: a miner needs some", tile.x, tile.y);
             }
             // **an inserter on an inserter is not a building order, it is a click on that arm.**
             // There is no mode to switch into and no key to learn: a click on a tile that already
@@ -220,23 +290,16 @@ pub fn orders(
                 info!("the inserter at {}, {} is already there", tile.x, tile.y);
             }
             Some(What::Machine(kind)) => {
-                match build_a_machine(&mut grid, &mut lanes, &data, kind, tile, dir) {
-                    true => {
-                        happenings.was_built(What::Machine(kind), at);
-                        info!(
-                            "built a {} at {}, {} facing {}",
-                            word_for(what, &data),
-                            tile.x,
-                            tile.y,
-                            dir.word()
-                        );
-                    }
-                    false => info!(
-                        "a {} does not fit at {}, {}: it would go off the map",
+                // it fits: `would_refuse` above is the one that says whether it does
+                if build_a_machine(&mut grid, &mut lanes, &data, kind, tile, dir) {
+                    happenings.was_built(What::Machine(kind), at);
+                    info!(
+                        "built a {} at {}, {} facing {}",
                         word_for(what, &data),
                         tile.x,
-                        tile.y
-                    ),
+                        tile.y,
+                        dir.word()
+                    );
                 }
             }
             // a covered tile is not something a player can put down; only a machine makes one

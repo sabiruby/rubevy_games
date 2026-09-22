@@ -39,6 +39,7 @@ mod inserters;
 mod items;
 mod guide_text;
 mod machines;
+mod palette;
 mod platform;
 mod save;
 mod window;
@@ -467,7 +468,25 @@ fn main() {
                     .run_if(on_message::<RebuildTheWorld>)
                     .run_if(resource_exists::<Map>),
             )
-            .add_systems(bevy_egui::EguiPrimaryContextPass, window::draw_hud)
+            // **F7's two windows and the ghost.** The palette is drawn in the same pass as the
+            // HUD and after it, so that a frame's picture is one pass; the ghost is a chunk like
+            // the floor and the buildings and is written where they are.
+            .add_systems(bevy_egui::EguiPrimaryContextPass, (window::draw_hud, palette::draw_palette).chain())
+            .insert_resource({
+                let mut style = palette::PaletteStyle::default();
+                style.read_from(&settings);
+                style
+            })
+            .init_resource::<palette::Palette>()
+            .init_resource::<palette::NextStep>()
+            .add_systems(
+                Update,
+                (
+                    palette::work_out_the_next_step,
+                    draw::draw_ghost.after(CameraSet::Drive).run_if(resource_exists::<draw::Chunks>),
+                )
+                    .run_if(the_factory_is_up),
+            )
             .init_resource::<items::Pool>()
             .init_resource::<draw::Animation>()
             .insert_resource(draw::SnapZoom(
@@ -1187,6 +1206,7 @@ fn draw_the_new_world(
     mut asked: MessageReader<RebuildTheWorld>,
     chunks: Option<Res<draw::Chunks>>,
     mut pool: ResMut<items::Pool>,
+    mut palette: ResMut<palette::Palette>,
 ) {
     if asked.read().next().is_none() {
         return;
@@ -1194,8 +1214,14 @@ fn draw_the_new_world(
     if let Some(chunks) = chunks {
         commands.entity(chunks.floor).despawn();
         commands.entity(chunks.buildings).despawn();
+        // **the ghost is the size of the biggest machine**, and a new `data.rb` may declare a
+        // bigger one; a `TilemapChunk` cannot be resized, so it goes with the other two (F7)
+        commands.entity(chunks.ghost).despawn();
         commands.remove_resource::<draw::Chunks>();
     }
+    // and the palette's pictures: the sheet is the same file, but `sprite:` may now name another
+    // tile of it, and a cached picture would be the old one
+    palette.forget();
     // the item sprites are borrowed from a pool that is refilled as the lanes need it; the
     // entities are still good, but the pool is rebuilt with the rest so that nothing is holding a
     // sprite for an item that is not there any more

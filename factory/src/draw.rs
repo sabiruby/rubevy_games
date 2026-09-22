@@ -80,6 +80,9 @@ pub const ICONS: u32 = ITEM_ICONS + 2;
 const Z_ITEM: f32 = 2.0;
 const Z_CARRIED: f32 = 2.1;
 const Z_MARK: f32 = 2.2;
+/// **The ghost is over everything** (F7): it is what is *about to be* there, and a picture of
+/// that behind the things that are there would be worse than nothing.
+const Z_GHOST: f32 = 3.0;
 
 /// **A quarter turn anticlockwise per direction**, for a picture drawn running east.
 /// `Rotate90` turns the pack's east-running belt into a north-running one, which is what F0a's
@@ -180,6 +183,35 @@ pub const MOST_TILES_ACROSS: u32 = 2048;
 pub struct Chunks {
     pub floor: Entity,
     pub buildings: Entity,
+    /// **The ghost** (F7): a third chunk, as big as the biggest machine and no bigger, moved to
+    /// whichever tile the mouse is over. See [`draw_ghost`].
+    pub ghost: Entity,
+    /// How many tiles across and up the ghost's chunk is, which is the biggest footprint
+    /// `data.rb` declares. A `TilemapChunk`'s size is immutable, so this is settled when the
+    /// chunks are spawned and a new `data.rb` spawns them again.
+    pub ghost_tiles: UVec2,
+    /// **The sheet itself**, which the palette cuts its pictures out of (`crate::palette`). It is
+    /// kept here because this is where it is loaded; two loads of one path with different
+    /// settings is a thing Bevy warns about, and the settings are this module's.
+    pub tileset: Handle<Image>,
+}
+
+/// **Which tile of the sheet a thing wears**, for anything that wants its picture without a grid
+/// to read it out of: the palette's rows (F7) and the ghost.
+///
+/// A belt's is the straight one, which is what a belt with nothing next to it is; the corner is
+/// worked out from the neighbours and only exists once it is on the map ([`belt_picture`]). A
+/// machine's is the top left of its footprint, which is the first of its `sprite:` list. Nothing
+/// in hand has no picture at all, which is what the wrecking ball is.
+pub fn picture_of(what: Option<What>, data: &Data) -> Option<u16> {
+    match what? {
+        What::Belt => Some(BELT_STRAIGHT[0]),
+        What::Miner => Some(MINER),
+        What::Chest => Some(CHEST),
+        What::Inserter => Some(INSERTER),
+        What::Machine(kind) => data.machines.get(kind as usize)?.sprite.first().copied(),
+        What::Covered { .. } => None,
+    }
 }
 
 /// **The items' pictures**: one sheet of [`ITEM_PX`] squares and the layout that cuts it, loaded
@@ -206,6 +238,7 @@ pub fn start_drawing(
     assets: Res<AssetServer>,
     mut layouts: ResMut<Assets<TextureAtlasLayout>>,
     map: Res<Map>,
+    data: Res<Data>,
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
 ) {
     // **What this machine's own limit turned out to be**, beside the one the data stage refuses
@@ -254,7 +287,7 @@ pub fn start_drawing(
             TilemapChunk {
                 chunk_size: map.tiles,
                 tile_display_size: UVec2::splat(TILE_PX),
-                tileset,
+                tileset: tileset.clone(),
                 // **over the floor**: a belt's corners and a crate's edges are transparent, and
                 // the default is opaque, which would draw the floor's colour through them
                 alpha_mode: AlphaMode2d::Blend,
@@ -263,7 +296,28 @@ pub fn start_drawing(
             Transform::from_xyz(0.0, 0.0, 1.0),
         ))
         .id();
-    commands.insert_resource(Chunks { floor, buildings });
+    // **the ghost's chunk** (F7): as many tiles as the biggest machine covers, so that a 2×2
+    // assembler can be shown whole and a map of four million tiles does not pay for a third
+    // texture of its own size. A `TilemapChunk` cannot be resized — the component is immutable —
+    // so the size is settled here, where a new `data.rb` comes past again.
+    let ghost_tiles = data
+        .machines
+        .iter()
+        .fold(UVec2::ONE, |most, machine| most.max(machine.size));
+    let ghost = commands
+        .spawn((
+            TilemapChunk {
+                chunk_size: ghost_tiles,
+                tile_display_size: UVec2::splat(TILE_PX),
+                tileset: tileset.clone(),
+                // it is a translucent picture of something that is not there yet
+                alpha_mode: AlphaMode2d::Blend,
+            },
+            TilemapChunkTileData(vec![None; crate::grid::how_many(ghost_tiles)]),
+            Transform::from_xyz(0.0, 0.0, Z_GHOST),
+        ))
+        .id();
+    commands.insert_resource(Chunks { floor, buildings, ghost, ghost_tiles, tileset });
     let layout = layouts.add(TextureAtlasLayout::from_grid(
         UVec2::splat(ITEM_PX),
         ICONS,
@@ -488,6 +542,139 @@ fn item_sprite(icons: &Icons, at: Vec3, icon: usize) -> impl Bundle {
         },
         Transform::from_translation(at),
     )
+}
+
+// ---------------------------------------------------------------------------------------------
+// The ghost
+// ---------------------------------------------------------------------------------------------
+
+/// **What is about to be built, on the tile the mouse is over** (F7, the author's third point:
+/// "I cannot tell which way round it will go").
+///
+/// It is the real picture and not an outline — the belt's corner worked out from its neighbours
+/// as if it were already laid, the inserter turned the way its arm will swing, a machine's whole
+/// footprint — drawn at [`crate::palette::PaletteStyle::ghost_alpha`], and tinted red where the
+/// tile would refuse it (`crate::build::would_refuse`, which is the same rule the click obeys).
+///
+/// **One entity, reused.** It is a third `TilemapChunk` the size of the biggest machine, moved
+/// to the tile under the cursor; nothing is spawned or despawned as the mouse travels. What it
+/// costs is one small texture and one draw call, and only while a window is open at all.
+///
+/// **A wrecking ball has no picture**, so nothing in hand shows the tile itself picked out —
+/// which is what the wrecking ball is: not a thing to put there, but a thing to take away.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_ghost(
+    map: Res<Map>,
+    grid: Res<Grid>,
+    ore: Res<crate::grid::Ore>,
+    data: Res<Data>,
+    hand: Res<crate::build::Hand>,
+    style: Res<crate::palette::PaletteStyle>,
+    animation: Res<Animation>,
+    chunks: Res<Chunks>,
+    view: Res<CameraView>,
+    insets: Res<games_shell::camera::ViewInsets>,
+    pointer: Option<Res<bevy_egui::input::EguiWantsInput>>,
+    windows: Query<&Window>,
+    mut tiles: Query<(&mut TilemapChunkTileData, &mut Transform)>,
+    mut visible: Query<&mut Visibility>,
+) {
+    let Ok((mut picture, mut place)) = tiles.get_mut(chunks.ghost) else { return };
+    let mut show = |on: bool| {
+        if let Ok(mut visible) = visible.get_mut(chunks.ghost) {
+            *visible = if on { Visibility::Inherited } else { Visibility::Hidden };
+        }
+    };
+    // **egui first**, the same question the camera asks of a wheel: a mouse over the palette or
+    // the editor is not pointing at a tile at all
+    if pointer.is_some_and(|p| p.wants_pointer_input() || p.is_pointer_over_area()) {
+        show(false);
+        return;
+    }
+    let Some(window) = windows.iter().next() else {
+        show(false);
+        return;
+    };
+    let size = Vec2::new(window.width(), window.height());
+    // **where the hand is aiming, with no pointer at all.** A container's window and a page
+    // nobody has moved a mouse over have no cursor position, and a ghost that is nowhere says
+    // nothing about what is in hand — so it stands in the middle of what can be seen, which is
+    // the tile a click with no mouse would be aimed at. It is also how a `--shot` shows it.
+    let at = window.cursor_position().unwrap_or(size * 0.5);
+
+    let point = view.lens(size, &insets).world_at(at);
+    let Some(tile) = map.tile_at(point) else {
+        show(false);
+        return;
+    };
+    let refused = crate::build::would_refuse(&grid, &ore, &data, tile, hand.what);
+    if hand.what.is_none() && refused == Some(crate::build::Refusal::NothingThere) {
+        // nothing in hand over an empty tile: there is nothing to say
+        show(false);
+        return;
+    }
+    show(true);
+    let colour = style.ghost_colour(refused.is_some());
+    for slot in picture.0.iter_mut() {
+        *slot = None;
+    }
+    // the chunk's own transform puts *its* middle somewhere; what has to land on the tile under
+    // the cursor is its tile (0, 0), which is half a chunk away from that middle
+    let step = TILE_PX as f32;
+    let offset = Vec2::new(
+        step * (chunks.ghost_tiles.x as f32 - 1.0) / 2.0,
+        step * (chunks.ghost_tiles.y as f32 - 1.0) / 2.0,
+    );
+    let middle = map.tile_centre(tile) + offset;
+    place.translation = middle.extend(Z_GHOST);
+    let index = |dx: u32, dy: u32| (dy * chunks.ghost_tiles.x + dx) as usize;
+    match hand.what {
+        // the wrecking ball: the tile itself, picked out
+        None => {
+            if let Some(slot) = picture.0.get_mut(index(0, 0)) {
+                *slot = Some(TileData {
+                    color: colour,
+                    ..TileData::from_tileset_index(GROUND)
+                });
+            }
+        }
+        Some(What::Machine(kind)) => {
+            let Some(machine) = data.machines.get(kind as usize) else { return };
+            for dy in 0..machine.size.y.min(chunks.ghost_tiles.y) {
+                for dx in 0..machine.size.x.min(chunks.ghost_tiles.x) {
+                    let here = tile + UVec2::new(dx, dy);
+                    if let Some(slot) = picture.0.get_mut(index(dx, dy)) {
+                        *slot = Some(TileData {
+                            color: colour,
+                            ..TileData::from_tileset_index(machine_picture(&data, kind, tile, here))
+                        });
+                    }
+                }
+            }
+        }
+        Some(What::Belt) => {
+            // **the corner it would be**, worked out from the neighbours exactly as if it had
+            // been laid (`Flow`'s own rule, which is why that rule is a function)
+            let at = grid.index(tile);
+            let came_in = crate::grid::Flow::where_it_comes_in(&grid, at, hand.dir);
+            let (tileset_index, orientation) = belt_picture(came_in, hand.dir, animation.frame);
+            if let Some(slot) = picture.0.get_mut(index(0, 0)) {
+                *slot = Some(TileData { tileset_index, color: colour, orientation, visible: true });
+            }
+        }
+        Some(what) => {
+            let Some(tileset_index) = picture_of(Some(what), &data) else { return };
+            // a miner and a chest look the same whichever way they are turned; an inserter does
+            // not, and the way it is turned is the way its arm will swing
+            let orientation = match what {
+                What::Inserter => FACING[hand.dir.number()],
+                _ => TileOrientation::Default,
+            };
+            if let Some(slot) = picture.0.get_mut(index(0, 0)) {
+                *slot = Some(TileData { tileset_index, color: colour, orientation, visible: true });
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
