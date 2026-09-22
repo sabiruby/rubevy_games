@@ -92,6 +92,18 @@ pub const KEYS_PER_SECOND: f32 = 0.9;
 /// source beyond "a few pixels".
 pub const CLICK_SLOP: f32 = 6.0;
 
+/// **How much one press of the zoom keys is worth, in notches of the wheel** (F7).
+///
+/// **Derived, and the derivation is that there is nothing to derive**: a key and a wheel are two
+/// ways of asking for the same thing, so one press is one notch and the two agree. Anything else
+/// would be a second step size on the screen — a player who zoomed in four notches with the wheel
+/// and out four times with the key would not be back where they started.
+///
+/// It is a field all the same ([`CameraControls::notches_per_key`]) because a keyboard is not a
+/// wheel: a key repeats while it is held and this crate does not read the repeat, so a game whose
+/// players complain that the keys are slow raises this rather than inventing a second gesture.
+pub const NOTCHES_PER_KEY: f32 = 1.0;
+
 /// **Which keys and buttons drive the camera.** Every one of them is a list, so a game can add to
 /// them or empty one out to take a gesture away.
 #[derive(Debug, Clone)]
@@ -102,6 +114,11 @@ pub struct CameraKeys {
     pub down: Vec<KeyCode>,
     /// Puts the camera back where it started ([`CameraHome`]).
     pub home: Vec<KeyCode>,
+    /// **Nearer** ([`NOTCHES_PER_KEY`] notches a press). The wheel is the other way of asking and
+    /// the two go through the same door ([`zoom_by`]).
+    pub zoom_in: Vec<KeyCode>,
+    /// **Further out.**
+    pub zoom_out: Vec<KeyCode>,
     /// Held with [`CameraKeys::click_button`], this drags too — for a trackpad, and for a browser
     /// that keeps the right button for its own menu.
     pub drag_modifier: Vec<KeyCode>,
@@ -121,6 +138,12 @@ impl Default for CameraKeys {
             up: vec![KeyCode::KeyW, KeyCode::ArrowUp],
             down: vec![KeyCode::KeyS, KeyCode::ArrowDown],
             home: vec![KeyCode::Home],
+            // **`+` and `-`, in both places a keyboard has them** (F7). winit reports the
+            // *physical* key, so `Equal` is the key `+` is printed on as well — a player holding
+            // Shift and a player who is not press the same one — and the numeric pad's two are
+            // the other pair anybody reaches for.
+            zoom_in: vec![KeyCode::Equal, KeyCode::NumpadAdd],
+            zoom_out: vec![KeyCode::Minus, KeyCode::NumpadSubtract],
             drag_modifier: vec![KeyCode::ShiftLeft, KeyCode::ShiftRight],
             drag_buttons: vec![MouseButton::Right],
             click_button: MouseButton::Left,
@@ -145,6 +168,8 @@ pub struct CameraControls {
     pub drag_per_pixel: f32,
     /// [`KEYS_PER_SECOND`]
     pub keys_per_second: f32,
+    /// [`NOTCHES_PER_KEY`]
+    pub notches_per_key: f32,
     /// [`CLICK_SLOP`]
     pub click_slop: f32,
     /// How far the camera may be walked, in world units. `None` — the default — is a world with
@@ -163,6 +188,7 @@ impl Default for CameraControls {
             zoom_out_limit: ZOOM_OUT_LIMIT,
             drag_per_pixel: DRAG_PER_PIXEL,
             keys_per_second: KEYS_PER_SECOND,
+            notches_per_key: NOTCHES_PER_KEY,
             click_slop: CLICK_SLOP,
             bounds: None,
             keys: CameraKeys::default(),
@@ -183,6 +209,7 @@ impl CameraControls {
     /// | `camera_zoom_out_limit` | [`CameraControls::zoom_out_limit`] |
     /// | `camera_drag_per_pixel` | [`CameraControls::drag_per_pixel`] |
     /// | `camera_keys_per_second` | [`CameraControls::keys_per_second`] |
+    /// | `camera_notches_per_key` | [`CameraControls::notches_per_key`] |
     /// | `camera_click_slop` | [`CameraControls::click_slop`] |
     ///
     /// A key that is not there leaves the field alone, which is what makes a store written by an
@@ -199,6 +226,7 @@ impl CameraControls {
         take("camera_zoom_out_limit", &mut self.zoom_out_limit);
         take("camera_drag_per_pixel", &mut self.drag_per_pixel);
         take("camera_keys_per_second", &mut self.keys_per_second);
+        take("camera_notches_per_key", &mut self.notches_per_key);
         take("camera_click_slop", &mut self.click_slop);
     }
 }
@@ -285,6 +313,53 @@ pub fn notches_of(unit: MouseScrollUnit, y: f32, pixels_per_notch: f32) -> f32 {
 pub fn zoom_by(half_height: f32, notches: f32, home: f32, controls: &CameraControls) -> f32 {
     (half_height * controls.zoom_per_notch.powf(-notches))
         .clamp(home * controls.zoom_in_limit, home * controls.zoom_out_limit)
+}
+
+/// **How many notches it takes to get from `half_height` to `wanted`** (F7).
+///
+/// It is the inverse of the ratio [`zoom_by`] applies, and it is here so that a *button* that
+/// wants a particular view — "show me the whole map" — asks for it in notches and goes through
+/// the one door with the wheel and the keys, limits and all, instead of writing a half-view of
+/// its own straight into [`CameraView`] and quietly stepping outside the range.
+pub fn notches_to(half_height: f32, wanted: f32, controls: &CameraControls) -> f32 {
+    let ratio = controls.zoom_per_notch;
+    if wanted <= 0.0 || half_height <= 0.0 || ratio <= 0.0 || (ratio - 1.0).abs() < f32::EPSILON {
+        return 0.0;
+    }
+    (half_height / wanted).ln() / ratio.ln()
+}
+
+/// **The whole of what a zoom does to the view, when nothing in particular is to stay put**: the
+/// keys and the buttons, whose middle is the middle of the window.
+pub fn zoom_the_view(
+    view: &mut CameraView,
+    notches: f32,
+    home: &CameraHome,
+    controls: &CameraControls,
+) {
+    view.half_height = zoom_by(view.half_height, notches, home.half_height, controls);
+}
+
+/// **A zoom that leaves one point of the world where it is** — the wheel's, whose middle is
+/// whatever the cursor is over.
+///
+/// It is the same [`zoom_by`] and the same limits; what is added is the two lines either side of
+/// it. A wheel that zooms about the middle of the window makes a player chase the thing they were
+/// looking at across the screen, which on a map bigger than the window is most of the driving
+/// they do.
+pub fn zoom_about(
+    view: &mut CameraView,
+    notches: f32,
+    home: &CameraHome,
+    controls: &CameraControls,
+    cursor: Vec2,
+    window: Vec2,
+    insets: &ViewInsets,
+) {
+    let before = view.lens(window, insets).world_at(cursor);
+    zoom_the_view(view, notches, home, controls);
+    let after = view.lens(window, insets).world_at(cursor);
+    view.focus += before - after;
 }
 
 /// Whether a press that went down at `down` and came up at `up` was a click rather than a drag.
@@ -420,10 +495,12 @@ fn spawn_camera(mut commands: Commands, view: Res<CameraView>) {
 /// sitting in the reader when the pointer comes off it), and egui is asked with both of its
 /// questions.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn drive_camera(
     time: Res<Time>,
     controls: Res<CameraControls>,
     home: Res<CameraHome>,
+    insets: Res<ViewInsets>,
     mut view: ResMut<CameraView>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -439,7 +516,10 @@ fn drive_camera(
         Some(p) => (p.wants_pointer_input() || p.is_pointer_over_area(), !p.wants_keyboard_input()),
         None => (false, true),
     };
-    let height = windows.iter().next().map(|w| w.height()).unwrap_or(1.0).max(1.0);
+    let window = windows.iter().next();
+    let size = window.map(|w| Vec2::new(w.width(), w.height())).unwrap_or(Vec2::ONE);
+    let cursor = window.and_then(|w| w.cursor_position());
+    let height = size.y.max(1.0);
     let world_per_px = (view.half_height * 2.0) / height;
 
     let mut dragging: Vec<MouseButton> = controls.keys.drag_buttons.clone();
@@ -467,14 +547,37 @@ fn drive_camera(
             focus += Vec2::new(-m.delta.x, m.delta.y) * step;
         }
     }
+    // **the focus the wheel works on is this frame's**, drag and all: the two are read in one
+    // system and a wheel turned during a drag would otherwise be given the place the camera was
+    // in before the hand moved it
+    view.focus = focus;
     for w in wheel.read() {
         if egui_pointer {
             continue;
         }
         let notches = notches_of(w.unit, w.y, controls.pixels_per_notch);
-        view.half_height = zoom_by(view.half_height, notches, home.half_height, &controls);
+        // **the wheel keeps what is under the cursor under the cursor** (F7); with no cursor —
+        // a window nothing has pointed at — there is no point to keep and the middle stands in
+        match cursor {
+            Some(at) => zoom_about(&mut view, notches, &home, &controls, at, size, &insets),
+            None => zoom_the_view(&mut view, notches, &home, &controls),
+        }
     }
+    focus = view.focus;
     if mine_keys {
+        // **`+` and `-`** (F7): the same door and the same limits as the wheel, a whole number of
+        // notches a press, about the middle of the window rather than about the cursor — a key is
+        // not pointing at anything. The author found the wheel on its own invisible in a browser.
+        let mut notches = 0.0;
+        if controls.keys.zoom_in.iter().any(|k| keys.just_pressed(*k)) {
+            notches += controls.notches_per_key;
+        }
+        if controls.keys.zoom_out.iter().any(|k| keys.just_pressed(*k)) {
+            notches -= controls.notches_per_key;
+        }
+        if notches != 0.0 {
+            zoom_the_view(&mut view, notches, &home, &controls);
+        }
         let mut d = Vec2::ZERO;
         if controls.keys.up.iter().any(|k| keys.pressed(*k)) {
             d.y += 1.0;
@@ -613,6 +716,59 @@ mod tests {
         // from one end to the other is about thirty notches, not one
         let notches = (c.zoom_out_limit / c.zoom_in_limit).ln() / c.zoom_per_notch.ln();
         assert!((29.0..32.0).contains(&notches), "{notches}");
+    }
+
+    /// **A key press and a notch of the wheel are the same step** (F7), and a button that asks
+    /// for a particular view asks in notches — so all three land on the same numbers and are
+    /// stopped by the same limits.
+    #[test]
+    fn the_keys_and_the_buttons_go_through_the_wheels_door() {
+        let c = controls();
+        assert_eq!(c.notches_per_key, 1.0, "one press, one notch");
+        let home = CameraHome { focus: Vec2::ZERO, half_height: HOME };
+
+        let mut view = CameraView { focus: Vec2::ZERO, half_height: HOME };
+        zoom_the_view(&mut view, c.notches_per_key, &home, &c);
+        let by_key = view.half_height;
+        let by_wheel = zoom_by(HOME, notches_of(MouseScrollUnit::Line, 1.0, c.pixels_per_notch), HOME, &c);
+        assert!((by_key - by_wheel).abs() < 1e-4, "{by_key} vs {by_wheel}");
+        assert_eq!(view.focus, Vec2::ZERO, "a key is not pointing anywhere");
+
+        // "show me the whole of it", as a number of notches — and the answer is clamped by the
+        // same range the wheel is, so a button cannot step outside it
+        let whole = HOME * 2.0;
+        let notches = notches_to(view.half_height, whole, &c);
+        zoom_the_view(&mut view, notches, &home, &c);
+        assert!((view.half_height - whole).abs() < 1e-3, "{}", view.half_height);
+        let far = HOME * c.zoom_out_limit;
+        let out = notches_to(view.half_height, HOME * 1000.0, &c);
+        zoom_the_view(&mut view, out, &home, &c);
+        assert!((view.half_height - far).abs() < 1e-3, "the limit still holds: {}", view.half_height);
+    }
+
+    /// **The wheel leaves what is under the cursor under the cursor** (F7), which is the whole of
+    /// what `zoom_about` adds to `zoom_by`.
+    #[test]
+    fn a_wheel_over_a_point_keeps_that_point() {
+        let c = controls();
+        let window = Vec2::new(1600.0, 900.0);
+        let insets = ViewInsets { right: 528.0, ..ViewInsets::NONE };
+        let home = CameraHome { focus: Vec2::ZERO, half_height: 150.0 };
+        let mut view = CameraView { focus: Vec2::new(12.0, -30.0), half_height: 150.0 };
+        for cursor in [Vec2::new(300.0, 200.0), Vec2::new(1000.0, 700.0)] {
+            for notches in [1.0f32, -1.0, 3.0] {
+                let was = view.lens(window, &insets).world_at(cursor);
+                zoom_about(&mut view, notches, &home, &c, cursor, window, &insets);
+                let now = view.lens(window, &insets).world_at(cursor);
+                assert!((was - now).length() < 1e-2, "{was} vs {now} after {notches}");
+            }
+        }
+        // and at the limit, where the zoom does not move, nothing moves either
+        let stuck = CameraView { focus: Vec2::ZERO, half_height: 150.0 * c.zoom_in_limit };
+        let mut view = stuck;
+        zoom_about(&mut view, 5.0, &home, &c, Vec2::new(10.0, 10.0), window, &insets);
+        assert_eq!(view.half_height, stuck.half_height);
+        assert!((view.focus - stuck.focus).length() < 1e-4);
     }
 
     #[test]
