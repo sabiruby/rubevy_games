@@ -204,6 +204,19 @@ impl Guide {
         Guide { lang, open, ..self }
     }
 
+    /// **The one place [`Guide::keys_window`] is written** (F7), so that the checkbox in the
+    /// body, the small window's own ✕ and a game's checks all remember it the same way — in the
+    /// store the language is kept in, which is a `localStorage` key in a page.
+    ///
+    /// It is public for the reason [`guide_keys`] is: a check has to be able to work the thing a
+    /// player works, and what is being checked here is the *remembering* and not the flag.
+    pub fn show_keys_window(&mut self, on: bool, settings: Option<&mut crate::settings::Settings>) {
+        self.keys_window = on;
+        if let Some(settings) = settings {
+            settings.set(KEYS_WINDOW_KEY, if on { "1" } else { "0" });
+        }
+    }
+
     /// What a game's HUD draws to say the panel is there. Both languages, one line. It is here
     /// rather than in a game's `guide_text.rs` because both games show the same words; it is
     /// still guide text, and `tools/subset-font.sh` reads this file for that reason.
@@ -488,18 +501,13 @@ fn draw_keys_window(
     }
 }
 
-/// **The one place [`Guide::keys_window`] is written**, so that the checkbox, the ✕ and anything
-/// later all remember it the same way — in the store the save file is kept in, which is a
-/// `localStorage` key in a page.
+/// [`Guide::show_keys_window`], with the resource the two drawing places hold.
 fn turn_the_keys_window(
     guide: &mut Guide,
     settings: &mut Option<ResMut<crate::settings::Settings>>,
     on: bool,
 ) {
-    guide.keys_window = on;
-    if let Some(settings) = settings.as_mut() {
-        settings.set(KEYS_WINDOW_KEY, if on { "1" } else { "0" });
-    }
+    guide.show_keys_window(on, settings.as_mut().map(|s| s.as_mut()));
 }
 
 fn draw_guide(

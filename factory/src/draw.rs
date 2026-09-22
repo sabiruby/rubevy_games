@@ -562,6 +562,60 @@ fn item_sprite(icons: &Icons, at: Vec3, icon: usize) -> impl Bundle {
 ///
 /// **A wrecking ball has no picture**, so nothing in hand shows the tile itself picked out —
 /// which is what the wrecking ball is: not a thing to put there, but a thing to take away.
+///
+/// **What it is doing is written down** ([`Ghost`]) and not only drawn, because a picture is the
+/// one thing a log cannot check: the checks read that instead of the screen.
+/// **Which tile the ghost stands on**, as arithmetic rather than as a system, so that the two
+/// rules in it can be checked without a window: **egui is asked first** (a mouse over the palette
+/// or the editor is not pointing at a tile at all — the same question the camera asks of a
+/// wheel), and **a run with no pointer aims at the middle of what can be seen**.
+///
+/// That second one is a decision. A container's window and a page nobody has moved a mouse over
+/// have no cursor position at all, and a ghost that is nowhere says nothing about what is in
+/// hand; the middle of the view is where a click with no mouse would be aimed. It is also what
+/// puts the ghost in a `--shot`.
+pub fn where_the_ghost_goes(
+    egui_has_the_pointer: bool,
+    cursor: Option<Vec2>,
+    window: Vec2,
+    view: &CameraView,
+    insets: &games_shell::camera::ViewInsets,
+    map: &Map,
+) -> Option<UVec2> {
+    if egui_has_the_pointer {
+        return None;
+    }
+    let at = cursor.unwrap_or(window * 0.5);
+    map.tile_at(view.lens(window, insets).world_at(at))
+}
+
+/// **One tile of the ghost as it was drawn**, for the checks: a picture out of the sheet and the
+/// turn it was given.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GhostTile {
+    pub tile: u16,
+    pub orientation: TileOrientation,
+}
+
+/// **What the ghost is doing**, written down every frame. A picture is the one thing a log cannot
+/// check, so what the checks read is this.
+#[derive(Resource, Debug, Default)]
+pub struct Ghost {
+    /// The tile it is standing on, or `None` where it is not being drawn at all.
+    pub at: Option<UVec2>,
+    /// Whether the click would be refused there (`crate::build::would_refuse`), which is the
+    /// whole of the difference between the two tints.
+    pub refused: bool,
+    /// Its first tile — the origin of a machine's footprint, and the only one of anything else.
+    pub drawn: Option<GhostTile>,
+}
+
+/// The quarter turn a thing drawn running east is given to face `dir`. It is the picture's half
+/// of [`crate::grid::Dir`], and public because the checks compare the ghost's turn with the hand's.
+pub fn facing(dir: crate::grid::Dir) -> TileOrientation {
+    FACING[dir.number()]
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw_ghost(
     map: Res<Map>,
@@ -576,6 +630,7 @@ pub fn draw_ghost(
     insets: Res<games_shell::camera::ViewInsets>,
     pointer: Option<Res<bevy_egui::input::EguiWantsInput>>,
     windows: Query<&Window>,
+    mut ghost: ResMut<Ghost>,
     mut tiles: Query<(&mut TilemapChunkTileData, &mut Transform)>,
     mut visible: Query<&mut Visibility>,
 ) {
@@ -585,35 +640,35 @@ pub fn draw_ghost(
             *visible = if on { Visibility::Inherited } else { Visibility::Hidden };
         }
     };
-    // **egui first**, the same question the camera asks of a wheel: a mouse over the palette or
-    // the editor is not pointing at a tile at all
-    if pointer.is_some_and(|p| p.wants_pointer_input() || p.is_pointer_over_area()) {
-        show(false);
-        return;
-    }
+    let nothing = |ghost: &mut Ghost| {
+        *ghost = Ghost::default();
+    };
     let Some(window) = windows.iter().next() else {
         show(false);
+        nothing(&mut ghost);
         return;
     };
     let size = Vec2::new(window.width(), window.height());
-    // **where the hand is aiming, with no pointer at all.** A container's window and a page
-    // nobody has moved a mouse over have no cursor position, and a ghost that is nowhere says
-    // nothing about what is in hand — so it stands in the middle of what can be seen, which is
-    // the tile a click with no mouse would be aimed at. It is also how a `--shot` shows it.
-    let at = window.cursor_position().unwrap_or(size * 0.5);
-
-    let point = view.lens(size, &insets).world_at(at);
-    let Some(tile) = map.tile_at(point) else {
+    let egui_has_the_pointer =
+        pointer.is_some_and(|p| p.wants_pointer_input() || p.is_pointer_over_area());
+    let Some(tile) =
+        where_the_ghost_goes(egui_has_the_pointer, window.cursor_position(), size, &view, &insets, &map)
+    else {
         show(false);
+        nothing(&mut ghost);
         return;
     };
     let refused = crate::build::would_refuse(&grid, &ore, &data, tile, hand.what);
     if hand.what.is_none() && refused == Some(crate::build::Refusal::NothingThere) {
         // nothing in hand over an empty tile: there is nothing to say
         show(false);
+        nothing(&mut ghost);
         return;
     }
     show(true);
+    ghost.at = Some(tile);
+    ghost.refused = refused.is_some();
+    ghost.drawn = None;
     let colour = style.ghost_colour(refused.is_some());
     for slot in picture.0.iter_mut() {
         *slot = None;
@@ -632,22 +687,23 @@ pub fn draw_ghost(
         // the wrecking ball: the tile itself, picked out
         None => {
             if let Some(slot) = picture.0.get_mut(index(0, 0)) {
-                *slot = Some(TileData {
-                    color: colour,
-                    ..TileData::from_tileset_index(GROUND)
-                });
+                *slot = Some(TileData { color: colour, ..TileData::from_tileset_index(GROUND) });
             }
+            ghost.drawn = Some(GhostTile { tile: GROUND, orientation: TileOrientation::Default });
         }
         Some(What::Machine(kind)) => {
             let Some(machine) = data.machines.get(kind as usize) else { return };
             for dy in 0..machine.size.y.min(chunks.ghost_tiles.y) {
                 for dx in 0..machine.size.x.min(chunks.ghost_tiles.x) {
                     let here = tile + UVec2::new(dx, dy);
+                    let tileset_index = machine_picture(&data, kind, tile, here);
                     if let Some(slot) = picture.0.get_mut(index(dx, dy)) {
-                        *slot = Some(TileData {
-                            color: colour,
-                            ..TileData::from_tileset_index(machine_picture(&data, kind, tile, here))
-                        });
+                        *slot =
+                            Some(TileData { color: colour, ..TileData::from_tileset_index(tileset_index) });
+                    }
+                    if (dx, dy) == (0, 0) {
+                        ghost.drawn =
+                            Some(GhostTile { tile: tileset_index, orientation: TileOrientation::Default });
                     }
                 }
             }
@@ -661,18 +717,20 @@ pub fn draw_ghost(
             if let Some(slot) = picture.0.get_mut(index(0, 0)) {
                 *slot = Some(TileData { tileset_index, color: colour, orientation, visible: true });
             }
+            ghost.drawn = Some(GhostTile { tile: tileset_index, orientation });
         }
         Some(what) => {
             let Some(tileset_index) = picture_of(Some(what), &data) else { return };
             // a miner and a chest look the same whichever way they are turned; an inserter does
             // not, and the way it is turned is the way its arm will swing
             let orientation = match what {
-                What::Inserter => FACING[hand.dir.number()],
+                What::Inserter => facing(hand.dir),
                 _ => TileOrientation::Default,
             };
             if let Some(slot) = picture.0.get_mut(index(0, 0)) {
                 *slot = Some(TileData { tileset_index, color: colour, orientation, visible: true });
             }
+            ghost.drawn = Some(GhostTile { tile: tileset_index, orientation });
         }
     }
 }
@@ -696,15 +754,81 @@ pub struct SnapZoom(pub bool);
 /// It is written as a system over [`CameraView`] rather than a change to the shared camera,
 /// because "how much world the window holds" is the camera's and "the world is pixel art" is this
 /// game's. The wheel still zooms by the ratio the crate says; this catches the value afterwards.
-pub fn snap_zoom(snap: Res<SnapZoom>, windows: Query<&Window>, mut view: ResMut<CameraView>) {
+/// **What the snapping cost, and what F7 gives back.** One notch of the wheel is a tenth
+/// (`games_shell::camera::ZOOM_PER_NOTCH`) and the gap between two whole zooms is a third — 3:1
+/// to 4:1 — so **a single notch was swallowed**: 150 world units became 136, and the rounding put
+/// it straight back at 150. Spinning a wheel fast worked, because several notches arrive in one
+/// frame and are only rounded at the end of it; one notch, and every press of F7's `+` and `-`,
+/// did nothing at all.
+///
+/// So when a zoom was asked for and the rounding would undo it, the view goes **one whole zoom**
+/// the way it was asked instead. That is not a new number: with the art drawn at a whole number
+/// of screen pixels, the next whole number *is* the next view there is.
+const A_HAIR: f32 = 1e-4;
+
+pub fn snap_zoom(
+    snap: Res<SnapZoom>,
+    home: Res<games_shell::camera::CameraHome>,
+    controls: Res<games_shell::camera::CameraControls>,
+    windows: Query<&Window>,
+    mut view: ResMut<CameraView>,
+    // what this system last left in the view, so that "the player asked for a zoom" can be told
+    // from "nothing has happened"
+    mut left: Local<f32>,
+) {
     if !snap.0 {
         return;
     }
     let Some(height) = windows.iter().next().map(|w| w.height()) else { return };
-    let wanted = snapped(height, view.half_height);
-    if (wanted - view.half_height).abs() > 1e-4 {
+    let asked = view.half_height;
+    let rounded = snapped(height, asked);
+    let swallowed = (rounded - *left).abs() < A_HAIR && (asked - *left).abs() > A_HAIR;
+    let wanted = if swallowed {
+        // one whole zoom the way it was asked, and no further out or in than the wheel may go
+        let along = if asked < *left { 1 } else { -1 };
+        let stepped = half_height_of(height, step_the_zoom(rung(height, *left), along));
+        snapped(
+            height,
+            stepped.clamp(
+                home.half_height * controls.zoom_in_limit,
+                home.half_height * controls.zoom_out_limit,
+            ),
+        )
+    } else {
+        rounded
+    };
+    if (wanted - view.half_height).abs() > A_HAIR {
         view.half_height = wanted;
     }
+    *left = wanted;
+}
+
+/// **Which rung of the whole-number zoom the view is on**: `3` is three screen pixels to one
+/// pixel of the art, `-2` is one screen pixel to two of the art, `1` is 1:1. There is no `0` and
+/// no `-1` — 1:1 is where the two halves of the ladder meet ([`snapped`]).
+pub fn rung(window_height: f32, half_height: f32) -> i32 {
+    let scale = window_height / (2.0 * half_height.max(f32::MIN_POSITIVE));
+    if scale >= 1.0 {
+        scale.round().max(1.0) as i32
+    } else {
+        -((1.0 / scale).round().max(2.0) as i32)
+    }
+}
+
+/// The half-view a rung is, which is [`rung`] read backwards.
+pub fn half_height_of(window_height: f32, rung: i32) -> f32 {
+    match rung {
+        near if near >= 1 => window_height / (2.0 * near as f32),
+        far => window_height * (-far as f32) / 2.0,
+    }
+}
+
+/// One rung nearer (`+1`) or further out (`-1`), over the hole in the middle of the ladder: the
+/// rung after `-2` going in is `1`, because 1:1 is the next whole zoom and there is nothing
+/// between them.
+pub fn step_the_zoom(rung: i32, by: i32) -> i32 {
+    let along = if rung >= 1 { rung } else { rung + 2 } + by;
+    if along >= 1 { along } else { along - 2 }
 }
 
 /// The nearest half-view to `half_height` that shows a whole number of screen pixels per pixel of
@@ -718,9 +842,7 @@ pub fn snap_zoom(snap: Res<SnapZoom>, windows: Query<&Window>, mut view: ResMut<
 ///
 /// [`Rules::spacing`]: crate::belts::Rules::spacing
 pub fn snapped(window_height: f32, half_height: f32) -> f32 {
-    let scale = window_height / (2.0 * half_height);
-    let whole = if scale >= 1.0 { scale.round().max(1.0) } else { 1.0 / (1.0 / scale).round() };
-    window_height / (2.0 * whole)
+    half_height_of(window_height, rung(window_height, half_height))
 }
 
 #[cfg(test)]
@@ -751,6 +873,35 @@ mod tests {
         assert_eq!(belt_picture(Dir::East, Dir::North, 1).0, BELT_CORNER[1]);
     }
 
+    /// **The two rules about where the ghost stands** (F7), which are the two that cannot be
+    /// seen in a screenshot: a pointer egui has taken is not pointing at a tile, and a run with
+    /// no pointer at all aims at the middle of what can be seen.
+    #[test]
+    fn the_ghost_follows_the_pointer_and_lets_egui_have_it() {
+        let map = Map { tiles: UVec2::splat(32) };
+        let window = Vec2::new(1600.0, 900.0);
+        let view = CameraView { focus: Vec2::ZERO, half_height: 150.0 };
+        let none = games_shell::camera::ViewInsets::NONE;
+
+        // the middle of the window is the middle of the map, which is where a map of an even
+        // number of tiles has its corner of four
+        assert_eq!(
+            where_the_ghost_goes(false, None, window, &view, &none, &map),
+            Some(UVec2::new(16, 16)),
+        );
+        // a pointer somewhere else is that tile, and the two answers are different
+        let over_there = where_the_ghost_goes(false, Some(Vec2::new(400.0, 300.0)), window, &view, &none, &map);
+        assert!(over_there.is_some() && over_there != Some(UVec2::new(16, 16)), "{over_there:?}");
+        // **egui first**: a mouse over the palette is not pointing at a tile
+        assert_eq!(
+            where_the_ghost_goes(true, Some(Vec2::new(400.0, 300.0)), window, &view, &none, &map),
+            None,
+        );
+        // and a pointer off the map is off it, however far out the camera is
+        let far = CameraView { focus: Vec2::ZERO, half_height: 2000.0 };
+        assert_eq!(where_the_ghost_goes(false, Some(Vec2::ZERO), window, &far, &none, &map), None);
+    }
+
     /// The zoom lands on whole numbers and stays inside the range it was given.
     #[test]
     fn the_zoom_rounds_to_whole_pixels() {
@@ -770,5 +921,33 @@ mod tests {
                 assert!((whole - whole.round()).abs() < 1e-4, "{window} {half} -> {scale}");
             }
         }
+    }
+
+    /// **The ladder of whole zooms, and the hole in the middle of it** (F7): 1:1 is where the two
+    /// halves meet, so the rung in from 1:2 is 1:1 and not "1:1.5". A step is never nothing,
+    /// which is the whole reason this exists — one notch of the wheel used to be rounded back to
+    /// where it started, and every press of `+` with it.
+    #[test]
+    fn a_whole_zoom_either_side_and_never_the_same_one() {
+        let window = 900.0;
+        assert_eq!(rung(window, 150.0), 3, "three screen pixels to one of the art");
+        assert_eq!(rung(window, 450.0), 1);
+        assert_eq!(rung(window, 900.0), -2);
+        for half in [112.5f32, 150.0, 450.0, 900.0, 1350.0] {
+            let k = rung(window, half);
+            assert!((half_height_of(window, k) - half).abs() < 1e-3, "{half} is rung {k}");
+            for by in [1, -1] {
+                let next = step_the_zoom(k, by);
+                assert_ne!(next, k, "a step is a step");
+                assert!(next >= 1 || next <= -2, "there is no rung {next}");
+                let there = half_height_of(window, next);
+                assert!((there - half).abs() > 1e-3, "{half} -> {there} is not a step");
+                // and back again
+                assert_eq!(step_the_zoom(next, -by), k);
+            }
+        }
+        // in from 1:2 is 1:1, and out from 1:1 is 1:2 — the hole is not fallen into
+        assert_eq!(step_the_zoom(-2, 1), 1);
+        assert_eq!(step_the_zoom(1, -1), -2);
     }
 }

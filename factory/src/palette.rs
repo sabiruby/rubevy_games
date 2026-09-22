@@ -314,8 +314,23 @@ pub fn how_near(window_height: f32, half_height: f32) -> String {
 
 /// **The whole map, as a half-view**: half of its longer side, which is what
 /// `crate::point_the_camera_at_the_map` raises the zoom limit to reach.
-pub fn the_whole_map(map: &Map) -> f32 {
-    (map.span().max_element() / 2.0).max(f32::MIN_POSITIVE)
+///
+/// **With the zoom rounded to whole pixels it is the rung that holds all of it**, not the exact
+/// half-view: `crate::draw::snapped` rounds to the *nearest* whole zoom, and the nearest to "the
+/// whole map" is as often the one that shows nine tenths of it. A button called "whole map" that
+/// leaves a row of tiles off the bottom is a button that lies, so the rung is stepped out until
+/// the map is inside it — which is why this takes the window's height and cannot be worked out
+/// from the map alone.
+pub fn the_whole_map(map: &Map, window_height: f32, snap: bool) -> f32 {
+    let whole = (map.span().max_element() / 2.0).max(f32::MIN_POSITIVE);
+    if !snap {
+        return whole;
+    }
+    let mut rung = crate::draw::rung(window_height, whole);
+    if crate::draw::half_height_of(window_height, rung) + 1e-3 < whole {
+        rung = crate::draw::step_the_zoom(rung, -1);
+    }
+    crate::draw::half_height_of(window_height, rung)
 }
 
 /// The palette, the way round, the next step and the zoom — one small window, always up.
@@ -335,6 +350,7 @@ pub fn draw_palette(
     controls: Res<CameraControls>,
     mut view: ResMut<CameraView>,
     control: Res<crate::control::TheControl>,
+    snap: Res<crate::draw::SnapZoom>,
     windows: Query<&Window>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
@@ -431,7 +447,7 @@ pub fn draw_palette(
                 if ui.button(words::WHOLE_MAP.of(lang)).clicked() {
                     let notches = games_shell::camera::notches_to(
                         view.half_height,
-                        the_whole_map(&map),
+                        the_whole_map(&map, height, snap.0),
                         &controls,
                     );
                     games_shell::camera::zoom_the_view(&mut view, notches, &home, &controls);
