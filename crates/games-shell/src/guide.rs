@@ -495,6 +495,11 @@ fn draw_keys_window(
     // the corner it is measured from is the corner it sits in
     .pivot(egui::Align2::RIGHT_BOTTOM)
     .default_pos(corner)
+    // **in front, for the reason the body is** (G6: "an explanation you have to find is not an
+    // explanation"). The garden and Battle both open their editor at startup, a panel 640 tall
+    // down the right of the window, and the first picture taken of this had the small window's
+    // title bar under its bottom edge. It is still dragged anywhere, and egui remembers where.
+    .order(egui::Order::Foreground)
     .show(ctx, |ui| key_table(ui, guide, style, "guide-keys-window"));
     if !open {
         turn_the_keys_window(guide, settings, false);

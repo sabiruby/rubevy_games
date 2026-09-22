@@ -3013,14 +3013,21 @@ fn window_checks(
 /// door, what the ghost's chunk holds, what [`palette::NextStep`] says with a miner taken away,
 /// what the store holds after the keys' window is turned off, and where the camera is after the
 /// keys and after the button's arithmetic.
-/// **Where the checks put the mouse.** Two points on a 1600 by 900 window: one over the map,
-/// clear of every panel (the HUD is the top left, the palette the bottom left, the guide's keys
-/// the bottom right, the editor the right), and one over the palette's own rows.
+/// **Where the checks put the mouse**, as fractions of the window rather than as two points: a
+/// PC opens 1600 by 900 and **a page is whatever the canvas is** (Playwright's is 1280 by 720),
+/// and a check that pointed at 820 pixels down a 720-pixel window pointed outside it — which is
+/// what the browser run said the first time this was written.
 ///
-/// They are the checks' own numbers and not the game's — a window of another size would want
-/// others, and `window_width` / `window_height` are what a run is given.
-const OVER_THE_MAP: Vec2 = Vec2::new(800.0, 300.0);
-const OVER_THE_PALETTE: Vec2 = Vec2::new(60.0, 820.0);
+/// The middle is clear of every panel in both (the HUD is the top left, the palette the bottom
+/// left, the guide's keys the bottom right, the editor the right, and the editor is shut by the
+/// check before this one); a twentieth in from the bottom left is the palette's own rows,
+/// whose corner is eight pixels from that corner whatever the window.
+fn over_the_map(size: Vec2) -> Vec2 {
+    size * 0.5
+}
+fn over_the_palette(size: Vec2) -> Vec2 {
+    Vec2::new(size.x * 0.05, size.y * 0.95)
+}
 
 /// **A mouse, forged** — the pointer's `ButtonInput::press`. Both halves have to be told: the
 /// game asks the window where the cursor is (`Window::cursor_position`, which
@@ -3029,9 +3036,10 @@ const OVER_THE_PALETTE: Vec2 = Vec2::new(60.0, 820.0);
 fn point_the_mouse(
     windows: &mut Query<(Entity, &mut Window)>,
     pointed: &mut MessageWriter<bevy::window::WindowEvent>,
-    at: Vec2,
+    where_to: fn(Vec2) -> Vec2,
 ) {
     let Some((entity, mut window)) = windows.iter_mut().next() else { return };
+    let at = where_to(Vec2::new(window.width(), window.height()));
     let was = window.cursor_position();
     window.set_cursor_position(Some(at));
     pointed.write(bevy::window::WindowEvent::CursorMoved(bevy::window::CursorMoved {
@@ -3117,7 +3125,7 @@ fn f7_checks(
             // ghost is about where the mouse is, so the check puts it somewhere. A forged
             // `CursorMoved` is what bevy_egui reads, and `set_cursor_position` is what the game
             // reads, so both halves are told.
-            point_the_mouse(&mut windows, &mut pointed, OVER_THE_MAP);
+            point_the_mouse(&mut windows, &mut pointed, over_the_map);
             test.waited = 0;
             test.step = 61;
         }
@@ -3189,7 +3197,7 @@ fn f7_checks(
         }
         // ---- and it goes when the mouse is over a panel -----------------------------------------
         64 => {
-            point_the_mouse(&mut windows, &mut pointed, OVER_THE_PALETTE);
+            point_the_mouse(&mut windows, &mut pointed, over_the_palette);
             test.waited = 0;
             test.step = 65;
         }
@@ -3206,7 +3214,7 @@ fn f7_checks(
                     ghost.at.map(|t| format!("{}, {}", t.x, t.y)).unwrap_or_else(|| "0, 0".into())
                 ),
             );
-            point_the_mouse(&mut windows, &mut pointed, OVER_THE_MAP);
+            point_the_mouse(&mut windows, &mut pointed, over_the_map);
             test.waited = 0;
             test.step = 66;
         }
