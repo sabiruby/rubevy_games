@@ -162,6 +162,11 @@ dropped from the comparison altogether.
 and the editor's own actions. The match does not end inside the run, so none of the four lines
 above appears.
 
+**F7 put a second window on this screen and no line here moved** (2026-09-22): the guide's key
+table stands in a small window of its own in all three games now, in front of the editor and in
+the bottom right corner. Nothing in Battle's checks reads a screen position, and the arena is in
+the middle of the window, so what changed is the picture and not the list.
+
 ```
 selftest: ok   Apply does not touch the file
 selftest: ok   Apply gives robot N the edited behaviour
@@ -270,6 +275,11 @@ selftest: ok   what the world declares reaches a creature's memory (Beetle NvN h
 
 `GARDEN_SELFTEST=1 docker/run.sh garden release`. The editor, the VM panel, the wheel, `P`, and
 `F3`'s third file — the rules of the world.
+
+**F7's small key window changed nothing here either** (see Battle's note above). The garden is
+the one of the three where it covers part of the field, so it is drawn in `Order::Foreground` —
+the first picture had its title bar under the editor's bottom edge — and a creature under it is
+reached by dragging it out of the way, which egui remembers.
 
 ```
 selftest: ok   Apply does not touch the file
@@ -408,7 +418,9 @@ wrong on), one that would lay the world out anew (it asks before it does), and t
 because it takes the checks' own factory with it.
 
 Two of F5's are `--` here and two of the earlier ones are: driving the panels, `P`, the guide and
-the camera all need a window, and so does the floor.
+the camera all need a window, and so does the floor. **F7 added no line here**: the palette, the
+ghost and the zoom are all a window's, and the run never reaches the step that would say so —
+the checks walk 50 → 60 → 47, and a headless run leaves that road at 50.
 
 ```
 selftest: --   no floor was drawn (this run has no renderer)
@@ -501,11 +513,27 @@ publish, and a number other than zero there says the division came out wrong.
 sixteen parameters and the other checks take sixteen. The two share the run and hand it to each
 other by the step they are on, so the order of the lines is what it was.
 
-## Factory, a window — 39 lines
+## Factory, a window — 48 lines
 
 `FACTORY_SELFTEST=1 docker/run.sh factory release`. The headless twenty-eight that are not `--`,
-the tileset the first of those stood in for, **the four the panel is driven for**, and **F5's six**
-— the editor's other two files, `P`, the guide, and the camera a script moves.
+the tileset the first of those stood in for, **the four the panel is driven for**, **F5's six**
+— the editor's other two files, `P`, the guide, and the camera a script moves — and **F7's nine**.
+
+**F7's nine are what the author could not see** (his six points after playing the published game):
+the **palette** has a row for each thing the digits hold, each with the tile of the sheet it is
+really drawn with, and a row puts it in hand through the same door a digit does; the **ghost**
+under the mouse is what is in hand and the way round it is held, turns with `R`, is red exactly
+where the click would be refused, and goes while the mouse is over a panel; the **next step**
+follows the factory (every miner is taken away and it asks for one again); the **keys** stand in
+a window of their own and turning it off is remembered in the store; and `+`, `-` and **whole
+map** move the camera and stop where the wheel stops.
+
+**The mouse is forged the way the keys are** (`main.rs`'s `point_the_mouse`). A container parks
+the real pointer where it likes — one run found it at 77, 9, over the HUD, which correctly hid
+the ghost and made the check a coin toss — so the check points it at the middle of the window and
+then at the palette. Both halves have to be told: `Window::set_cursor_position` is what the game
+reads and a `CursorMoved` message is where bevy_egui builds egui's own pointer from. The two
+places are **fractions of the window**, because a page's canvas is not 1600 by 900.
 
 **F5's six are driven the way a player drives them.** The editor's three buttons are switched
 between and each file's own text is waited for; the editor is shut and `P` is pressed, which stops
@@ -530,8 +558,10 @@ of those is the VM holding one more program, which is three frames after the but
 what a check that leans on one system running before another looks like.
 
 ```
+selftest: ok   "whole map" pulls back until all 32 by 32 tiles are in the window (786 world units of 512)
+selftest: ok   + brings the camera nearer (112 world units of 150) and - stops where the wheel stops (393)
 selftest: ok   Apply to every inserter reached all 3 of them and loaded no new program (4 in the VM)
-selftest: ok   H turns the guide: 5 paragraphs and 16 keys, in en
+selftest: ok   H turns the guide: 5 paragraphs and 18 keys, in en
 selftest: ok   P stops the factory: the belts stand still and the scripts' budget is 0 (egui holds the keyboard: false)
 selftest: ok   Revert put all 3 of them back on inserter.rb
 selftest: ok   a click built each of the 5 things the line needs (miner, belt, belt, belt, chest)
@@ -544,30 +574,37 @@ selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] 
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (5/5), and a point off the map is off it
 selftest: ok   a wrong data.rb is refused with the line it is wrong on (10/10)
 selftest: ok   an inserter taken away leaves no script behind: 3 scripts where there were 4, and none of them is waiting on an arm that is gone (0)
-selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:4 (after 0.5 s)
-selftest: ok   an inserter's script can remember something across a save (@memory, after 1.0 s)
+selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:4 (after 0.8 s)
+selftest: ok   an inserter's script can remember something across a save (@memory, after 0.4 s)
 selftest: ok   and P again gives back exactly what it took (39000)
+selftest: ok   and R turns the ghost with the hand: a quarter turn Some(Rotate90) where it was 0
 selftest: ok   and control.rb beside it, with the three buttons to switch between (3 choices)
+selftest: ok   and it goes while the mouse is over a panel, so that a click on the palette never lays a belt behind it (0, 0)
 selftest: ok   and what it remembered is there again after the factory was read back
 selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
 selftest: ok   every inserter on the map has a script of its own: 4 arms, 4 scripts
 selftest: ok   every item is either in a chest or on a belt: 2 dug, 1 held, 1 carried
 selftest: ok   nothing published to the control stage was dropped: 0 in the script, 0 in the VM
 selftest: ok   reading data.rb again with a bigger map lays out a bigger world (64 by 32, was 32 by 32)
-selftest: ok   save, load, save is the same text (7700 bytes, 21 buildings)
-selftest: ok   the assembler turned 2 iron_plate into 1 gear after 5.5 s (the numbers say 5.5 s)
+selftest: ok   save, load, save is the same text (7702 bytes, 21 buildings)
+selftest: ok   the assembler turned 2 iron_plate into 1 gear after 5.9 s (the numbers say 5.5 s)
 selftest: ok   the control stage heard what the factory did: 19 built, 2 crafted, 4 delivered
 selftest: ok   the data stage was done before Update 1: 3 items, 2 recipes, 2 machines, a belt of 4 a second
 selftest: ok   the editor applied a script to one inserter and left the other 2 alone (4 programs in the VM, was 3)
 selftest: ok   the editor opens data.rb (149 lines)
-selftest: ok   the furnace turned 1 iron_ore into 1 iron_plate after 4.9 s (the numbers say 5.5 s)
+selftest: ok   the furnace turned 1 iron_ore into 1 iron_plate after 5.4 s (the numbers say 5.5 s)
+selftest: ok   the ghost is red exactly where the click would be refused: a miner on 12, 8 is refused
+selftest: ok   the ghost on the tile under the mouse is what is in hand, the way round it is held: Some(142) of the sheet, a quarter turn Some(Default) (12, 8)
 selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore 1 / 1 (after 1.5 s)
+selftest: ok   the keys stand in a small window of their own (18 rows), on by default, and turning it off is remembered in the store
 selftest: ok   the map is 32 by 32 tiles with 128 of them holding 7680 of ore
 selftest: ok   the miner dug, the belts carried and the chest holds 1 after 2.3 s (the numbers say 3.0 s)
+selftest: ok   the next step follows the factory: with its 1 miners taken away it says "2: put a miner on a patch of ore" again
+selftest: ok   the palette has a row for each of the 7 things the digits hold, each with its picture (7), and a row puts it in hand (the chest)
 selftest: ok   the rest of the factory is untouched: 1 of 4 inserters stopped, and the assembler line has 1 in its chest
 selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: 1 delivered, won false
 selftest: ok   the tileset arrived as an array of 143 layers of 16 by 16 px (frame 3)
-selftest: ok   winning moves the camera from Ruby: it is looking at -56, -120 (was -154, -120, won true)
+selftest: ok   winning moves the camera from Ruby: it is looking at -56, -120 (was -45, -120, won true)
 selftest: ok   with no inserter in the gap nothing reaches the machine: 2/2 lines are jammed on the belt with the machine empty
 ```
 
@@ -577,7 +614,7 @@ that anything was *drawn* — nothing in a log can be — and the evidence for t
 with its pixels counted, in `worklog/2026-09-21-factory-F0.md` for the floor and
 `worklog/2026-09-21-factory-F1.md` §5.4, `…-F2.md` and `…-F3.md` for the factory built on it.
 
-## Factory, a browser — 40 lines
+## Factory, a browser — 49 lines
 
 `…/factory/?selftest`, after `web/build.sh factory`. The window's list plus the `done` line.
 
@@ -596,8 +633,10 @@ three lists say the same sentence again. **This list is the one that would catch
 
 ```
 selftest: done — the factory keeps running (a page has nothing to exit to)
+selftest: ok   "whole map" pulls back until all 32 by 32 tiles are in the window (720 world units of 512)
+selftest: ok   + brings the camera nearer (120 world units of 180) and - stops where the wheel stops (393)
 selftest: ok   Apply to every inserter reached all 3 of them and loaded no new program (4 in the VM)
-selftest: ok   H turns the guide: 5 paragraphs and 15 keys, in en
+selftest: ok   H turns the guide: 5 paragraphs and 18 keys, in en
 selftest: ok   P stops the factory: the belts stand still and the scripts' budget is 0 (egui holds the keyboard: false)
 selftest: ok   Revert put all 3 of them back on inserter.rb
 selftest: ok   a click built each of the 5 things the line needs (miner, belt, belt, belt, chest)
@@ -610,26 +649,33 @@ selftest: ok   a script reads the tables back: recipe_of(:iron_plate)[:made_in] 
 selftest: ok   a world point and the tile it is in agree at the corners and the middle (5/5), and a point off the map is off it
 selftest: ok   a wrong data.rb is refused with the line it is wrong on (10/10)
 selftest: ok   an inserter taken away leaves no script behind: 3 scripts where there were 4, and none of them is waiting on an arm that is gone (0)
-selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:4 (after 1.0 s)
-selftest: ok   an inserter's script can remember something across a save (@memory, after 1.0 s)
+selftest: ok   an inserter whose script raises stops, and the game knows where: inserter.rb:4 (after 1.3 s)
+selftest: ok   an inserter's script can remember something across a save (@memory, after 1.2 s)
 selftest: ok   and P again gives back exactly what it took (39000)
+selftest: ok   and R turns the ghost with the hand: a quarter turn Some(Rotate90) where it was 0
 selftest: ok   and control.rb beside it, with the three buttons to switch between (3 choices)
+selftest: ok   and it goes while the mouse is over a panel, so that a click on the palette never lays a belt behind it (0, 0)
 selftest: ok   and what it remembered is there again after the factory was read back
 selftest: ok   clicking an inserter with an inserter in hand opens its script rather than building over it
 selftest: ok   every inserter on the map has a script of its own: 4 arms, 4 scripts
 selftest: ok   every item is either in a chest or on a belt: 2 dug, 1 held, 1 carried
 selftest: ok   nothing published to the control stage was dropped: 0 in the script, 0 in the VM
 selftest: ok   reading data.rb again with a bigger map lays out a bigger world (64 by 32, was 32 by 32)
-selftest: ok   save, load, save is the same text (7798 bytes, 21 buildings)
-selftest: ok   the assembler turned 2 iron_plate into 1 gear after 5.8 s (the numbers say 5.5 s)
+selftest: ok   save, load, save is the same text (7697 bytes, 21 buildings)
+selftest: ok   the assembler turned 2 iron_plate into 1 gear after 6.1 s (the numbers say 5.5 s)
 selftest: ok   the control stage heard what the factory did: 19 built, 2 crafted, 4 delivered
 selftest: ok   the data stage was done before Update 1: 3 items, 2 recipes, 2 machines, a belt of 4 a second
 selftest: ok   the editor applied a script to one inserter and left the other 2 alone (4 programs in the VM, was 3)
 selftest: ok   the editor opens data.rb (149 lines)
-selftest: ok   the furnace turned 1 iron_ore into 1 iron_plate after 5.6 s (the numbers say 5.5 s)
+selftest: ok   the furnace turned 1 iron_ore into 1 iron_plate after 5.3 s (the numbers say 5.5 s)
+selftest: ok   the ghost is red exactly where the click would be refused: a miner on 12, 8 is refused
+selftest: ok   the ghost on the tile under the mouse is what is in hand, the way round it is held: Some(142) of the sheet, a quarter turn Some(Default) (12, 8)
 selftest: ok   the goal in control.rb is reached and the game is told: won — iron_ore 1 / 1 (after 1.8 s)
+selftest: ok   the keys stand in a small window of their own (18 rows), on by default, and turning it off is remembered in the store
 selftest: ok   the map is 32 by 32 tiles with 128 of them holding 7680 of ore
-selftest: ok   the miner dug, the belts carried and the chest holds 1 after 2.3 s (the numbers say 3.0 s)
+selftest: ok   the miner dug, the belts carried and the chest holds 1 after 2.1 s (the numbers say 3.0 s)
+selftest: ok   the next step follows the factory: with its 1 miners taken away it says "2: put a miner on a patch of ore" again
+selftest: ok   the palette has a row for each of the 7 things the digits hold, each with its picture (7), and a row puts it in hand (the chest)
 selftest: ok   the rest of the factory is untouched: 1 of 4 inserters stopped, and the assembler line has 1 in its chest
 selftest: ok   the same factory does not win on a control.rb that asks for more than the ground holds: 1 delivered, won false
 selftest: ok   the tileset arrived as an array of 143 layers of 16 by 16 px (frame 4)

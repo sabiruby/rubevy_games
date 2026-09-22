@@ -285,6 +285,13 @@ because the script optimises the module in place):
 | `sabibots/pkg/game_bg.wasm` | 39,265,829 | 10,082,522 | 35,264,746 | 10,793,564 |
 | `factory/pkg/game_bg.wasm` | 39,693,676 | 10,235,529 | **35,668,110** | 10,942,946 |
 | `garden/pkg/game_bg.wasm` | 40,099,872 | 10,305,560 | 36,038,000 | 11,013,138 |
+
+**After F7** (2026-09-22, the same machine and the same binaryen, optimised column only):
+Battle **35,273,838** (+9,092, +0.026%), the garden **36,047,112** (+9,112, +0.025%), Factory
+**35,767,480** (+99,370, +0.28%). The nine kilobytes the two older games pay are the shared
+crate's — the guide's second window and the camera's zoom keys, and **the re-cut font**, which is
+5,112 bytes larger (417 glyphs against 396: the palette's Japanese and the four arrows). Factory's
+hundred kilobytes are its own: the palette, the ghost, the next step and the nine checks.
 | `compiler/sabiruby.wasm` (each game's copy) | 2,448,533 | 840,475 | — | — |
 | `sabibots/assets/` (16 files) | 234,202 | | | |
 | `garden/assets/` (10 files) | 322,924 | | | |
@@ -302,7 +309,7 @@ Against the 2026-09-21 reading (S5b) the two older games moved **+53,179 raw / +
 for Battle (+0.14%)** and **+63,971 / +57,971 for the garden (+0.16%)**. What is in that sixth of
 a percent is S11 — `Settings::positive`/`counted` and `checks::Errands` in the shared crate, which
 both games link — and F5's re-cut guide font, which is in `games-shell` and therefore in all three
-(81,480 B against 64,616; `CREDITS.md`).
+(81,480 B against 64,616, and **86,592 after F7**; `CREDITS.md`).
 
 **The compiler module moved too**, +3,024 raw and +207 gzipped, and it is the one row here that is
 not this repository's doing: the playground pin went `d72e000` → `5337b2f` and its SabiRuby with
@@ -367,8 +374,11 @@ not the download**, and this is the first time the two were measured side by sid
 The guide (`H`) is written in English and Japanese — one of the two at a time from G6b, switched
 by a button — and egui's default fonts have no CJK at all, so a subset of Noto Sans JP,
 62,780 bytes at G6, 66,796 after G6b re-cut it, 65,904 after G7 renamed the words in it
-(four characters in, seven out) and **64,616** after G9 changed the `F2` and `P` rows
-(one character in — `く`, from 「続く」 — and six out), is
+(four characters in, seven out), **64,616** after G9 changed the `F2` and `P` rows
+(one character in — `く`, from 「続く」 — and six out), 81,480 after Factory's guide (F5) and
+**86,592 after F7** (417 glyphs: the Build panel's words and the four arrows `→ ↑ ← ↓`, which are
+in `factory/src/guide_text.rs` for exactly this reason — `tools/subset-font.sh` reads four files
+and a Japanese word written anywhere else is drawn as a blank box), is
 `include_bytes!`d into `games-shell` and added to egui as a fallback family. **The author accepted the size increase** (2026-09-17), on the
 condition that the font be subset rather than shipped whole. Measured on the same machine and the
 same binaryen, all four numbers after `wasm-opt -Os`:

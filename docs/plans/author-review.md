@@ -55,6 +55,13 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 | 09-22 F6 | `script_budget` 39,000 を動かさない（F4・F5 の後に取り直した） | 導出をやり直すと 36,000 だが、差 8% は tick µs 自身のばらつき 25% より小さい。持ち越しも `dropped` も 24 報告すべて 0 | `factory.settings.txt` の `script_budget`、根拠は `numbers.md` §9.8a |
 | 09-22 F6 | URL から地図の大きさを渡す口を作らない（`?arms=1` + エディタで `data.rb`） | 地図は宣言で、ページでも Apply できる。URL に 2 つ目の綴りを作らない | `factory/src/main.rs` の stress のつまみ、手順は `verification/factory-on-a-real-gpu.md` |
 | 09-22 F6 | 公開用の絵を足さない。入口のページの Kenney CC0 は footer に 1 段落 | README にも入口にも絵を置く流儀が無い。3 本とも Kenney なので 1 か所で言えば全部について真 | `README.md` / `web/index.html` |
+| 09-22 F7 | ゴーストの色は **建てられる所 = 元の絵の半透明（白 × α 0.5）／建てられない所 = 赤み（255, 90, 90 × α 0.5）**。α は**出どころ不明**と書いた | 著者が「任せる」と言った所。半分は測った数ではないので、設定に置いて「測っていない」と正直に書いた | `factory.settings.txt` の `ghost_alpha`、色は `palette::PaletteStyle::{can, cannot}` |
+| 09-22 F7 | 手ぶら（撤去）のゴーストは**枠ではなくタイル 1 枚の色付き** | 枠の絵はシートに無く、足すとシートの層が 144 = 6 の倍数になる（F0 が 1 日使ったブラウザの黒画面の条件）。色は絵を足さずに言える | `factory/src/draw.rs` の `draw_ghost` の `None` の腕 |
+| 09-22 F7 | ポインタが無い走行ではゴーストが**見えている範囲の真ん中**に立つ | コンテナの窓もまだ触っていないページもカーソルを持たない。「どこにも無いゴースト」は手の中身について何も言わない。`--shot` に写るのもこれ | `factory/src/draw.rs` の `where_the_ghost_goes` |
+| 09-22 F7 | キーの小窓は **右下**、`Order::Foreground` | 3 本とも空いている角が右下（HUD は左上、エディタは右、VM パネルは左下）。前面なのは、箱庭と Battle がエディタを起動時に開くので見出しが隠れたから（G6 の「探さないと見つからない説明は説明ではない」） | `crates/games-shell/src/guide.rs` の `draw_keys_window` |
+| 09-22 F7 | palette は **左下**、HUD・エディタ・キーの小窓と別の角 | 同上。VM パネル（既定では閉じている）と同じ角なので、両方開けば重なる — どちらも動かせる | `factory/src/palette.rs` の `draw_palette` |
+| 09-22 F7 | **`+`/`-` を箱庭に足さなかった**（`CameraPlugin` を使っているのは Factory だけで、計画の「3 本に届く」は間違いだった） | F7 は著者が Factory について言った 6 点への答え。箱庭の camera を触ると 3 本目の段階が 1 本目の遊びを変える | 箱庭に足すなら `garden/src/main.rs` の `Eye`。`shared-crate-plan.md` §7 に 1 行 |
+| 09-22 F7 | ズームの丸めが 1 ノッチを飲み込んでいた件を、**新しい数を作らずに**直した（丸めが打ち消すときは整数倍を 1 段動かす） | 整数倍ズームでは「次の整数倍」が**次の見え方そのもの**なので、刻みの大きさを決める数は要らない | `factory/src/draw.rs` の `snap_zoom` / `step_the_zoom` |
 | 09-22 F6 | `stress:` の行に地図の大きさと GPU のアダプタ名、`control.rb` / `inserter.rb` のコンパイルの ms を 1 行 | ms は何を何で描いていたかが無ければ意味がない。ページではコンパイルの間キャンバスが白い | `factory/src/main.rs` の `watch_the_frames`、`control::compile` / `inserters::compile` |
 
 ## B. 著者にしか決められないもの（公開後に）
