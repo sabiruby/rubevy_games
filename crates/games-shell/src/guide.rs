@@ -48,6 +48,22 @@
 //! `.ttf` again. A Japanese word edited into a guide without that step is drawn as blank boxes.
 //! The strings a *game* shows all live in its own `guide_text.rs`; the only ones here are
 //! [`Guide::HINT`] and the line at the foot of the panel.
+//!
+//! ## The body and the keys are two windows (F7)
+//!
+//! The author played the published Factory and said it of the guide: **a wall of text you open,
+//! read and shut is not something you can play with open.** What is wanted while playing is the
+//! *key list*, and what is wanted once is the paragraphs — so they are two windows now.
+//!
+//! * **the body** ([`Guide::open`]) — the paragraphs, `H` or `?`, over the middle of the screen,
+//!   exactly as it was;
+//! * **the keys** ([`Guide::keys_window`]) — a small window of its own, in a corner, draggable,
+//!   and **on by default in all three games** (the author's decision, 2026-09-22).
+//!
+//! **The table is never in both at once.** While the small window is up the body says one line
+//! saying where the keys are; turn it off, in the body or with the small window's own ✕, and the
+//! table is back in the body where it was. What the player chose is remembered in the store
+//! (`guide_keys_window`), so a page opens the way it was left.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
@@ -138,6 +154,10 @@ pub struct Guide {
     pub notes: Vec<GuideNote>,
     pub keys: Vec<GuideKey>,
     pub open: bool,
+    /// **Whether the key table is a small window of its own** (F7) rather than a block inside the
+    /// body. It starts at [`GuideStyle::keys_window`], which the store can move, and the
+    /// checkbox in the body and the small window's own ✕ turn it while the game runs.
+    pub keys_window: bool,
     /// Which language is being drawn. A game sets it from [`GuideLang::pick`] at startup; the
     /// buttons at the top of the panel change it after that.
     pub lang: GuideLang,
@@ -151,6 +171,7 @@ impl Default for Guide {
             notes: Vec::new(),
             keys: Vec::new(),
             open: true,
+            keys_window: KEYS_WINDOW,
             lang: GuideLang::En,
         }
     }
@@ -210,6 +231,25 @@ pub const NOTE_SPACING: f32 = 6.0;
 /// the pair arrived with the panel and nothing says why 14 and 3.
 pub const KEY_SPACING: [f32; 2] = [14.0, 3.0];
 
+/// **Whether the keys stand in a small window of their own** (F7). On, in all three games — the
+/// author's decision of 2026-09-22, after playing the published Factory and finding that the one
+/// thing worth having on the screen while playing was the key list.
+pub const KEYS_WINDOW: bool = true;
+
+/// How far the small window stands off the corner it starts in, in pixels.
+///
+/// **The same margin every other panel in these three games stands off an edge with**: the HUD's
+/// `default_pos([8, 8])` in all three, the VM panel's `[8, bottom - 8 - height]`, and
+/// `EditorLayout::margin`, which is 8 as well. It is one number rather than four because a fourth
+/// window at a fifth distance would be the only thing on the screen that did not line up.
+pub const KEYS_MARGIN: f32 = 8.0;
+
+// **The small window has no size of its own**, which is why there is no number here for one:
+// egui fits a window with no `default_size` to what is in it, and what is in it is a two-column
+// table whose width is the longest key and the longest line of one language. A size chosen here
+// would be a number with nowhere to come from, and the one time this crate did choose one
+// (`SIZE`, quoted from a screenshot) is the reason that line says "cited, and not measured".
+
 /// **Every number the guide has**, in one resource a game can hand [`GuidePlugin::styled`] or a
 /// player can change through the `key=value` store ([`GuideStyle::read_from`]). The key colour is
 /// here too, since it is the one colour this panel chooses for itself.
@@ -225,6 +265,10 @@ pub struct GuideStyle {
     pub note_spacing: f32,
     /// [`KEY_SPACING`]
     pub key_spacing: [f32; 2],
+    /// [`KEYS_WINDOW`] — where the key table starts, before the player has turned it either way.
+    pub keys_window: bool,
+    /// [`KEYS_MARGIN`]
+    pub keys_margin: f32,
 }
 
 impl Default for GuideStyle {
@@ -235,6 +279,8 @@ impl Default for GuideStyle {
             key_color: KEYCOL,
             note_spacing: NOTE_SPACING,
             key_spacing: KEY_SPACING,
+            keys_window: KEYS_WINDOW,
+            keys_margin: KEYS_MARGIN,
         }
     }
 }
@@ -248,6 +294,11 @@ impl GuideStyle {
     /// | `guide_height` | [`GuideStyle::size`]`[1]` |
     /// | `guide_max_height` | [`GuideStyle::max_height`] |
     /// | `guide_note_spacing` | [`GuideStyle::note_spacing`] |
+    /// | `guide_keys_window` | [`GuideStyle::keys_window`] (0 or 1) |
+    /// | `guide_keys_margin` | [`GuideStyle::keys_margin`] |
+    ///
+    /// `guide_keys_window` is the one of these the *game itself* writes back: the checkbox in the
+    /// body and the small window's ✕ remember what was chosen, the way the language buttons do.
     ///
     /// The colour is not among them, for the reason the camera's keys are not: a colour in a text
     /// file needs a parser, and a game may still set it. [`GuideStyle::key_spacing`] is left out
@@ -262,8 +313,17 @@ impl GuideStyle {
         take("guide_height", &mut self.size[1]);
         take("guide_max_height", &mut self.max_height);
         take("guide_note_spacing", &mut self.note_spacing);
+        take("guide_keys_margin", &mut self.keys_margin);
+        // a flag rather than a measurement, so nought is off and anything else is on — the same
+        // reading Factory's `camera_snap_zoom` gives its own key
+        if let Some(value) = settings.number("guide_keys_window") {
+            self.keys_window = value != 0.0;
+        }
     }
 }
+
+/// The store's spelling of [`GuideStyle::keys_window`], written back when the player turns it.
+pub const KEYS_WINDOW_KEY: &str = "guide_keys_window";
 
 #[derive(Default)]
 pub struct GuidePlugin {
@@ -285,10 +345,19 @@ impl Plugin for GuidePlugin {
         app.init_resource::<Guide>()
             .insert_resource(self.style.clone())
             .add_systems(Update, guide_keys)
+            // **where the small window starts**, which is the store's answer and not this
+            // plugin's: `PanelSettingsPlugin` reads `guide_keys_window` into `GuideStyle` in
+            // `PreStartup`, and a game inserts its own `Guide` before the first frame, so the two
+            // are joined here — once, in `Startup`, before anything is drawn.
+            .add_systems(Startup, start_the_keys_window)
             // the font has to be in the context before anything draws with it, and `install_font`
             // does nothing after the first frame
             .add_systems(EguiPrimaryContextPass, (install_font, draw_guide).chain());
     }
+}
+
+fn start_the_keys_window(style: Res<GuideStyle>, mut guide: ResMut<Guide>) {
+    guide.keys_window = style.keys_window;
 }
 
 /// `H` and `?` open and close it; `Esc` closes it. Not while the editor has the keyboard — an `h`
@@ -355,20 +424,101 @@ const LANG_BUTTONS: [(GuideLang, &str); 2] = [(GuideLang::En, "English"), (Guide
 const FOOT_EN: &str = "H or ? closes this again";
 const FOOT_JA: &str = "H か ? でこの説明を閉じます";
 
+/// **The small window's own words** (F7): its title, the checkbox that turns it, and the line the
+/// body says in place of the table while it is up.
+const KEYS_TITLE_EN: &str = "Keys";
+const KEYS_TITLE_JA: &str = "キー";
+const KEYS_TOGGLE_EN: &str = "Keep the keys in a small window";
+const KEYS_TOGGLE_JA: &str = "キーの一覧を小さな窓で出しておく";
+const KEYS_ELSEWHERE_EN: &str = "The keys are in the small window, which you can drag anywhere.";
+const KEYS_ELSEWHERE_JA: &str = "キーの一覧は小さな窓に出ています。好きな場所へ動かせます。";
+
+/// The two columns of the key list, wherever they are being drawn — the body or the small window.
+fn key_table(ui: &mut egui::Ui, guide: &Guide, style: &GuideStyle, id: &str) {
+    let (r, g, b) = style.key_color;
+    let keycol = egui::Color32::from_rgb(r, g, b);
+    let lang = guide.lang;
+    egui::Grid::new(id).num_columns(2).spacing(style.key_spacing).striped(true).show(ui, |ui| {
+        for row in &guide.keys {
+            ui.label(egui::RichText::new(&row.keys).monospace().color(keycol).strong());
+            ui.label(match lang {
+                GuideLang::En => &row.en,
+                GuideLang::Ja => &row.ja,
+            });
+            ui.end_row();
+        }
+    });
+}
+
+/// **The key list, in a small window in a corner** (F7) — the half of the guide worth having on
+/// the screen while playing.
+///
+/// It starts in the **bottom right**, which is the corner all three games leave free: the HUD is
+/// at the top left in all three, the editor at the top right, and the VM panel at the bottom
+/// left. It is dragged from there by whoever wants it somewhere else, and egui remembers where
+/// they put it. Shutting it with the ✕ is the same act as clearing the checkbox in the body, and
+/// both are remembered.
+fn draw_keys_window(
+    ctx: &egui::Context,
+    guide: &mut Guide,
+    style: &GuideStyle,
+    settings: &mut Option<ResMut<crate::settings::Settings>>,
+) {
+    if !guide.keys_window || guide.keys.is_empty() {
+        return;
+    }
+    let corner = ctx.content_rect().max - egui::vec2(style.keys_margin, style.keys_margin);
+    let mut open = true;
+    egui::Window::new(match guide.lang {
+        GuideLang::En => KEYS_TITLE_EN,
+        GuideLang::Ja => KEYS_TITLE_JA,
+    })
+    // the name is half of what switches with the language, so — as with the body — the window
+    // egui knows is the id and not the title
+    .id(egui::Id::new("games-shell-guide-keys"))
+    .open(&mut open)
+    .collapsible(true)
+    .resizable(false)
+    // the corner it is measured from is the corner it sits in
+    .pivot(egui::Align2::RIGHT_BOTTOM)
+    .default_pos(corner)
+    .show(ctx, |ui| key_table(ui, guide, style, "guide-keys-window"));
+    if !open {
+        turn_the_keys_window(guide, settings, false);
+    }
+}
+
+/// **The one place [`Guide::keys_window`] is written**, so that the checkbox, the ✕ and anything
+/// later all remember it the same way — in the store the save file is kept in, which is a
+/// `localStorage` key in a page.
+fn turn_the_keys_window(
+    guide: &mut Guide,
+    settings: &mut Option<ResMut<crate::settings::Settings>>,
+    on: bool,
+) {
+    guide.keys_window = on;
+    if let Some(settings) = settings.as_mut() {
+        settings.set(KEYS_WINDOW_KEY, if on { "1" } else { "0" });
+    }
+}
+
 fn draw_guide(
     mut contexts: EguiContexts,
     mut guide: ResMut<Guide>,
     style: Res<GuideStyle>,
     mut settings: Option<ResMut<crate::settings::Settings>>,
 ) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let ctx = ctx.clone();
+    // **the small window is not the body's**: it stands whether or not `H` has been pressed,
+    // which is the whole point of splitting the two
+    draw_keys_window(&ctx, &mut guide, &style, &mut settings);
     if !guide.open {
         return;
     }
-    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let ctx = &ctx;
     let mut open = true;
     let lang = guide.lang;
-    let (r, g, b) = style.key_color;
-    let keycol = egui::Color32::from_rgb(r, g, b);
     let title = match lang {
         GuideLang::En => guide.title_en.clone(),
         GuideLang::Ja => guide.title_ja.clone(),
@@ -408,6 +558,7 @@ fn draw_guide(
                 }
             });
             ui.separator();
+            let mut turn = None;
             egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                 for note in &guide.notes {
                     ui.label(match lang {
@@ -418,23 +569,35 @@ fn draw_guide(
                 }
                 if !guide.keys.is_empty() {
                     ui.separator();
-                    // two columns now, not three: the key and what it does in the one language
-                    egui::Grid::new("guide-keys")
-                        .num_columns(2)
-                        .spacing(style.key_spacing)
-                        .striped(true)
-                        .show(ui, |ui| {
-                            for row in &guide.keys {
-                                ui.label(
-                                    egui::RichText::new(&row.keys).monospace().color(keycol).strong(),
-                                );
-                                ui.label(match lang {
-                                    GuideLang::En => &row.en,
-                                    GuideLang::Ja => &row.ja,
-                                });
-                                ui.end_row();
-                            }
-                        });
+                    // **the table is in one place at a time** (F7): here, or in the small window,
+                    // and the checkbox is what moves it. The same list twice on one screen is
+                    // what the split was for getting rid of.
+                    let mut in_a_window = guide.keys_window;
+                    if ui
+                        .checkbox(
+                            &mut in_a_window,
+                            match lang {
+                                GuideLang::En => KEYS_TOGGLE_EN,
+                                GuideLang::Ja => KEYS_TOGGLE_JA,
+                            },
+                        )
+                        .changed()
+                    {
+                        turn = Some(in_a_window);
+                    }
+                    match guide.keys_window {
+                        true => {
+                            ui.label(
+                                egui::RichText::new(match lang {
+                                    GuideLang::En => KEYS_ELSEWHERE_EN,
+                                    GuideLang::Ja => KEYS_ELSEWHERE_JA,
+                                })
+                                .weak(),
+                            );
+                        }
+                        // two columns, not three: the key and what it does in the one language
+                        false => key_table(ui, &guide, &style, "guide-keys"),
+                    }
                 }
                 ui.separator();
                 ui.label(
@@ -445,6 +608,9 @@ fn draw_guide(
                     .weak(),
                 );
             });
+            if let Some(on) = turn {
+                turn_the_keys_window(&mut guide, &mut settings, on);
+            }
             if let Some(which) = chose {
                 guide.lang = which;
                 // remembered where the save file is kept: the next run of this game, in this
@@ -495,6 +661,37 @@ mod tests {
         assert_eq!(spaced.note_spacing, 12.0);
         assert_eq!(spaced.key_spacing, KEY_SPACING, "the pair is not in the store");
         assert_eq!(GuideStyle { key_spacing: [1.0, 2.0], ..GuideStyle::default() }.key_spacing, [1.0, 2.0]);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// **The small window is on unless the player turned it off** (F7, the author's decision), and
+    /// what they chose comes back out of the store as a flag rather than as a measurement.
+    #[test]
+    fn the_keys_window_is_on_and_the_store_can_turn_it_off() {
+        let path = std::env::temp_dir().join("games-shell-guide-keys-test.txt");
+        let _ = std::fs::remove_file(&path);
+        fn read(path: &std::path::Path) -> Result<String, String> {
+            std::fs::read_to_string(path).map_err(|e| e.to_string())
+        }
+        fn write(path: &std::path::Path, text: &str) -> Result<(), String> {
+            std::fs::write(path, text).map_err(|e| e.to_string())
+        }
+        assert!(GuideStyle::default().keys_window, "three games, on");
+        assert!(Guide::default().keys_window);
+
+        let mut settings = crate::Settings::load(&path, "a test", read, write);
+        let mut style = GuideStyle::default();
+        style.read_from(&settings);
+        assert!(style.keys_window, "a store nobody has written leaves it on");
+
+        settings.set(KEYS_WINDOW_KEY, "0");
+        style.read_from(&settings);
+        assert!(!style.keys_window);
+        settings.set(KEYS_WINDOW_KEY, "1");
+        style.read_from(&settings);
+        assert!(style.keys_window);
+        assert_eq!(style.keys_margin, KEYS_MARGIN, "and the corner it starts in is untouched");
 
         let _ = std::fs::remove_file(&path);
     }
