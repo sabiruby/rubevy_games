@@ -288,7 +288,7 @@ because the script optimises the module in place):
 
 **After F7** (2026-09-22, the same machine and the same binaryen, optimised column only):
 Battle **35,273,838** (+9,092, +0.026%), the garden **36,047,112** (+9,112, +0.025%), Factory
-**35,767,480** (+99,370, +0.28%). The nine kilobytes the two older games pay are the shared
+**35,767,618** (+99,508, +0.28%). The nine kilobytes the two older games pay are the shared
 crate's — the guide's second window and the camera's zoom keys, and **the re-cut font**, which is
 5,112 bytes larger (417 glyphs against 396: the palette's Japanese and the four arrows). Factory's
 hundred kilobytes are its own: the palette, the ghost, the next step and the nine checks.

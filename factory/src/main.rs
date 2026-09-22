@@ -385,6 +385,11 @@ fn main() {
             // do not write one at all: they write the order a click turns into (`build::Order`),
             // which is the message that carries what was meant.
             .add_message::<WorldClick>()
+            // **and the window's own messages**, for the same reason and with the same shape
+            // (F7): the checks forge a `CursorMoved` to say where the mouse is, and a message
+            // nobody has registered is a system that will not start. `WindowPlugin` registers it
+            // where there is a window; here there is none and the writer writes into the dark.
+            .add_message::<bevy::window::WindowEvent>()
             .insert_resource(Headless { until: seconds })
             .add_systems(Update, stop_when_over);
         }
@@ -3075,7 +3080,9 @@ fn f7_checks(
     map: Res<Map>,
     grid: Res<Grid>,
     ore: Res<Ore>,
-    snap: Res<draw::SnapZoom>,
+    // **`SnapZoom` is the window's too** — a headless run has no camera to round — so it is an
+    // `Option` like the rest of them, and this system's `--` line is what a run without it says
+    snap: Option<Res<draw::SnapZoom>>,
     mut windows: Query<(Entity, &mut Window)>,
     mut pointed: MessageWriter<bevy::window::WindowEvent>,
     mut orders: MessageWriter<build::Order>,
@@ -3091,7 +3098,8 @@ fn f7_checks(
         Some(home),
         Some(controls),
         Some(step),
-    ) = (keys, guide, ghost, eye.view.take(), eye.home.take(), eye.controls.take(), step)
+        Some(snap),
+    ) = (keys, guide, ghost, eye.view.take(), eye.home.take(), eye.controls.take(), step, snap)
     else {
         say("--  ", "the palette, the ghost and the zoom were not driven (this run has no window)");
         test.step = REBUILD_THE_WORLD_CHECK;
