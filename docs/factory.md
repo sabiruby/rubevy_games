@@ -72,12 +72,37 @@ or Japanese:
 | `R` | turn what is in hand a quarter turn anticlockwise — **a machine has no direction**, so with one in hand it does nothing and says why (nothing goes in or out of a machine but through an arm) |
 | click | build it, or take it away |
 | click an inserter with an inserter in hand | **open its script in the panel** |
-| drag, wheel, `WASD`, `Home` | the camera |
+| drag, wheel, `WASD`, `+` `-`, `Home` | the camera. The wheel zooms **about the mouse**; `+` and `-` do the same thing about the middle of the window, and the Build panel has the same two as buttons with the zoom written between them |
 | `H` `?` | the guide, English and Japanese |
 | `F1` `F2` | the editor, the VM panel |
 | `F5` `F9` | write the factory down, read it back |
 | `P` | **the whole factory stands still** — the belts, the arms and the scripts. Building and editing go on, because looking at a jammed line and laying the belt it wanted is what a pause is for |
 | Ctrl+Enter, Ctrl+S | apply what is in the editor, write it to its file |
+
+![The Build panel, the ghost, the next step and the keys](factory-palette.png)
+
+**What is in hand is on the screen** (F7, after the author played the published page and said
+that none of it was). Three things say it, and all three are drawn from the declarations rather
+than from a list kept beside them:
+
+* **the Build panel** — a row for each of the things the digits hold, with the tile of the sheet
+  it is really drawn with, its name and its key. Clicking a row and pressing its digit are the
+  same door (`build::take_in_hand`), what is in hand is the row that is lit, and the line under
+  the rows says which way round it will go and turns it.
+* **the ghost** — the tile under the mouse, drawn as what is about to be built: a belt shows the
+  corner it *would* be once its neighbours are read, an arm faces the way it will swing, a
+  machine shows its whole footprint, and it is red where the click would be refused — the same
+  rule the click obeys (`build::would_refuse`), so a green ghost is never followed by a refusal.
+  It goes while the mouse is over a panel.
+* **the next step** — one line at the foot of the panel, the next thing to do and nothing else:
+  a miner on ore, a belt away from it, a chest at the end, a machine beside the belt, an arm in
+  the gap. It is counted off the grid, so it follows the factory rather than a tutorial's idea of
+  it; once all five are standing it becomes the control stage's own sentence ("gear 12 / 60").
+
+**The keys are a window of their own.** `H` is the paragraphs, and the key table stands in a
+small window in the corner — on by default, draggable, and what you choose is remembered
+(`guide_keys_window` in `factory.settings.txt`, a `localStorage` key in a page). It is
+`games_shell`'s, so the garden and Battle have it too.
 
 **Opening an arm needs no mode and no key.** A click on a tile that already has an inserter cannot
 have meant "build an inserter", so it means "show me this one" — and building a new one opens it
@@ -553,11 +578,30 @@ puts that number back to its default.
 # Factory: what the game remembers. Delete a line for the default.
 camera_half_height=150
 camera_snap_zoom=1
+camera_notches_per_key=1
 window_width=1600
 window_height=900
 script_budget=39000
 script_frame_time_ms=8
+palette_icon_scale=2
+palette_margin=8
+ghost_alpha=0.5
+guide_keys_window=1
 ```
+
+**F7's four are the panel and the ghost.** `palette_icon_scale` is a whole number because pixel
+art is drawn at a whole multiple, and 2 is the smallest that is taller than the text beside it;
+`ghost_alpha` is a half and **nobody has measured where "about to be" stops looking like "there"**
+— which is why it is a setting and why this sentence does not invent a reason for it.
+`guide_keys_window` is the one of them a *player* writes, by clearing the checkbox in the guide or
+shutting the small window: it is `games_shell`'s, so the same line in `garden.settings.txt` or
+`sabibots.settings.txt` does the same thing.
+
+**The zoom rounds to a whole number of screen pixels per pixel of the art**, and until F7 that
+quietly ate a single notch: a tenth is smaller than the step from 3:1 to 4:1, so the rounding put
+the view back where it started and `+`, `-` and one notch of the wheel did nothing at all. A zoom
+the rounding would undo now moves a **whole** step the way it was asked, over a ladder with 1:1
+in the middle of it; "whole map" takes the step that holds the map rather than the nearest one.
 
 **`script_budget` is the one number here that came out of an instrument.** rubevy's default is
 200,000 and this game says 39,000 instead, by rubevy's own three steps: the scripts run **9,800

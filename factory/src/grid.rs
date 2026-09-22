@@ -401,30 +401,35 @@ impl Flow {
             let t = t as usize;
             let Some(building) = grid.at(t) else { continue };
             let out = building.dir;
-            if building.what != What::Belt {
-                self.came_in[t] = out;
-                continue;
-            }
-            let mut sides = Vec::new();
-            let mut straight = false;
-            for side in Dir::ALL {
-                let Some(n) = grid.step_from(t, side) else { continue };
-                let feeding = grid
-                    .at(n)
-                    .is_some_and(|b| feeds(b) && b.dir == side.back());
-                if !feeding {
-                    continue;
-                }
-                if side.back() == out {
-                    straight = true;
-                } else if side.back() != out.back() {
-                    sides.push(side.back());
-                }
-            }
-            self.came_in[t] = match (straight, sides.len()) {
-                (false, 1) => sides[0],
+            self.came_in[t] = match building.what {
+                What::Belt => Flow::where_it_comes_in(grid, t, out),
                 _ => out,
             };
+        }
+    }
+
+    /// **The rule itself, for one tile** — and it is a function rather than the body of the loop
+    /// above because F7 asks it about a belt that **is not there yet**: the ghost under the mouse
+    /// is drawn as the corner it would be, and that is this same answer about a hypothetical
+    /// belt. Nothing in here reads the tile itself; it is a fact about the neighbours.
+    pub fn where_it_comes_in(grid: &Grid, at: usize, out: Dir) -> Dir {
+        let mut sides = Vec::new();
+        let mut straight = false;
+        for side in Dir::ALL {
+            let Some(n) = grid.step_from(at, side) else { continue };
+            let feeding = grid.at(n).is_some_and(|b| feeds(b) && b.dir == side.back());
+            if !feeding {
+                continue;
+            }
+            if side.back() == out {
+                straight = true;
+            } else if side.back() != out.back() {
+                sides.push(side.back());
+            }
+        }
+        match (straight, sides.len()) {
+            (false, 1) => sides[0],
+            _ => out,
         }
     }
 }

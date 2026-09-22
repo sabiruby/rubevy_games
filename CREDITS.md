@@ -132,7 +132,7 @@ above has a single CJK character in it:
 
 | file | what it is |
 |---|---|
-| `crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf` | 81,480 bytes: Noto Sans JP pinned to `wght=400` and subset to the characters the three guides use — 396 glyphs, re-cut for Factory's guide (F5) |
+| `crates/games-shell/assets/fonts/NotoSansJP-Guide.subset.ttf` | 86,592 bytes: Noto Sans JP pinned to `wght=400` and subset to the characters the three guides use — 417 glyphs, re-cut for Factory's guide (F5) and again for its Build panel and arrows (F7) |
 | `crates/games-shell/assets/fonts/OFL.txt` | its licence |
 
 The source font is 9,589,900 bytes; what is in each binary is 0.85% of that. `tools/subset-font.sh`

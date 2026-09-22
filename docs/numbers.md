@@ -108,6 +108,8 @@ S3 の時点で既に `CameraControls`（Resource、`Settings` の `camera_*` 7 
 | `KEYS_PER_SECOND` | `camera.rs:88` | 0.9 | ● | 同上 `camera_keys_per_second` | (e) | **不明**（箱庭の `PAN_PER_SECOND` の書き写し。箱庭側に記録が無い） |
 | `CLICK_SLOP` | `camera.rs:93` | 6.0 | ● | 同上 `camera_click_slop` | (e) | *理由のみ*「a few pixels」（箱庭 `window.rs` の同名の数と同じ） |
 | `CameraControls::bounds` | `camera.rs:153` | `None` | ● | `CameraControls`（`Settings` には出さない） | (e) | **導出**: 世界の端はゲームしか知らないので既定を持たない |
+| `NOTCHES_PER_KEY`（**F7**） | `camera.rs` | 1.0 | ● | `CameraControls::notches_per_key`、`camera_notches_per_key` | (e) | **導出**: `+` / `-` の 1 押しはホイールの 1 ノッチ。同じことを頼む 2 つの道なので、4 ノッチ入って 4 押し出たら元に戻る。**キーは 2 つ目の刻みを作らない** |
+| `CameraKeys::zoom_in` / `zoom_out`（**F7**） | `camera.rs` | `Equal`+`NumpadAdd` / `Minus`+`NumpadSubtract` | ● | `CameraKeys`（`Settings` には出さない — キー名にはパーサが要る） | (e) | **導出**: winit は物理キーを返すので `Equal` は `+` が刷ってあるキーでもある。著者の指摘「ホイールしか無いとブラウザやトラックパッドでは気づけない」への答え |
 
 ### 1.3 エディタ（`crates/rubevy-egui/src/editor.rs`）
 
@@ -155,7 +157,10 @@ Resource を分けずにここへ置いた — 判定の system が Bevy の引�
 | 説明の窓の大きさ `SIZE` / `MAX_HEIGHT` | `guide.rs:202-203` | `[640, 820]`、最大 860 | ● | `GuideStyle`、`Settings` の `guide_width` / `guide_height` / `guide_max_height` | (c) | **引用**: G6 の絵で下が切れていたので広げた（`docs/plans/garden-plan.md`）。測った記録ではない。860 は **不明** |
 | キーの色 `KEYCOL` | `guide.rs:341` | `(255,226,150)` | ● | `GuideStyle::key_color`（`Settings` には出さない） | (c) | **不明** |
 | 説明の余白 3 つ（`NOTE_SPACING` / `KEY_SPACING`） | `guide.rs:207-211` | 6.0、`[14.0, 3.0]` | ● | `GuideStyle::note_spacing`（`Settings` の `guide_note_spacing`）／`key_spacing`（組なので鍵は無い） | (c) | **不明**。**S5b-2 で足した**（S5a の網に掛かっていなかった。`draw_guide` に直書き） |
-| 日本語フォント（部分集合） | `guide.rs:56` | 327 文字・62,780 バイト | | ビルド時（`tools/subset-font.sh`） | (a) 本文と一緒に切らないと字が欠ける | **測った**（`docs/plans/garden-plan.md`。9,589,900 → 62,780 バイト） |
+| **キーの小窓を出すか** `KEYS_WINDOW`（F7） | `guide.rs` | **true（3 本とも出す）** | ● | `GuideStyle::keys_window`、`Settings` の `guide_keys_window`。本文のトグルと小窓の ✕ が書き戻す | (c) | **著者の決定（2026-09-22）**「キーの小窓の既定は 3 本ともオン」 |
+| **小窓が角から離れる距離** `KEYS_MARGIN`（F7） | `guide.rs` | 8.0 | ● | `GuideStyle::keys_margin`、`guide_keys_margin` | (c) | **引用**: 3 本のどのパネルも縁から 8 px（HUD の `[8, 8]`、VM パネル、`EditorLayout::margin`） |
+| **小窓の大きさ**（F7） | — | **数を持たない** | | — | — | **導出**: `default_size` を渡さなければ egui が中身に合わせる。キーの表の幅は「いちばん長いキーと、その言語のいちばん長い行」で、そこに数を置けば必ずどちらかの言語で切れる。この crate が 1 度だけ大きさを選んだ `SIZE` が「引用であって測定ではない」と書いてあるのがその先例 |
+| 日本語フォント（部分集合） | `guide.rs:56` | **417 グリフ・86,592 バイト**（F7 で切り直した。F5 まで 327 文字・81,480 バイト） | | ビルド時（`tools/subset-font.sh`） | (a) 本文と一緒に切らないと字が欠ける | **測った**（`docs/plans/garden-plan.md`。9,589,900 → 62,780 バイト） |
 | HUD の予算バーの目盛 `BAR_TICKS` | `hud.rs:33` | 16 | ● | `HudStyle::bar_ticks`、`hud_bar_ticks` | (c) | **不明** |
 | HUD の字の大きさ `LINE_FONT` / `PANEL_FONT` | `hud.rs:37-38` | 15.0 / 13.0 | | `HudStyle`、`hud_line_font` / `hud_panel_font` | (c) | **不明** |
 | HUD の余白 `MARGIN` / `PADDING` / `ROW_GAP` | `hud.rs:42-44` | 8 / 8 / 3 | | `HudStyle`、`hud_margin`（余白と行間は app が渡す） | (c) | **不明** |
@@ -1143,12 +1148,12 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
 
 ---
 
-## 9. Factory（F0〜F5。2026-09-22）
+## 9. Factory（F0〜F7。2026-09-22）
 
 3 本目の crate `factory/` が持っている数の全部。節の番号が 8 の後ろなのは、
 §2〜§5 の番号が他の文書から参照されているため（renumber しない）。
 過程は `docs/worklog/2026-09-21-factory-F0.md`・`…-F1.md`・`…-F2.md`・`…-F3.md`・`…-F3a.md`・
-`docs/worklog/2026-09-22-factory-F4.md`・`…-F5.md`。
+`docs/worklog/2026-09-22-factory-F4.md`・`…-F5.md`・`…-F6.md`・`…-F7.md`。
 
 **方針**: 「遊びの数は Ruby、動かす側は `factory.settings.txt`、`const` は不変量だけ」
 （計画書 `plans/factory-plan.md` §2）。**F2 で data stage ができて、遊びの数は `ruby/data.rb` へ
@@ -1186,6 +1191,12 @@ S5a が `grep` で拾った母数は S5a の時点のもの。S5b-1・S5b-2・S5
 | `inserter_stagger` | 1.0（1 swing ぶん散らす） | **計測のつまみで、遊びの数ではない**。スクリプトが最初に見るまでの待ちを swing の何割に散らすか。0 にすると全台が同じフレームに起きる（`FACTORY_STAGGER` / `?stagger=0`）。既定の 1.0 は**導出**: 1 周期より広く散らしても意味がない。0 にすると何が起きるかは §9.8 |
 | `script_budget` | **39,000** | **測って決めた（2026-09-21）**: §9.8。rubevy の既定 200,000 を継がずにこのゲームが言う |
 | `script_frame_time_ms` | 8.0 | **rubevy の既定のまま**、ただし「そのままでよい」は測って言っている（§9.8）。0 以下は「時計の番人なし」という rubevy の意味でそのまま通す |
+| `palette_icon_scale` | **2**（= 32 px） | **導出（F7）**: ドット絵は整数倍で描く（地図と同じ規則。`draw::snapped`）。そのうち**行の文字より高い最小の倍率**が 2 — 素材は 16 px、egui の本文はこの 3 本では 13 px + 行間で、1 倍だと絵が語より低くなって箇条書きの点に見える |
+| `palette_margin` | 8 | **引用（F7）**: 3 本のどのパネルも縁から 8 px に立っている（HUD の `default_pos([8, 8])`、VM パネル、`EditorLayout::margin`、`GuideStyle::keys_margin`）。5 つ目の距離を作らない |
+| `ghost_alpha` | 0.5 | **不明（F7）**。半分。ゴーストは「もう在る」ではなく「これから建つ」と読めればよく、その境目は**測っていない**。だから設定にしてある（`PaletteStyle::ghost_alpha`）。もっともらしい理由は書かない |
+| `guide_keys_window` | **1（出す）** | **著者の決定（2026-09-22）**「キーの小窓の既定は 3 本ともオン」。0/1 の旗で、本文の中のトグルと小窓の ✕ が書き戻す（`Guide::show_keys_window`）。§1.5 にも同じ行がある — 共有 crate の鍵なので 3 本に効く |
+| `guide_keys_margin` | 8 | **引用（F7）**: 上の `palette_margin` と同じ 8 |
+| `camera_notches_per_key` | **1.0** | **導出（F7）**: `+` / `-` の 1 押しはホイールの 1 ノッチ。キーとホイールは同じことを頼む 2 つの道なので、4 ノッチ入って 4 押し出たら元に戻る。共有 crate の鍵（§1.2）なので 3 本に効くが、`CameraPlugin` を使っているのは Factory だけ |
 
 `camera_*`（ズームの刻み、ドラッグの比、クリックの遊び）は共有 crate の 7 鍵をそのまま使う（§1.2）。
 ただし **`camera_half_height` は 3 つとも地図で調整される**（F3a、`main::point_the_camera_at_the_map`）:
@@ -1252,6 +1263,8 @@ F2a がその言い方は片方にしか当たっていないと直し（`ore_pe
 | `factory/src/main.rs` | `PANEL_WAIT_FRAMES` | 6 | **導出（F3）**: パネルを動かす判定が待つものは 3 段で、いちばん遠いのは「VM がプログラムを 1 本多く持つこと」＝ボタンから 3 フレーム後（依頼が読まれる → 次のフレームで crew が差し替える → その次の頭で rubevy が読む）。6 はその倍。**秒ではなくフレーム**なのは待っているものが 1 フレームに 1 回起きるから（S7 の規則）。1 フレームで書いていたときは窓で通りブラウザで落ちた |
 | `factory/src/main.rs` | `CONTROL_CHECKS` | `31..40` | **段の番号であって閾値ではない**（F4）: 判定は 2 つのシステムに分かれていて（Bevy の system は引数 16 個までで `selftest` がちょうど 16 個だった）、この範囲の step のあいだ `control_checks` が run を持つ |
 | `factory/src/main.rs` | `F5_CHECKS` / `WINDOW_CHECKS` | `40..50` / `50..60` | **段の番号であって閾値ではない**（F5、`CONTROL_CHECKS` と同じ理由）: 判定は 4 つのシステムに分かれた。`WINDOW_CHECKS` の側は窓のあるときだけ動く（`Editor`・`Guide`・`Paused`・カメラの 4 つが `Option`） |
+| `factory/src/main.rs` | `F7_CHECKS` | `60..80` | **段の番号であって閾値ではない**（F7、`CONTROL_CHECKS` と同じ理由）: 5 つ目のシステム。判定は 50 → 60 → 47 の順に歩き、終わりの番号は `F7_CHECKS.end` になった |
+| `factory/src/main.rs` | 判定がマウスを置く 2 点 | 窓の **中央** と **左下から 1/20** | **導出（F7）**: 点ではなく窓に対する割合。PC は 1600×900、**ページはキャンバス次第**（Playwright は 1280×720）で、820 px の点は 720 px の窓の外だった（最初の browser 走行が FAIL で言った）。中央はどの窓でもパネルが無く、左下から 1/20 は palette の行の上（palette の角は窓の大きさによらず縁から 8 px） |
 | `factory/src/main.rs` | `REBUILD_THE_WORLD_CHECK` | **47** | **順番であって閾値ではない**（F5）: 「`data.rb` を読み直して世界を組み直す」判定は判定の**いちばん最後**でなければならない — 判定自身の工場を道連れにするので。数そのものは `F5_CHECKS` の中の空いている step |
 | `factory/src/main.rs` | `CAMERA_WAIT_FRAMES` | 600 | **導出（F5）**: 「勝つとカメラが動く」判定が待つのは、判定自身の線が箱にもう 1 つ入れること（掘り 1 回 + ベルト 4 タイル）で、それを窓の走行のフレームレートでフレーム数にしたもの。**上限であって所要時間ではない** — カメラが動いたフレームで通る |
 | `factory/src/main.rs` | `CHECK_SLACK` | 2.0 | **導出**: 判定は「ゲーム自身の数が言う所要時間」を条件の上限に使う。2 倍は、前後 1 フレームの粒度と、1/60 秒でないブラウザのフレームのぶん。実測は 3.0 秒に対して 2.5 秒、3.5 秒に対して 3.5 秒、2.5 秒に対して 2.8 秒 |
@@ -1461,6 +1474,30 @@ F3 が 39,000 を決めたあと、**F4 の control stage と F5 の `Held` へ�
 egui は窓のあるときだけ動く。窓の側が VM の命令数を増やすことはない（パネルは
 `ScriptWorld::last_frame()` を読むだけ）ので、予算の話としてはこれで足りる。
 窓とページのフレームの長さのほうは `?stress` の行が言う（`verification/factory-on-a-real-gpu.md`）。
+
+### 9.9 F7 が足した数（2026-09-22）
+
+著者が公開版を触って挙げた 6 点への答え。**遊びの数は 1 つも足していない** — 窓は遊びを持たない。
+
+| 分類 | 足したもの | 件数 |
+|---|---|---|
+| 動かす側 (c) | `palette_icon_scale`・`palette_margin`・`ghost_alpha`（factory）、`guide_keys_window`・`guide_keys_margin`・`camera_notches_per_key`（**共有 crate なので 3 本に効く**） | 6 |
+| 判定と計測の器 (d) | `F7_CHECKS`（`60..80`）、判定がマウスを置く 2 点（窓に対する割合） | 2 |
+| 色（設定には出さない。3 本の流儀） | `PaletteStyle::can` / `cannot`（ゴーストの 2 つの色み） | 2 |
+| 不変量 (a) | `Z_GHOST` = 3.0（ゴーストは全部の上） | 1 |
+| **数を持たないと決めたもの** | キーの小窓の大きさ（egui が中身に合わせる。§1.5） / ゴーストの届く範囲（マウスのタイル 1 枚） | — |
+
+**出どころが「不明」なのは 1 つだけ**: `ghost_alpha` の 0.5。「もう在る」と「これから建つ」の
+境目は測っていないので、半分から始めて設定に置き、そう書いた。
+
+**ズームの刻みが飲み込まれていた件**（F7 が判定で見つけた）。1 ノッチは 1/10（`ZOOM_PER_NOTCH`）、
+整数倍ズームの隣どうしの差は 1/3（3:1 と 4:1）。だから `draw::snap_zoom` の丸めが 1 ノッチを
+**元の値に戻していた** — `+` / `-` は 1 度も効かず、ホイールも 1 ノッチずつでは効かなかった
+（速く回すと 1 フレームに複数ノッチ届くので効いた）。直しは**新しい数ではない**:
+丸めが打ち消すときは「頼まれた向きに整数倍を 1 段」動かす（`rung` / `half_height_of` /
+`step_the_zoom`。1:1 を真ん中に置いた梯子で、0 と −1 の段は無い）。
+「地図全体」も**いちばん近い段ではなく地図が入る段**を採る — 近いほうを採ると
+1 列ぶんはみ出したまま「全体」と言うことになる。
 
 ---
 

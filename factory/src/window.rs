@@ -120,6 +120,25 @@ pub fn follow_the_orders(
     }
 }
 
+/// **What a key is called on the screen** (F7), for the palette's rows and the next step's
+/// sentence. Only the keys [`crate::build::what_the_digits_hold`] hands out are asked about, so
+/// the fall-back is the enum's own name rather than a table of a hundred.
+pub fn key_word(key: KeyCode) -> String {
+    match key {
+        KeyCode::Digit0 => "0".into(),
+        KeyCode::Digit1 => "1".into(),
+        KeyCode::Digit2 => "2".into(),
+        KeyCode::Digit3 => "3".into(),
+        KeyCode::Digit4 => "4".into(),
+        KeyCode::Digit5 => "5".into(),
+        KeyCode::Digit6 => "6".into(),
+        KeyCode::Digit7 => "7".into(),
+        KeyCode::Digit8 => "8".into(),
+        KeyCode::Digit9 => "9".into(),
+        other => format!("{other:?}"),
+    }
+}
+
 /// `F1` opens and shuts the editor, `F2` the VM panel, and `P` stops the world — the two other
 /// games' keys, unchanged, because a player who has seen one of them has learned these.
 ///

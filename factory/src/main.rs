@@ -39,6 +39,7 @@ mod inserters;
 mod items;
 mod guide_text;
 mod machines;
+mod palette;
 mod platform;
 mod save;
 mod window;
@@ -384,6 +385,11 @@ fn main() {
             // do not write one at all: they write the order a click turns into (`build::Order`),
             // which is the message that carries what was meant.
             .add_message::<WorldClick>()
+            // **and the window's own messages**, for the same reason and with the same shape
+            // (F7): the checks forge a `CursorMoved` to say where the mouse is, and a message
+            // nobody has registered is a system that will not start. `WindowPlugin` registers it
+            // where there is a window; here there is none and the writer writes into the dark.
+            .add_message::<bevy::window::WindowEvent>()
             .insert_resource(Headless { until: seconds })
             .add_systems(Update, stop_when_over);
         }
@@ -467,7 +473,26 @@ fn main() {
                     .run_if(on_message::<RebuildTheWorld>)
                     .run_if(resource_exists::<Map>),
             )
-            .add_systems(bevy_egui::EguiPrimaryContextPass, window::draw_hud)
+            // **F7's two windows and the ghost.** The palette is drawn in the same pass as the
+            // HUD and after it, so that a frame's picture is one pass; the ghost is a chunk like
+            // the floor and the buildings and is written where they are.
+            .add_systems(bevy_egui::EguiPrimaryContextPass, (window::draw_hud, palette::draw_palette).chain())
+            .insert_resource({
+                let mut style = palette::PaletteStyle::default();
+                style.read_from(&settings);
+                style
+            })
+            .init_resource::<palette::Palette>()
+            .init_resource::<palette::NextStep>()
+            .init_resource::<draw::Ghost>()
+            .add_systems(
+                Update,
+                (
+                    palette::work_out_the_next_step,
+                    draw::draw_ghost.after(CameraSet::Drive).run_if(resource_exists::<draw::Chunks>),
+                )
+                    .run_if(the_factory_is_up),
+            )
             .init_resource::<items::Pool>()
             .init_resource::<draw::Animation>()
             .insert_resource(draw::SnapZoom(
@@ -743,7 +768,7 @@ fn main() {
             // resources a headless run does not have at all
             .add_systems(
                 Update,
-                (file_checks, window_checks)
+                (file_checks, window_checks, f7_checks)
                     .chain()
                     // **before the keys are read**, because a forged press is only a press for
                     // the frame it was made in: `ButtonInput::clear` wipes `just_pressed` at the
@@ -751,6 +776,10 @@ fn main() {
                     // pressed nothing at all
                     .before(window::panel_keys)
                     .before(games_shell::guide::guide_keys)
+                    // **and before the camera reads them** (F7), which is the same rule again:
+                    // `+` and `-` are the shared camera's keys, and a press forged after
+                    // `CameraSet::Drive` has run is a press nothing ever sees
+                    .before(CameraSet::Drive)
                     .before(build::orders)
                     .before(reread_the_data_stage)
                     .before(control::follow_the_rewrites)
@@ -1187,6 +1216,7 @@ fn draw_the_new_world(
     mut asked: MessageReader<RebuildTheWorld>,
     chunks: Option<Res<draw::Chunks>>,
     mut pool: ResMut<items::Pool>,
+    mut palette: ResMut<palette::Palette>,
 ) {
     if asked.read().next().is_none() {
         return;
@@ -1194,8 +1224,14 @@ fn draw_the_new_world(
     if let Some(chunks) = chunks {
         commands.entity(chunks.floor).despawn();
         commands.entity(chunks.buildings).despawn();
+        // **the ghost is the size of the biggest machine**, and a new `data.rb` may declare a
+        // bigger one; a `TilemapChunk` cannot be resized, so it goes with the other two (F7)
+        commands.entity(chunks.ghost).despawn();
         commands.remove_resource::<draw::Chunks>();
     }
+    // and the palette's pictures: the sheet is the same file, but `sprite:` may now name another
+    // tile of it, and a cached picture would be the old one
+    palette.forget();
     // the item sprites are borrowed from a pool that is refilled as the lanes need it; the
     // entities are still good, but the pool is rebuilt with the rest so that nothing is holding a
     // sprite for an item that is not there any more
@@ -1654,6 +1690,12 @@ const F5_CHECKS: std::ops::Range<u8> = 40..50;
 /// the reason there was a third: the window is six resources nothing else here takes.
 const WINDOW_CHECKS: std::ops::Range<u8> = 50..60;
 
+/// **F7's**, which answer the six things the author said after playing the published game: the
+/// palette, the ghost, the next step, the keys in their own window and the zoom. A fifth system
+/// for the reason there was a fourth — a Bevy system may take sixteen parameters — and, like the
+/// fourth, every resource it takes is a window's.
+const F7_CHECKS: std::ops::Range<u8> = 60..80;
+
 /// **How long the camera check waits for the win it asked for.** It is the checks' own delivery —
 /// a dig and four tiles of belt — as frames at the frame rate a windowed run keeps, which is the
 /// same arithmetic `games_shell::checks` does for everything else that waits on a condition. It
@@ -1783,6 +1825,7 @@ fn selftest(
     if CONTROL_CHECKS.contains(&test.step)
         || F5_CHECKS.contains(&test.step)
         || WINDOW_CHECKS.contains(&test.step)
+        || F7_CHECKS.contains(&test.step)
     {
         return;
     }
@@ -2775,8 +2818,9 @@ fn file_checks(
             );
             // **the last check of all**, which is why the world may be taken away by it: the
             // step past every range is the one `selftest`'s own `_` arm says the checks are
-            // finished in
-            test.step = WINDOW_CHECKS.end;
+            // finished in. It is F7's end since F7, because the ranges are walked 50 → 60 → 47
+            // and the rebuild is what the last of them hands the run to.
+            test.step = F7_CHECKS.end;
         }
         _ => {}
     }
@@ -2959,6 +3003,346 @@ fn window_checks(
                     view.focus.x, view.focus.y, test.camera_before.x, test.camera_before.y, control.won
                 ),
             );
+            // **F7's are next door** ([`f7_checks`]), and they hand the run back to the rebuild
+            test.step = F7_CHECKS.start;
+        }
+        _ => {}
+    }
+}
+
+/// **The palette, the ghost, the next step, the keys' window and the zoom** — F7, and the fifth
+/// system of checks for the reason there was a fourth.
+///
+/// Every one of these is about something a *player* could not see before, so every one of them
+/// is measured where a player would look: what is in [`build::Hand`] after the palette's own
+/// door, what the ghost's chunk holds, what [`palette::NextStep`] says with a miner taken away,
+/// what the store holds after the keys' window is turned off, and where the camera is after the
+/// keys and after the button's arithmetic.
+/// **Where the checks put the mouse**, as fractions of the window rather than as two points: a
+/// PC opens 1600 by 900 and **a page is whatever the canvas is** (Playwright's is 1280 by 720),
+/// and a check that pointed at 820 pixels down a 720-pixel window pointed outside it — which is
+/// what the browser run said the first time this was written.
+///
+/// The middle is clear of every panel in both (the HUD is the top left, the palette the bottom
+/// left, the guide's keys the bottom right, the editor the right, and the editor is shut by the
+/// check before this one); a twentieth in from the bottom left is the palette's own rows,
+/// whose corner is eight pixels from that corner whatever the window.
+fn over_the_map(size: Vec2) -> Vec2 {
+    size * 0.5
+}
+fn over_the_palette(size: Vec2) -> Vec2 {
+    Vec2::new(size.x * 0.05, size.y * 0.95)
+}
+
+/// **A mouse, forged** — the pointer's `ButtonInput::press`. Both halves have to be told: the
+/// game asks the window where the cursor is (`Window::cursor_position`, which
+/// `set_cursor_position` writes) and bevy_egui builds egui's own pointer out of `CursorMoved`
+/// messages, so a check that wrote one and not the other would have the two disagreeing.
+fn point_the_mouse(
+    windows: &mut Query<(Entity, &mut Window)>,
+    pointed: &mut MessageWriter<bevy::window::WindowEvent>,
+    where_to: fn(Vec2) -> Vec2,
+) {
+    let Some((entity, mut window)) = windows.iter_mut().next() else { return };
+    let at = where_to(Vec2::new(window.width(), window.height()));
+    let was = window.cursor_position();
+    window.set_cursor_position(Some(at));
+    pointed.write(bevy::window::WindowEvent::CursorMoved(bevy::window::CursorMoved {
+        window: entity,
+        position: at,
+        delta: was.map(|from| at - from),
+    }));
+}
+
+/// **The camera, as one parameter** — a Bevy system may take sixteen and [`f7_checks`] wanted
+/// seventeen. The three are always there together or not at all (a headless run has none of
+/// them), which is what makes them one thing to ask for.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct TheEye<'w> {
+    view: Option<ResMut<'w, games_shell::camera::CameraView>>,
+    home: Option<Res<'w, games_shell::camera::CameraHome>>,
+    controls: Option<Res<'w, CameraControls>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn f7_checks(
+    mut test: ResMut<SelfTest>,
+    // an `Option` each, for the reason `window_checks` has them: a headless run has no window,
+    // no keys, no ghost and no palette at all
+    keys: Option<ResMut<ButtonInput<KeyCode>>>,
+    guide: Option<ResMut<games_shell::Guide>>,
+    ghost: Option<Res<draw::Ghost>>,
+    mut eye: TheEye,
+    mut settings: ResMut<games_shell::Settings>,
+    mut hand: ResMut<Hand>,
+    step: Option<Res<palette::NextStep>>,
+    data: Res<Data>,
+    map: Res<Map>,
+    grid: Res<Grid>,
+    ore: Res<Ore>,
+    // **`SnapZoom` is the window's too** — a headless run has no camera to round — so it is an
+    // `Option` like the rest of them, and this system's `--` line is what a run without it says
+    snap: Option<Res<draw::SnapZoom>>,
+    mut windows: Query<(Entity, &mut Window)>,
+    mut pointed: MessageWriter<bevy::window::WindowEvent>,
+    mut orders: MessageWriter<build::Order>,
+) {
+    if !F7_CHECKS.contains(&test.step) {
+        return;
+    }
+    let (
+        Some(mut keys),
+        Some(mut guide),
+        Some(ghost),
+        Some(mut view),
+        Some(home),
+        Some(controls),
+        Some(step),
+        Some(snap),
+    ) = (keys, guide, ghost, eye.view.take(), eye.home.take(), eye.controls.take(), step, snap)
+    else {
+        say("--  ", "the palette, the ghost and the zoom were not driven (this run has no window)");
+        test.step = REBUILD_THE_WORLD_CHECK;
+        return;
+    };
+    match test.step {
+        // ---- the palette is the digits' list, and a row is the same door as a key -------------
+        60 => {
+            let rows = build::what_the_digits_hold(&data);
+            // every row has a picture except the wrecking ball, which is the absence of one
+            let pictured = rows
+                .iter()
+                .filter(|(_, what)| what.is_none() || draw::picture_of(*what, &data).is_some())
+                .count();
+            // **the door a row clicks through** is the one a digit presses through
+            // (`build::take_in_hand`), so this is what a click on the chest's row does
+            build::take_in_hand(&mut hand, Some(What::Chest), &data);
+            let took = hand.what == Some(What::Chest);
+            say(
+                if took && pictured == rows.len() && rows.len() >= 5 { "ok  " } else { "FAIL" },
+                &format!(
+                    "the palette has a row for each of the {} things the digits hold, each with its picture ({pictured}), and a row puts it in hand (the {})",
+                    rows.len(),
+                    build::word_for(hand.what, &data)
+                ),
+            );
+            build::take_in_hand(&mut hand, Some(What::Inserter), &data);
+            hand.dir = Dir::East;
+            // **the mouse is driven the way the keys are** (F7): a container parks the real
+            // pointer wherever it likes — over the HUD, or off the window altogether — and the
+            // ghost is about where the mouse is, so the check puts it somewhere. A forged
+            // `CursorMoved` is what bevy_egui reads, and `set_cursor_position` is what the game
+            // reads, so both halves are told.
+            point_the_mouse(&mut windows, &mut pointed, over_the_map);
+            test.waited = 0;
+            test.step = 61;
+        }
+        // ---- the ghost is what is in hand, the way round it is in hand ------------------------
+        61 => {
+            let drawn = ghost.drawn;
+            test.waited += 1;
+            if drawn.is_none() && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            let right = drawn.is_some_and(|d| Some(d.tile) == draw::picture_of(hand.what, &data))
+                && drawn.is_some_and(|d| d.orientation == draw::facing(hand.dir));
+            say(
+                if right { "ok  " } else { "FAIL" },
+                &format!(
+                    "the ghost on the tile under the mouse is what is in hand, the way round it is held: {:?} of the sheet, a quarter turn {:?} ({})",
+                    drawn.map(|d| d.tile),
+                    drawn.map(|d| d.orientation),
+                    ghost.at.map(|t| format!("{}, {}", t.x, t.y)).unwrap_or_else(|| "nowhere".into())
+                ),
+            );
+            test.before = drawn.map(|d| d.orientation as usize).unwrap_or(usize::MAX);
+            build::turn_the_hand(&mut hand, &data);
+            test.waited = 0;
+            test.step = 62;
+        }
+        62 => {
+            let drawn = ghost.drawn;
+            let turned = drawn.map(|d| d.orientation as usize) != Some(test.before);
+            test.waited += 1;
+            if !turned && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if turned { "ok  " } else { "FAIL" },
+                &format!(
+                    "and R turns the ghost with the hand: a quarter turn {:?} where it was {}",
+                    drawn.map(|d| d.orientation),
+                    test.before
+                ),
+            );
+            // **a miner needs ore under it**, which is the one refusal a player meets every game
+            build::take_in_hand(&mut hand, Some(What::Miner), &data);
+            test.waited = 0;
+            test.step = 63;
+        }
+        63 => {
+            // the ghost says whether it was refused, and the rule is asked again here: the two
+            // have to be the same answer, because the click obeys the second one
+            // (`build::would_refuse`)
+            let should = ghost
+                .at
+                .map(|tile| build::would_refuse(&grid, &ore, &data, tile, hand.what).is_some());
+            let agree = should == Some(ghost.refused);
+            test.waited += 1;
+            if !agree && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if agree { "ok  " } else { "FAIL" },
+                &format!(
+                    "the ghost is red exactly where the click would be refused: a miner on {} is {}",
+                    ghost.at.map(|t| format!("{}, {}", t.x, t.y)).unwrap_or_else(|| "nowhere".into()),
+                    if ghost.refused { "refused" } else { "allowed" }
+                ),
+            );
+            test.waited = 0;
+            test.step = 64;
+        }
+        // ---- and it goes when the mouse is over a panel -----------------------------------------
+        64 => {
+            point_the_mouse(&mut windows, &mut pointed, over_the_palette);
+            test.waited = 0;
+            test.step = 65;
+        }
+        65 => {
+            let gone = ghost.at.is_none();
+            test.waited += 1;
+            if !gone && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if gone { "ok  " } else { "FAIL" },
+                &format!(
+                    "and it goes while the mouse is over a panel, so that a click on the palette never lays a belt behind it ({})",
+                    ghost.at.map(|t| format!("{}, {}", t.x, t.y)).unwrap_or_else(|| "0, 0".into())
+                ),
+            );
+            point_the_mouse(&mut windows, &mut pointed, over_the_map);
+            test.waited = 0;
+            test.step = 66;
+        }
+        // ---- the next step follows the factory ------------------------------------------------
+        66 => {
+            // take every miner away: a miner is the first thing the line needs, so whatever the
+            // step was saying, it has to go back to saying that
+            let mut taken = 0;
+            for &at in grid.built() {
+                if grid.at(at as usize).map(|b| b.what) == Some(What::Miner) {
+                    orders.write(build::Order {
+                        at: grid.tile_of(at as usize),
+                        what: None,
+                        dir: Dir::East,
+                    });
+                    taken += 1;
+                }
+            }
+            test.before = taken;
+            test.waited = 0;
+            test.step = 67;
+        }
+        67 => {
+            let saying =
+                step.of(games_shell::guide::GuideLang::En).unwrap_or_default().to_string();
+            let asks_for_a_miner = saying.contains("miner");
+            test.waited += 1;
+            if !asks_for_a_miner && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            say(
+                if asks_for_a_miner && test.before > 0 { "ok  " } else { "FAIL" },
+                &format!(
+                    "the next step follows the factory: with its {} miners taken away it says \"{saying}\" again",
+                    test.before
+                ),
+            );
+            test.waited = 0;
+            test.step = 68;
+        }
+        // ---- the keys' own window is remembered ------------------------------------------------
+        68 => {
+            let was = guide.keys_window;
+            guide.show_keys_window(false, Some(&mut settings));
+            let off = !guide.keys_window
+                && settings.get(games_shell::guide::KEYS_WINDOW_KEY) == Some("0");
+            guide.show_keys_window(true, Some(&mut settings));
+            let on = guide.keys_window
+                && settings.get(games_shell::guide::KEYS_WINDOW_KEY) == Some("1");
+            say(
+                if was && off && on { "ok  " } else { "FAIL" },
+                &format!(
+                    "the keys stand in a small window of their own ({} rows), on by default, and turning it off is remembered in the store",
+                    guide.keys.len()
+                ),
+            );
+            test.step = 69;
+        }
+        // ---- the zoom, by the keys and by the buttons -------------------------------------------
+        69 => {
+            test.camera_before = Vec2::new(view.half_height, home.half_height);
+            keys.press(KeyCode::Equal);
+            test.waited = 0;
+            test.step = 70;
+        }
+        70 => {
+            keys.release(KeyCode::Equal);
+            let nearer = view.half_height < test.camera_before.x;
+            test.waited += 1;
+            if !nearer && test.waited < PANEL_WAIT_FRAMES {
+                return;
+            }
+            let after_the_key = view.half_height;
+            // and out, past where it may go: the limit is the wheel's, because the keys and the
+            // buttons go through the wheel's door (`games_shell::camera::zoom_by`). How many
+            // presses cross the whole range is the range itself, in notches, and one more.
+            let far = home.half_height * controls.zoom_out_limit;
+            let across = (controls.zoom_out_limit / controls.zoom_in_limit).ln()
+                / controls.zoom_per_notch.ln();
+            for _ in 0..(across as u32 + 1) {
+                games_shell::camera::zoom_the_view(
+                    &mut view,
+                    -controls.notches_per_key,
+                    &home,
+                    &controls,
+                );
+            }
+            let stopped = (view.half_height - far).abs() < 1e-2;
+            say(
+                if nearer && stopped { "ok  " } else { "FAIL" },
+                &format!(
+                    "+ brings the camera nearer ({after_the_key:.0} world units of {:.0}) and - stops where the wheel stops ({:.0})",
+                    test.camera_before.x, view.half_height
+                ),
+            );
+            test.step = 71;
+        }
+        71 => {
+            // **the button's own arithmetic**: the whole map, as notches through the one door
+            let height =
+                windows.iter().next().map(|(_, w)| w.height()).unwrap_or(1.0).max(1.0);
+            let wanted = palette::the_whole_map(&map, height, snap.0);
+            let notches = games_shell::camera::notches_to(view.half_height, wanted, &controls);
+            games_shell::camera::zoom_the_view(&mut view, notches, &home, &controls);
+            // what is claimed is what the button says: all of the map is in the window
+            let whole = view.half_height * 2.0 + 1e-3 >= map.span().max_element();
+            // and Home puts it back where it started, which is the key the shared crate has had
+            // since S3 and the guide now names
+            keys.press(KeyCode::Home);
+            say(
+                if whole { "ok  " } else { "FAIL" },
+                &format!(
+                    "\"whole map\" pulls back until all {} by {} tiles are in the window ({:.0} world units of {:.0})",
+                    map.tiles.x,
+                    map.tiles.y,
+                    view.half_height * 2.0,
+                    map.span().max_element()
+                ),
+            );
+            test.waited = 0;
             test.step = REBUILD_THE_WORLD_CHECK;
         }
         _ => {}
