@@ -63,6 +63,7 @@ sabiruby・rubevy・playground の件もここに集める（3 つの repo に�
 | 09-22 F7 | **`+`/`-` を箱庭に足さなかった**（`CameraPlugin` を使っているのは Factory だけで、計画の「3 本に届く」は間違いだった） | F7 は著者が Factory について言った 6 点への答え。箱庭の camera を触ると 3 本目の段階が 1 本目の遊びを変える | 箱庭に足すなら `garden/src/main.rs` の `Eye`。`shared-crate-plan.md` §7 に 1 行 |
 | 09-22 F7 | ズームの丸めが 1 ノッチを飲み込んでいた件を、**新しい数を作らずに**直した（丸めが打ち消すときは整数倍を 1 段動かす） | 整数倍ズームでは「次の整数倍」が**次の見え方そのもの**なので、刻みの大きさを決める数は要らない | `factory/src/draw.rs` の `snap_zoom` / `step_the_zoom` |
 | 09-22 F6 | `stress:` の行に地図の大きさと GPU のアダプタ名、`control.rb` / `inserter.rb` のコンパイルの ms を 1 行 | ms は何を何で描いていたかが無ければ意味がない。ページではコンパイルの間キャンバスが白い | `factory/src/main.rs` の `watch_the_frames`、`control::compile` / `inserters::compile` |
+| 09-27 rel02 | games を rubevy 0.2（ブランチ `rel02-b`）と SabiRuby 0.7 に上げた。`Cargo.toml` は `sabiruby "0.7"`・`sabiruby-compiler "0.4"`・`sabiruby-serde "0.3"`、rubevy は git のまま。**`Cargo.lock` はコミットしていない**（手元の path への patch で書かれた lock だから）。Battle の HUD の前置きの引き算を消した（rubevy 0.2 の `ScriptStats` が引いて渡す）。Factory の `Arms::waiting` → `Held` は F5-0b（`de0eae9`）で済んでいたので何もしていない | 公開前の SabiRuby と rubevy を指す lock を main に入れると、patch の無い clone と Pages が建たない | 公開後に `cargo update -p rubevy -p sabiruby` で lock を作り直してコミット（`pages.yml` は lock のバージョンから playground のタグを作る） |
 
 ## B. 著者にしか決められないもの（公開後に）
 

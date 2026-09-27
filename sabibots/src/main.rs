@@ -3457,20 +3457,16 @@ fn update_hud(
         let stats = world.stats(script);
         panel.spent = stats.instructions.saturating_sub(robot.last_instructions);
         robot.last_instructions = stats.instructions;
-        panel.at = match stats.location {
-            Some((file, line)) if line > robot.prelude_lines => {
-                format!("{file}:{}", line - robot.prelude_lines)
-            }
-            Some((_, line)) => format!("prelude.rb:{line}"),
+        // rubevy 0.2 hands both in the robot's own lines: the prelude is taken off and the frames
+        // standing in it are left out (`ScriptStats`, from the `Script::with_prelude_lines` the
+        // robot was started with), so there is nothing to subtract here any more
+        panel.at = match &stats.location {
+            Some((file, line)) => format!("{file}:{line}"),
             None => String::new(),
         };
         // the line of the robot's own file that is waiting, even when the brain is standing
         // inside the DSL (which it is whenever it waits for a scan)
-        robot.own_line = stats
-            .frames
-            .iter()
-            .find(|(_, line)| *line > robot.prelude_lines)
-            .map(|(_, line)| line - robot.prelude_lines);
+        robot.own_line = stats.frames.first().map(|(_, line)| *line);
         let spent = panel.spent as f32;
         robot.cpu = robot.cpu * keep + spent * (1.0 - keep);
         for h in robot.heat.iter_mut() {
