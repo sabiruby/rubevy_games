@@ -139,38 +139,25 @@ class Robot
   # that sticks. A handler that wants the wheel for longer than one frame still has to say so and
   # the brain has to leave it alone: the scout does it with an instance variable, which is shared
   # because both tasks are the same object's.
-  # How many handlers one robot may have. There is a limit because of how a handler is called:
-  # see `run_handler`.
-  ON_SLOTS = 4
-
+  #
+  # A handler is the block itself, run with `instance_exec` on the robot. Since SabiRuby 0.7 a task
+  # can wait inside `instance_exec` (SabiRuby `docs/design/wait-anywhere.md`), so the block's first
+  # `act` parks the task like any other line. Until 0.6 it could not — the block ran in a nested
+  # run loop, and each block had to be made into a method of its own and called by a name written
+  # out in the source, which is what capped a robot at four handlers. There is no cap now.
   def self.handlers
     @handlers ||= []
   end
 
   def self.on(event, &block)
     raise "on needs a block" if block.nil?
-    slot = handlers.size
-    raise "a robot may have #{ON_SLOTS} handlers at most" if slot >= ON_SLOTS
-    # the block becomes an ordinary method of this robot's class, which is what lets it wait
-    define_method("__handler_#{slot}", &block)
-    handlers << [event.to_sym, slot]
+    handlers << [event.to_sym, block]
     block
   end
 
-  # Runs handler `slot` with the arguments the game published.
-  #
-  # The `case` is not decoration. `instance_exec`, `send` and `Method#call` all run the block in
-  # a nested run loop of the VM, and a task cannot be parked across one: the first `act` inside
-  # such a block dies with "blocking pop cannot be called from within a C function boundary".
-  # An ordinary call written out in Ruby is a frame in this task, which can wait — so the name
-  # has to be there in the source, and that is what fixes the number of slots.
-  def run_handler(slot, args)
-    case slot
-    when 0 then __handler_0(*args)
-    when 1 then __handler_1(*args)
-    when 2 then __handler_2(*args)
-    when 3 then __handler_3(*args)
-    end
+  # Runs one handler with the arguments the game published.
+  def run_handler(block, args)
+    instance_exec(*args, &block)
   end
 
   # === a library of helpers, in plain Ruby ======================================
@@ -294,7 +281,7 @@ def start_handlers(bot, klass, tasks)
   # last in the frame is what makes it stick (docs/sabiruby-battle.md, *Two tasks, one tank*).
   priority = here.priority + 20
   priority = 255 if priority > 255
-  klass.handlers.each do |event, slot|
+  klass.handlers.each do |event, handler|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "#{klass.robot_name}-#{event}", priority: priority) do
       begin
@@ -305,7 +292,7 @@ def start_handlers(bot, klass, tasks)
           # queue to wait on, and a handler that never pops it is not parked for a frame
           Rubevy.ask("handler", :begin)
           begin
-            bot.run_handler(slot, args)
+            bot.run_handler(handler, args)
           rescue => e
             Rubevy.log "#{bot.name}: handler #{event}: #{e.class}: #{e.message}"
           ensure

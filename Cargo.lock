@@ -2591,6 +2591,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "js-sys",
+ "rubevy",
  "rubevy-egui",
  "sabiruby-compiler",
  "wasm-bindgen",

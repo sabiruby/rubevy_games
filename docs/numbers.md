@@ -39,7 +39,7 @@ S4a で 2 つに割れた）、`garden/src/`、`sabibots/src/`、`garden/ruby/**
 
 1. **0 と 1**（初期化 `= 0`、`+ 1`、`.max(1)`、`unwrap_or(0)`、`% 2` の類）。
 2. **添字とスロット番号**（`when 0 then __handler_0`、`args.get(i + 1)`、`sorted[len / 2]`、`TEAMS[team.min(len - 1)]`、`test.step = 7`)。
-   スロットの**個数**（`ON_SLOTS`、`EVERY_SLOTS`、`REGS_FRAMES`）は入れた — 上限だから。
+   スロットの**個数**（`ON_SLOTS`、`EVERY_SLOTS`、`REGS_FRAMES`）は入れた — 上限だから（`ON_SLOTS` と `EVERY_SLOTS` は 2026-09-27 に無くなった）。
 3. **単位換算と数学の定数**（`* 255.0`、`/ 1000.0`、`1.0 / 60.0`、`Math::PI / 2`、`TAU`、`(1u64 << 24)`)。
 4. **配列の長さとしての自明な数**（`[Species; 2]`、`[(f32, f32, f32); 4]`、`[f64; 3]`、`Vec<[f32; 2]>`）。
    ただし**その長さが上限として効くもの**（`TEAMS` の 4、`Brains` の 3 枠）は入れた。
@@ -106,7 +106,7 @@ S3 の時点で既に `CameraControls`（Resource、`Settings` の `camera_*` 7 
 | `ZOOM_OUT_LIMIT` | `camera.rs:68` | 110/42 | ● | 同上 `camera_zoom_out_limit` | (e) | **不明**（同上） |
 | `DRAG_PER_PIXEL` | `camera.rs:80` | 1.0 | ● | 同上 `camera_drag_per_pixel` | (e) | **導出**: 「カーソルの下の点がカーソルの下に居続ける」から 1.0（箱庭の出どころ不明の 0.0016 は引き継がなかった） |
 | `KEYS_PER_SECOND` | `camera.rs:88` | 0.9 | ● | 同上 `camera_keys_per_second` | (e) | **不明**（箱庭の `PAN_PER_SECOND` の書き写し。箱庭側に記録が無い） |
-| `CLICK_SLOP` | `camera.rs:93` | 6.0 | ● | 同上 `camera_click_slop` | (e) | *理由のみ*「a few pixels」（箱庭 `window.rs` の同名の数と同じ） |
+| `CLICK_SLOP` | `camera.rs` | 6.0 | ● | 同上 `camera_click_slop` | (e) | *理由のみ*「a few pixels」（箱庭 `window.rs` の同名の数と同じ）。2026-09-27 post-02 から `rubevy::pointer::DEFAULT_CLICK_SLOP` を指す（値は同じ 6.0、rubevy の 1 か所に）|
 | `CameraControls::bounds` | `camera.rs:153` | `None` | ● | `CameraControls`（`Settings` には出さない） | (e) | **導出**: 世界の端はゲームしか知らないので既定を持たない |
 | `NOTCHES_PER_KEY`（**F7**） | `camera.rs` | 1.0 | ● | `CameraControls::notches_per_key`、`camera_notches_per_key` | (e) | **導出**: `+` / `-` の 1 押しはホイールの 1 ノッチ。同じことを頼む 2 つの道なので、4 ノッチ入って 4 押し出たら元に戻る。**キーは 2 つ目の刻みを作らない** |
 | `CameraKeys::zoom_in` / `zoom_out`（**F7**） | `camera.rs` | `Equal`+`NumpadAdd` / `Minus`+`NumpadSubtract` | ● | `CameraKeys`（`Settings` には出さない — キー名にはパーサが要る） | (e) | **導出**: winit は物理キーを返すので `Equal` は `+` が刷ってあるキーでもある。著者の指摘「ホイールしか無いとブラウザやトラックパッドでは気づけない」への答え |
@@ -562,7 +562,7 @@ S5a の網は `const` と名前のある名前に寄っていた。**S5b-5 で�
 
 | 名前 | 位置 | 値 | 毎F | 今変えられるか | 分類案 | 出どころ |
 |---|---|---|---|---|---|---|
-| `EVERY_SLOTS` | `world_prelude.rb:258` | 4 | | Ruby | (a) `__every_0..3` が書き出されている数と一致していないと壊れる | **引用**: `world_prelude.rb:243-257`（`ON_SLOTS` と同じ理由） |
+| ~~`EVERY_SLOTS`~~ | — | — | | — | — | **無くなった**（2026-09-27 post-02）。SabiRuby 0.7 で `instance_exec` の中で待てるようになり、名前を書き出す `case` が要らなくなった |
 | 購読キューの長さ | `world_prelude.rb:140` のコメント | 64（rubevy 側） | ● | rubevy | — | **引用**（rubevy の数） |
 
 ### 3.3 `ruby/prelude.rb`（生き物の DSL）
@@ -571,7 +571,7 @@ S5a の網は `const` と名前のある名前に寄っていた。**S5b-5 で�
 |---|---|---|---|---|---|---|
 | `CRUISE` | `prelude.rb:76` | 2.0 | | Ruby | **(e)** | *理由のみ* 「A creature may ask for more speed than its body has」`prelude.rb:73-75`。2.0 は**不明** |
 | `DASH` | `prelude.rb:77` | 9.0 | | Ruby | **(e)** | **不明** |
-| `ON_SLOTS` | `prelude.rb:357` | 7 | | Ruby | **(a)** `run_handler` に書き出されている名前の数。減らすとハンドラが黙る | **引用**: `prelude.rb:340-356`（「a budget anybody measured ではない」と明記） |
+| ~~`ON_SLOTS`~~ | — | — | | — | — | **無くなった**（2026-09-27 post-02）。`EVERY_SLOTS` と同じ理由 |
 | ハンドラの優先度差 | `prelude.rb:457` | 本体 −20 | | Ruby | **(e)** | *理由のみ* 「a smaller number is a higher priority: a handler is looked at before the brain」`prelude.rb:456` |
 | 起動直後の `sleep` | `prelude.rb:438` | 0.05 秒 | | Ruby | **(e)** | **測った**: この行が無いと、セーブから読んだウサギが空の `@memory` を読む（`prelude.rb:430-437`） |
 | `wander` の既定の振れ | `prelude.rb:261` | 0.25 | | Ruby | **(e)** | **不明** |
@@ -737,7 +737,7 @@ S5a の網は `const` と名前のある名前に寄っていた。**S5b-5 で�
 |---|---|---|---|---|---|
 | ~~`UNSET`~~ | — | — | **無くなった**（S5b-2）。`act(throttle: nil)` の `nil` が `Request::num` に `None` で届く | — | — |
 | ~~`SHOT_FAST` / `SHOT_SLOW`~~ | `prelude.rb:68-75`（`Model`） | 試合の `shot_fast` / `shot_slow` | **`matches/*.rb` の `numbers:`** | **(e)** | 写しではなくなった（§7-2 の決着） |
-| `ON_SLOTS` | `prelude.rb:144` | 4 | Ruby | **(a)** `run_handler` に書き出されている名前の数 | **引用**: 箱庭の `ON_SLOTS` と同じ理由 |
+| ~~`ON_SLOTS`~~ | — | — | — | — | **無くなった**（2026-09-27 post-02）。箱庭の `ON_SLOTS` と同じ理由 |
 | ハンドラの優先度差 | `prelude.rb:295-296` | 本体 +20、上限 255 | Ruby | (a) 255 は mruby-task の優先度の上限 | **不明**（+20 の理由） |
 | `steer_to` の利得 | `prelude.rb:189` | ×2.0 | Ruby | **(e)** | **不明** |
 | `aimed?` の許容 | `prelude.rb:211` | 0.12 rad | Ruby | **(e)** | **不明** |

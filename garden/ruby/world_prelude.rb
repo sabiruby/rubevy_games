@@ -180,6 +180,8 @@ class World
   # world that stands still, which is also what a `world.rb` that will not compile leaves behind
   # (the game says so on the HUD rather than refusing to start).
   def each_frame(dt)
+    block = self.class.each_frame_block
+    instance_exec(dt, &block) unless block.nil?
   end
 
   # Called by `run_world` at the head of every frame, before `each_frame`.
@@ -193,11 +195,12 @@ class World
 
   # === the DSL ===============================================================
   #
-  # `each_frame` is `define_method` and not `instance_exec`, for the same reason `on` is in
-  # `prelude.rb`: `instance_exec` runs the block in a nested run loop of the VM, and a task cannot
-  # be parked across one — the first `Rubevy.ask` inside such a block would die with "blocking pop
-  # cannot be called from within a C function boundary". A method defined from the block is an
-  # ordinary Ruby frame, which can wait.
+  # The blocks `each_frame` and `every` take are run with `instance_exec` on the world. Since
+  # SabiRuby 0.7 a task can wait inside `instance_exec` (SabiRuby `docs/design/wait-anywhere.md`),
+  # so a `Rubevy.ask` or a `tell` in them parks the task like any other line. Until 0.6 it could
+  # not — the block ran in a nested run loop — and each block had to be made into a method with
+  # `define_method` and called by a name written out in the source, which is what capped a world
+  # at four `every`s. There is no cap now.
 
   # How long one turn of the sun takes, in seconds. The sun itself is still drawn by Rust
   # (`day_night`), so this is handed over once, at the start, as `garden.rules(day_length:)`.
@@ -208,8 +211,11 @@ class World
 
   def self.each_frame(&block)
     raise "each_frame needs a block" if block.nil?
-    define_method(:each_frame, &block)
+    @each_frame_block = block
   end
+
+  # the block `each_frame` was given, or nil for a world that gave none
+  def self.each_frame_block = @each_frame_block
 
   # **Something that happens now and then rather than every frame** (W2).
   #
@@ -227,18 +233,10 @@ class World
   # being read back from a file — is a frame these tasks do not live through: a season with
   # eleven seconds left when the world stops has eleven seconds left when it starts again. A
   # wall-clock timer would have turned the season over while the player was reading the HUD.
-  #
-  # `define_method`, not the block called directly, for the same reason `each_frame` is
-  # (`instance_exec` and `Method#call` run the block in a nested run loop of the VM, and a task
-  # cannot park across one — so the first `tell` inside such a block would die). The name is in
-  # the source, which is what fixes the slots.
   def self.every(seconds, &block)
     raise "every needs a block" if block.nil?
     raise "every wants a number of seconds" unless seconds.to_f > 0.0
-    slot = timers.size
-    raise "a world may have #{EVERY_SLOTS} `every` blocks at most" if slot >= EVERY_SLOTS
-    define_method("__every_#{slot}", &block)
-    timers << [seconds.to_f, slot]
+    timers << [seconds.to_f, block]
     block
   end
 
@@ -246,21 +244,10 @@ class World
     @timers ||= []
   end
 
-  # The turn of one `every`, called by its task. It is written out like `run_handler` in
-  # `prelude.rb`, and for the same reason: `send` would be a nested run loop.
-  def run_timer(slot, n)
-    case slot
-    when 0 then __every_0(n)
-    when 1 then __every_1(n)
-    when 2 then __every_2(n)
-    when 3 then __every_3(n)
-    end
+  # The turn of one `every`, called by its task.
+  def run_timer(block, n)
+    instance_exec(n, &block)
   end
-
-  # How many `every`s one world may have. Four, because the names have to be written out above
-  # and the world this game ships with uses one: it is room to play with in the editor, not a
-  # budget anybody measured.
-  EVERY_SLOTS = 4
 end
 
 # `world do … end` — a subclass of World with the block evaluated in it, remembered as the one
@@ -388,7 +375,7 @@ end
 # the right time. What a higher priority would buy is that the timer runs before this frame's
 # `each_frame` rather than after it, and there is no rule here that would notice.
 def start_timers(being, klass)
-  klass.timers.map do |seconds, slot|
+  klass.timers.map do |seconds, block|
     Task.new(name: "world-every-#{seconds}") do
       turn = 0
       loop do
@@ -397,7 +384,7 @@ def start_timers(being, klass)
         break unless $world_being.equal?(being)
         turn += 1
         begin
-          being.run_timer(slot, turn)
+          being.run_timer(block, turn)
         rescue => e
           # a timer that raises is one `every` block going quiet, not the world stopping: the
           # grass keeps growing while the author fixes the season

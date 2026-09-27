@@ -363,7 +363,7 @@ end
 
 | what | who says it |
 |---|---|
-| `on(event) { \|*args\| … }` in the class body | registers it; up to `Robot::ON_SLOTS` (4) per robot |
+| `on(event) { \|*args\| … }` in the class body | registers it; as many per robot as it likes (the cap of four went with SabiRuby 0.7) |
 | `ScriptWorld::publish(Some(entity), "hit", …)` in `move_bullets` | the game, on every hit that lands |
 | the payload | `[by, damage]` — `by` is the attacker's name as the scoreboard writes it (`2 red/hunter`), `damage` the hit points taken |
 
@@ -479,17 +479,19 @@ more than half a second must have had as many handler tasks end as it registered
 
 ### What it cost to get right
 
-`instance_exec`, `send` and `Method#call` all run the block in a **nested run loop** of the VM, and
-a task cannot be parked across one: the first `act` inside a block called that way dies with
-`blocking pop cannot be called from within a C function boundary`. So `on` turns the block
-into an ordinary method of the robot's class (`define_method`), and `run_handler` calls it by a
-name written out in the source — which is why there is a fixed number of slots
-(`Robot::ON_SLOTS`, 4).
+Until SabiRuby 0.6, `instance_exec`, `send` and `Method#call` all ran the block in a **nested run
+loop** of the VM, and a task could not be parked across one: the first `act` inside a block called
+that way died with `blocking pop cannot be called from within a C function boundary`. So `on`
+turned the block into an ordinary method of the robot's class (`define_method`), and
+`run_handler` called it by a name written out in the source — which is why there was a fixed
+number of slots (`Robot::ON_SLOTS`, 4).
 
-That limit is about the nested run loop and nothing else. The two other things this cost — a
-child task with no entity, and a handler task nobody ended — were rubevy's to fix and rubevy has
-fixed them; the slots stay, because a `case` over names written in the source is still the only
-way to call a block and be able to park inside it.
+SabiRuby 0.7 runs `instance_exec` in a frame of the calling task rather than a nested loop
+(SabiRuby `docs/design/wait-anywhere.md`), so a task can wait inside it. `run_handler` is now
+`instance_exec(*args, &block)`, and the slots and their cap are gone
+(`docs/worklog/2026-09-27-post-02.md`). The two other things the handlers once cost — a child
+task with no entity, and a handler task nobody ended — were rubevy's to fix and rubevy fixed them
+before that.
 
 ## The DSL
 

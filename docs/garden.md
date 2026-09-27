@@ -670,15 +670,16 @@ toll: `garden.nearest` — the one question the *game* answers — does still co
 `Rubevy.find` still walks every entity in the world however quickly it comes back. What got cheap
 is the waiting, not the walking.
 
-**The handlers are tasks of their own.** `on(:touched) { … }` becomes an ordinary method
-(`define_method`) and a `Task.new` that waits on `Rubevy.subscribe(:touched)`; `run_creature`
-starts one per handler before the behaviour. The block has to become a *named method* rather than
-being run with `instance_exec`, because `instance_exec`, `send` and `Method#call` all go through a
-nested run loop of the VM and a task cannot be parked across one — the first `act` inside such a
-block dies with "blocking pop cannot be called from within a C function boundary"
-(`docs/worklog/2026-09-16-reflex.md`). That is also why there is a fixed number of slots: G1 had
-five and the beetle used all five, so G2 made it six, which is one `when` in `run_handler` and one
-`__handler_5`.
+**The handlers are tasks of their own.** `on(:touched) { … }` is kept as a block, and a
+`Task.new` waits on `Rubevy.subscribe(:touched)` and runs it with `instance_exec` on the creature;
+`run_creature` starts one per handler before the behaviour. Until SabiRuby 0.6 the block had to
+become a *named method* (`define_method`) instead, because `instance_exec`, `send` and
+`Method#call` went through a nested run loop of the VM and a task could not be parked across one —
+the first `act` inside such a block died with "blocking pop cannot be called from within a C
+function boundary" (`docs/worklog/2026-09-16-reflex.md`). That was also why there was a fixed
+number of slots (five in G1, six in G2, seven by W2). SabiRuby 0.7 lets a task wait inside
+`instance_exec` (its `docs/design/wait-anywhere.md`), and the slots went
+(`docs/worklog/2026-09-27-post-02.md`).
 
 **The wheel.** Both tasks are the same object's, so they share instance variables — and they share
 the body, which is the problem. **A component write is still last-writer-wins and still lands at

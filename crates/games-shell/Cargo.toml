@@ -15,6 +15,10 @@ bevy_egui.workspace = true
 # S4a: `ViewInsets` — the pixels a panel covers, which both cameras here read. It belongs to the
 # crate whose editor writes it. The dependency goes this way only.
 rubevy-egui.workspace = true
+# post-02: the mouse in world units — a press, a click, a drag and its drop — is rubevy's
+# (`rubevy::pointer`, since rubevy 0.2). The camera here adds it for its own camera and keeps only
+# what rubevy cannot know, which panel a press began over (`camera::WorldClicks`).
+rubevy = { workspace = true, features = ["pointer"] }
 
 # the Ruby compiler, which `platform::compile` and `platform::highlight` are on a PC —
 # both games already had it as a dependency of their own for exactly those two functions, so

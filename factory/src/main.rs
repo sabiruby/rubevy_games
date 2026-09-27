@@ -49,7 +49,7 @@ use std::path::PathBuf;
 use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
 use bevy::sprite_render::{TilemapChunk, TilemapChunkTileData};
-use games_shell::camera::{CameraControls, CameraPlugin, CameraSet, WorldClick};
+use games_shell::camera::{CameraControls, CameraPlugin, CameraSet, WorldClick, WorldGrab};
 use rubevy::{HoldRequests, RubevyPlugin, RubevySet, ScriptWorld};
 use rubevy_egui::{VmInspector, VmInspectorPlugin};
 
@@ -378,13 +378,15 @@ fn main() {
                 RubevyPlugin::default(),
             ))
             .init_asset::<Image>()
-            // **The click still exists here**, it is just that nobody writes one: `WorldClick`
-            // is registered by `CameraPlugin`, which a run with no window does not add, and
-            // without the message `build::clicks` would not even start. It is registered so
-            // that there is one code path for the mouse in both modes — and since F3 the checks
-            // do not write one at all: they write the order a click turns into (`build::Order`),
-            // which is the message that carries what was meant.
+            // **The click still exists here**, it is just that nobody writes one: rubevy's
+            // `WorldClick` and `WorldGrab` are registered by its `PointerPlugin`, which
+            // `CameraPlugin` adds and a run with no window does not, and without the messages
+            // `build::clicks` (which reads both, through `WorldClicks`) would not even start.
+            // They are registered so that there is one code path for the mouse in both modes —
+            // and since F3 the checks do not write one at all: they write the order a click turns
+            // into (`build::Order`), which is the message that carries what was meant.
             .add_message::<WorldClick>()
+            .add_message::<WorldGrab>()
             // **and the window's own messages**, for the same reason and with the same shape
             // (F7): the checks forge a `CursorMoved` to say where the mouse is, and a message
             // nobody has registered is a system that will not start. `WindowPlugin` registers it

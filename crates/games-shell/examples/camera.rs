@@ -10,7 +10,8 @@
 //! * **the panel covers pixels** ([`ViewInsets`]): tick its box and the floor slides out from
 //!   under it, which is the same arrangement sabibots' arena and its editor are in.
 //!
-//! A click writes a [`WorldClick`], and what this example does with it is what any game would do
+//! A click is rubevy's `WorldClick`, read through [`WorldClicks`] so that one begun over the
+//! panel is the panel's, and what this example does with it is what any game would do
 //! first — turn the world point into the square it landed on, which this crate has no opinion
 //! about.
 //!
@@ -21,7 +22,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use games_shell::camera::{CameraControls, CameraPlugin, CameraView, ViewInsets, WorldClick};
+use games_shell::camera::{CameraControls, CameraPlugin, CameraView, ViewInsets, WorldClicks};
 
 /// How wide one square of the floor is, in world units. The floor is a picture of the world's
 /// scale and nothing else, so this is the example's own number: something a `TILE`-sized thing
@@ -113,7 +114,7 @@ fn spawn_floor(mut commands: Commands) {
 
 /// The crate says where in the world the click was; which square that is, is the game's own
 /// arithmetic — here, one division.
-fn take_clicks(mut clicks: MessageReader<WorldClick>, mut last: ResMut<LastClick>) {
+fn take_clicks(mut clicks: WorldClicks, mut last: ResMut<LastClick>) {
     for click in clicks.read() {
         let tile = ((click.at.x / TILE).floor() as i32, (click.at.y / TILE).floor() as i32);
         info!("clicked {:.2}, {:.2} — square {:?}", click.at.x, click.at.y, tile);

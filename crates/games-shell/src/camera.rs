@@ -19,9 +19,13 @@
 //! * **A drag is decided when the button goes down.** One that began on the world stays the
 //!   camera's wherever the pointer travels, and one that began on a panel never becomes the
 //!   camera's however far it is dragged out of it.
-//! * **A press that let go where it went down was a click**, and anything further was a drag
-//!   ([`is_click`]). The click leaves as a [`WorldClick`] message carrying the world point that
-//!   was under the cursor; turning that into a tile, a robot or a creature is the game's.
+//! * **A press that let go where it went down was a click**, and anything further was a drag.
+//!   Since post-02 (2026-09-27) that is rubevy's `rubevy::pointer` and not this crate's: the
+//!   plugin adds `PointerPlugin::<PanCamera>`, which writes `WorldGrab`, `WorldClick`,
+//!   `WorldDrop` and `WorldMove` in world units through this camera. What is left here is the
+//!   one thing rubevy cannot know — **a press that began over a panel is the panel's** — which
+//!   [`WorldClicks`] takes off the clicks. Turning a click into a tile, a robot or a creature is
+//!   the game's.
 //!
 //! **Where the numbers are.** Every one of them is a field of [`CameraControls`], which a game
 //! can hand the plugin, write into at any time, or let a player change through
@@ -29,8 +33,10 @@
 //! here are the names of the defaults and nothing else; each one says in a line where its value
 //! came from, and where that is "the garden had it and nobody wrote down why", it says so.
 
+use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+pub use rubevy::pointer::{Pointer, PointerPlugin, WorldClick, WorldDrop, WorldGrab, WorldMove};
 // **What covers the window** is `rubevy-egui`'s, because the panel that writes it is
 // (`rubevy_egui::EditorPlugin`); a camera is only ever a reader of it (S4a). Re-exported so that
 // a game reaching for the camera's vocabulary finds it here, where it used to be defined.
@@ -88,9 +94,11 @@ pub const DRAG_PER_PIXEL: f32 = 1.0;
 pub const KEYS_PER_SECOND: f32 = 0.9;
 
 /// How far the mouse may travel between press and release and still be a click rather than a drag,
-/// in pixels. The garden's `CLICK_SLOP` (`garden/src/window.rs`), whose value has no recorded
-/// source beyond "a few pixels".
-pub const CLICK_SLOP: f32 = 6.0;
+/// in pixels. **rubevy's default** (`rubevy::pointer::DEFAULT_CLICK_SLOP`), which is the value this
+/// crate had and which came from the garden's `CLICK_SLOP` (`garden/src/window.rs`) with no
+/// recorded source beyond "a few pixels". [`CameraControls::click_slop`] is copied into
+/// [`Pointer::click_slop`] whenever it changes, so the setting a player has stays where it was.
+pub const CLICK_SLOP: f32 = rubevy::pointer::DEFAULT_CLICK_SLOP;
 
 /// **How much one press of the zoom keys is worth, in notches of the wheel** (F7).
 ///
@@ -362,11 +370,6 @@ pub fn zoom_about(
     view.focus += before - after;
 }
 
-/// Whether a press that went down at `down` and came up at `up` was a click rather than a drag.
-pub fn is_click(down: Vec2, up: Vec2, slop: f32) -> bool {
-    down.distance(up) <= slop
-}
-
 // ---------------------------------------------------------------------------------------------
 // The plugin
 // ---------------------------------------------------------------------------------------------
@@ -376,19 +379,53 @@ pub fn is_click(down: Vec2, up: Vec2, slop: f32) -> bool {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct PanCamera;
 
-/// **Somebody clicked a place in the world.** What is there is the game's question: this crate
-/// has no tiles, no robots and no creatures in it.
+/// **Somebody clicked a place in the world, and not a panel.** What is there is the game's
+/// question: this crate has no tiles, no robots and no creatures in it.
 ///
-/// It is written on the *release*, and only for a press that stayed within
-/// [`CameraControls::click_slop`] of where it went down and did not begin over a panel.
-#[derive(Message, Debug, Clone, Copy, PartialEq)]
-pub struct WorldClick {
-    /// Where in the world the cursor was.
-    pub at: Vec2,
-    /// Which button it was, so a game can give the other ones meanings of its own.
-    pub button: MouseButton,
-    /// Where on the screen it was, for a game that wants to open something next to the cursor.
-    pub cursor: Vec2,
+/// The clicks are rubevy's [`WorldClick`] (`rubevy::pointer`), written on the *release* for a
+/// press that stayed within [`Pointer::click_slop`] of where it went down. rubevy has no panels,
+/// so this reads its [`WorldGrab`]s as well and drops the click of a press that **began** over
+/// one — egui asked with both of its questions, as the camera asks (`drive_camera`). A system
+/// that wants clicks takes this instead of a `MessageReader<WorldClick>`.
+#[derive(SystemParam)]
+pub struct WorldClicks<'w, 's> {
+    grabs: MessageReader<'w, 's, WorldGrab>,
+    clicks: MessageReader<'w, 's, WorldClick>,
+    egui: Option<Res<'w, bevy_egui::input::EguiWantsInput>>,
+    panel: Local<'s, PanelPresses>,
+}
+
+impl WorldClicks<'_, '_> {
+    /// This frame's clicks on the world, in the order they were written.
+    pub fn read(&mut self) -> impl Iterator<Item = WorldClick> + '_ {
+        let over = self.egui.as_ref().is_some_and(|p| p.wants_pointer_input() || p.is_pointer_over_area());
+        for grab in self.grabs.read() {
+            self.panel.grab(grab.button, over);
+        }
+        let panel = &mut self.panel;
+        self.clicks.read().copied().filter(move |click| panel.keep(click.button))
+    }
+}
+
+/// Which buttons went down over a panel, for [`WorldClicks`]. A grab sets or clears its button, so
+/// the answer is always about the press under way.
+#[derive(Default, Debug)]
+pub struct PanelPresses(Vec<MouseButton>);
+
+impl PanelPresses {
+    fn grab(&mut self, button: MouseButton, over_a_panel: bool) {
+        self.0.retain(|b| *b != button);
+        if over_a_panel {
+            self.0.push(button);
+        }
+    }
+
+    /// Whether a click of `button` is the world's, which ends the press either way.
+    fn keep(&mut self, button: MouseButton) -> bool {
+        let before = self.0.len();
+        self.0.retain(|b| *b != button);
+        self.0.len() == before
+    }
 }
 
 /// **A 2D camera the player drives**: drag, wheel, walk, `Home`.
@@ -456,12 +493,17 @@ impl Plugin for CameraPlugin {
             .insert_resource(CameraView { focus: self.home.focus, half_height: self.home.half_height })
             .insert_resource(self.controls.clone())
             .init_resource::<ViewInsets>()
-            .add_message::<WorldClick>()
             .add_systems(Startup, spawn_camera);
+        // **the mouse in world units is rubevy's** (post-02): its four messages, through this
+        // camera. A game that added it already keeps its own.
+        if !app.is_plugin_added::<PointerPlugin<PanCamera>>() {
+            app.add_plugins(PointerPlugin::<PanCamera>::default());
+        }
         if self.from_settings {
             app.add_systems(PreStartup, settings_override);
         }
-        app.add_systems(Update, (drive_camera, report_clicks).in_set(CameraSet::Drive))
+        app.add_systems(PreUpdate, slop_to_the_pointer)
+            .add_systems(Update, drive_camera.in_set(CameraSet::Drive))
             .add_systems(PostUpdate, place_camera.in_set(CameraSet::Place));
     }
 }
@@ -609,31 +651,13 @@ fn drive_camera(
     };
 }
 
-/// A press that let go where it went down, as a point in the world.
-fn report_clicks(
-    controls: Res<CameraControls>,
-    view: Res<CameraView>,
-    insets: Res<ViewInsets>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    pointer: Option<Res<bevy_egui::input::EguiWantsInput>>,
-    windows: Query<&Window>,
-    mut clicked: MessageWriter<WorldClick>,
-    mut pressed_at: Local<Option<Vec2>>,
-) {
-    let egui_pointer = pointer
-        .is_some_and(|p| p.wants_pointer_input() || p.is_pointer_over_area());
-    let Some(window) = windows.iter().next() else { return };
-    let cursor = window.cursor_position();
-    let button = controls.keys.click_button;
-    if buttons.just_pressed(button) {
-        *pressed_at = if egui_pointer { None } else { cursor };
-    }
-    if buttons.just_released(button)
-        && let (Some(down), Some(up)) = (pressed_at.take(), cursor)
-        && is_click(down, up, controls.click_slop)
-    {
-        let lens = view.lens(Vec2::new(window.width(), window.height()), &insets);
-        clicked.write(WorldClick { at: lens.world_at(up), button, cursor: up });
+/// [`CameraControls::click_slop`] — where a game and a player's settings put it — into rubevy's
+/// [`Pointer`], whenever it changes. Before rubevy's system in the same schedule would be tidier
+/// and is not needed: the number only moves when somebody writes it, and a press is not made in
+/// the frame that happens.
+fn slop_to_the_pointer(controls: Res<CameraControls>, mut pointer: ResMut<Pointer<PanCamera>>) {
+    if controls.is_changed() {
+        pointer.click_slop = controls.click_slop;
     }
 }
 
@@ -771,15 +795,22 @@ mod tests {
         assert!((view.focus - stuck.focus).length() < 1e-4);
     }
 
+    /// **A press that began over a panel is the panel's**, all the way to its click — and only
+    /// that press: the next one, begun on the world, clicks. (The slop itself is rubevy's and
+    /// tested there.)
     #[test]
-    fn a_press_that_travelled_is_a_drag_and_not_a_click() {
-        let slop = controls().click_slop;
-        let down = Vec2::new(400.0, 300.0);
-        assert!(is_click(down, down, slop), "a press that did not move at all");
-        assert!(is_click(down, down + Vec2::new(3.0, 4.0), slop), "five pixels is still a click");
-        assert!(is_click(down, down + Vec2::new(6.0, 0.0), slop), "the slop itself is a click");
-        assert!(!is_click(down, down + Vec2::new(0.0, 6.1), slop), "past it is a drag");
-        assert!(!is_click(down, down + Vec2::new(60.0, 60.0), slop));
+    fn a_click_begun_over_a_panel_is_the_panels() {
+        let mut p = PanelPresses::default();
+        p.grab(MouseButton::Left, true);
+        assert!(!p.keep(MouseButton::Left), "began over the editor");
+        p.grab(MouseButton::Left, false);
+        assert!(p.keep(MouseButton::Left), "began on the world");
+        // one button over a panel says nothing about another
+        p.grab(MouseButton::Right, true);
+        p.grab(MouseButton::Left, false);
+        assert!(p.keep(MouseButton::Left));
+        assert!(!p.keep(MouseButton::Right));
+        assert_eq!(CLICK_SLOP, rubevy::pointer::DEFAULT_CLICK_SLOP, "the default is rubevy's");
     }
 
     #[test]

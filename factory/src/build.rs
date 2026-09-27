@@ -9,7 +9,8 @@
 //! # Why there is an [`Order`] between the click and the building
 //!
 //! There are two halves and F1 and F2 had them as one system. [`clicks`] turns a mouse — a
-//! [`WorldClick`], which is the shared crate's and carries a point in the world and nothing else
+//! `WorldClick`, which is rubevy's (`rubevy::pointer`, read through the shared crate's
+//! [`WorldClicks`] since post-02) and carries a point in the world and nothing else
 //! — together with what is in [`Hand`] into an order: **a tile, a thing, and a way round**.
 //! [`orders`] is the only thing that builds, and it knows nothing about a mouse or a hand.
 //!
@@ -28,7 +29,7 @@
 //! property of *checking*, not of building, and nothing a player does is affected by it.
 
 use bevy::prelude::*;
-use games_shell::camera::WorldClick;
+use games_shell::camera::WorldClicks;
 
 use crate::belts::Lanes;
 use crate::data::Data;
@@ -37,7 +38,7 @@ use crate::Map;
 
 /// **Build this here, facing this way** — or, where `what` is `None`, take away whatever is there.
 ///
-/// It is the game's own message and not [`WorldClick`], which is the shared crate's and cannot
+/// It is the game's own message and not `WorldClick`, which is rubevy's and cannot
 /// carry a tile or a building: this crate's vocabulary has no business in a camera. Everything
 /// that puts something on the map writes one of these — the mouse ([`clicks`]), the checks, and
 /// whatever F5's editor and a later blueprint want.
@@ -221,7 +222,7 @@ pub fn would_refuse(
 /// A click off the map is said and dropped — there is no tile to name in an order, and the
 /// sentence is the useful half of it.
 pub fn clicks(
-    mut clicked: MessageReader<WorldClick>,
+    mut clicked: WorldClicks,
     map: Res<Map>,
     hand: Res<Hand>,
     mut orders: MessageWriter<Order>,

@@ -42,7 +42,7 @@ pub use args::Args;
 pub use checks::CheckPace;
 pub use camera::{
     CameraControls, CameraHome, CameraKeys, CameraPlugin, CameraSet, CameraView, Lens, PanCamera,
-    WorldClick,
+    WorldClick, WorldClicks,
 };
 pub use guide::{Guide, GuideKey, GuideLang, GuideNote, GuidePlugin, GuideStyle};
 pub use hud::{Hud, HudPlugin, HudStyle, ScriptPanel};

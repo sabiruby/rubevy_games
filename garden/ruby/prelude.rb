@@ -343,19 +343,12 @@ class Creature
   # its own, the moment the game publishes the event — not on the next pass of `run`.
   # `run_creature` starts one task per handler before `run`.
   #
-  # It is the same shape SabiRuby Battle uses, and for the same reason: `instance_exec`, `send`
-  # and `Method#call` all run the block in a nested run loop of the VM, and a task cannot be
-  # parked across one — the first `act` inside such a block dies with "blocking pop cannot be
-  # called from within a C function boundary". An ordinary call written out in Ruby is a frame
-  # in this task, which can wait. So the names have to be in the source, and that is what fixes
-  # the number of slots (rubevy_games `docs/worklog/2026-09-16-reflex.md`).
-  #
-  # Seven since W2, which is what the beetle has: `night`, `day`, `touched`, `bumped`, `ate`,
-  # `mate` and — now that the world can declare things — `season`. The number is not a budget
-  # anybody measured, it is how many names are written out in `run_handler` below, and it goes up
-  # by one when a creature in this repository needs one more.
-  ON_SLOTS = 7
-
+  # It is the same shape SabiRuby Battle uses: the block itself, run with `instance_exec` on the
+  # creature. Since SabiRuby 0.7 a task can wait inside `instance_exec` (SabiRuby
+  # `docs/design/wait-anywhere.md`), so the block's first `act` parks the task like any other line.
+  # Until 0.6 it could not, and each block had to be made into a method and called by a name
+  # written out in the source, which is what capped a creature at seven handlers
+  # (rubevy_games `docs/worklog/2026-09-16-reflex.md`). There is no cap now.
   def self.handlers
     @handlers ||= []
   end
@@ -387,26 +380,15 @@ class Creature
 
   def self.on(event, &block)
     raise "on needs a block" if block.nil?
-    slot = handlers.size
-    raise "a creature may have #{ON_SLOTS} handlers at most" if slot >= ON_SLOTS
-    define_method("__handler_#{slot}", &block)
-    handlers << [event.to_sym, slot]
+    handlers << [event.to_sym, block]
     block
   end
 
   # A payload the game published: `Answer::Num` and `Answer::Entity` arrive as one value,
   # `Answer::List` as an Array, and a handler block writes the parameters it wants either way.
-  def run_handler(slot, payload)
+  def run_handler(block, payload)
     args = payload.is_a?(Array) ? payload : [payload]
-    case slot
-    when 0 then __handler_0(*args)
-    when 1 then __handler_1(*args)
-    when 2 then __handler_2(*args)
-    when 3 then __handler_3(*args)
-    when 4 then __handler_4(*args)
-    when 5 then __handler_5(*args)
-    when 6 then __handler_6(*args)
-    end
+    instance_exec(*args, &block)
   end
 
   # Both tasks are this same object's, so an instance variable is how the brain and a handler
@@ -481,14 +463,14 @@ def start_handlers(being, klass, tasks)
   # a smaller number is a higher priority: a handler is looked at before the brain
   priority = here.priority - 20
   priority = 0 if priority < 0
-  klass.handlers.each do |event, slot|
+  klass.handlers.each do |event, handler|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "#{klass.creature_name}-#{event}", priority: priority) do
       begin
         loop do
           args = queue.pop # parked here, costing nothing, until it happens
           begin
-            being.run_handler(slot, args)
+            being.run_handler(handler, args)
           rescue => e
             Rubevy.log "#{being.name}: handler #{event}: #{e.class}: #{e.message}"
           end

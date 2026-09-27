@@ -40,13 +40,11 @@
 class Control
   # === what the game publishes ================================================
 
-  # **How many `on` blocks one control.rb may have**: one per event the game publishes, which is
-  # what `crate::control::EVENTS` says and not a budget anybody chose. The dispatch below has to
-  # name its methods in the source — `instance_exec`, `send` and `Method#call` all run a block in
-  # a nested run loop of the VM, and a task cannot be parked across one — so the number of slots
-  # is the number of lines written out in `run_handler` (rubevy_games `docs/worklog/…-reflex.md`,
-  # and the garden's prelude, which is where this shape comes from).
-  ON_SLOTS = 5
+  # An `on` block is run with `instance_exec` on the control object, in a task of its own. Since
+  # SabiRuby 0.7 a task can wait inside `instance_exec` (SabiRuby `docs/design/wait-anywhere.md`);
+  # until 0.6 it could not, and each block had to be made into a method and called by a name
+  # written out in the source, which is what capped a control.rb at five of them. There is no cap
+  # now.
 
   # Which of the five carry an **item**'s name; the rest carry a **building**'s.
   ABOUT_ITEMS = [:crafted, :delivered]
@@ -57,10 +55,7 @@ class Control
 
   def self.on(event, &block)
     raise "on needs a block" if block.nil?
-    slot = handlers.size
-    raise "a control.rb may have #{ON_SLOTS} handlers at most" if slot >= ON_SLOTS
-    define_method("__handler_#{slot}", &block)
-    handlers << [event.to_sym, slot]
+    handlers << [event.to_sym, block]
     block
   end
 
@@ -86,19 +81,13 @@ class Control
   # A payload the game published, handed to the block that asked for it. The game answers numbers
   # — an in-tick answer and a published message are both flat values — and the name is looked up
   # here, out of the lists the game wrote from `data.rb`.
-  def run_handler(slot, event, payload)
+  def run_handler(block, event, payload)
     what = name_of(event, payload[0])
     n = payload[1].to_i
     x = payload[2].to_i
     y = payload[3].to_i
     note_seen(event, n)
-    case slot
-    when 0 then __handler_0(what, n, x, y)
-    when 1 then __handler_1(what, n, x, y)
-    when 2 then __handler_2(what, n, x, y)
-    when 3 then __handler_3(what, n, x, y)
-    when 4 then __handler_4(what, n, x, y)
-    end
+    instance_exec(what, n, x, y, &block)
   end
 
   # An item's or a building's name, as the number the game published.
@@ -287,7 +276,7 @@ end
 # script that says whether the game has been won.
 def start_control_handlers(being, tasks)
   here = Task.current
-  $control_class.handlers.each do |event, slot|
+  $control_class.handlers.each_with_index do |(event, handler), slot|
     queue = Rubevy.subscribe(event)
     task = Task.new(name: "control-#{event}", priority: here.priority) do
       begin
@@ -295,7 +284,7 @@ def start_control_handlers(being, tasks)
           payload = queue.pop # parked here, costing nothing, until it happens
           being.note_dropped(slot, queue.dropped)
           begin
-            being.run_handler(slot, event, payload)
+            being.run_handler(handler, event, payload)
           rescue => e
             Rubevy.log "control.rb: #{event}: #{e.class}: #{e.message}"
           end
