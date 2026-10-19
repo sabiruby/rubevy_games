@@ -29,7 +29,10 @@ env:
   # two red runs, nothing deployed, the published pages stayed as they were). **This is the
   # third pin of the same pair** — the lock's SabiRuby, the playground's own SABIRUBY_REF, and
   # this — and a release that removes a name has to move all three.
-  PLAYGROUND_REF: 5337b2f2b452b3377bd03db3418fad9c1bba27c4
+  # 2acc616 (2026-10-19): the playground whose own SABIRUBY_REF is v0.8.0, the version the lock
+  # names. Its wasm/src is the same as 5337b2f's (built against v0.8.0 with tools/build.sh there);
+  # the pin moves so that pin 3 says the same version as pin 1 (docs/web.md, "Three pins").
+  PLAYGROUND_REF: 2acc61698651f441d677737882df1cddeb748261
   WASI_SDK: "34"
   BINARYEN: "132"
 jobs:
