@@ -32,7 +32,8 @@ env:
   # 2acc616 (2026-10-19): the playground whose own SABIRUBY_REF is v0.8.0, the version the lock
   # names. Its wasm/src is the same as 5337b2f's (built against v0.8.0 with tools/build.sh there);
   # the pin moves so that pin 3 says the same version as pin 1 (docs/web.md, "Three pins").
-  PLAYGROUND_REF: 2acc61698651f441d677737882df1cddeb748261
+  # 0e93e4e (2026-11-03): the playground whose own SABIRUBY_REF is v0.9.0; wasm/src unchanged again.
+  PLAYGROUND_REF: 0e93e4e3ce57783ab668aeb1ea99542389012180
   WASI_SDK: "34"
   BINARYEN: "132"
 jobs:

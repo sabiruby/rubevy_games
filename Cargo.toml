@@ -43,16 +43,17 @@ rubevy-build = { git = "https://github.com/sabiruby/rubevy" }
 # because the games rode the VM's main branch; 0.6.1 on crates.io has everything this workspace
 # calls (`declare`, `take_with_lines`, `Declared`, `Options::symbols`, `Vm::backtrace_line`,
 # `highlight`), so the patch is gone and the lock names published versions. `cargo tree -d` has no
-# `sabiruby` line, which is the check that there is still only one. 0.8 goes with rubevy 0.3,
-# which asks for it (0.8.0 is a breaking release of the VM, so a `^0.7` here beside rubevy's `^0.8`
-# would be the second VM); the games call nothing 0.8 changed.
-sabiruby = "0.8"
+# `sabiruby` line, which is the check that there is still only one. 0.9 goes with rubevy 0.4,
+# which asks for it (a minor of a 0.x crate is a major to the caret, so a `^0.8` here beside
+# rubevy's `^0.9` would be the second VM); 0.9.0 only adds to the VM, and the games call nothing
+# it changed.
+sabiruby = "0.9"
 # The editor's colours call `sabiruby_compiler::highlight`, published since 0.2.3 and carried
-# into 0.3, 0.4 and 0.5 (sabiruby `docs/design/compiler.md`, "Publishing"); 0.5 is the one of a 0.8 VM.
-sabiruby-compiler = { version = "0.5", features = ["host"] }
+# into 0.3 to 0.6 (sabiruby `docs/design/compiler.md`, "Publishing"); 0.6 is the one of a 0.9 VM.
+sabiruby-compiler = { version = "0.6", features = ["host"] }
 # G3's save file: the `Vm` this converts values for is the one the scripts run in, which the
 # patch below is what guarantees.
-sabiruby-serde = "0.4"
+sabiruby-serde = "0.5"
 # S4a: what was `rubevy-arena` until 2026-09-20, split in two. `rubevy-egui` is the part an
 # outside rubevy user could want (the editor and the VM panel, over bevy_egui); `games-shell` is
 # the shell the games here share, and it is the one that depends on the other.

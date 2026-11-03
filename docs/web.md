@@ -178,7 +178,7 @@ There is not one pin here but **three, and they all name the same SabiRuby**:
 
 | | where | what it says | how it is read |
 |---|---|---|---|
-| 1 | this repository's `Cargo.lock` | which SabiRuby the games' **VM** is — today `sabiruby 0.8.0`, a published version; until 2026-09-22 a `[patch.crates-io]` git rev | `pages.yml`'s first step greps for the rev, then falls back to `v` + the version, and **fails rather than checking out an empty ref** (an empty one is "the default branch", which would silently publish against the VM's `main`) |
+| 1 | this repository's `Cargo.lock` | which SabiRuby the games' **VM** is — today `sabiruby 0.9.0`, a published version; until 2026-09-22 a `[patch.crates-io]` git rev | `pages.yml`'s first step greps for the rev, then falls back to `v` + the version, and **fails rather than checking out an empty ref** (an empty one is "the default branch", which would silently publish against the VM's `main`) |
 | 2 | `pages.yml`'s `PLAYGROUND_REF` | which **playground** the compiler module is built from | checked out by commit |
 | 3 | that playground's own `SABIRUBY_REF` | which SabiRuby **it** is built against for its own site | not read here at all — it is how you tell whether the playground commit you are pinning was ever built against pin 1 |
 
